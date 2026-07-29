@@ -1,26 +1,127 @@
 #!/usr/bin/env node
-// Read-only forensic dump for a coder_session — diagnoses tool-loop patterns
-// and which guard (strict, fuzzy, dominance, dup-call-cap) SHOULD have caught
-// the loop but didn't. Usage: node scripts/inspect-session.mjs <session_id>
+// Read-only forensic dump for a filesystem session bundle.
+// Usage: node scripts/inspect-session.mjs <bundle-path|session-uuid>
 
-import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 
-const require = createRequire(import.meta.url);
-const Database = require('better-sqlite3');
-
-const sessionId = parseInt(process.argv[2], 10);
-if (!Number.isFinite(sessionId) || sessionId <= 0) {
-  console.error('Usage: node scripts/inspect-session.mjs <session_id>');
+const input = process.argv[2];
+if (!input) {
+  console.error('Usage: node scripts/inspect-session.mjs <bundle-path|session-uuid>');
   process.exit(1);
 }
 
-const dbPath = process.env.MCP_DB_PATH
-  ?? resolve(process.env.USERPROFILE ?? process.env.HOME ?? '.', '.mcp-code-indexer/index.db');
-const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function dataDir() {
+  return process.env.MCP_DATA_DIR
+    ?? resolve(process.env.USERPROFILE ?? process.env.HOME ?? '.', '.mcp-code-indexer');
+}
+
+function bundlePath(value) {
+  const direct = resolve(value);
+  if (existsSync(join(direct, 'session.json'))) return direct;
+  if (!UUID.test(value)) return direct;
+  const candidates = [
+    resolve('.mcp-indexer', 'session', value),
+    resolve(dataDir(), 'sessions', 'global', value),
+  ];
+  return candidates.find((candidate) => existsSync(join(candidate, 'session.json')))
+    ?? direct;
+}
+
+const bundle = bundlePath(input);
+if (!existsSync(join(bundle, 'session.json')) || !statSync(bundle).isDirectory()) {
+  console.error(`Filesystem session bundle not found: ${bundle}`);
+  process.exit(1);
+}
+
+function json(path) {
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+const session = json(join(bundle, 'session.json'));
+const state = json(join(bundle, 'state.json'));
+if (!UUID.test(session.id) || basename(bundle).toLowerCase() !== session.id.toLowerCase()) {
+  throw new Error('session.json identity does not match its bundle directory');
+}
+
+const conversationPath = join(bundle, 'conversation.jsonl');
+const commits = existsSync(conversationPath)
+  ? readFileSync(conversationPath, 'utf8')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line, index) => {
+        try {
+          return JSON.parse(line);
+        } catch (error) {
+          throw new Error(
+            `Invalid conversation.jsonl line ${index + 1}: ${error.message}`,
+          );
+        }
+      })
+  : [];
+
+const messages = new Map();
+let calls = [];
+for (const commit of commits) {
+  const payload = commit.payload;
+  if (payload?.type !== 'coder.turn') continue;
+  if (Number.isSafeInteger(payload.truncate_from_seq)) {
+    for (const seq of messages.keys()) {
+      if (seq >= payload.truncate_from_seq) messages.delete(seq);
+    }
+    calls = calls.filter((call) => call.message_seq < payload.truncate_from_seq);
+  }
+  for (const patch of payload.message_patches ?? []) {
+    const current = messages.get(patch.seq);
+    if (current) messages.set(patch.seq, { ...current, ...patch });
+  }
+  for (const message of payload.messages ?? []) {
+    messages.set(message.seq, message);
+  }
+  calls.push(...(payload.tool_calls ?? []));
+}
+
+const sha = (value) =>
+  createHash('sha1').update(typeof value === 'string' ? value : JSON.stringify(value ?? null))
+    .digest('hex')
+    .slice(0, 12);
+
+const turnHasText = new Map();
+for (const message of messages.values()) {
+  if (message.role !== 'assistant') continue;
+  turnHasText.set(
+    message.seq,
+    Array.isArray(message.content)
+      && message.content.some(
+        (block) => block?.type === 'text' && String(block.text ?? '').trim(),
+      ),
+  );
+}
+
+const turns = [];
+let last = null;
+for (const call of calls) {
+  if (call.message_seq !== last) {
+    turns.push({ msgId: call.message_seq, calls: [] });
+    last = call.message_seq;
+  }
+  const outputRef = call.output?.shaped ?? call.output?.raw ?? null;
+  turns.at(-1).calls.push({
+    name: call.tool_name,
+    argsHash: sha(call.args),
+    resultHash: outputRef?.sha256?.slice(0, 12) ?? null,
+    isError: call.is_error === true,
+    resultLen: outputRef?.size ?? 0,
+  });
+}
 
 const DOOM_STRICT = 3;
 const DOOM_FUZZY = 6;
@@ -30,161 +131,131 @@ const DUP_CALL_THRESHOLD = 5;
 const DUP_CALL_WINDOW = 20;
 const POLLING = /(?:^|__)(?:wait_for|await|poll|tail|monitor|list)_|_(?:status|logs|pulse|stats)$/;
 
-const sha = (s) => createHash('sha1').update(s ?? '').digest('hex').slice(0, 12);
-
-const session = db.prepare('SELECT * FROM coder_sessions WHERE id = ?').get(sessionId);
-if (!session) { console.error(`Session ${sessionId} not found`); process.exit(1); }
-
-const calls = db.prepare(`
-  SELECT tc.tool_name, tc.args_json, tc.result_text, tc.is_error, tc.duration_ms, tc.message_id
-  FROM coder_tool_calls tc
-  JOIN coder_messages m ON m.id = tc.message_id
-  WHERE m.session_id = ? ORDER BY tc.message_id, tc.id
-`).all(sessionId);
-
-const messages = db.prepare(
-  'SELECT id, role, content_json FROM coder_messages WHERE session_id = ? ORDER BY id'
-).all(sessionId);
-
-const turnHasText = new Map();
-for (const m of messages) {
-  if (m.role !== 'assistant') continue;
-  try {
-    const c = JSON.parse(m.content_json);
-    turnHasText.set(m.id, Array.isArray(c) && c.some((b) => b.type === 'text' && b.text?.trim()));
-  } catch { turnHasText.set(m.id, false); }
-}
-
-const turns = [];
-let last = null;
-for (const c of calls) {
-  if (c.message_id !== last) { turns.push({ msgId: c.message_id, calls: [] }); last = c.message_id; }
-  turns[turns.length - 1].calls.push({
-    name: c.tool_name, argsHash: sha(c.args_json),
-    resultHash: c.result_text ? sha(c.result_text) : null,
-    isError: !!c.is_error, resultLen: (c.result_text ?? '').length,
-  });
-}
-
-const total = calls.length;
 const nameCount = new Map();
 const argCount = new Map();
-const resCount = new Map();
-for (const c of calls) {
-  nameCount.set(c.tool_name, (nameCount.get(c.tool_name) ?? 0) + 1);
-  const ak = `${c.tool_name}|${sha(c.args_json)}`;
-  argCount.set(ak, (argCount.get(ak) ?? 0) + 1);
-  if (c.result_text) {
-    const rk = `${c.tool_name}|${sha(c.result_text)}`;
-    resCount.set(rk, (resCount.get(rk) ?? 0) + 1);
+const resultCount = new Map();
+for (const turn of turns) {
+  for (const call of turn.calls) {
+    nameCount.set(call.name, (nameCount.get(call.name) ?? 0) + 1);
+    const argKey = `${call.name}|${call.argsHash}`;
+    argCount.set(argKey, (argCount.get(argKey) ?? 0) + 1);
+    if (call.resultHash) {
+      const resultKey = `${call.name}|${call.resultHash}`;
+      resultCount.set(resultKey, (resultCount.get(resultKey) ?? 0) + 1);
+    }
   }
 }
 
-const tools = [...nameCount.entries()].sort((a, b) => b[1] - a[1]);
-const dom = tools[0];
-const domRatio = dom ? dom[1] / total : 0;
-
-function strictRun() {
-  let max = 0, run = 0, last = '';
-  for (const t of turns) {
-    const sig = t.calls.map((c) => `${c.name}|${c.argsHash}`).join(',');
-    if (sig === last && sig !== '') run++; else { max = Math.max(max, run); run = 1; }
-    last = sig;
-  }
-  return Math.max(max, run);
-}
-
-function fuzzyRun() {
-  let max = 0, run = 0, last = '';
-  for (const t of turns) {
-    const names = t.calls.map((c) => c.name).sort().join(',');
-    if (names === last && names !== '') run++; else { max = Math.max(max, run); run = 1; }
-    last = names;
+function repeatedRun(signature) {
+  let max = 0;
+  let run = 0;
+  let previous = '';
+  for (const turn of turns) {
+    const current = signature(turn);
+    if (current === previous && current !== '') run += 1;
+    else {
+      max = Math.max(max, run);
+      run = 1;
+    }
+    previous = current;
   }
   return Math.max(max, run);
 }
 
 function dominanceFinding() {
-  for (let i = DOMINANCE_WINDOW; i <= turns.length; i++) {
-    const win = turns.slice(i - DOMINANCE_WINDOW, i);
-    const cnt = new Map();
-    let textT = 0;
-    for (const t of win) {
-      const p = t.calls[0]?.name ?? '';
-      cnt.set(p, (cnt.get(p) ?? 0) + 1);
-      if (turnHasText.get(t.msgId)) textT++;
+  for (let index = DOMINANCE_WINDOW; index <= turns.length; index += 1) {
+    const window = turns.slice(index - DOMINANCE_WINDOW, index);
+    const counts = new Map();
+    let textTurns = 0;
+    for (const turn of window) {
+      const primary = turn.calls[0]?.name ?? '';
+      counts.set(primary, (counts.get(primary) ?? 0) + 1);
+      if (turnHasText.get(turn.msgId)) textTurns += 1;
     }
-    let top = ['', 0];
-    for (const [n, c] of cnt) if (c > top[1]) top = [n, c];
-    if (top[1] / DOMINANCE_WINDOW >= DOMINANCE_RATIO && textT === 0) {
-      return { window: [i - DOMINANCE_WINDOW, i], top, ratio: top[1] / DOMINANCE_WINDOW };
+    const top = [...counts].sort((left, right) => right[1] - left[1])[0] ?? ['', 0];
+    if (top[1] / DOMINANCE_WINDOW >= DOMINANCE_RATIO && textTurns === 0) {
+      return {
+        window: [index - DOMINANCE_WINDOW, index],
+        top,
+        ratio: top[1] / DOMINANCE_WINDOW,
+      };
     }
   }
   return null;
 }
 
-function dupCapFinding() {
-  const flat = [];
-  for (const t of turns) for (const c of t.calls) flat.push(c);
-  for (let i = DUP_CALL_WINDOW; i <= flat.length; i++) {
-    const win = flat.slice(i - DUP_CALL_WINDOW, i);
-    const cnt = new Map();
-    for (const c of win) {
-      const k = `${c.name}|${c.argsHash}`;
-      cnt.set(k, (cnt.get(k) ?? 0) + 1);
+function duplicateFinding() {
+  const flat = turns.flatMap((turn) => turn.calls);
+  for (let index = DUP_CALL_WINDOW; index <= flat.length; index += 1) {
+    const counts = new Map();
+    for (const call of flat.slice(index - DUP_CALL_WINDOW, index)) {
+      const key = `${call.name}|${call.argsHash}`;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    let top = ['', 0];
-    for (const [k, c] of cnt) if (c > top[1]) top = [k, c];
+    const top = [...counts].sort((left, right) => right[1] - left[1])[0] ?? ['', 0];
     if (top[1] >= DUP_CALL_THRESHOLD) {
       const name = top[0].split('|')[0];
-      return { key: top[0], count: top[1], window: [i - DUP_CALL_WINDOW, i], polling: POLLING.test(name) };
+      return {
+        key: top[0],
+        count: top[1],
+        window: [index - DUP_CALL_WINDOW, index],
+        polling: POLLING.test(name),
+      };
     }
   }
   return null;
 }
 
-let telemetry = [];
-try {
-  telemetry = db.prepare(
-    'SELECT turn, input_tokens, output_tokens, tool_count, compaction_triggered, summarizer_ran FROM coder_turn_telemetry WHERE session_id = ? ORDER BY turn'
-  ).all(sessionId);
-} catch { /* telemetry table may not exist on old DBs */ }
+const total = calls.length;
+const tools = [...nameCount].sort((left, right) => right[1] - left[1]);
+const dominant = tools[0];
+const dominantRatio = dominant && total > 0 ? dominant[1] / total : 0;
+const strictRun = repeatedRun((turn) =>
+  turn.calls.map((call) => `${call.name}|${call.argsHash}`).join(','),
+);
+const fuzzyRun = repeatedRun((turn) =>
+  turn.calls.map((call) => call.name).sort().join(','),
+);
+const dominance = dominanceFinding();
+const duplicate = duplicateFinding();
+const metricsPath = join(bundle, 'metrics', 'summary.json');
+const metrics = existsSync(metricsPath) ? json(metricsPath) : null;
 
-const sRun = strictRun();
-const fRun = fuzzyRun();
-const domF = dominanceFinding();
-const dupF = dupCapFinding();
-const compTurns = telemetry.filter((t) => t.compaction_triggered).length;
-const sumTurns = telemetry.filter((t) => t.summarizer_ran).length;
-const maxIn = telemetry.length ? Math.max(...telemetry.map((t) => t.input_tokens ?? 0)) : 0;
-
-let r = `# Session ${sessionId} forensic report\n\n`;
-r += `**Title**: ${session.title}\n`;
-r += `**Provider/Model**: ${session.provider}/${session.model}\n`;
-r += `**Status**: ${session.status}\n`;
-r += `**Tokens**: in=${session.total_input_tokens.toLocaleString()} out=${session.total_output_tokens.toLocaleString()}\n\n`;
-r += `## Summary\n- Total tool calls: ${total}\n- Turns with tools: ${turns.length}\n- Distinct tools: ${nameCount.size}\n- Avg calls/turn: ${turns.length ? (total / turns.length).toFixed(1) : 0}\n\n`;
-r += `## Top tools by call count\n\n| Tool | Count | % |\n|---|---|---|\n`;
-for (const [n, c] of tools.slice(0, 15)) r += `| \`${n}\` | ${c} | ${(c/total*100).toFixed(1)}% |\n`;
-if (dom && domRatio > 0.3) {
-  r += `\n⚠ **Dominant tool**: \`${dom[0]}\` = ${(domRatio*100).toFixed(1)}% of calls`;
-  if (POLLING.test(dom[0])) r += ` (matches POLLING exemption — bypasses ALL guards via turnAllRepeatable)`;
-  r += `\n`;
+let report = `# Session ${session.id} forensic report\n\n`;
+report += `**Bundle**: \`${bundle}\`\n`;
+report += `**Title**: ${session.title ?? ''}\n`;
+report += `**Provider/Model**: ${session.provider ?? ''}/${session.model ?? ''}\n`;
+report += `**Status**: ${state.status}\n`;
+report += `**Tokens**: in=${(metrics?.tokens?.input ?? 0).toLocaleString()} out=${(metrics?.tokens?.output ?? 0).toLocaleString()}\n\n`;
+report += `## Summary\n- Conversation commits: ${commits.length}\n- Total tool calls: ${total}\n- Turns with tools: ${turns.length}\n- Distinct tools: ${nameCount.size}\n- Avg calls/turn: ${turns.length ? (total / turns.length).toFixed(1) : 0}\n\n`;
+report += '## Top tools by call count\n\n| Tool | Count | % |\n|---|---|---|\n';
+for (const [name, count] of tools.slice(0, 15)) {
+  report += `| \`${name}\` | ${count} | ${total ? (count / total * 100).toFixed(1) : '0.0'}% |\n`;
 }
-r += `\n## Repeated (tool, args) — top 10\n\n| Key | Count |\n|---|---|\n`;
-for (const [k, c] of [...argCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)) r += `| \`${k}\` | ${c} |\n`;
-r += `\n## Repeated (tool, result) — top 10\n\n| Key | Count |\n|---|---|\n`;
-for (const [k, c] of [...resCount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)) r += `| \`${k}\` | ${c} |\n`;
-r += `\n## Guard diagnosis\n\n`;
-r += `- doom-loop-strict (threshold ${DOOM_STRICT}): max consecutive identical-sig run = **${sRun}** ${sRun >= DOOM_STRICT ? '✗ SHOULD have fired' : '✓ ok'}\n`;
-r += `- doom-loop-fuzzy (threshold ${DOOM_FUZZY}): max consecutive same-names run = **${fRun}** ${fRun >= DOOM_FUZZY ? '✗ SHOULD have fired' : '✓ ok'}\n`;
-if (domF) r += `- dominance: ✗ SHOULD have fired in turn window ${domF.window.join('-')}: \`${domF.top[0]}\` ${domF.top[1]}/${DOMINANCE_WINDOW} (${(domF.ratio*100).toFixed(0)}%) zero-text\n`;
-else r += `- dominance: ✓ ok (no ${DOMINANCE_RATIO*100}%+ single-tool window with zero text)\n`;
-if (dupF) r += `- dup-call-cap: ${dupF.polling ? '⚠ POLLING-exempt' : '✗ SHOULD have fired'}: \`${dupF.key}\` (${dupF.count}× in window ${dupF.window.join('-')})\n`;
-else r += `- dup-call-cap: ✓ ok (no (name, args) ≥${DUP_CALL_THRESHOLD}× in window of ${DUP_CALL_WINDOW})\n`;
-r += `\n## Telemetry\n\n- Turns where compaction triggered: ${compTurns}\n- Turns where summarizer ran: ${sumTurns}\n- Max input_tokens in a single turn: ${maxIn.toLocaleString()}\n- Telemetry rows: ${telemetry.length}\n`;
+if (dominant && dominantRatio > 0.3) {
+  report += `\n⚠ **Dominant tool**: \`${dominant[0]}\` = ${(dominantRatio * 100).toFixed(1)}% of calls`;
+  if (POLLING.test(dominant[0])) report += ' (matches POLLING exemption)';
+  report += '\n';
+}
+report += '\n## Repeated (tool, args) — top 10\n\n| Key | Count |\n|---|---|\n';
+for (const [key, count] of [...argCount].sort((left, right) => right[1] - left[1]).slice(0, 10)) {
+  report += `| \`${key}\` | ${count} |\n`;
+}
+report += '\n## Repeated (tool, result artifact) — top 10\n\n| Key | Count |\n|---|---|\n';
+for (const [key, count] of [...resultCount].sort((left, right) => right[1] - left[1]).slice(0, 10)) {
+  report += `| \`${key}\` | ${count} |\n`;
+}
+report += '\n## Guard diagnosis\n\n';
+report += `- doom-loop-strict (threshold ${DOOM_STRICT}): max consecutive identical-sig run = **${strictRun}** ${strictRun >= DOOM_STRICT ? '✗ SHOULD have fired' : '✓ ok'}\n`;
+report += `- doom-loop-fuzzy (threshold ${DOOM_FUZZY}): max consecutive same-names run = **${fuzzyRun}** ${fuzzyRun >= DOOM_FUZZY ? '✗ SHOULD have fired' : '✓ ok'}\n`;
+report += dominance
+  ? `- dominance: ✗ SHOULD have fired in turn window ${dominance.window.join('-')}: \`${dominance.top[0]}\` ${dominance.top[1]}/${DOMINANCE_WINDOW} (${(dominance.ratio * 100).toFixed(0)}%) zero-text\n`
+  : `- dominance: ✓ ok (no ${DOMINANCE_RATIO * 100}%+ single-tool window with zero text)\n`;
+report += duplicate
+  ? `- dup-call-cap: ${duplicate.polling ? '⚠ POLLING-exempt' : '✗ SHOULD have fired'}: \`${duplicate.key}\` (${duplicate.count}× in window ${duplicate.window.join('-')})\n`
+  : `- dup-call-cap: ✓ ok (no (name, args) ≥${DUP_CALL_THRESHOLD}× in window of ${DUP_CALL_WINDOW})\n`;
 
-console.log(r);
-writeFileSync(`inspect-${sessionId}.md`, r);
-console.error(`\nWrote inspect-${sessionId}.md`);
-db.close();
+console.log(report);
+const outputPath = resolve(`inspect-${session.id}.md`);
+writeFileSync(outputPath, report);
+console.error(`\nWrote ${outputPath}`);

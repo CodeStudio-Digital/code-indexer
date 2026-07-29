@@ -45,10 +45,10 @@ export function normalizeFrameIndexes(raw: unknown): Set<number> | null {
 }
 
 export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
-  const store = deps.spriteAnimationsStore;
+  const store = deps.spriteFileStore;
 
   app.post('/api/sprite-studio/animations/:id/frames/align', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
+    const found = await resolveAnim(deps, c.req.param('id'));
     if (!found || !found.root) return c.json({ error: 'not_found' }, 404);
     const { anim, asset, root } = found;
     const body = (await c.req.json().catch(() => null)) as AlignBody | null;
@@ -66,16 +66,16 @@ export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
     }
     // Align operates on the BASE track only (replaceFrames below is track-0
     // scoped by contract — overlay layers keep their own registration).
-    const frames = store.listFrames(anim.id, 0);
+    const frames = await store.listFrames(anim.id, 0);
     const targets = frames.filter((f) => !wanted || wanted.has(f.frame_index));
     if (targets.length === 0) return c.json({ error: 'no_frames' }, 400);
 
     const worker = getSpriteWorkerClient();
-    const alignedVersionByFrame = new Map<number, number>();
+    const alignedVersionByFrame = new Map<string, string>();
     try {
       // Sequential on purpose: one worker thread anyway, and ≤8 frames.
       for (const frame of targets) {
-        const version = deps.spriteAssetsStore.getVersion(frame.version_id);
+        const version = await store.getVersion(frame.version_id);
         if (!version) throw new Error(`missing version ${frame.version_id}`);
         const png = fs.readFileSync(resolveInsideSpriteDir(root, version.file_rel_path));
         // Target canvas = the frame version's own dims; only the content moves.
@@ -87,7 +87,7 @@ export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
           { op: 'placeOnCanvas', width: dims.width, height: dims.height, anchorX, anchorY },
         ];
         const out = await worker.processPipeline(png.toString('base64'), ops);
-        const row = writeEditedVersion(deps, root, asset, Buffer.from(out.pngBase64, 'base64'), {
+        const row = await writeEditedVersion(deps, root, asset, Buffer.from(out.pngBase64, 'base64'), {
           // Worker reports the output dims — skip the decode-for-dims on main.
           setCurrent: false, parentVersionId: version.id, dims: { width: out.width, height: out.height },
         });
@@ -98,7 +98,7 @@ export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
       // is only repointed after EVERY target succeeded (all-or-nothing).
       return c.json({ error: (e as Error).message }, 500);
     }
-    store.replaceFrames(
+    await store.replaceFrames(
       anim.id,
       frames.map((f) => ({
         frame_index: f.frame_index,
@@ -106,8 +106,8 @@ export function mountSpriteFrameAlignRoutes(app: Hono, deps: ServerDeps): void {
         duration_ms: f.duration_ms,
       })),
     );
-    const updated = store.get(anim.id);
+    const updated = await store.getAnimation(anim.id);
     if (!updated) return c.json({ error: 'not_found' }, 404);
-    return c.json(toAnimDto(updated, store.listFrames(anim.id)));
+    return c.json(toAnimDto(updated, await store.listFrames(anim.id)));
   });
 }

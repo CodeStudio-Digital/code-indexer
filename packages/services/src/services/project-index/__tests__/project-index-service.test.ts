@@ -11,7 +11,12 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import { KeyedMutex } from '../project-mutex.js';
 import { DirtyQueue } from '../dirty-queue.js';
 import { ProjectIndexService } from '../service.js';
-import type { ProjectIndexSettings, StructuralExecutor, StructuralProgressFrame } from '../types.js';
+import type {
+  DirtyEvent,
+  ProjectIndexSettings,
+  StructuralExecutor,
+  StructuralProgressFrame,
+} from '../types.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -47,24 +52,34 @@ class FakeExecutor implements StructuralExecutor {
   abortEmptyScan = false;
   lastRunOpts: { maxFiles?: number; allowEmptyWipe?: boolean } | null = null;
   onRun?: () => void;
+  runChanges: DirtyEvent[] = [
+    { path: 'src/changed.ts', kind: 'upsert' },
+    { path: 'src/deleted.ts', kind: 'delete' },
+  ];
   /** Frames emitted via onProgress during the run (scan/index liveness). */
   progressFrames: StructuralProgressFrame[] = [];
   async runStructuralIndex(
     projectId: number,
-    opts: { maxFiles?: number; allowEmptyWipe?: boolean; onProgress?: (p: StructuralProgressFrame) => void },
+    opts: {
+      maxFiles?: number;
+      allowEmptyWipe?: boolean;
+      onProgress?: (p: StructuralProgressFrame) => void;
+      onChanges?: (events: readonly DirtyEvent[]) => void | Promise<void>;
+    },
   ) {
     this.runs++;
     this.runProjectIds.push(projectId);
     this.lastRunOpts = opts;
     if (this.delayMs) await sleep(this.delayMs);
-    this.onRun?.();
-    for (const f of this.progressFrames) opts.onProgress?.(f);
     if (this.abortTooLarge) {
       return { totalFiles: 99999, indexed: 0, removed: 0, skipped: 0, errorCount: 0, durationMs: 1, aborted: 'too_large' as const };
     }
     if (this.abortEmptyScan) {
       return { totalFiles: 0, indexed: 0, removed: 0, skipped: 0, errorCount: 0, durationMs: 1, aborted: 'empty_scan' as const };
     }
+    await opts.onChanges?.(this.runChanges);
+    this.onRun?.();
+    for (const f of this.progressFrames) opts.onProgress?.(f);
     return { totalFiles: 2, indexed: 2, removed: 0, skipped: 0, errorCount: 0, durationMs: 1 };
   }
   async indexFiles(_projectId: number, relPaths: string[]) {
@@ -512,11 +527,14 @@ describe('ProjectIndexService', () => {
     await svc.dispose();
   });
 
-  it('invalidates semantic hashes after a changed structural pass without snapshot fences', async () => {
+  it('fences exact semantic deltas before a changed structural pass mutates rows', async () => {
     const projectRow = { structural_indexed_at: null as string | null, last_indexed: null };
     const exec = new FakeExecutor();
     exec.delayMs = 20;
-    exec.onRun = () => { projectRow.structural_indexed_at = '2026-07-15T00:00:00Z'; };
+    exec.onRun = () => {
+      events.push('mutate');
+      projectRow.structural_indexed_at = '2026-07-15T00:00:00Z';
+    };
     const svc = makeService(exec, fakeDb(projectRow));
     const events: string[] = [];
     svc.setSemanticCatchup({
@@ -529,7 +547,7 @@ describe('ProjectIndexService', () => {
     await sleep(5);
     expect(events).toEqual([]);
     await sleep(40);
-    expect(events).toEqual(['delta:1:*', 'ready:1', 'ensure:1']);
+    expect(events).toEqual(['delta:1:src/changed.ts', 'mutate', 'ready:1', 'ensure:1']);
     await svc.dispose();
 
     const emptyExec = new FakeExecutor();

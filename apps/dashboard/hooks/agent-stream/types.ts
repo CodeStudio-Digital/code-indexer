@@ -1,3 +1,6 @@
+/** Opaque UUID identifying a filesystem-backed coder session. */
+export type SessionId = string;
+
 export interface ToolCallEvent {
   id: string;
   name: string;
@@ -495,11 +498,11 @@ export type PipelineNodeRuntimeStatus =
   | 'aborted';
 
 export interface PipelineRuntimeState {
-  /** `pipeline_executions.id`. */
-  executionId: number;
+  /** Opaque filesystem-backed pipeline execution UUID. */
+  executionId: string;
   /** `pipelines.id`. */
-  pipelineId: number;
-  /** Aggregate state machine — mirrors `pipeline_executions.status`. */
+  pipelineId: number | string;
+  /** Aggregate state machine — mirrors the pipeline-run bundle entity status. */
   status: 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
   /** Active node id (null when terminal). */
   currentNodeId: string | null;
@@ -667,4 +670,4 @@ export type SessionPatch =
   | Partial<SessionState>
   | ((s: SessionState) => Partial<SessionState>);
 
-export type UpdateSession = (sid: number, patch: SessionPatch) => void;
+export type UpdateSession = (sid: SessionId, patch: SessionPatch) => void;

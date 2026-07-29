@@ -23,13 +23,13 @@ import type { SpriteOp } from '@mcp/sprite-studio/processing/types.js';
 import { slugify, uniqueSlug } from '@mcp/sprite-studio/repo/slug.js';
 import { runGenerationJob } from '@mcp/sprite-studio/jobs/job-runner.js';
 import type { SpriteGenerationJobParams } from '@mcp/sprite-studio/jobs/generation-request.js';
-import type { SpriteAssetRow } from '@mcp/store/sprite-studio/types.js';
 import type {
   ISpriteStudioHost,
   SpriteGenerateToolInput,
   SpriteGenerateToolResult,
 } from '@mcp/code-agent/tools/sprite-studio/index.js';
 import type { ServerDeps } from './deps.js';
+import type { SpriteAssetFileRow } from './sprite-files.js';
 import { buildSpriteJobDeps } from './routes/sprite-studio/job-deps.js';
 import { getSpriteJobQueue } from './routes/sprite-studio/queue-singleton.js';
 import { getSpriteWorkerClient } from '../sse/SpriteWorkerClient.js';
@@ -37,15 +37,15 @@ import { writeEditedVersion } from './routes/sprite-studio/version-write.js';
 import { buildSpriteExport, type ExportRequestV2 } from './routes/sprite-studio/export-plan.js';
 
 /** Get-or-create the asset for an agent generate. Reuse by exact slug/name; else create. */
-function resolveAsset(
+async function resolveAsset(
   deps: ServerDeps,
-  spriteProjectId: number,
+  spriteProjectId: string,
   root: string,
   input: SpriteGenerateToolInput,
-): SpriteAssetRow {
-  const store = deps.spriteAssetsStore;
+): Promise<SpriteAssetFileRow> {
+  const store = deps.spriteFileStore;
   if (input.assetId !== undefined) {
-    const row = store.get(input.assetId);
+    const row = await store.getAsset(input.assetId);
     if (!row || row.sprite_project_id !== spriteProjectId) {
       throw new Error(`Unknown asset ${input.assetId} in this sprite project`);
     }
@@ -53,7 +53,7 @@ function resolveAsset(
   }
   const name = (input.assetName ?? '').trim();
   if (!name) throw new Error('assetName or assetId is required');
-  const existing = store.list(spriteProjectId);
+  const existing = await store.listAssets(spriteProjectId);
   const wantSlug = slugify(name);
   const match = existing.find((a) => a.slug === wantSlug || a.display_name === name);
   if (match) return match;
@@ -64,13 +64,18 @@ function resolveAsset(
   writeAssetManifest(root, slug, {
     slug, displayName: name, category, tags: [], status: 'draft', versions: [],
   });
-  return store.create({ sprite_project_id: spriteProjectId, slug, display_name: name, category });
+  return store.createAsset({
+    sprite_project_id: spriteProjectId,
+    slug,
+    display_name: name,
+    category,
+  });
 }
 
 /** Run a job on the shared per-project queue and resolve when it settles. */
 function runQueued(
-  spriteProjectId: number,
-  jobId: number,
+  spriteProjectId: string,
+  jobId: string,
   run: (signal: AbortSignal) => Promise<void>,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
@@ -86,45 +91,46 @@ function runQueued(
 }
 
 export function createSpriteStudioHostImpl(deps: ServerDeps): ISpriteStudioHost {
-  const projects = deps.spriteProjectsStore;
-  const assets = deps.spriteAssetsStore;
-  const jobs = deps.spriteJobsStore;
+  const sprites = deps.spriteFileStore;
 
   return {
     async getProject(projectId) {
-      const project = projects.getByProjectId(projectId);
+      const project = await sprites.projectByIdeId(projectId);
       if (!project) return null;
       return {
         initialized: true,
-        assetCount: assets.list(project.id).length,
+        assetCount: (await sprites.listAssets(project.id)).length,
         style: project.style,
       };
     },
 
     async listAssets(projectId, filter) {
-      const project = projects.getByProjectId(projectId);
+      const project = await sprites.projectByIdeId(projectId);
       if (!project) return [];
-      const rows = assets.list(project.id, { category: filter?.category, q: filter?.q });
-      return rows.map((a) => ({
-        id: a.id,
-        slug: a.slug,
-        name: a.display_name,
-        category: a.category,
-        status: a.status,
-        versionCount: assets.listVersions(a.id).length,
-      }));
+      const rows = await sprites.listAssets(project.id, {
+        category: filter?.category,
+        q: filter?.q,
+      });
+      return Promise.all(rows.map(async (asset) => ({
+        id: asset.id,
+        slug: asset.slug,
+        name: asset.display_name,
+        category: asset.category,
+        status: asset.status,
+        versionCount: (await sprites.listVersions(asset.id)).length,
+      })));
     },
 
     async generate(input): Promise<SpriteGenerateToolResult> {
-      const project = projects.getByProjectId(input.projectId);
+      const project = await sprites.projectByIdeId(input.projectId);
       if (!project) {
         throw new Error('Sprite Studio is not initialized for this project (.sprite-studio missing)');
       }
-      const root = deps.db.getProject(project.project_id)?.root_path;
+      const root = project.root_path;
       if (!root) throw new Error(`No workspace root for project ${project.project_id}`);
 
-      const asset = resolveAsset(deps, project.id, root, input);
-      const jobRow = jobs.insert({
+      const asset = await resolveAsset(deps, project.id, root, input);
+      const jobRow = await sprites.insertJob({
         sprite_project_id: project.id,
         asset_id: asset.id,
         kind: 'generate',
@@ -144,11 +150,11 @@ export function createSpriteStudioHostImpl(deps: ServerDeps): ISpriteStudioHost 
       );
 
       // The runner catches its own errors and persists status; inspect the row.
-      const done = jobs.get(jobRow.id);
+      const done = await sprites.getJob(jobRow.id);
       if (!done || done.status !== 'done' || done.result_version_id == null) {
         throw new Error(done?.error || `generation ${done?.status ?? 'unknown'}`);
       }
-      const version = assets.getVersion(done.result_version_id);
+      const version = await sprites.getVersion(done.result_version_id);
       if (!version) throw new Error('generation finished but the version row is missing');
       return {
         assetId: asset.id,
@@ -161,27 +167,29 @@ export function createSpriteStudioHostImpl(deps: ServerDeps): ISpriteStudioHost 
     },
 
     async process(input) {
-      const project = projects.getByProjectId(input.projectId);
-      const asset = assets.get(input.assetId);
-      const root = project ? deps.db.getProject(project.project_id)?.root_path : null;
+      const project = await sprites.projectByIdeId(input.projectId);
+      const asset = await sprites.getAsset(input.assetId);
+      const root = project?.root_path ?? null;
       if (!project || !asset || asset.sprite_project_id !== project.id || !root || asset.current_version_id == null) {
         throw new Error('Asset/current version not found in this sprite project');
       }
-      const current = assets.getVersion(asset.current_version_id);
+      const current = await sprites.getVersion(asset.current_version_id);
       if (!current) throw new Error('Current version row is missing');
       const png = fs.readFileSync(resolveInsideSpriteDir(root, current.file_rel_path));
       const result = await getSpriteWorkerClient().processPipeline(png.toString('base64'), input.ops as SpriteOp[]);
-      const version = writeEditedVersion(deps, root, asset, Buffer.from(result.pngBase64, 'base64'), {
+      const version = await writeEditedVersion(deps, root, asset, Buffer.from(result.pngBase64, 'base64'), {
         parentVersionId: current.id, source: 'processed', dims: { width: result.width, height: result.height },
       });
       return { versionId: version.id };
     },
 
     async export(input) {
-      const project = projects.getByProjectId(input.projectId);
+      const project = await sprites.projectByIdeId(input.projectId);
       if (!project) throw new Error('Sprite Studio is not initialized for this project');
       const selected = input.assetSlugs?.length
-        ? assets.list(project.id).filter((asset) => input.assetSlugs!.includes(asset.slug)).map((asset) => asset.id)
+        ? (await sprites.listAssets(project.id))
+          .filter((asset) => input.assetSlugs!.includes(asset.slug))
+          .map((asset) => asset.id)
         : null;
       const request: ExportRequestV2 = {
         version: 2,
@@ -191,7 +199,7 @@ export function createSpriteStudioHostImpl(deps: ServerDeps): ISpriteStudioHost 
         target: { kind: 'project' },
         options: { padding: 2, extrude: 2, scale: 1 },
       };
-      const built = buildSpriteExport(deps, input.projectId, request);
+      const built = await buildSpriteExport(deps, input.projectId, request);
       fs.mkdirSync(built.destination, { recursive: true });
       const written: string[] = [];
       for (const file of built.files) {

@@ -21,11 +21,16 @@ import {
 } from '../index.js';
 import { CompanyEventBus } from '../../CompanyEventBus.js';
 import { SubordinateCompletionBus } from '../../subordinate/completion-events.js';
+import { agentRunId, companySessionId } from './uuid-fixtures.js';
+
+const SESSION_ID = companySessionId(100);
+const AGENT_1 = agentRunId(1);
+const AGENT_2 = agentRunId(2);
 
 function makeRecord(over: Partial<AgentSupervisionRecord> = {}): AgentSupervisionRecord {
   return {
-    agentRunId: 1,
-    companySessionId: 100,
+    agentRunId: AGENT_1,
+    companySessionId: SESSION_ID,
     role: 'frontend',
     state: 'RUNNING_TURN',
     enteredAt: 0,
@@ -54,18 +59,22 @@ class FakePersistence implements SupervisionPersistence {
     if (idx >= 0) this.rows[idx] = { ...record };
     else this.rows.push({ ...record });
   }
-  saveHeartbeats(records: ReadonlyArray<{ agentRunId: number; lastHeartbeatAt: number }>): void {
+  saveHeartbeats(records: ReadonlyArray<{ agentRunId: string; lastHeartbeatAt: number }>): void {
     this.heartbeatBatches.push(records.length);
   }
-  deleteRecord(agentRunId: number): void {
+  deleteRecord(agentRunId: string): void {
     this.rows = this.rows.filter((r) => r.agentRunId !== agentRunId);
   }
   saveIncident(incident: PersistedIncident): void {
     this.incidents.push(incident);
   }
-  listRecentIncidents(_sessionId: number, _limit: number): IncidentQueryRow[] {
+  listRecentIncidents(_sessionId: string, _limit: number): IncidentQueryRow[] {
     return this.incidents.map(
-      (i, idx): IncidentQueryRow => ({ ...i, id: idx + 1, resolvedAtMs: null }),
+      (i, idx): IncidentQueryRow => ({
+        ...i,
+        id: agentRunId(500 + idx),
+        resolvedAtMs: null,
+      }),
     );
   }
 }
@@ -75,7 +84,7 @@ function makeDeps(
   emitted: Array<{ kind: string; detail: string }> = [],
 ): AgentSupervisorDeps {
   return {
-    companySessionId: 100,
+    companySessionId: SESSION_ID,
     companyEventBus: new CompanyEventBus(),
     completionBus: new SubordinateCompletionBus(),
     tickIntervalMs: 60_000,
@@ -88,8 +97,8 @@ describe('hydrateFromPersistence', () => {
   it('loads records into the tracker', () => {
     const p = new FakePersistence();
     p.rows = [
-      makeRecord({ agentRunId: 1, state: 'RUNNING_TURN', lastHeartbeatAt: Date.now() }),
-      makeRecord({ agentRunId: 2, state: 'AWAITING_TOOL', lastHeartbeatAt: Date.now() }),
+      makeRecord({ agentRunId: AGENT_1, state: 'RUNNING_TURN', lastHeartbeatAt: Date.now() }),
+      makeRecord({ agentRunId: AGENT_2, state: 'AWAITING_TOOL', lastHeartbeatAt: Date.now() }),
     ];
     const sup = new AgentSupervisor(makeDeps({ persistence: p }));
     const { rehydrated, ghosts } = sup.hydrateFromPersistence(Date.now());
@@ -103,13 +112,13 @@ describe('hydrateFromPersistence', () => {
     const now = Date.now();
     p.rows = [
       makeRecord({
-        agentRunId: 1,
+        agentRunId: AGENT_1,
         role: 'frontend',
         state: 'RUNNING_TURN',
         lastHeartbeatAt: now - 10 * 60_000, // 10min stale
       }),
       makeRecord({
-        agentRunId: 2,
+        agentRunId: AGENT_2,
         role: 'qa',
         state: 'AWAITING_MASTER_APPROVAL',
         lastHeartbeatAt: now, // fresh — not ghost
@@ -126,8 +135,8 @@ describe('hydrateFromPersistence', () => {
     const { rehydrated, ghosts } = sup.hydrateFromPersistence(now);
     expect(rehydrated).toBe(2);
     expect(ghosts).toBe(1);
-    expect(sup.listRecords().find((r) => r.agentRunId === 1)?.state).toBe('TERMINAL');
-    expect(sup.listRecords().find((r) => r.agentRunId === 2)?.state).toBe('AWAITING_MASTER_APPROVAL');
+    expect(sup.listRecords().find((r) => r.agentRunId === AGENT_1)?.state).toBe('TERMINAL');
+    expect(sup.listRecords().find((r) => r.agentRunId === AGENT_2)?.state).toBe('AWAITING_MASTER_APPROVAL');
     expect(emitted.some((e) => e.detail.includes('ghost_running'))).toBe(true);
   });
 
@@ -153,8 +162,8 @@ describe('tickOnce heartbeat flush', () => {
   it('calls persistence.saveHeartbeats with current snapshot each tick', async () => {
     const p = new FakePersistence();
     const sup = new AgentSupervisor(makeDeps({ persistence: p }));
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'frontend' });
-    sup.registerSubordinate({ agentRunId: 2, companySessionId: 100, role: 'qa' });
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'frontend' });
+    sup.registerSubordinate({ agentRunId: AGENT_2, companySessionId: SESSION_ID, role: 'qa' });
     await sup.tickOnce(Date.now());
     expect(p.heartbeatBatches).toHaveLength(1);
     expect(p.heartbeatBatches[0]).toBe(2);
@@ -166,7 +175,7 @@ describe('tickOnce heartbeat flush', () => {
       throw new Error('locked');
     });
     const sup = new AgentSupervisor(makeDeps({ persistence: p }));
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'frontend' });
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'frontend' });
     await expect(sup.tickOnce(Date.now())).resolves.toBeDefined();
   });
 });
@@ -175,14 +184,14 @@ describe('incident mirroring', () => {
   it('mirrors every emitted incident into persistence.saveIncident', () => {
     const p = new FakePersistence();
     const sup = new AgentSupervisor(makeDeps({ persistence: p }));
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'frontend' });
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'frontend' });
     // AWAITING_TOOL is NOT a legal successor of BOOTING — triggers
     // an `illegal_transition` incident which the supervisor mirrors.
-    sup.transition(1, 'AWAITING_TOOL');
+    sup.transition(AGENT_1, 'AWAITING_TOOL');
     expect(p.incidents.length).toBeGreaterThan(0);
     const first = p.incidents[0];
     expect(first.incidentKind).toBe('illegal_transition');
-    expect(first.companySessionId).toBe(100);
+    expect(first.companySessionId).toBe(SESSION_ID);
   });
 
   it('persists companySessionId (not null) for incidents with a null agentRunId', () => {
@@ -201,14 +210,14 @@ describe('incident mirroring', () => {
     sup.hydrateFromPersistence();
     expect(p.incidents).toHaveLength(1);
     expect(p.incidents[0].agentRunId).toBeNull();
-    expect(p.incidents[0].companySessionId).toBe(100);
+    expect(p.incidents[0].companySessionId).toBe(SESSION_ID);
   });
 
   it('listRecentIncidents bridges to persistence', () => {
     const p = new FakePersistence();
     p.incidents.push({
-      agentRunId: 1,
-      companySessionId: 100,
+      agentRunId: AGENT_1,
+      companySessionId: SESSION_ID,
       incidentKind: 'stuck_detected',
       fromState: null,
       attemptedToState: null,
@@ -216,14 +225,14 @@ describe('incident mirroring', () => {
       detectedAtMs: 0,
     });
     const sup = new AgentSupervisor(makeDeps({ persistence: p }));
-    const incidents = sup.listRecentIncidents(100, 10);
+    const incidents = sup.listRecentIncidents(SESSION_ID, 10);
     expect(incidents).toHaveLength(1);
     expect(incidents[0].detail).toBe('test');
   });
 
   it('returns empty when persistence not wired', () => {
     const sup = new AgentSupervisor(makeDeps());
-    expect(sup.listRecentIncidents(100)).toEqual([]);
+    expect(sup.listRecentIncidents(SESSION_ID)).toEqual([]);
   });
 });
 
@@ -231,7 +240,7 @@ describe('start() rehydrates only once', () => {
   it('hydrate fires on first start, not on subsequent', () => {
     const p = new FakePersistence();
     const loadSpy = vi.spyOn(p, 'loadAll');
-    p.rows = [makeRecord({ agentRunId: 1, lastHeartbeatAt: Date.now() })];
+    p.rows = [makeRecord({ agentRunId: AGENT_1, lastHeartbeatAt: Date.now() })];
     const sup = new AgentSupervisor(makeDeps({ persistence: p }));
     sup.start();
     sup.stop();

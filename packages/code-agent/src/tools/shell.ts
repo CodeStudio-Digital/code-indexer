@@ -6,7 +6,7 @@ import {
   defaultLocalShellPort,
   type IShellPort,
 } from '@mcp/code-agent/ports/shell-port.js';
-import { pathFor, resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
+import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 import { shellLabel } from '@mcp/code-agent/core/shell-info.js';
 import { unsafeProcessCommandRefusal } from '@mcp/code-agent/tools/shell-command-safety.js';
 
@@ -178,7 +178,10 @@ const runCommandTool: CoderTool = {
           `OS line for shell-specific dos/don'ts (e.g. on Windows it's cmd.exe: ` +
           `no \`| head\`/\`grep\`, use \`findstr\`/\`type\`).`,
       },
-      cwd: { type: 'string', description: 'Optional subdirectory relative to project root' },
+      cwd: {
+        type: 'string',
+        description: 'Optional subdirectory relative to the primary project. In a global session use "<project-slug>/subdir".',
+      },
       timeout_ms: {
         type: 'number',
         description: 'Timeout in ms (default 120000, max 600000 / 10 min). Unity Editor batch/test commands automatically receive a 30-minute ceiling.',
@@ -220,21 +223,22 @@ const runCommandTool: CoderTool = {
     let cwd = ctx.cwd;
     if (args.cwd) {
       const sub = String(args.cwd);
-      const p = pathFor(ctx.cwd);
-      const abs = p.isAbsolute(sub) ? sub : p.resolve(ctx.cwd, sub);
-      const rel = p.relative(ctx.cwd, abs);
-      if (rel.startsWith('..') || p.isAbsolute(rel)) {
-        const external = resolveAuthorizedPath(sub, ctx.cwd, ctx.externalRoots, 'read');
-        if (external.ok && external.external) {
-          return err(
-            `cwd '${sub}' is an authorized external root, but local shell execution stays project-scoped ` +
-              'because it cannot yet be confined to one host directory. Use glob/read_file/list_directory ' +
-              'and other native filesystem tools for external roots.',
-          );
-        }
-        return err(`cwd '${sub}' is outside project root`);
+      const resolved = resolveWorkspacePath(sub, ctx, 'read');
+      if (!resolved.ok) {
+        return err(
+          resolved.reason.includes('outside project root')
+            ? `cwd '${sub}' is outside project root`
+            : `cwd '${sub}' rejected: ${resolved.reason}`,
+        );
       }
-      cwd = abs;
+      if (resolved.external) {
+        return err(
+          `cwd '${sub}' is an authorized external root, but local shell execution stays project-scoped ` +
+            'because it cannot yet be confined to one host directory. Use glob/read_file/list_directory ' +
+            'and other native filesystem tools for external roots.',
+        );
+      }
+      cwd = resolved.abs;
     }
 
     let stdin: string | undefined;

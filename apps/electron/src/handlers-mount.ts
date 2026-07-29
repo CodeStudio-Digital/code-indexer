@@ -10,11 +10,16 @@
  * The renderer's preload builds matching channel names from the proxy
  * access path, so adding a new method requires no preload changes —
  * only the new handler factory entry below.
+ *
+ * The transport-blind half — the tree walk, the channel-naming convention, the
+ * cancellable-invoke envelope and the error wire shape — lives in
+ * `@apps/http-api/server/handler-tree.js` so a second host can bind the same
+ * handlers without duplicating (and drifting from) any of it. What stays here
+ * is only what `ipcMain` / `MessageChannelMain` specifically require.
  */
 
 import { ipcMain, MessageChannelMain, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron';
 import { createHandlers, createContext } from '@mcp/api-handlers';
-import type { ApiError } from '@mcp/api-bus';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
 import type { Hono } from 'hono';
 import {
@@ -22,31 +27,21 @@ import {
   STREAMING_DISPATCH_PATHS,
   dispatchHono,
   dispatchStreaming,
-} from './hono-dispatch.js';
+} from '@apps/http-api/server/hono-dispatch.js';
 import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
-
-type AnyFn = (...args: unknown[]) => unknown;
-type AnyRecord = Record<string, unknown>;
-
-interface CancellableInvokeEnvelope {
-  __mcpInvokeV1: true;
-  requestId: string;
-  payload: unknown;
-}
+import {
+  type AnyFn,
+  type AnyRecord,
+  decodeInvoke,
+  serializeError,
+  walkHandlers,
+} from '@apps/http-api/server/handler-tree.js';
 
 const activeInvokes = new Map<string, AbortController>();
 let cancelInvokeMounted = false;
 
 function invokeKey(senderId: number, requestId: string): string {
   return `${senderId}:${requestId}`;
-}
-
-function decodeInvoke(input: unknown): { payload: unknown; requestId?: string } {
-  const value = input as Partial<CancellableInvokeEnvelope> | null;
-  if (value?.__mcpInvokeV1 === true && typeof value.requestId === 'string') {
-    return { payload: value.payload, requestId: value.requestId };
-  }
-  return { payload: input };
 }
 
 async function runInvoke(
@@ -75,62 +70,6 @@ function ensureCancelInvokeMounted(): void {
     if (typeof requestId !== 'string') return;
     activeInvokes.get(invokeKey(event.sender.id, requestId))?.abort(new Error('request cancelled'));
   });
-}
-
-function isApiError(err: unknown): err is ApiError {
-  return !!err && typeof err === 'object' && 'code' in err && 'status' in err && err instanceof Error;
-}
-
-function serializeError(err: unknown) {
-  if (isApiError(err)) {
-    // `details` carries structured, actionable metadata (e.g. the SSH host-key
-    // fingerprint on `ssh_host_key_unknown`) the renderer needs to react —
-    // forwarded only when present so ordinary errors stay lean.
-    return { message: err.message, code: err.code, status: err.status, details: err.details };
-  }
-  if (err instanceof Error) return { message: err.message };
-  return { message: String(err) };
-}
-
-/**
- * Walk a `Partial<Api>` object and bind every leaf function to
- * `ipcMain.handle`. The channel key encodes the access path with colons:
- *
- *   handlers.coder.sessions.list  →  api:coder:sessions:list
- *
- * Streaming methods (return AsyncIterable) are detected by name suffix
- * /Stream$/, by being inside the `stream` sub-namespace of `coder`, or
- * by being `terminal.output` / `company.stream`. They register on
- * `stream:<channel>` and pump frames over a MessagePort transferred
- * to the renderer.
- */
-function isStreamingLeaf(path: string[], fnName: string): boolean {
-  if (/Stream$/.test(fnName)) return true;
-  if (path[0] === 'coder' && path[1] === 'stream') return true;
-  if (path[0] === 'terminal' && fnName === 'output') return true;
-  if (path[0] === 'runner' && fnName === 'events') return true;
-  if (path[0] === 'debug' && fnName === 'events') return true;
-  if (path[0] === 'runtime' && (fnName === 'install' || fnName === 'installPeclExtension')) return true;
-  if (path[0] === 'company' && fnName === 'stream') return true;
-  return false;
-}
-
-function bind(handlers: AnyRecord, basePath: string[], boundChannels: Set<string>) {
-  for (const [key, value] of Object.entries(handlers)) {
-    const path = [...basePath, key];
-    if (typeof value === 'function') {
-      const fn = value as AnyFn;
-      const channel = `api:${path.join(':')}`;
-      if (isStreamingLeaf(basePath, key)) {
-        mountStream(channel, fn);
-      } else {
-        mountInvoke(channel, fn);
-      }
-      boundChannels.add(channel);
-    } else if (value && typeof value === 'object') {
-      bind(value as AnyRecord, path, boundChannels);
-    }
-  }
 }
 
 function mountInvoke(channel: string, fn: AnyFn) {
@@ -190,8 +129,12 @@ async function pumpStream(port: Electron.MessagePortMain, fn: AnyFn, payload: un
 export function mountIpcHandlers(deps: ServerDeps, honoApp?: Hono): ReturnType<typeof createHandlers> {
   ensureCancelInvokeMounted();
   const handlers = createHandlers(deps);
-  const boundChannels = new Set<string>();
-  bind(handlers as AnyRecord, [], boundChannels);
+  // The walk is shared with the (future) utilityProcess host; only what a leaf
+  // BINDS to is Electron-specific, so that is all this visitor decides.
+  const boundChannels = walkHandlers(handlers as AnyRecord, ({ channel, fn, streaming }) => {
+    if (streaming) mountStream(channel, fn);
+    else mountInvoke(channel, fn);
+  });
 
   // ─── Hono dispatch fallback ─────────────────────────────────
   //

@@ -6,16 +6,19 @@ import {
   getCompanyOrchestrator,
   getOrSpawnCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
 import {
-  appOwnedControlPlaneConflict,
-  isAppOwnedCompanySession,
-} from './runtime-capabilities.js';
+  parseCompanySessionIdParam,
+  parseJsonBody,
+  parseSessionRecordIdParam,
+  notFound,
+} from '../_helpers.js';
+import { appOwnedControlPlaneConflict } from './runtime-capabilities.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 
 /**
  * Per-agent (subordinate) control: pause, resume, delete. The session-wide
- * abort lives in `stream.ts`; these act on a SINGLE `company_agent_runs`
- * row. The Master is intentionally excluded — it's driven by the session
+ * abort lives in `stream.ts`; these act on one independent agent-run file.
+ * The Master is intentionally excluded — it's driven by the session
  * abort / delete flows, not these fine-grained controls.
  *
  * NOTE: orchestrator methods are RPC-forwarded to the worker thread, so
@@ -23,19 +26,27 @@ import {
  * signatures look synchronous — hence the `await`s below.
  */
 export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore } = deps;
+  const { sessionStore } = deps;
+
+  const filesFor = async (
+    id: ReturnType<typeof parseCompanySessionIdParam>,
+  ): Promise<CompanySessionFiles> => {
+    await sessionStore.ensureCatalog();
+    return new CompanySessionFiles({ companySessionId: id, sessionStore });
+  };
 
   /**
    * Pause a running subordinate. Stops its current turn but keeps the
    * session so it can be resumed; status becomes `paused`.
    */
   app.post('/api/company/sessions/:id/agents/:agentRunId/pause', async (c) => {
-    const id = parseIdParam(c);
-    if (isAppOwnedCompanySession(companyStore, id)) {
+    const id = parseCompanySessionIdParam(c);
+    const files = await filesFor(id);
+    if (files.getSession().runtime_kind === 'app_studio') {
       return appOwnedControlPlaneConflict(c, 'agent pause');
     }
-    const agentRunId = parseIdParam(c, 'agentRunId');
-    const run = companyStore.getAgentRun(agentRunId);
+    const agentRunId = parseSessionRecordIdParam(c, 'agentRunId');
+    const run = files.getAgentRunSync(agentRunId);
     if (!run || run.company_session_id !== id) return notFound(c, 'Agent run not found');
     if (run.role === 'master') return c.json({ error: 'Cannot pause the master agent' }, 400);
 
@@ -65,12 +76,13 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
    * continuation; defaults to a generic "continue" prompt.
    */
   app.post('/api/company/sessions/:id/agents/:agentRunId/resume', async (c) => {
-    const id = parseIdParam(c);
-    if (isAppOwnedCompanySession(companyStore, id)) {
+    const id = parseCompanySessionIdParam(c);
+    const files = await filesFor(id);
+    if (files.getSession().runtime_kind === 'app_studio') {
       return appOwnedControlPlaneConflict(c, 'agent resume');
     }
-    const agentRunId = parseIdParam(c, 'agentRunId');
-    const run = companyStore.getAgentRun(agentRunId);
+    const agentRunId = parseSessionRecordIdParam(c, 'agentRunId');
+    const run = files.getAgentRunSync(agentRunId);
     if (!run || run.company_session_id !== id) return notFound(c, 'Agent run not found');
     if (run.role === 'master') return c.json({ error: 'Cannot resume the master agent' }, 400);
 
@@ -101,17 +113,17 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
   });
 
   /**
-   * Delete a subordinate: abort it if a worker is live (best-effort),
-   * then remove the `company_agent_runs` row. FK constraints cascade the
-   * dependent rows. Works even when no worker is running.
+   * Delete a subordinate: abort it if a worker is live (best-effort), then
+   * move its independent agent-run record to the bundle trash.
    */
   app.delete('/api/company/sessions/:id/agents/:agentRunId', async (c) => {
-    const id = parseIdParam(c);
-    if (isAppOwnedCompanySession(companyStore, id)) {
+    const id = parseCompanySessionIdParam(c);
+    const files = await filesFor(id);
+    if (files.getSession().runtime_kind === 'app_studio') {
       return appOwnedControlPlaneConflict(c, 'agent deletion');
     }
-    const agentRunId = parseIdParam(c, 'agentRunId');
-    const run = companyStore.getAgentRun(agentRunId);
+    const agentRunId = parseSessionRecordIdParam(c, 'agentRunId');
+    const run = files.getAgentRunSync(agentRunId);
     if (!run || run.company_session_id !== id) return notFound(c, 'Agent run not found');
     if (run.role === 'master') return c.json({ error: 'Cannot delete the master agent' }, 400);
 
@@ -132,7 +144,7 @@ export function mountCompanyAgentControlRoutes(app: Hono, deps: ServerDeps): voi
         }
       }
     }
-    companyStore.deleteAgentRun(agentRunId);
+    await files.moveAgentRunToTrash(agentRunId);
     return c.json({ ok: true });
   });
 }

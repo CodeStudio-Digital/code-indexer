@@ -20,11 +20,20 @@ import {
   detectGhostRunning,
   type SupervisionPersistence,
 } from '../persistence.js';
+import { agentRunId, companySessionId } from './uuid-fixtures.js';
+
+const SESSION_ID = companySessionId(100);
+const AGENT_1 = agentRunId(1);
+const AGENT_2 = agentRunId(2);
+const AGENT_3 = agentRunId(3);
+const AGENT_4 = agentRunId(4);
+const AGENT_5 = agentRunId(5);
+const AGENT_7 = agentRunId(7);
 
 function makeRecord(over: Partial<AgentSupervisionRecord> = {}): AgentSupervisionRecord {
   return {
-    agentRunId: 1,
-    companySessionId: 100,
+    agentRunId: AGENT_1,
+    companySessionId: SESSION_ID,
     role: 'frontend',
     state: 'RUNNING_TURN',
     enteredAt: 0,
@@ -41,9 +50,9 @@ function makeRecord(over: Partial<AgentSupervisionRecord> = {}): AgentSupervisio
 /** In-memory test impl that captures calls without touching DB. */
 class CapturingPersistence implements SupervisionPersistence {
   records: AgentSupervisionRecord[] = [];
-  heartbeatBatches: Array<ReadonlyArray<{ agentRunId: number; lastHeartbeatAt: number }>> = [];
+  heartbeatBatches: Array<ReadonlyArray<{ agentRunId: string; lastHeartbeatAt: number }>> = [];
   incidents: Array<unknown> = [];
-  deletes: number[] = [];
+  deletes: string[] = [];
 
   setSeed(records: AgentSupervisionRecord[]): void {
     this.records = records.map((r) => ({ ...r }));
@@ -56,10 +65,10 @@ class CapturingPersistence implements SupervisionPersistence {
     if (idx >= 0) this.records[idx] = { ...record };
     else this.records.push({ ...record });
   }
-  saveHeartbeats(records: ReadonlyArray<{ agentRunId: number; lastHeartbeatAt: number }>): void {
+  saveHeartbeats(records: ReadonlyArray<{ agentRunId: string; lastHeartbeatAt: number }>): void {
     this.heartbeatBatches.push(records.slice());
   }
-  deleteRecord(agentRunId: number): void {
+  deleteRecord(agentRunId: string): void {
     this.deletes.push(agentRunId);
     this.records = this.records.filter((r) => r.agentRunId !== agentRunId);
   }
@@ -76,12 +85,12 @@ describe('NullSupervisionPersistence', () => {
     const p = new NullSupervisionPersistence();
     expect(p.loadAll()).toEqual([]);
     expect(() => p.saveRecord(makeRecord())).not.toThrow();
-    expect(() => p.saveHeartbeats([{ agentRunId: 1, lastHeartbeatAt: 1 }])).not.toThrow();
-    expect(() => p.deleteRecord(1)).not.toThrow();
+    expect(() => p.saveHeartbeats([{ agentRunId: AGENT_1, lastHeartbeatAt: 1 }])).not.toThrow();
+    expect(() => p.deleteRecord(AGENT_1)).not.toThrow();
     expect(() =>
       p.saveIncident({
-        agentRunId: 1,
-        companySessionId: 100,
+        agentRunId: AGENT_1,
+        companySessionId: SESSION_ID,
         incidentKind: 'x',
         fromState: null,
         attemptedToState: null,
@@ -89,21 +98,21 @@ describe('NullSupervisionPersistence', () => {
         detectedAtMs: 0,
       }),
     ).not.toThrow();
-    expect(p.listRecentIncidents(1, 10)).toEqual([]);
+    expect(p.listRecentIncidents(SESSION_ID, 10)).toEqual([]);
   });
 });
 
 describe('detectGhostRunning', () => {
   it('flags non-terminal records with stale heartbeats', () => {
     const records: AgentSupervisionRecord[] = [
-      makeRecord({ agentRunId: 1, state: 'RUNNING_TURN', lastHeartbeatAt: 0 }),
-      makeRecord({ agentRunId: 2, state: 'AWAITING_TOOL', lastHeartbeatAt: 0 }),
-      makeRecord({ agentRunId: 3, state: 'TERMINAL', lastHeartbeatAt: 0 }), // skip terminal
-      makeRecord({ agentRunId: 4, state: 'IDLE', lastHeartbeatAt: 0 }), // skip non-ghostable
-      makeRecord({ agentRunId: 5, state: 'RUNNING_TURN', lastHeartbeatAt: 999_999 }), // fresh
+      makeRecord({ agentRunId: AGENT_1, state: 'RUNNING_TURN', lastHeartbeatAt: 0 }),
+      makeRecord({ agentRunId: AGENT_2, state: 'AWAITING_TOOL', lastHeartbeatAt: 0 }),
+      makeRecord({ agentRunId: AGENT_3, state: 'TERMINAL', lastHeartbeatAt: 0 }), // skip terminal
+      makeRecord({ agentRunId: AGENT_4, state: 'IDLE', lastHeartbeatAt: 0 }), // skip non-ghostable
+      makeRecord({ agentRunId: AGENT_5, state: 'RUNNING_TURN', lastHeartbeatAt: 999_999 }), // fresh
     ];
     const ghosts = detectGhostRunning(records, 1_000_000, 60_000);
-    expect(ghosts.map((g) => g.agentRunId).sort()).toEqual([1, 2]);
+    expect(ghosts.map((g) => g.agentRunId).sort()).toEqual([AGENT_1, AGENT_2]);
   });
 
   it('flags BOOTING / AWAITING_PROVIDER / AWAITING_MASTER_APPROVAL / AWAITING_INBOX_ANSWER / RESURRECTING', () => {
@@ -115,7 +124,7 @@ describe('detectGhostRunning', () => {
       'RESURRECTING',
     ] as const;
     const records = states.map((s, i) =>
-      makeRecord({ agentRunId: i + 1, state: s, lastHeartbeatAt: 0 }),
+      makeRecord({ agentRunId: agentRunId(i + 1), state: s, lastHeartbeatAt: 0 }),
     );
     const ghosts = detectGhostRunning(records, 1_000_000, 60_000);
     expect(ghosts).toHaveLength(5);
@@ -123,16 +132,16 @@ describe('detectGhostRunning', () => {
 
   it('does NOT flag QUARANTINED / STUCK_* / FAILED_* (no live process expected)', () => {
     const records: AgentSupervisionRecord[] = [
-      makeRecord({ agentRunId: 1, state: 'QUARANTINED', lastHeartbeatAt: 0 }),
-      makeRecord({ agentRunId: 2, state: 'STUCK_TURN', lastHeartbeatAt: 0 }),
-      makeRecord({ agentRunId: 3, state: 'FAILED_BOOT', lastHeartbeatAt: 0 }),
+      makeRecord({ agentRunId: AGENT_1, state: 'QUARANTINED', lastHeartbeatAt: 0 }),
+      makeRecord({ agentRunId: AGENT_2, state: 'STUCK_TURN', lastHeartbeatAt: 0 }),
+      makeRecord({ agentRunId: AGENT_3, state: 'FAILED_BOOT', lastHeartbeatAt: 0 }),
     ];
     expect(detectGhostRunning(records, 1_000_000, 60_000)).toEqual([]);
   });
 
   it('returns empty when records are all fresh', () => {
     const records = [
-      makeRecord({ agentRunId: 1, state: 'RUNNING_TURN', lastHeartbeatAt: 900_000 }),
+      makeRecord({ agentRunId: AGENT_1, state: 'RUNNING_TURN', lastHeartbeatAt: 900_000 }),
     ];
     expect(detectGhostRunning(records, 1_000_000, 200_000)).toEqual([]);
   });
@@ -143,22 +152,22 @@ describe('HeartbeatTracker with persistence', () => {
     const p = new CapturingPersistence();
     const t = new HeartbeatTracker();
     t.setPersistence(p);
-    t.register({ agentRunId: 7, companySessionId: 100, role: 'qa' }, 0);
+    t.register({ agentRunId: AGENT_7, companySessionId: SESSION_ID, role: 'qa' }, 0);
     expect(p.records).toHaveLength(1);
-    expect(p.records[0]).toMatchObject({ agentRunId: 7, role: 'qa', state: 'BOOTING' });
+    expect(p.records[0]).toMatchObject({ agentRunId: AGENT_7, role: 'qa', state: 'BOOTING' });
   });
 
   it('transition persists only on real state change', () => {
     const p = new CapturingPersistence();
     const t = new HeartbeatTracker();
     t.setPersistence(p);
-    t.register({ agentRunId: 1, companySessionId: 100, role: 'qa' }, 0);
+    t.register({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'qa' }, 0);
     p.records = []; // reset to isolate transition writes
     // Same-state transition = heartbeat refresh → NO persist
-    t.transition(1, 'BOOTING', 100);
+    t.transition(AGENT_1, 'BOOTING', 100);
     expect(p.records).toHaveLength(0);
     // Real transition → persist
-    t.transition(1, 'RUNNING_TURN', 200);
+    t.transition(AGENT_1, 'RUNNING_TURN', 200);
     expect(p.records).toHaveLength(1);
     expect(p.records[0].state).toBe('RUNNING_TURN');
   });
@@ -167,10 +176,10 @@ describe('HeartbeatTracker with persistence', () => {
     const p = new CapturingPersistence();
     const t = new HeartbeatTracker();
     t.setPersistence(p);
-    t.register({ agentRunId: 1, companySessionId: 100, role: 'qa' }, 0);
+    t.register({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'qa' }, 0);
     p.records = [];
-    t.recordIncident(1);
-    t.recordRecoveryAttempt(1);
+    t.recordIncident(AGENT_1);
+    t.recordRecoveryAttempt(AGENT_1);
     expect(p.records.length).toBeGreaterThan(0);
     const last = p.records[p.records.length - 1];
     expect(last.incidentCount).toBe(1);
@@ -181,9 +190,9 @@ describe('HeartbeatTracker with persistence', () => {
     const p = new CapturingPersistence();
     const t = new HeartbeatTracker();
     t.setPersistence(p);
-    t.register({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    t.unregister(1);
-    expect(p.deletes).toEqual([1]);
+    t.register({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'qa' });
+    t.unregister(AGENT_1);
+    expect(p.deletes).toEqual([AGENT_1]);
   });
 
   it('hydrate adds records without persisting them', () => {
@@ -191,8 +200,8 @@ describe('HeartbeatTracker with persistence', () => {
     const t = new HeartbeatTracker();
     t.setPersistence(p);
     const seed = [
-      makeRecord({ agentRunId: 1, state: 'RUNNING_TURN' }),
-      makeRecord({ agentRunId: 2, state: 'AWAITING_TOOL' }),
+      makeRecord({ agentRunId: AGENT_1, state: 'RUNNING_TURN' }),
+      makeRecord({ agentRunId: AGENT_2, state: 'AWAITING_TOOL' }),
     ];
     const n = t.hydrate(seed);
     expect(n).toBe(2);
@@ -203,21 +212,21 @@ describe('HeartbeatTracker with persistence', () => {
 
   it('hydrate skips duplicates', () => {
     const t = new HeartbeatTracker();
-    t.register({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    const seed = [makeRecord({ agentRunId: 1, state: 'RUNNING_TURN' })];
+    t.register({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'qa' });
+    const seed = [makeRecord({ agentRunId: AGENT_1, state: 'RUNNING_TURN' })];
     expect(t.hydrate(seed)).toBe(0);
   });
 
   it('heartbeatSnapshot excludes terminal records', () => {
     const t = new HeartbeatTracker();
-    t.register({ agentRunId: 1, companySessionId: 100, role: 'qa' }, 0);
-    t.register({ agentRunId: 2, companySessionId: 100, role: 'qa' }, 0);
-    t.transition(1, 'RUNNING_TURN', 100);
-    t.transition(2, 'RUNNING_TURN', 100);
-    t.transition(2, 'TERMINAL', 200);
+    t.register({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'qa' }, 0);
+    t.register({ agentRunId: AGENT_2, companySessionId: SESSION_ID, role: 'qa' }, 0);
+    t.transition(AGENT_1, 'RUNNING_TURN', 100);
+    t.transition(AGENT_2, 'RUNNING_TURN', 100);
+    t.transition(AGENT_2, 'TERMINAL', 200);
     const snap = t.heartbeatSnapshot();
     expect(snap).toHaveLength(1);
-    expect(snap[0].agentRunId).toBe(1);
+    expect(snap[0].agentRunId).toBe(AGENT_1);
   });
 
   it('persistence failures do not propagate', () => {
@@ -235,7 +244,9 @@ describe('HeartbeatTracker with persistence', () => {
     };
     const t = new HeartbeatTracker();
     t.setPersistence(failing);
-    expect(() => t.register({ agentRunId: 1, companySessionId: 100, role: 'qa' })).not.toThrow();
-    expect(() => t.unregister(1)).not.toThrow();
+    expect(() =>
+      t.register({ agentRunId: AGENT_1, companySessionId: SESSION_ID, role: 'qa' }),
+    ).not.toThrow();
+    expect(() => t.unregister(AGENT_1)).not.toThrow();
   });
 });

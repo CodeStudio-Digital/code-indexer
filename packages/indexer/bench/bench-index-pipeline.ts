@@ -18,7 +18,8 @@
  *
  * Run:
  *   pnpm tsx packages/indexer/bench/bench-index-pipeline.ts \
- *     [--files=300] [--workers=both|on|off] [--concurrency=5]
+ *     [--files=300] [--workers=both|on|off] [--concurrency=5] [--pool-size=4]
+ *     [--big-every=15] [--big-lines=90]
  */
 import { performance } from 'node:perf_hooks';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, existsSync } from 'node:fs';
@@ -33,9 +34,9 @@ function smallFileFixture(fnName: string): string {
   return `export function ${fnName}(value: number): number {\n  return value * 2;\n}\n`;
 }
 
-function bigFunctionFixture(name: string): string {
+function bigFunctionFixture(name: string, lines: number): string {
   return `export function ${name}(value: number): number {\n${Array.from(
-    { length: 90 },
+    { length: lines },
     (_, index) => `  value += ${index};`,
   ).join('\n')}\n  return value;\n}\n`;
 }
@@ -46,8 +47,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const arg = (name: string): string | undefined =>
   process.argv.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
 const FILE_COUNT = Number(arg('files') ?? 300);
-const BIG_EVERY = 15;                       // every 15th file gets a multi-window body
+const BIG_EVERY = Number(arg('big-every') ?? 15);
+const BIG_LINES = Number(arg('big-lines') ?? 90);
 const CONCURRENCY = Number(arg('concurrency') ?? 5);
+const POOL_SIZE = arg('pool-size');
 const WORKER_MODES: Array<'off' | 'on'> =
   arg('workers') === 'on' ? ['on'] : arg('workers') === 'off' ? ['off'] : ['off', 'on'];
 
@@ -105,7 +108,7 @@ function writeFixture(root: string, count: number): string[] {
     if (i % 10 === i) mkdirSync(sub, { recursive: true });
     const p = join(sub, `file${i}.ts`);
     const body = i % BIG_EVERY === 0
-      ? bigFunctionFixture(`bigFn${i}`)
+      ? bigFunctionFixture(`bigFn${i}`, BIG_LINES)
       : `${smallFileFixture(`fn${i}`)}\nexport const TAG_${i} = '${i}';\n`;
     writeFileSync(p, body, 'utf-8');
     paths.push(p);
@@ -174,8 +177,8 @@ async function main(): Promise<void> {
   const results: ScenarioResult[] = [];
 
   for (const mode of WORKER_MODES) {
-    // 'on' must be non-numeric: a numeric value would also override pool size.
-    process.env.MCP_INDEX_WORKERS = mode === 'on' ? 'on' : '0';
+    // Without --pool-size, 'on' keeps the production auto-size policy.
+    process.env.MCP_INDEX_WORKERS = mode === 'on' ? (POOL_SIZE ?? 'on') : '0';
     const b = setup(mode);
     try {
       results.push(await runScenario('cold', mode, b));

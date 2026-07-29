@@ -270,6 +270,34 @@ export function listBySource(db: DB, sourceId: number): DocChunk[] {
   return rows.map(mapChunk);
 }
 
+/** The five columns an outline needs — everything except the chunk bodies. */
+export interface DocChunkOutlineRow {
+  id: number;
+  ord: number;
+  heading_path: string | null;
+  source_uri: string | null;
+  token_count: number;
+}
+
+/**
+ * Outline projection of `listBySource`.
+ *
+ * `SELECT *` pulls every chunk's full `content`, so building an outline for a
+ * large source moved megabytes of text through a synchronous query — and this
+ * runs on the Electron main thread via the coder bridge, during agent turns.
+ * The outline reads none of it.
+ */
+export function listOutlineBySource(db: DB, sourceId: number): DocChunkOutlineRow[] {
+  return db
+    .prepare(
+      `SELECT id, ord, heading_path, source_uri, token_count
+         FROM doc_chunks
+        WHERE source_id = ?
+        ORDER BY ord ASC`,
+    )
+    .all(sourceId) as DocChunkOutlineRow[];
+}
+
 export function listByCollection(db: DB, collectionId: number): DocChunk[] {
   const rows = db
     .prepare('SELECT * FROM doc_chunks WHERE collection_id = ? ORDER BY source_id, ord ASC')

@@ -39,6 +39,11 @@ import {
   streamQueueLimits,
 } from '../../../sse/SerializedWriteQueue.js';
 import { effectiveSinceForBus } from '../../../sse/pumpBusToSSE.js';
+import {
+  asCompanySessionId,
+  isUuid,
+  type CompanySessionId,
+} from '@mcp/session-storage';
 
 // Narrow `ws` surface — typed locally because `@types/ws` is not a
 // project dependency. The runtime module is the published `ws`
@@ -70,13 +75,14 @@ const wsModule = require('ws') as {
 };
 
 export interface WsContext {
-  sessionId: number;
+  sessionId: CompanySessionId;
   sinceSeq: number;
   busId: string | null;
 }
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
-const PATH_RE = /^\/api\/company\/sessions\/(\d+)\/ws(?:\?(.*))?$/;
+const PATH_RE =
+  /^\/api\/company\/sessions\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/ws(?:\?(.*))?$/i;
 
 /**
  * Wire a `WebSocketServer` to the existing HTTP server. Mirrors
@@ -109,16 +115,18 @@ export function parseUpgradeRequest(req: IncomingMessage): WsContext | null {
   const url = req.url ?? '';
   const m = PATH_RE.exec(url);
   if (!m) return null;
-  const sessionId = Number(m[1]);
-  if (!Number.isFinite(sessionId)) return null;
+  if (!isUuid(m[1])) return null;
+  const sessionId = asCompanySessionId(m[1]);
   let sinceSeq = -1;
   let busId: string | null = null;
   if (m[2]) {
     const params = new URLSearchParams(m[2]);
     const raw = params.get('sinceSeq');
     if (raw != null) {
-      const n = Number(raw);
-      if (Number.isFinite(n)) sinceSeq = n;
+      if (/^(0|[1-9][0-9]*)$/.test(raw)) {
+        const n = Number(raw);
+        if (Number.isSafeInteger(n)) sinceSeq = n;
+      }
     }
     const rawBusId = params.get('busId')?.trim();
     if (rawBusId && rawBusId.length <= 256) busId = rawBusId;

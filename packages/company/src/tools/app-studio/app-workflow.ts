@@ -39,17 +39,17 @@ function json<T>(raw: string | null | undefined, fallback: T): T {
 }
 
 type BoundApp = { ok: false; error: string } | { ok: true; store: AppStudioStore; session: AppStudioSession };
-function bound(binding: AppToolBinding): BoundApp {
+async function bound(binding: AppToolBinding): Promise<BoundApp> {
   const store = getAppStudioStore();
   if (!store) return { ok: false, error: 'AppStudioStore not wired.' };
-  const session = binding.resolveAppSession(store);
+  const session = await binding.resolveAppSession(store);
   return session
     ? { ok: true, store, session }
     : { ok: false, error: `No App is bound to ${binding.describeBinding()}.` };
 }
 
-function latestPlan(value: Extract<BoundApp, { ok: true }>) {
-  const revision = value.store.getLatestPlanRevision(value.session.id);
+async function latestPlan(value: Extract<BoundApp, { ok: true }>) {
+  const revision = await value.store.getLatestPlanRevision(value.session.id);
   const plan = parseAppPlan(revision?.plan_json ?? null);
   const fitness = json<AppFitnessReport | null>(revision?.fitness_json, null);
   return { revision, plan, fitness };
@@ -82,11 +82,14 @@ export function appGetState(binding: AppToolBinding): CoderTool {
     parameters: EMPTY,
     source: 'native', mutates: false, parallelSafe: true, stopOnRepeatedUnchangedResult: true,
     handler: async () => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
-      const { revision, fitness } = latestPlan(value);
-      const work = value.store.listWorkItems(value.session.id);
-      const decisions = value.store.listDecisions(value.session.id);
-      const deployment = value.store.getLatestDeployment(value.session.id);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
+      const [{ revision, fitness }, work, decisions, deployment] =
+        await Promise.all([
+          latestPlan(value),
+          value.store.listWorkItems(value.session.id),
+          value.store.listDecisions(value.session.id),
+          value.store.getLatestDeployment(value.session.id),
+        ]);
       const stage = deployment?.status === 'live' && deployment.health_ok
         ? 'live'
         : revision?.status !== 'approved'
@@ -113,8 +116,8 @@ export function appGetPlan(binding: AppToolBinding): CoderTool {
     parameters: EMPTY,
     source: 'native', outputPolicy: { mode: 'authoritative', reducer: 'none', recovery: 'output_store', preserveOnError: true }, mutates: false, parallelSafe: true, stopOnRepeatedUnchangedResult: true,
     handler: async () => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
-      const { revision, plan, fitness } = latestPlan(value);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
+      const { revision, plan, fitness } = await latestPlan(value);
       return revision && plan
         ? appResult(`App plan r${revision.revision_number}`, { revision: { id: revision.id, revision_number: revision.revision_number, status: revision.status }, plan, fitness })
         : err('The App has no valid AppPlanV1.');
@@ -140,12 +143,12 @@ export function appUpdatePlan(binding: AppToolBinding): CoderTool {
     parameters: PLAN_SCHEMA,
     source: 'native', mutates: true, parallelSafe: false,
     handler: async (args) => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
       try {
         const validation = validateAppPlan(args.plan);
         if (!validation.ok) return err(formatAppPlanValidationIssues(validation.issues));
         const fitness = auditAppPlan(validation.plan);
-        const revision = value.store.savePlanRevision({
+        const revision = await value.store.savePlanRevision({
           app_session_id: value.session.id,
           plan: validation.plan,
           fitness,
@@ -184,21 +187,25 @@ export function appUpsertWorkItems(binding: AppToolBinding): CoderTool {
     parameters: UPSERT_SCHEMA,
     source: 'native', mutates: true, parallelSafe: false,
     handler: async (args) => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
-      const { revision, plan } = latestPlan(value);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
+      const { revision, plan } = await latestPlan(value);
       if (!revision || !plan) return err('Save a valid AppPlanV1 before creating work.');
       const raw = Array.isArray(args.items) ? args.items as Array<Record<string, unknown>> : [];
       if (raw.length === 0) return err('items is required.');
       const ids = raw.map((item) => String(item.id ?? '').trim());
       if (ids.some((id) => !id) || new Set(ids).size !== ids.length) return err('Every item needs a unique non-empty id.');
-      const known = new Set([...value.store.listWorkItems(value.session.id).map((item) => item.id), ...ids]);
+      const existing = await value.store.listWorkItems(value.session.id);
+      const known = new Set([
+        ...existing.flatMap((item) => [item.id, item.source_id]),
+        ...ids,
+      ]);
       for (const item of raw) {
         for (const dep of Array.isArray(item.depends_on) ? item.depends_on.map(String) : []) {
           if (!known.has(dep)) return err(`Unknown dependency '${dep}'.`);
           if (dep === String(item.id)) return err(`Work item '${dep}' cannot depend on itself.`);
         }
       }
-      const saved = value.store.upsertWorkItems(raw.map((item, index) => ({
+      const saved = await value.store.upsertWorkItems(raw.map((item, index) => ({
         app_session_id: value.session.id,
         id: String(item.id),
         plan_revision_id: revision.id,
@@ -215,7 +222,7 @@ export function appUpsertWorkItems(binding: AppToolBinding): CoderTool {
         acceptance_json: JSON.stringify(Array.isArray(item.acceptance) ? item.acceptance : []),
         file_scope_json: JSON.stringify(Array.isArray(item.file_scope) ? item.file_scope : []),
       })));
-      value.store.refreshReadyWorkItems(value.session.id);
+      await value.store.refreshReadyWorkItems(value.session.id);
       return appResult('App work updated', { plan_revision_id: revision.id, items: saved.map(workView) });
     },
   };
@@ -231,21 +238,29 @@ export function appRequestDecision(binding: AppToolBinding): CoderTool {
     }, required: ['question', 'blocked_work_item_ids'], additionalProperties: false } as JsonSchema,
     source: 'native', mutates: true,
     handler: async (args) => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
-      const { revision } = latestPlan(value);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
+      const { revision } = await latestPlan(value);
       const question = typeof args.question === 'string' ? args.question.trim() : '';
       const blocked = Array.isArray(args.blocked_work_item_ids) ? args.blocked_work_item_ids.map(String) : [];
       if (!revision || !question) return err('A current plan and question are required.');
+      const blockedPublicIds: string[] = [];
       for (const id of blocked) {
-        if (!value.store.getWorkItem(value.session.id, id)) return err(`Unknown work item '${id}'.`);
-        value.store.setWorkItemStatus(value.session.id, id, 'blocked', { blockedReason: question });
+        const item = await value.store.getWorkItem(value.session.id, id);
+        if (!item) return err(`Unknown work item '${id}'.`);
+        blockedPublicIds.push(item.id);
+        await value.store.setWorkItemStatus(
+          value.session.id,
+          item.id,
+          'blocked',
+          { blockedReason: question },
+        );
       }
-      const decision = value.store.createDecision({
+      const decision = await value.store.createDecision({
         sessionId: value.session.id,
         planRevisionId: revision.id,
         question,
         optionsJson: JSON.stringify(args.options ?? []),
-        blockedWorkItemIdsJson: JSON.stringify(blocked),
+        blockedWorkItemIdsJson: JSON.stringify(blockedPublicIds),
       });
       return ok(`Decision ${decision.id} requested; ${blocked.length} linked card(s) blocked.`);
     },
@@ -259,12 +274,12 @@ export function appRequestPlanApproval(binding: AppToolBinding): CoderTool {
     parameters: EMPTY,
     source: 'native', mutates: true,
     handler: async () => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
-      const { revision, plan } = latestPlan(value);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
+      const { revision, plan } = await latestPlan(value);
       if (!revision || !plan) return err('The App has no valid plan.');
       const fitness = auditAppPlan(plan);
       if (fitness.status !== 'ready') return appResult('Plan approval blocked', { fitness, action: 'Resolve every failed check.' });
-      value.store.appendEvent(value.session.id, 'plan.approval_requested', 'plan_revision', String(revision.id), JSON.stringify({ revision_number: revision.revision_number }), `plan-approval-requested:${revision.id}`);
+      await value.store.appendEvent(value.session.id, 'plan.approval_requested', 'plan_revision', String(revision.id), JSON.stringify({ revision_number: revision.revision_number }), `plan-approval-requested:${revision.id}`);
       return appResult('Plan ready for approval', { revision_id: revision.id, revision_number: revision.revision_number, fitness, human_action: 'approve_plan_and_build' });
     },
   };
@@ -277,7 +292,7 @@ export function appDispatchReadyWork(binding: AppToolBinding): CoderTool {
     parameters: EMPTY,
     source: 'native', mutates: true, parallelSafe: false,
     handler: async (_args, ctx) => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
       if (ctx.companyContext?.runtimeKind !== 'app_studio' || !ctx.companyContext.isMaster) {
         return err('Only the persistent App Company Master can dispatch App work.');
       }
@@ -305,13 +320,15 @@ export function appRecordWorkEvidence(binding: AppToolBinding): CoderTool {
     }, required: ['work_item_id', 'status', 'summary'], additionalProperties: false } as JsonSchema,
     source: 'native', mutates: true,
     handler: async (args, ctx) => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
       const id = String(args.work_item_id ?? '');
-      const item = value.store.getWorkItem(value.session.id, id);
+      const item = await value.store.getWorkItem(value.session.id, id);
       if (!item) return err(`Unknown work item '${id}'.`);
-      const approved = value.store.getLatestApprovedPlanRevision(value.session.id);
+      const [approved, active] = await Promise.all([
+        value.store.getLatestApprovedPlanRevision(value.session.id),
+        value.store.getActiveWorkItemRun(value.session.id, item.id),
+      ]);
       if (!approved || approved.id !== item.plan_revision_id) return err('Evidence can only be recorded for the current approved plan revision.');
-      const active = value.store.getActiveWorkItemRun(value.session.id, id);
       const company = ctx.companyContext;
       if (!company || company.runtimeKind !== 'app_studio' || company.isMaster || company.companySessionId !== value.session.company_session_id) {
         return err('Evidence must come from the App specialist that owns the active attempt.');
@@ -335,20 +352,37 @@ export function appRecordWorkEvidence(binding: AppToolBinding): CoderTool {
       if (records.some((record) => !record.kind.trim() || !record.value.trim())) return err('Every evidence item needs kind and value.');
       if (['implement', 'contract', 'change'].includes(item.kind) && status === 'done') return err('Implementation cards move to review; a separate verify card closes them.');
       const merged = [...json<Array<Record<string, unknown>>>(item.evidence_json, []), ...records];
-      const updated = value.store.setWorkItemStatus(value.session.id, id, status, {
+      const updated = await value.store.setWorkItemStatus(value.session.id, item.id, status, {
         blockedReason: typeof args.blocked_reason === 'string' ? args.blocked_reason : null,
         evidenceJson: JSON.stringify(merged),
       });
-      value.store.updateWorkItemRunStatus(active.id, status === 'blocked' ? 'blocked' : 'completed', { statusMessage: String(args.summary) });
+      await value.store.updateWorkItemRunStatus(active.id, status === 'blocked' ? 'blocked' : 'completed', { statusMessage: String(args.summary) });
       if (updated.kind === 'verify' && updated.status === 'done') {
         for (const dependencyId of json<string[]>(updated.depends_on_json, [])) {
-          const dependency = value.store.getWorkItem(value.session.id, dependencyId);
-          if (dependency?.status === 'review') value.store.setWorkItemStatus(value.session.id, dependency.id, 'done', {
-            evidenceJson: JSON.stringify([...json<unknown[]>(dependency.evidence_json, []), { kind: 'verified-by', value: updated.id, recorded_at: now }]),
-          });
+          const dependency = await value.store.getWorkItem(
+            value.session.id,
+            dependencyId,
+          );
+          if (dependency?.status === 'review') {
+            await value.store.setWorkItemStatus(
+              value.session.id,
+              dependency.id,
+              'done',
+              {
+                evidenceJson: JSON.stringify([
+                  ...json<unknown[]>(dependency.evidence_json, []),
+                  {
+                    kind: 'verified-by',
+                    value: updated.id,
+                    recorded_at: now,
+                  },
+                ]),
+              },
+            );
+          }
         }
       }
-      value.store.refreshReadyWorkItems(value.session.id);
+      await value.store.refreshReadyWorkItems(value.session.id);
       return ok(`Evidence recorded for '${id}'; status=${updated.status}.`);
     },
   };
@@ -361,7 +395,7 @@ export function appGetDbState(binding: AppToolBinding): CoderTool {
     parameters: EMPTY,
     source: 'native', mutates: false, parallelSafe: true,
     handler: async (_args, ctx) => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
       const resolved = resolveHostPath('.', ctx); if (resolved.kind === 'no-bind-mount') return err(resolved.message);
       const migrations = listSqlMigrations(resolved.path);
       const status = readDbStatus(resolved.path);
@@ -386,8 +420,8 @@ export function appUpdateDatabase(binding: AppToolBinding): CoderTool {
     }, required: ['operation'], additionalProperties: false } as JsonSchema,
     source: 'native', mutates: true, parallelSafe: false,
     handler: async (args, ctx) => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
-      if (!value.store.getLatestApprovedPlanRevision(value.session.id)) return err('Approve the current plan before changing the database.');
+      const value = await bound(binding); if (!value.ok) return err(value.error);
+      if (!(await value.store.getLatestApprovedPlanRevision(value.session.id))) return err('Approve the current plan before changing the database.');
       const resolved = resolveHostPath('.', ctx); if (resolved.kind === 'no-bind-mount') return err(resolved.message);
       const operation = String(args.operation ?? '');
       if (operation === 'add_migration') {
@@ -403,9 +437,11 @@ export function appUpdateDatabase(binding: AppToolBinding): CoderTool {
         const filename = nextMigrationFilename(migrations, name);
         mkdirSync(join(resolved.path, 'migrations'), { recursive: true });
         writeFileSync(join(resolved.path, 'migrations', filename), `${sql.trim()}\n`, 'utf8');
-        const stale = value.store.listWorkItems(value.session.id).filter((item) => ['done', 'review'].includes(item.status)).map((item) => item.id);
-        value.store.markWorkItemsStale(value.session.id, stale, `Database migration ${filename} changed the implementation evidence.`);
-        value.store.appendEvent(value.session.id, 'database.changed', 'migration', filename, JSON.stringify({ operation }));
+        const stale = (await value.store.listWorkItems(value.session.id))
+          .filter((item) => ['done', 'review'].includes(item.status))
+          .map((item) => item.id);
+        await value.store.markWorkItemsStale(value.session.id, stale, `Database migration ${filename} changed the implementation evidence.`);
+        await value.store.appendEvent(value.session.id, 'database.changed', 'migration', filename, JSON.stringify({ operation }));
         return appResult('Database migration added', { filename, stale_work_items: stale });
       }
       if (operation === 'replace_seed') {
@@ -415,10 +451,12 @@ export function appUpdateDatabase(binding: AppToolBinding): CoderTool {
         if (!reason || issue) return err(issue ?? 'reason is required.');
         const result = replaceAppSeedFile(resolved.path, sql);
         const stale = result.changed
-          ? value.store.listWorkItems(value.session.id).filter((item) => ['done', 'review'].includes(item.status)).map((item) => item.id)
+          ? (await value.store.listWorkItems(value.session.id))
+              .filter((item) => ['done', 'review'].includes(item.status))
+              .map((item) => item.id)
           : [];
-        value.store.markWorkItemsStale(value.session.id, stale, 'Canonical seed data changed the implementation evidence.');
-        value.store.appendEvent(value.session.id, 'database.changed', 'seed', 'seeds/seed.sql', JSON.stringify({ operation, reason, changed: result.changed }));
+        await value.store.markWorkItemsStale(value.session.id, stale, 'Canonical seed data changed the implementation evidence.');
+        await value.store.appendEvent(value.session.id, 'database.changed', 'seed', 'seeds/seed.sql', JSON.stringify({ operation, reason, changed: result.changed }));
         return appResult('Database seed updated', { ...result, stale_work_items: stale });
       }
       if (operation === 'provision_local') {
@@ -427,7 +465,7 @@ export function appUpdateDatabase(binding: AppToolBinding): CoderTool {
         const dbFile = findLocalD1File(resolved.path);
         const dbStore = getAppStudioDbClientStore();
         if (dbFile && dbStore) ensureAppStudioDbConnection(dbStore, value.session, dbFile);
-        value.store.appendEvent(value.session.id, 'database.provisioned', 'database', 'local-d1', JSON.stringify({ applied: outcome.applied }));
+        await value.store.appendEvent(value.session.id, 'database.provisioned', 'database', 'local-d1', JSON.stringify({ applied: outcome.applied }));
         return appResult('Local D1 ready', { applied: outcome.applied, database_file: dbFile ? 'available' : 'missing' });
       }
       return err('operation must be add_migration, replace_seed or provision_local.');
@@ -444,8 +482,8 @@ export function appRunChecks(binding: AppToolBinding): CoderTool {
     }, additionalProperties: false } as JsonSchema,
     source: 'native', mutates: false, parallelSafe: false, riskLevel: 'execute',
     handler: async (args, ctx) => {
-      const value = bound(binding); if (!value.ok) return err(value.error);
-      const { revision, plan } = latestPlan(value);
+      const value = await bound(binding); if (!value.ok) return err(value.error);
+      const { revision, plan } = await latestPlan(value);
       if (!revision || !plan) return err('The App has no valid plan.');
       const fitness = auditAppPlan(plan);
       const script = typeof args.script === 'string' ? args.script : null;

@@ -6,7 +6,7 @@ import type { TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js
 import { enrichReferencesWithLines } from './enrich-references.js';
 import { hashContent, countLines } from '../content-hash.js';
 import { getCachedExtraction, cacheExtraction } from '../extract-cache.js';
-import { structuralPathFlags } from '../mapper.js';
+import { structuralPathFlags, type StructuralPathFlags } from '../mapper.js';
 
 export interface ProcessFileStructuralResult {
   fileId: number;
@@ -16,18 +16,32 @@ export interface ProcessFileStructuralResult {
 }
 
 /**
- * Per-file STRUCTURAL pipeline — the free half of `processFile`: tree-sitter
- * extraction + persistence, no LLM, no embeddings, no cost tracking.
- *
- * Unsupported languages keep their existing structural symbols/dependencies;
- * path/content FTS is still refreshed. Semantic generations are independent.
+ * CPU/read side of the structural pipeline. Prepared values are deliberately
+ * detached from SQLite so callers can run this stage in a bounded parser pool
+ * and hand completed records to one writer.
  */
-export async function processFileStructural(
-  db: CodeIndexDB,
-  projectId: number,
+export interface PreparedFileStructural {
+  file: ScannedFile;
+  content: string;
+  hash: string;
+  sizeBytes: number;
+  lineCount: number;
+  mtimeMs: number | null;
+  tsResult: TreeSitterResult;
+  supported: boolean;
+  pathFlags: StructuralPathFlags;
+}
+
+/**
+ * Read + hash + tree-sitter extraction, with no SQLite mutation.
+ *
+ * Keeping this boundary pure with respect to the project DB is what makes a
+ * clean producer/parser pool + single-writer pipeline possible.
+ */
+export async function prepareFileStructural(
   file: ScannedFile,
   treeSitter: { extract: (filePath: string, content: string) => Promise<TreeSitterResult> },
-): Promise<ProcessFileStructuralResult> {
+): Promise<PreparedFileStructural> {
   // Lazy content read, same drift handling as processFile: the file may have
   // changed between scan and process; `files.content_hash` must match what we
   // actually parsed.
@@ -57,8 +71,45 @@ export async function processFileStructural(
     if (hash) await cacheExtraction(hash, file.relativePath, tsResult);
   }
   const supported = tsResult.supported;
-  const symbols = supported ? tsResult.analysis.symbols ?? [] : [];
   const pathFlags = structuralPathFlags(file.relativePath);
+
+  return {
+    file,
+    content,
+    hash,
+    sizeBytes,
+    lineCount,
+    mtimeMs,
+    tsResult,
+    supported,
+    pathFlags,
+  };
+}
+
+/**
+ * SQLite side of the per-file structural pipeline.
+ *
+ * The transaction remains per-file as a savepoint when a caller wraps a whole
+ * wave in `db.indexTransaction`: one bad file rolls back independently while
+ * the outer wave still commits once.
+ */
+export function persistPreparedFileStructural(
+  db: CodeIndexDB,
+  projectId: number,
+  prepared: PreparedFileStructural,
+): ProcessFileStructuralResult {
+  const {
+    file,
+    content,
+    hash,
+    sizeBytes,
+    lineCount,
+    mtimeMs,
+    tsResult,
+    supported,
+    pathFlags,
+  } = prepared;
+  const symbols = supported ? tsResult.analysis.symbols ?? [] : [];
 
   const fileId = db.indexTransaction(projectId, () => {
     const { fileId: id } = db.upsertFileStructural(projectId, {
@@ -102,4 +153,18 @@ export async function processFileStructural(
   });
 
   return { fileId, supported, symbolCount: symbols.length };
+}
+
+/**
+ * Backwards-compatible single-file entrypoint used by narrow incremental
+ * callers. Full and batched incremental passes call prepare/persist separately.
+ */
+export async function processFileStructural(
+  db: CodeIndexDB,
+  projectId: number,
+  file: ScannedFile,
+  treeSitter: { extract: (filePath: string, content: string) => Promise<TreeSitterResult> },
+): Promise<ProcessFileStructuralResult> {
+  const prepared = await prepareFileStructural(file, treeSitter);
+  return persistPreparedFileStructural(db, projectId, prepared);
 }

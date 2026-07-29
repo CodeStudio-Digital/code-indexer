@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IncomingMessage } from 'node:http';
+import { asCompanySessionId } from '@mcp/session-storage';
 import { createBus, markEnded, publish } from '../../../../coder-bus.js';
 import {
   handleConnection,
@@ -7,6 +8,11 @@ import {
   type WsContext,
   type WsLike,
 } from '../ws.js';
+
+const SESSION_ID = asCompanySessionId(
+  '00000000-0000-4000-8000-000000000007',
+);
+const BOARD_ENTRY_ID = 'b0000000-0000-4000-8000-000000000001';
 
 class FakeWs implements WsLike {
   readonly OPEN = 1;
@@ -54,7 +60,7 @@ class FakeWs implements WsLike {
 }
 
 function context(busId: string | null, sinceSeq = -1): WsContext {
-  return { sessionId: 1, sinceSeq, busId };
+  return { sessionId: SESSION_ID, sinceSeq, busId };
 }
 
 async function parsedFrames(ws: FakeWs): Promise<Array<Record<string, unknown>>> {
@@ -66,10 +72,11 @@ describe('Company WebSocket stream protocol', () => {
   it('decodes the paired replay cursor from the upgrade URL', () => {
     const parsed = parseUpgradeRequest({
       method: 'GET',
-      url: '/api/company/sessions/7/ws?sinceSeq=42&busId=bus%20%2F%2042',
+      url:
+        `/api/company/sessions/${SESSION_ID}/ws?sinceSeq=42&busId=bus%20%2F%2042`,
     } as IncomingMessage);
     expect(parsed).toEqual({
-      sessionId: 7,
+      sessionId: SESSION_ID,
       sinceSeq: 42,
       busId: 'bus / 42',
     });
@@ -77,7 +84,7 @@ describe('Company WebSocket stream protocol', () => {
 
   it('sends bus_info and an explicit terminal for an already-ended bus', async () => {
     const bus = createBus(new AbortController());
-    publish(bus, 'board_entry', { id: 1 });
+    publish(bus, 'board_entry', { id: BOARD_ENTRY_ID });
     markEnded(bus, 'done', { reason: 'completed' });
     const ws = new FakeWs();
 

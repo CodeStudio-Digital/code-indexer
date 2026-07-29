@@ -47,8 +47,8 @@ export interface PerfSample {
     | null;
   totalWorkingSetMB: number | null;
   workers: {
-    company: Array<{ sessionId: number; stats: WorkerMemStats | null }>;
-    coder: Array<{ sessionId: number; stats: WorkerMemStats | null }>;
+    company: Array<{ sessionId: string; stats: WorkerMemStats | null }>;
+    coder: Array<{ sessionId: string; stats: WorkerMemStats | null }>;
     indexer: WorkerMemStats | null;
   };
   ledger: Array<{ name: string; count: number; bytes?: number; detail?: string }>;

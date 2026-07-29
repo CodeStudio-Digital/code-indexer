@@ -1,6 +1,6 @@
 /**
  * Promote ALL staged candidates of a finished frame-pack job into asset
- * versions + sprite_frames rows (animation adopt flow). Loops the existing
+ * version/frame records in the Sprite bundle (animation adopt flow). Loops the existing
  * promoteCandidate — each frame gets a real immutable version (v numbers,
  * manifest entries, mirror rows: full provenance + per-frame re-roll later)
  * — then REPLACES the animation's frame list with the new versions in
@@ -14,26 +14,44 @@
  *     frame (promoteCandidate writes it per loop) — harmless ledger detail.
  */
 import fs from 'node:fs';
-import type { SpriteAnimationsStore } from '@mcp/store/sprite-studio/sprite-animations-store.js';
-import type { SpriteAssetVersionRow, SpriteFrameRow } from '@mcp/store/sprite-studio/types.js';
+import type { SpriteJobVersionRecord } from './deps.js';
 import { candidateFileName, promoteCandidate, type PickDeps } from './pick-candidate.js';
 
 export interface PromoteFramesDeps extends PickDeps {
   stores: PickDeps['stores'] & {
-    animations: Pick<SpriteAnimationsStore, 'replaceFrames'>;
+    animations: {
+      replaceFrames(
+        animationId: string,
+        frames: Array<{ frame_index: number; version_id: string }>,
+      ): Promise<Array<{
+        id: string;
+        animation_id: string;
+        frame_index: number;
+        version_id: string;
+        duration_ms: number | null;
+        track: number;
+      }>>;
+    };
   };
 }
 
 export interface PromoteFramesInput {
-  jobId: number;
-  animationId: number;
-  /** Target asset: DB row id + repo slug (the animation's owner). */
-  asset: { id: number; slug: string };
+  jobId: string;
+  animationId: string;
+  /** Target asset: bundle-record UUID + repo slug (the animation's owner). */
+  asset: { id: string; slug: string };
 }
 
 export interface PromoteFramesResult {
-  versions: SpriteAssetVersionRow[];
-  frames: SpriteFrameRow[];
+  versions: SpriteJobVersionRecord[];
+  frames: Array<{
+    id: string;
+    animation_id: string;
+    frame_index: number;
+    version_id: string;
+    duration_ms: number | null;
+    track: number;
+  }>;
 }
 
 /** Contiguous staged candidate indices (0..n-1) present in the job scratch dir. */
@@ -71,9 +89,10 @@ export async function promoteFrames(
     );
   }
 
-  const originalCurrent = deps.stores.assets.get(asset.id)?.current_version_id ?? null;
+  const originalCurrent =
+    (await deps.stores.assets.get(asset.id))?.current_version_id ?? null;
 
-  const versions: SpriteAssetVersionRow[] = [];
+  const versions: SpriteJobVersionRecord[] = [];
   for (const index of indices) {
     versions.push(await promoteCandidate(deps, { jobId, candidateIndex: index, asset }));
   }
@@ -81,9 +100,12 @@ export async function promoteFrames(
   // promoteCandidate moves current_version_id to each new version; put the
   // pointer back unless the asset had none (then the first frame is a
   // sensible hero image).
-  deps.stores.assets.setCurrentVersion(asset.id, originalCurrent ?? versions[0].id);
+  await deps.stores.assets.setCurrentVersion(
+    asset.id,
+    originalCurrent ?? versions[0].id,
+  );
 
-  const frames = deps.stores.animations.replaceFrames(
+  const frames = await deps.stores.animations.replaceFrames(
     animationId,
     versions.map((v, i) => ({ frame_index: i, version_id: v.id })),
   );

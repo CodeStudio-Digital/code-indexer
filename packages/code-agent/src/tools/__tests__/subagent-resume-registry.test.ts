@@ -7,6 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { StopReason } from '@mcp/code-agent/core/runner.js';
+import { newSessionId, type SessionId } from '@mcp/session-storage';
 import {
   retainGroup,
   getGroup,
@@ -52,36 +53,39 @@ function agent(index: number, reason: StopReason, overrides: Partial<ResumableAg
   };
 }
 
-function group(sessionId: number, spawnId: string, agents: ResumableAgentState[]): ResumableGroup {
+function group(sessionId: SessionId, spawnId: string, agents: ResumableAgentState[]): ResumableGroup {
   return { spawnId, sessionId, provider: 'openai', model: 'gpt', createdAt: 0, lastTouchedAt: 0, agents };
 }
 
-let SID = 0;
+let SID: SessionId;
 // This suite isolates the registry's in-RAM mechanics (sanitize, byte-cap, LRU,
 // TTL). The disk-spill layer (default ON) is exercised in
 // subagent-resume-retention.test.ts, so keep it OFF here to assert in-memory
 // transcripts directly.
-beforeEach(() => { SID += 100; vi.stubEnv('CODER_RESUME_SPILL', '0'); });
-afterEach(() => {
-  for (let s = SID - 100; s <= SID + 20; s++) clearSession(s);
+beforeEach(() => {
+  SID = newSessionId();
+  vi.stubEnv('CODER_RESUME_SPILL', '0');
+});
+afterEach(async () => {
+  await clearSession(SID);
   vi.unstubAllEnvs();
   stopResumeSweepForTests();
   vi.useRealTimers();
 });
 
 describe('subagent-resume-registry', () => {
-  it('keeps transcripts for failed AND completed agents by default (P1 observability)', () => {
-    retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
-    const g = getGroup(SID, 'g1')!;
+  it('keeps transcripts for failed AND completed agents by default (P1 observability)', async () => {
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
+    const g = (await getGroup(SID, 'g1'))!;
     expect(g.agents[0].transcript).toBeDefined();
     expect(g.agents[1].transcript).toBeDefined();
   });
 
-  it('drops completed transcripts when CODER_RESUME_RETAIN_COMPLETED=0 (old economy)', () => {
+  it('drops completed transcripts when CODER_RESUME_RETAIN_COMPLETED=0 (old economy)', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '0');
     try {
-      retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
-      const g = getGroup(SID, 'g1')!;
+      await retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
+      const g = (await getGroup(SID, 'g1'))!;
       expect(g.agents[0].transcript).toBeDefined();
       expect(g.agents[1].transcript).toBeUndefined();
     } finally {
@@ -89,24 +93,24 @@ describe('subagent-resume-registry', () => {
     }
   });
 
-  it('records a failureNote from the finalText/detail for failed agents', () => {
-    retainGroup(SID, group(SID, 'g1', [agent(0, 'tool_budget', { failureNote: 'hit cap' })]));
-    expect(getGroup(SID, 'g1')!.agents[0].failureNote).toBe('hit cap');
+  it('records a failureNote from the finalText/detail for failed agents', async () => {
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'tool_budget', { failureNote: 'hit cap' })]));
+    expect((await getGroup(SID, 'g1'))!.agents[0].failureNote).toBe('hit cap');
   });
 
-  it('sanitizes a dangling tool_use in the captured transcript', () => {
+  it('sanitizes a dangling tool_use in the captured transcript', async () => {
     const dangling: AgentMessage[] = [
       { role: 'user', content: [{ type: 'text', text: 'go' }] },
       { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'run_command', input: {} }] },
     ];
-    retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: dangling })]));
-    const t = getGroup(SID, 'g1')!.agents[0].transcript!;
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: dangling })]));
+    const t = (await getGroup(SID, 'g1'))!.agents[0].transcript!;
     const last = t[t.length - 1];
     expect(last.role).toBe('tool');
     expect((last.content[0] as { is_error?: boolean }).is_error).toBe(true);
   });
 
-  it('front-elides large tool_results but protects the tail under the byte cap', () => {
+  it('front-elides large tool_results but protects the tail under the byte cap', async () => {
     const big = 'x'.repeat(5000);
     const long: AgentMessage[] = [{ role: 'user', content: [{ type: 'text', text: 'go' }] }];
     // 30 tool turns each with a big result. Cap chosen so the FRONT pass alone
@@ -119,12 +123,12 @@ describe('subagent-resume-registry', () => {
     const prev = process.env.CODER_RESUME_MAX_AGENT_BYTES;
     process.env.CODER_RESUME_MAX_AGENT_BYTES = '60000';
     try {
-      retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: long })]));
+      await retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: long })]));
     } finally {
       if (prev == null) delete process.env.CODER_RESUME_MAX_AGENT_BYTES;
       else process.env.CODER_RESUME_MAX_AGENT_BYTES = prev;
     }
-    const t = getGroup(SID, 'g1')!.agents[0].transcript!;
+    const t = (await getGroup(SID, 'g1'))!.agents[0].transcript!;
     const findResult = (m: AgentMessage) => m.content.find((b) => b.type === 'tool_result') as { content: string } | undefined;
     // The very last tool_result (tail) is untouched.
     const lastTool = [...t].reverse().find((m) => m.role === 'tool')!;
@@ -134,7 +138,7 @@ describe('subagent-resume-registry', () => {
     expect(early.some((r) => r.content.includes('elided'))).toBe(true);
   });
 
-  it('enforces the byte cap even for a short (<=20 msg) transcript with a giant result (M2)', () => {
+  it('enforces the byte cap even for a short (<=20 msg) transcript with a giant result (M2)', async () => {
     const giant = 'y'.repeat(200_000);
     const short: AgentMessage[] = [
       { role: 'user', content: [{ type: 'text', text: 'go' }] },
@@ -144,11 +148,11 @@ describe('subagent-resume-registry', () => {
     const prev = process.env.CODER_RESUME_MAX_AGENT_BYTES;
     process.env.CODER_RESUME_MAX_AGENT_BYTES = '10000';
     try {
-      retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: short })]));
+      await retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: short })]));
     } finally {
       if (prev == null) delete process.env.CODER_RESUME_MAX_AGENT_BYTES; else process.env.CODER_RESUME_MAX_AGENT_BYTES = prev;
     }
-    const t = getGroup(SID, 'g1')!.agents[0].transcript!;
+    const t = (await getGroup(SID, 'g1'))!.agents[0].transcript!;
     const res = t.find((m) => m.role === 'tool')!.content.find((b) => b.type === 'tool_result') as { content: string };
     // The giant result was elided despite the transcript being only 3 messages.
     expect(res.content).toContain('elided');
@@ -156,49 +160,51 @@ describe('subagent-resume-registry', () => {
     expect(t).toHaveLength(3);
   });
 
-  it('evicts the LRU group beyond the 8-group cap', () => {
-    for (let i = 0; i < 10; i++) retainGroup(SID, group(SID, `g${i}`, [agent(0, 'error')]));
-    expect(getGroup(SID, 'g0')).toBeUndefined();
-    expect(getGroup(SID, 'g9')).toBeDefined();
+  it('evicts the LRU group beyond the 8-group cap', async () => {
+    for (let i = 0; i < 10; i++) {
+      await retainGroup(SID, group(SID, `g${i}`, [agent(0, 'error')]));
+    }
+    expect(await getGroup(SID, 'g0')).toBeUndefined();
+    expect(await getGroup(SID, 'g9')).toBeDefined();
   });
 
-  it('expires groups past the TTL', () => {
+  it('expires groups past the TTL', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    retainGroup(SID, group(SID, 'g1', [agent(0, 'error')]));
-    expect(getGroup(SID, 'g1')).toBeDefined();
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error')]));
+    expect(await getGroup(SID, 'g1')).toBeDefined();
     vi.setSystemTime(46 * 60_000);
-    expect(getGroup(SID, 'g1')).toBeUndefined();
+    expect(await getGroup(SID, 'g1')).toBeUndefined();
   });
 
-  it('listResumable only lists agents with a transcript', () => {
-    retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
+  it('listResumable only lists agents with a transcript', async () => {
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
     const list = listResumable(SID);
     expect(list).toHaveLength(1);
     expect(list[0]).toMatchObject({ spawnId: 'g1', agentIndex: 0 });
   });
 
-  it('replaceAgentState swaps a single agent in place', () => {
-    retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'error')]));
-    replaceAgentState(SID, 'g1', agent(0, 'completed', { attempt: 2 }));
-    const g = getGroup(SID, 'g1')!;
+  it('replaceAgentState swaps a single agent in place', async () => {
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'error')]));
+    await replaceAgentState(SID, 'g1', agent(0, 'completed', { attempt: 2 }));
+    const g = (await getGroup(SID, 'g1'))!;
     expect(g.agents[0].attempt).toBe(2);
     // Completed resumes keep their transcript now (readable, never resumable).
     expect(g.agents[0].transcript).toBeDefined();
     expect(g.agents[1].reason).toBe('error');
   });
 
-  it('the per-spawn resume lock is exclusive until released', () => {
-    expect(tryAcquireResume(SID, 'g1')).toBe(true);
-    expect(tryAcquireResume(SID, 'g1')).toBe(false);
-    releaseResume(SID, 'g1');
-    expect(tryAcquireResume(SID, 'g1')).toBe(true);
-    releaseResume(SID, 'g1');
+  it('the per-spawn resume lock is exclusive until released', async () => {
+    expect(await tryAcquireResume(SID, 'g1')).toBe(true);
+    expect(await tryAcquireResume(SID, 'g1')).toBe(false);
+    await releaseResume(SID, 'g1');
+    expect(await tryAcquireResume(SID, 'g1')).toBe(true);
+    await releaseResume(SID, 'g1');
   });
 
-  it('clearSession removes all groups', () => {
-    retainGroup(SID, group(SID, 'g1', [agent(0, 'error')]));
-    clearSession(SID);
-    expect(getGroup(SID, 'g1')).toBeUndefined();
+  it('clearSession removes all groups', async () => {
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error')]));
+    await clearSession(SID);
+    expect(await getGroup(SID, 'g1')).toBeUndefined();
   });
 });

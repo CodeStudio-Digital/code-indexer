@@ -44,7 +44,7 @@ const CHATGPT_SESSION_UUID_NAMESPACE = Buffer.from(
   'hex',
 );
 
-function transportSessionId(sessionId: string | number): string {
+function transportSessionId(sessionId: string): string {
   const bytes = Buffer.from(
     createHash('sha1')
       .update(CHATGPT_SESSION_UUID_NAMESPACE)

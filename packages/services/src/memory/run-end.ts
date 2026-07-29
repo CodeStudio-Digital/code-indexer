@@ -12,6 +12,7 @@
  * own errors so a failed distillation can never affect the user's session.
  */
 import type { FallbackDefault, PipelineProviderResolver, ResolveContext } from '../pipelines/index.js';
+import type { SessionId } from '@mcp/session-storage';
 import type { DistillDiag } from './distill-call.js';
 import { LlmMemoryDistiller } from './distiller.js';
 import { FailureDistiller } from './failure-distiller.js';
@@ -45,7 +46,7 @@ export interface RunEndMemoryInput {
    *  (compaction | manual_clear | idle | …). */
   trigger?: string;
   /** Session that produced the signal — recorded in the distill log. */
-  sessionId?: number;
+  sessionId?: SessionId;
   /** Session-drive notes promoted to project-memory candidates. Literal
    *  (no LLM cost) — they go through the same dedup/merge as distilled
    *  candidates. Caller pre-filters to pinned / durable kinds. */
@@ -94,7 +95,7 @@ export interface RunEndMemoryDeps {
   distillLog?: (
     projectId: number,
     entry: {
-      sessionId?: number | null;
+      sessionId?: SessionId | null;
       trigger: string;
       status: 'ok' | 'empty' | 'error' | 'skipped';
       created: number;

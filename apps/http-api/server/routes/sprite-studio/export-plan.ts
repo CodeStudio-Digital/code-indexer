@@ -3,6 +3,7 @@ import { exportAsset, type ExportFile, type SpriteExportFormat } from '@mcp/spri
 import type { AtlasAnimation } from '@mcp/sprite-studio/export/atlas-types.js';
 import type { NamedFrame } from '@mcp/sprite-studio/export/spritesheet.js';
 import { resolveInsideDir, spriteDir } from '@mcp/sprite-studio/repo/paths.js';
+import { isUuid } from '@mcp/session-storage';
 import type { ServerDeps } from '../../deps.js';
 import { buildExportMeta, resolveAnimationFrames, resolveAssetFrames } from './export-helpers.js';
 
@@ -11,8 +12,8 @@ export const EXPORT_FORMATS = new Set<SpriteExportFormat>([
 ]);
 
 export type ExportScopeV2 =
-  | { kind: 'asset'; assetIds: number[]; includeAnimations?: boolean }
-  | { kind: 'animation'; assetId: number; animationIds: number[] }
+  | { kind: 'asset'; assetIds: string[]; includeAnimations?: boolean }
+  | { kind: 'animation'; assetId: string; animationIds: string[] }
   | { kind: 'category'; category: string; includeAnimations?: boolean }
   | { kind: 'approved'; includeAnimations?: boolean };
 
@@ -31,13 +32,6 @@ export interface ExportRequestV2 {
   };
 }
 
-interface LegacyExportRequest {
-  scope?: 'asset' | 'category' | 'approved' | 'animation';
-  format?: string; assetId?: number; category?: string; animationIds?: number[];
-  includeAnimations?: boolean; destDir?: string;
-  options?: ExportRequestV2['options'];
-}
-
 export interface ExportPlanResult {
   request: ExportRequestV2;
   destination: string;
@@ -54,8 +48,8 @@ export interface BuiltExport {
   destination: string;
 }
 
-const ids = (value: unknown): number[] => Array.isArray(value)
-  ? [...new Set(value.filter((v): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0))]
+const ids = (value: unknown): string[] => Array.isArray(value)
+  ? [...new Set(value.filter(isUuid).map((id) => id.toLowerCase()))]
   : [];
 
 function normalizeV2Scope(value: unknown): ExportScopeV2 | null {
@@ -67,8 +61,8 @@ function normalizeV2Scope(value: unknown): ExportScopeV2 | null {
   }
   if (scope.kind === 'animation') {
     const animationIds = ids(scope.animationIds);
-    return typeof scope.assetId === 'number' && Number.isInteger(scope.assetId) && scope.assetId > 0 && animationIds.length > 0
-      ? { kind: 'animation', assetId: scope.assetId, animationIds }
+    return isUuid(scope.assetId) && animationIds.length > 0
+      ? { kind: 'animation', assetId: scope.assetId.toLowerCase(), animationIds }
       : null;
   }
   if (scope.kind === 'category') {
@@ -93,36 +87,17 @@ function normalizeTarget(value: unknown): ExportTargetV2 | undefined | null {
   return null;
 }
 
-/** Map the old flat body to the explicit v2 contract for one transition. */
 export function normalizeExportRequest(body: unknown): ExportRequestV2 | null {
   if (!body || typeof body !== 'object') return null;
-  const raw = body as Partial<ExportRequestV2> & LegacyExportRequest;
+  const raw = body as Partial<ExportRequestV2>;
   const format = raw.format as SpriteExportFormat | undefined;
   if (!format || !EXPORT_FORMATS.has(format)) return null;
-  if (raw.version === 2 && raw.scope && typeof raw.scope === 'object' && 'kind' in raw.scope) {
-    const scope = normalizeV2Scope(raw.scope);
-    const target = normalizeTarget(raw.target);
-    return scope && target !== null ? { version: 2, format, scope, target, options: raw.options } : null;
+  if (raw.version !== 2 || !raw.scope || typeof raw.scope !== 'object' || !('kind' in raw.scope)) {
+    return null;
   }
-  const includeAnimations = raw.includeAnimations === true;
-  let scope: ExportScopeV2;
-  if (raw.scope === 'animation') {
-    if (!raw.assetId) return null;
-    scope = { kind: 'animation', assetId: raw.assetId, animationIds: ids(raw.animationIds) };
-  } else if (raw.scope === 'category') {
-    if (!raw.category) return null;
-    scope = { kind: 'category', category: raw.category, includeAnimations };
-  } else if (raw.scope === 'approved') {
-    scope = { kind: 'approved', includeAnimations };
-  } else {
-    if (!raw.assetId) return null;
-    scope = { kind: 'asset', assetIds: [raw.assetId], includeAnimations };
-  }
-  const target = raw.destDir
-    ? path.isAbsolute(raw.destDir)
-      ? { kind: 'absolute' as const, path: raw.destDir }
-      : { kind: 'project' as const, relativeDir: raw.destDir }
-    : undefined;
+  const scope = normalizeV2Scope(raw.scope);
+  const target = normalizeTarget(raw.target);
+  if (!scope || target === null) return null;
   return { version: 2, format, scope, target, options: raw.options };
 }
 
@@ -144,16 +119,16 @@ function includeAnimations(scope: ExportScopeV2): boolean {
   return scope.kind === 'animation' || scope.includeAnimations === true;
 }
 
-export function buildSpriteExport(
+export async function buildSpriteExport(
   deps: ServerDeps,
   ideProjectId: number,
   request: ExportRequestV2,
-): BuiltExport {
-  const project = deps.spriteProjectsStore.getByProjectId(ideProjectId);
+): Promise<BuiltExport> {
+  const project = await deps.spriteFileStore.projectByIdeId(ideProjectId);
   const root = deps.db.getProject(ideProjectId)?.root_path ?? null;
   if (!project || !root) throw new Error('not_initialized');
   const destination = resolveDestination(root, project.export_dir, request.target);
-  let assets = deps.spriteAssetsStore.list(project.id);
+  let assets = await deps.spriteFileStore.listAssets(project.id);
   if (request.scope.kind === 'asset') {
     const selected = new Set(request.scope.assetIds);
     assets = assets.filter((asset) => selected.has(asset.id));
@@ -169,14 +144,17 @@ export function buildSpriteExport(
   if (assets.length === 0) throw new Error('not_found');
 
   const options = request.options ?? {};
-  const frames: NamedFrame[] = request.scope.kind === 'animation' ? [] : resolveAssetFrames(deps, root, assets);
+  const frames: NamedFrame[] =
+    request.scope.kind === 'animation'
+      ? []
+      : await resolveAssetFrames(deps, root, assets);
   const animations: Record<string, AtlasAnimation> = {};
   if (includeAnimations(request.scope)) {
     for (const asset of assets) {
       const selected = request.scope.kind === 'animation' ? new Set(request.scope.animationIds) : null;
-      for (const animation of deps.spriteAnimationsStore.listByAsset(asset.id)) {
+      for (const animation of await deps.spriteFileStore.listAnimations(asset.id)) {
         if (selected && selected.size > 0 && !selected.has(animation.id)) continue;
-        const resolved = resolveAnimationFrames(deps, animation.id, asset.slug);
+        const resolved = await resolveAnimationFrames(deps, animation.id, asset.slug);
         if (!resolved) continue;
         frames.push(...resolved.frames);
         animations[resolved.name] = resolved.anim;

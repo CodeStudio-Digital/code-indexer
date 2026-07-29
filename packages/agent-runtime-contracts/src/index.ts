@@ -1,4 +1,5 @@
 export * from './version.js';
+export * from './generated/index.js';
 export * from './ids.js';
 export * from './commands.js';
 export * from './environment.js';

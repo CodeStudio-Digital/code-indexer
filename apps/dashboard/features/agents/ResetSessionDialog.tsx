@@ -4,7 +4,7 @@ import { Button } from '../../components/ui/button.js';
 import { apiPost } from '../../hooks/useApi.js';
 
 interface ResetSessionDialogProps {
-  sessionId: number;
+  sessionId: string;
   sessionName: string;
   /**
    * True when the session was created in builder mode — shows the

@@ -61,7 +61,9 @@ export function buildDocNavVerbs(docStore: DocStore) {
         const source = docStore.getSource(input.source_id);
         if (!source) return null;
         const collection = docStore.getCollection(source.collection_id);
-        const chunks = docStore.listChunksBySource(input.source_id); // ord ASC
+        // Outline columns only: the full-row variant carried every chunk body,
+        // and this query runs synchronously on the Electron main thread.
+        const chunks = docStore.listChunkOutlineBySource(input.source_id); // ord ASC
         const headings: DocOutlineHeading[] = [];
         let cur: DocOutlineHeading | null = null;
         let curKey: string | null = null;

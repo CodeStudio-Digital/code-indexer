@@ -234,12 +234,12 @@ export async function runBehaviorTree(
     // mid-execute_task, was aborted, hit a circuit breaker, or a node
     // threw) get promoted to `interrupted` so the dashboard doesn't show
     // false spinners and the next resume sees real state. Best-effort:
-    // a DB failure here MUST NOT mask the RunResult.
+    // a filesystem failure here MUST NOT mask the RunResult.
     const store = ctx.opts.sessionStore;
     const sessionId = ctx.opts.sessionId;
     if (store && sessionId != null) {
       try {
-        store.recoverStaleTasks(sessionId);
+        await store.recoverStaleTasks(sessionId);
       } catch (e) {
         console.warn(
           `[coder/bt] recoverStaleTasks on shutdown failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -250,7 +250,7 @@ export async function runBehaviorTree(
       // `aborted` with reject_reason='worker_restart'. The dashboard
       // resumes correctly; the agent's next turn sees consistent state.
       try {
-        store.recoverRunningTaskRuns(sessionId);
+        await store.recoverRunningTaskRuns(sessionId);
       } catch (e) {
         console.warn(
           `[coder/bt] recoverRunningTaskRuns on shutdown failed: ${e instanceof Error ? e.message : String(e)}`,

@@ -22,7 +22,7 @@ export interface OpenApiSpecState {
  * AbortController so a fast service switch doesn't race.
  */
 export function useOpenApiSpec(
-  sessionId: number,
+  sessionId: string,
   serviceId: string | null,
   reloadKey = 0,
 ): OpenApiSpecState {

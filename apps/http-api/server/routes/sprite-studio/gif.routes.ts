@@ -17,13 +17,13 @@ import { resolveCompositeColumns } from './composite-helpers.js';
 
 export function mountSpriteGifRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/sprite-studio/animations/:id/gif', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
+    const found = await resolveAnim(deps, c.req.param('id'));
     if (!found || !found.root) return c.json({ error: 'not_found' }, 404);
     const { anim, asset } = found;
 
     let columns;
     try {
-      columns = resolveCompositeColumns(deps, found);
+      columns = await resolveCompositeColumns(deps, found);
     } catch (e) {
       const msg = (e as Error).message;
       return c.json({ error: msg }, msg.startsWith('layer_size_mismatch') ? 422 : 404);

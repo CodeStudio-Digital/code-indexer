@@ -22,6 +22,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { SandboxBinding } from '@mcp/company/types.js';
 import type { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
+import { isUuid } from '@mcp/session-storage';
 import { resolveDriver } from '@mcp/services/sandbox/drivers/driver-factory.js';
 import { checkRelativePath, DOCS_CONTENT_CAP_BYTES, DOCS_MIRROR_PREFIX } from './file-path-core.js';
 
@@ -53,9 +54,16 @@ async function resolveTargetBinding(
   // Sandbox manager keys services by the ROOT session id (sub-sessions
   // share the parent's container). Resolve to effective id so a tool
   // running inside a child orchestrator finds the parent's service.
-  const orchEff = (ctx.companyContext?.orchestrator as { effectiveSessionId?: number } | undefined)?.effectiveSessionId;
-  const sessionId = String(orchEff ?? ctx.companyContext?.companySessionId ?? '');
-  if (!sessionId) return { error: 'No company session id in context' };
+  const orchEff = (
+    ctx.companyContext?.orchestrator as
+      | { effectiveSessionId?: string }
+      | undefined
+  )?.effectiveSessionId;
+  const candidate = orchEff ?? ctx.companyContext?.companySessionId;
+  if (typeof candidate !== 'string' || !isUuid(candidate)) {
+    return { error: 'No canonical Company session UUID in context' };
+  }
+  const sessionId = candidate.toLowerCase();
   const secondary = getSandboxManager().getService(sessionId, serviceId);
   if (!secondary || !secondary.containerId) {
     return { error: `Service '${serviceId}' not found on this session` };

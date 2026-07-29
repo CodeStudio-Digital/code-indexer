@@ -3,9 +3,7 @@
  *
  * The start / pause / unpause / retry / restart-dev routes run on the MAIN
  * process; the ServiceSupervisor and SandboxService (worker) write to the
- * same `company_service_transitions` table through their own instances —
- * same SQLite file, WAL-safe. This helper reuses the transitions store the
- * server already carries on `ServerDeps` (no new deps surface).
+ * same bundle-local transition collection through their own instances.
  *
  * Best-effort by design: an audit-trail failure must never break the
  * lifecycle operation the operator asked for.
@@ -14,7 +12,7 @@ import type { ServerDeps } from '../../deps.js';
 
 export function recordOperatorTransition(
   deps: ServerDeps,
-  sessionId: number,
+  sessionId: string,
   serviceId: string,
   toState: string,
   reason?: string,

@@ -9,15 +9,15 @@
  *   - cycles allowed when reached through a conditional edge, capped
  *     by per-node `maxAttempts` (default 3) and a global execution
  *     cap (default 50 node executions)
- *   - `pause/resume` flips the execution row; resume re-runs the
+ *   - `pause/resume` updates the execution entity; resume re-runs the
  *     `current_node_id` so the operator can intervene mid-flight
  *   - `recoverRunning()` pauses any execution whose subordinate is no
  *     longer alive after a server restart so the dashboard can prompt
  *     a manual resume
  *
  * QA verdicts:
- *   For `pass-fail` branches the executor consults `qa_test_runs` via
- *   `qa_test_runs.kanban_feature_card_id` first, so a stage that runs a
+ *   For `pass-fail` branches the executor consults QA-run bundle entities via
+ *   `kanban_feature_card_id` first, so a stage that runs a
  *   QA suite reports its verdict from the actual test counts rather
  *   than parsing the agent's final message. Falls back to a regex over
  *   the output for non-QA stages that opt into `pass-fail`.
@@ -39,6 +39,7 @@ import type {
   PipelineExecutionContext,
   PipelineExecutionStatus,
   PipelineGraph,
+  PipelineId,
   PipelineNode,
   PipelineNodeExecution,
 } from '@mcp/company/types.js';
@@ -63,16 +64,16 @@ export interface PipelineExecutorDeps {
 }
 
 interface ActiveListener {
-  executionId: number;
-  agentRunId: number;
+  executionId: string;
+  agentRunId: string;
   unsubscribe: () => void;
 }
 
 export class PipelineExecutor {
   /** Per-execution listener so `abort` can detach the attention hook. */
-  private readonly activeListeners = new Map<number, ActiveListener>();
+  private readonly activeListeners = new Map<string, ActiveListener>();
   /** Per-execution fan-out barriers (shared with `FanOutRunner`). */
-  private readonly fanOutBarriers = new Map<number, FanOutBarrier>();
+  private readonly fanOutBarriers = new Map<string, FanOutBarrier>();
   private readonly fanOut: FanOutRunner;
 
   constructor(private readonly deps: PipelineExecutorDeps) {
@@ -94,11 +95,11 @@ export class PipelineExecutor {
   // ─── Public API ───────────────────────────────────────────────
 
   async start(
-    pipelineId: number,
+    pipelineId: PipelineId,
     initialInput: string,
     startedBy = 'master',
   ): Promise<PipelineExecution> {
-    const pipeline = this.deps.pipelines.get(pipelineId);
+    const pipeline = await this.deps.pipelines.get(pipelineId);
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found.`);
 
     const startNode = resolveStartNode(pipeline.graph);
@@ -110,7 +111,7 @@ export class PipelineExecutor {
       vars: {},
     };
 
-    const execution = this.deps.ctx.companyStore.createPipelineExecution({
+    const execution = await this.deps.ctx.companyStore.createPipelineExecution({
       pipelineId,
       companySessionId: this.deps.ctx.effectiveSessionId,
       initialInput,
@@ -138,15 +139,15 @@ export class PipelineExecutor {
    * runner (already finished, restart in flight, etc.) we still flip
    * the row so the dashboard reflects the operator intent.
    */
-  abort(executionId: number, reason?: string): boolean {
-    const exec = this.deps.ctx.companyStore.getPipelineExecution(executionId);
+  async abort(executionId: string, reason?: string): Promise<boolean> {
+    const exec = await this.deps.ctx.companyStore.getPipelineExecution(executionId);
     if (!exec) return false;
     if (exec.status !== 'running' && exec.status !== 'paused') return false;
 
     this.detachListener(executionId, { abortAgent: true });
     this.detachFanOut(executionId, { abortAgents: true });
 
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
+    await this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
       status: 'aborted',
       finishedAt: nowIso(),
       errorMessage: reason ?? null,
@@ -162,26 +163,26 @@ export class PipelineExecutor {
 
   /**
    * Pause a running execution. The subordinate currently working on the
-   * active node is aborted (its row in `pipeline_node_executions` is
-   * marked `aborted`); the execution row stays around with `status='paused'`
+   * active node is aborted (its independent node-execution entity is
+   * marked `aborted`); the execution entity stays around with `status='paused'`
    * and `current_node_id` pointing at the node to retry on resume. The
    * operator can then edit the source pipeline (the snapshot is frozen
    * regardless) or hand the work off before resuming.
    */
-  pause(executionId: number): boolean {
-    const exec = this.deps.ctx.companyStore.getPipelineExecution(executionId);
+  async pause(executionId: string): Promise<boolean> {
+    const exec = await this.deps.ctx.companyStore.getPipelineExecution(executionId);
     if (!exec) return false;
     if (exec.status !== 'running') return false;
 
     const listener = this.activeListeners.get(executionId);
-    let pausedNodeRowId: number | null = null;
+    let pausedNodeRowId: string | null = null;
     if (listener) {
       // Find the running node row for this agent so we can mark it aborted.
-      const rows = this.deps.ctx.companyStore.listPipelineNodeExecutions(executionId);
+      const rows = await this.deps.ctx.companyStore.listPipelineNodeExecutions(executionId);
       const last = rows[rows.length - 1];
       if (last && last.status === 'running' && last.agent_run_id === listener.agentRunId) {
         pausedNodeRowId = last.id;
-        this.deps.ctx.companyStore.updatePipelineNodeExecution(last.id, {
+        await this.deps.ctx.companyStore.updatePipelineNodeExecution(last.id, {
           status: 'aborted',
           finishedAt: nowIso(),
           errorMessage: 'paused by operator',
@@ -191,7 +192,7 @@ export class PipelineExecutor {
     this.detachListener(executionId, { abortAgent: true });
     this.detachFanOut(executionId, { abortAgents: true });
 
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, { status: 'paused' });
+    await this.deps.ctx.companyStore.updatePipelineExecution(executionId, { status: 'paused' });
     this.deps.publisher.publish('pipeline_paused', {
       executionId,
       pipelineId: exec.pipeline_id,
@@ -207,8 +208,8 @@ export class PipelineExecutor {
    * attempt count; if `current_node_id` is null the execution is
    * marked `failed` because there's nothing to do.
    */
-  async resume(executionId: number): Promise<boolean> {
-    const exec = this.deps.ctx.companyStore.getPipelineExecution(executionId);
+  async resume(executionId: string): Promise<boolean> {
+    const exec = await this.deps.ctx.companyStore.getPipelineExecution(executionId);
     if (!exec) return false;
     if (exec.status !== 'paused') return false;
 
@@ -216,11 +217,11 @@ export class PipelineExecutor {
       ? exec.context.snapshot.nodes.find((n) => n.id === exec.current_node_id)
       : null;
     if (!node) {
-      this.failExecution(executionId, exec.pipeline_id, 'Resume failed: current_node_id is missing or unknown.');
+      await this.failExecution(executionId, exec.pipeline_id, 'Resume failed: current_node_id is missing or unknown.');
       return false;
     }
 
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, { status: 'running' });
+    await this.deps.ctx.companyStore.updatePipelineExecution(executionId, { status: 'running' });
     this.deps.publisher.publish('pipeline_resumed', {
       executionId,
       pipelineId: exec.pipeline_id,
@@ -237,25 +238,25 @@ export class PipelineExecutor {
    * mirror `resume()` (re-run `current_node_id`, which points at the
    * not-yet-run next node); the distinct verb keeps the audit log clear.
    */
-  async confirm(executionId: number): Promise<boolean> {
+  async confirm(executionId: string): Promise<boolean> {
     return this.resume(executionId);
   }
 
-  status(executionId: number): {
+  async status(executionId: string): Promise<{
     execution: PipelineExecution;
     nodes: PipelineNodeExecution[];
-  } | null {
-    const execution = this.deps.ctx.companyStore.getPipelineExecution(executionId);
+  } | null> {
+    const execution = await this.deps.ctx.companyStore.getPipelineExecution(executionId);
     if (!execution) return null;
-    const nodes = this.deps.ctx.companyStore.listPipelineNodeExecutions(executionId);
+    const nodes = await this.deps.ctx.companyStore.listPipelineNodeExecutions(executionId);
     return { execution, nodes };
   }
 
-  listExecutions(opts?: {
-    pipelineId?: number;
+  async listExecutions(opts?: {
+    pipelineId?: PipelineId;
     status?: PipelineExecutionStatus;
     limit?: number;
-  }): PipelineExecution[] {
+  }): Promise<PipelineExecution[]> {
     return this.deps.ctx.companyStore.listPipelineExecutions({
       companySessionId: this.deps.ctx.effectiveSessionId,
       pipelineId: opts?.pipelineId,
@@ -271,23 +272,23 @@ export class PipelineExecutor {
    * operator decide whether to resume. We never silently re-run.
    */
   async recoverRunning(): Promise<{ paused: number }> {
-    const running = this.deps.ctx.companyStore.listPipelineExecutions({
+    const running = await this.deps.ctx.companyStore.listPipelineExecutions({
       companySessionId: this.deps.ctx.effectiveSessionId,
       status: 'running',
     });
     let paused = 0;
     for (const exec of running) {
       // Mark the last running node aborted (if any) so the timeline reflects reality.
-      const rows = this.deps.ctx.companyStore.listPipelineNodeExecutions(exec.id);
+      const rows = await this.deps.ctx.companyStore.listPipelineNodeExecutions(exec.id);
       const last = rows[rows.length - 1];
       if (last && last.status === 'running') {
-        this.deps.ctx.companyStore.updatePipelineNodeExecution(last.id, {
+        await this.deps.ctx.companyStore.updatePipelineNodeExecution(last.id, {
           status: 'aborted',
           finishedAt: nowIso(),
           errorMessage: 'server restart — agent no longer alive',
         });
       }
-      this.deps.ctx.companyStore.updatePipelineExecution(exec.id, { status: 'paused' });
+      await this.deps.ctx.companyStore.updatePipelineExecution(exec.id, { status: 'paused' });
       this.deps.publisher.publish('pipeline_paused', {
         executionId: exec.id,
         pipelineId: exec.pipeline_id,
@@ -302,19 +303,19 @@ export class PipelineExecutor {
   // ─── Internal: node loop ─────────────────────────────────────
 
   private async runNode(
-    executionId: number,
+    executionId: string,
     node: PipelineNode,
     initialInput: string,
     previousOutput: string,
   ): Promise<void> {
-    const exec = this.deps.ctx.companyStore.getPipelineExecution(executionId);
+    const exec = await this.deps.ctx.companyStore.getPipelineExecution(executionId);
     if (!exec || exec.status !== 'running') return;
 
     // Global cap: protects against pathological cycles that slip past
     // the per-node maxAttempts guard.
-    const allRows = this.deps.ctx.companyStore.listPipelineNodeExecutions(executionId);
+    const allRows = await this.deps.ctx.companyStore.listPipelineNodeExecutions(executionId);
     if (allRows.length >= GLOBAL_NODE_EXECUTION_CAP) {
-      this.failExecution(
+      await this.failExecution(
         executionId,
         exec.pipeline_id,
         `Aborted after ${GLOBAL_NODE_EXECUTION_CAP} node executions (global cycle cap).`,
@@ -336,7 +337,7 @@ export class PipelineExecutor {
     const previousAttemptsForNode = allRows.filter((r) => r.node_id === node.id).length;
     const maxAttempts = Math.max(1, node.maxAttempts ?? DEFAULT_NODE_MAX_ATTEMPTS);
     if (previousAttemptsForNode >= maxAttempts) {
-      this.failExecution(
+      await this.failExecution(
         executionId,
         exec.pipeline_id,
         `Node "${node.id}" exceeded maxAttempts (${maxAttempts}).`,
@@ -362,7 +363,7 @@ export class PipelineExecutor {
 
     let nodeExec: PipelineNodeExecution;
     try {
-      nodeExec = this.deps.ctx.companyStore.createPipelineNodeExecution({
+      nodeExec = await this.deps.ctx.companyStore.createPipelineNodeExecution({
         executionId,
         nodeId: node.id,
         nodeLabel: node.label,
@@ -372,7 +373,7 @@ export class PipelineExecutor {
         kanbanCardId: card.id,
       });
     } catch (e) {
-      this.failExecution(executionId, exec.pipeline_id, `Failed to record node execution: ${(e as Error).message}`);
+      await this.failExecution(executionId, exec.pipeline_id, `Failed to record node execution: ${(e as Error).message}`);
       return;
     }
 
@@ -387,7 +388,7 @@ export class PipelineExecutor {
       attempt: previousAttemptsForNode + 1,
     });
 
-    let spawnResult: { agentRunId: number; coderSessionId: number; status: string };
+    let spawnResult: { agentRunId: string; coderSessionId: string; status: string };
     try {
       const spec: SpawnSubordinateSpec = {
         role: node.role,
@@ -403,7 +404,7 @@ export class PipelineExecutor {
       spawnResult = await this.deps.subordinates.spawn(spec);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      this.deps.ctx.companyStore.updatePipelineNodeExecution(nodeExec.id, {
+      await this.deps.ctx.companyStore.updatePipelineNodeExecution(nodeExec.id, {
         status: 'failed',
         finishedAt: nowIso(),
         errorMessage: msg,
@@ -414,7 +415,7 @@ export class PipelineExecutor {
         nodeId: node.id,
         error: msg,
       });
-      this.failExecution(executionId, exec.pipeline_id, `Node "${node.id}" failed to spawn: ${msg}`);
+      await this.failExecution(executionId, exec.pipeline_id, `Node "${node.id}" failed to spawn: ${msg}`);
       return;
     }
 
@@ -423,7 +424,7 @@ export class PipelineExecutor {
       this.deps.kanban.moveCard(card.id, 'in_progress');
     } catch { /* best-effort */ }
 
-    this.deps.ctx.companyStore.updatePipelineNodeExecution(nodeExec.id, {
+    await this.deps.ctx.companyStore.updatePipelineNodeExecution(nodeExec.id, {
       agentRunId: spawnResult.agentRunId,
     });
 
@@ -443,19 +444,22 @@ export class PipelineExecutor {
   }
 
   private async onNodeFinished(
-    executionId: number,
+    executionId: string,
     node: PipelineNode,
-    nodeExecutionId: number,
-    coderSessionId: number,
-    cardId: number,
+    nodeExecutionId: string,
+    coderSessionId: string,
+    cardId: string,
     initialInput: string,
   ): Promise<void> {
-    const exec = this.deps.ctx.companyStore.getPipelineExecution(executionId);
+    const exec = await this.deps.ctx.companyStore.getPipelineExecution(executionId);
     if (!exec) return;
     // pause/abort happened mid-flight: don't advance.
     if (exec.status !== 'running') return;
 
-    const finalText = readFinalAssistantText(coderSessionId) ?? '';
+    const finalText = await readFinalAssistantText(
+      this.deps.ctx.companyFiles.sessionStore,
+      coderSessionId,
+    ) ?? '';
     const output = finalText;
 
     // Resolve the outgoing edge based on this node's branch mode. The
@@ -463,7 +467,7 @@ export class PipelineExecutor {
     // show *why* the executor went the way it did.
     const outgoing = exec.context.snapshot.edges.filter((e) => e.from === node.id);
     const branchMode = node.branchMode ?? 'linear';
-    const verdict = this.resolveBranchVerdict(branchMode, output, cardId);
+    const verdict = await this.resolveBranchVerdict(branchMode, output, cardId);
     const next = pickNextEdge(outgoing, branchMode, verdict);
 
     const updatedContext: PipelineExecutionContext = {
@@ -473,13 +477,13 @@ export class PipelineExecutor {
         [node.id]: { output, outcome: next?.outcome ?? branchMode },
       },
     };
-    this.deps.ctx.companyStore.updatePipelineNodeExecution(nodeExecutionId, {
+    await this.deps.ctx.companyStore.updatePipelineNodeExecution(nodeExecutionId, {
       status: 'completed',
       outputText: output,
       outcomeBranch: next?.outcome ?? null,
       finishedAt: nowIso(),
     });
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
+    await this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
       context: updatedContext,
     });
 
@@ -497,7 +501,7 @@ export class PipelineExecutor {
       outputPreview: output.slice(0, 240),
     });
 
-    this.advanceToNext(executionId, exec.pipeline_id, node, next, outgoing.length, exec.context.snapshot, initialInput, output, branchMode, verdict);
+    await this.advanceToNext(executionId, exec.pipeline_id, node, next, outgoing.length, exec.context.snapshot, initialInput, output, branchMode, verdict);
   }
 
   /**
@@ -505,9 +509,9 @@ export class PipelineExecutor {
    * and the fan-out join: route to the next node, hit a terminal, or pause
    * for a `requires_confirmation` gate.
    */
-  private advanceToNext(
-    executionId: number,
-    pipelineId: number,
+  private async advanceToNext(
+    executionId: string,
+    pipelineId: PipelineId,
     node: PipelineNode,
     next: { targetId: string; outcome: string | null } | null,
     outgoingCount: number,
@@ -516,15 +520,15 @@ export class PipelineExecutor {
     output: string,
     branchMode: NonNullable<PipelineNode['branchMode']>,
     verdict: string | null,
-  ): void {
+  ): Promise<void> {
     if (!next) {
       // No matching outgoing edge — terminal node reached, OR a condition
       // with no fallback. Treat zero-outgoing as 'completed'; a dead-end
       // condition surfaces as 'failed'.
       if (outgoingCount === 0) {
-        this.completeExecution(executionId, pipelineId);
+        await this.completeExecution(executionId, pipelineId);
       } else {
-        this.failExecution(
+        await this.failExecution(
           executionId,
           pipelineId,
           `Node "${node.id}" produced no matching branch (mode=${branchMode}, verdict=${verdict ?? 'none'}).`,
@@ -535,17 +539,17 @@ export class PipelineExecutor {
 
     const nextNode = snapshot.nodes.find((n) => n.id === next.targetId);
     if (!nextNode) {
-      this.failExecution(executionId, pipelineId, `Edge from "${node.id}" points at missing node "${next.targetId}".`);
+      await this.failExecution(executionId, pipelineId, `Edge from "${node.id}" points at missing node "${next.targetId}".`);
       return;
     }
 
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, { currentNodeId: nextNode.id });
+    await this.deps.ctx.companyStore.updatePipelineExecution(executionId, { currentNodeId: nextNode.id });
 
     // Human-in-the-loop gate: when the node that just finished asked for
     // confirmation, pause BEFORE running the next node. `current_node_id`
     // already points at `nextNode`, so `confirm()` (→ resume) runs it.
     if (node.requires_confirmation) {
-      this.deps.ctx.companyStore.updatePipelineExecution(executionId, { status: 'paused' });
+      await this.deps.ctx.companyStore.updatePipelineExecution(executionId, { status: 'paused' });
       this.deps.publisher.publish('pipeline_paused', {
         executionId,
         pipelineId,
@@ -563,8 +567,8 @@ export class PipelineExecutor {
    * becomes this node's output. Fan-out nodes are linear, so route the
    * single outgoing edge and advance (same terminal/confirmation rules).
    */
-  private joinFanOut(executionId: number, node: PipelineNode, aggregated: string, initialInput: string): void {
-    const exec = this.deps.ctx.companyStore.getPipelineExecution(executionId);
+  private async joinFanOut(executionId: string, node: PipelineNode, aggregated: string, initialInput: string): Promise<void> {
+    const exec = await this.deps.ctx.companyStore.getPipelineExecution(executionId);
     if (!exec || exec.status !== 'running') return;
 
     const outgoing = exec.context.snapshot.edges.filter((e) => e.from === node.id);
@@ -574,7 +578,7 @@ export class PipelineExecutor {
       snapshot: exec.context.snapshot,
       vars: { ...exec.context.vars, [node.id]: { output: aggregated, outcome: next?.outcome ?? 'linear' } },
     };
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, { context: updatedContext });
+    await this.deps.ctx.companyStore.updatePipelineExecution(executionId, { context: updatedContext });
 
     this.deps.publisher.publish('pipeline_node_completed', {
       executionId,
@@ -584,19 +588,20 @@ export class PipelineExecutor {
       outputPreview: aggregated.slice(0, 240),
     });
 
-    this.advanceToNext(executionId, exec.pipeline_id, node, next, outgoing.length, exec.context.snapshot, initialInput, aggregated, 'linear', null);
+    await this.advanceToNext(executionId, exec.pipeline_id, node, next, outgoing.length, exec.context.snapshot, initialInput, aggregated, 'linear', null);
   }
 
   /**
    * Compute the verdict string used to pick the next branch. Thin wrapper
    * around the pure kernel function — closes over the company-specific
-   * resolvers (QA verdict from `qa_test_runs`, kanban tag for the card).
+   * resolvers (QA verdict from bundle entities, kanban tag for the card).
    */
-  private resolveBranchVerdict(
+  private async resolveBranchVerdict(
     mode: NonNullable<PipelineNode['branchMode']>,
     output: string,
-    cardId: number,
-  ): string | null {
+    cardId: string,
+  ): Promise<string | null> {
+    const qaVerdict = await readQaVerdictForCard(this.deps.ctx, cardId);
     return resolveBranchVerdictPure({
       mode,
       output,
@@ -604,23 +609,23 @@ export class PipelineExecutor {
       // sidesteps the agent's prose entirely. The session's own QA
       // bridge keeps the linkage fresh whenever the agent fires
       // a Playwright run scoped to the feature card.
-      qaResolver: () => readQaVerdictForCard(this.deps.ctx, cardId),
+      qaResolver: () => qaVerdict,
       tagResolver: () => this.deps.kanban.getCard(cardId)?.tag ?? null,
     });
   }
 
   // ─── Internal: terminal transitions ───────────────────────────
 
-  private completeExecution(executionId: number, pipelineId: number): void {
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
+  private async completeExecution(executionId: string, pipelineId: PipelineId): Promise<void> {
+    await this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
       status: 'completed',
       finishedAt: nowIso(),
     });
     this.deps.publisher.publish('pipeline_completed', { executionId, pipelineId });
   }
 
-  private failExecution(executionId: number, pipelineId: number, message: string): void {
-    this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
+  private async failExecution(executionId: string, pipelineId: PipelineId, message: string): Promise<void> {
+    await this.deps.ctx.companyStore.updatePipelineExecution(executionId, {
       status: 'failed',
       finishedAt: nowIso(),
       errorMessage: message,
@@ -628,7 +633,7 @@ export class PipelineExecutor {
     this.deps.publisher.publish('pipeline_failed', { executionId, pipelineId, error: message });
   }
 
-  private detachListener(executionId: number, opts: { abortAgent: boolean }): void {
+  private detachListener(executionId: string, opts: { abortAgent: boolean }): void {
     const listener = this.activeListeners.get(executionId);
     if (!listener) return;
     listener.unsubscribe();
@@ -639,7 +644,7 @@ export class PipelineExecutor {
   }
 
   /** Tear down a fan-out barrier: unsubscribe + abort every in-flight branch. */
-  private detachFanOut(executionId: number, opts: { abortAgents: boolean }): void {
+  private detachFanOut(executionId: string, opts: { abortAgents: boolean }): void {
     const barrier = this.fanOutBarriers.get(executionId);
     if (!barrier) return;
     barrier.unsubscribe();
@@ -653,8 +658,8 @@ export class PipelineExecutor {
 
   // ─── Helpers ──────────────────────────────────────────────────
 
-  private async pipelineNameFor(pipelineId: number): Promise<string> {
-    const p = this.deps.pipelines.get(pipelineId);
+  private async pipelineNameFor(pipelineId: PipelineId): Promise<string> {
+    const p = await this.deps.pipelines.get(pipelineId);
     return p?.name ?? `pipeline-${pipelineId}`;
   }
 }
@@ -665,9 +670,19 @@ export class PipelineExecutor {
  * there's no run linked to the card or the latest run is still
  * 'running'/'aborted'/'error'.
  */
-function readQaVerdictForCard(ctx: SessionContext, cardId: number): 'pass' | 'fail' | null {
+async function readQaVerdictForCard(ctx: SessionContext, cardId: string): Promise<'pass' | 'fail' | null> {
   try {
-    return ctx.companyStore.getLatestQaVerdictForCard(ctx.effectiveSessionId, cardId);
+    const page = await ctx.companyFiles.entities.listByRelation(
+      'qaRun',
+      'kanban_feature_card_id',
+      cardId,
+      { limit: 1_000, order: 'desc' },
+    );
+    const latest = page.items.find(
+      (record) => record.data.status === 'completed',
+    );
+    if (!latest) return null;
+    return Number(latest.data.failed ?? 0) > 0 ? 'fail' : 'pass';
   } catch {
     return null;
   }

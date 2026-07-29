@@ -28,7 +28,7 @@
  *   - `runner_tunables.turnBudgetChars`
  *   - `runner_tunables.interventionCooldownTurns`
  *
- * Example admin usage (writes to `coder_sessions.config_json`):
+ * Example admin usage (writes to the session bundle configuration):
  *   {
  *     "pipelines": {
  *       "runner_tunables": {

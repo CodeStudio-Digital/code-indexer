@@ -23,6 +23,8 @@ import {
   type RolePipelineQuery,
 } from '../index.js';
 
+const KANBAN_CARD_ID = '00000000-0000-4000-8000-000000000001';
+
 function spawnCandidate(role: RoleDescriptor): RoleCandidate {
   return {
     candidateId: `spawn::${role.role}`,
@@ -57,7 +59,7 @@ describe('RoleContextHydrator', () => {
   it('populates roleContext from a successful fetch', async () => {
     const payload: RoleContextPayload = {
       relevantFiles: [{ path: 'src/x.ts', score: 0.9 }],
-      kanbanCards: [{ id: 1, title: 'card-A' }],
+      kanbanCards: [{ id: KANBAN_CARD_ID, title: 'card-A' }],
       notes: 'fresh context',
     };
     const fetcher: ContextFetcher = async () => payload;

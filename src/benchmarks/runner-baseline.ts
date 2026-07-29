@@ -1,6 +1,6 @@
 /**
- * Runner baseline — aggregates existing `coder_turn_telemetry` + `coder_tool_calls`
- * rows into a snapshot we can diff against after any agent change.
+ * Runner baseline — aggregates immutable turn metrics from filesystem session
+ * bundles into a snapshot we can diff against after any agent change.
  *
  * Zero tokens spent: this script ONLY reads what the runner already wrote
  * during real usage. It does NOT invoke the agent.
@@ -18,7 +18,7 @@
  *   - tokens-per-turn (input/output/cache/thinking) p50/p95/total
  *   - turns-per-session p50/p95/p99 (proxy for completion)
  *   - compaction & summarizer trigger rate
- *   - tool-call distribution + truncation rate + phase breakdown
+ *   - tool-call distribution from per-turn metrics
  *   - estimated_cost_usd
  *
  * Re-run this AFTER any agent change and diff vs the baseline JSON. Any
@@ -28,8 +28,14 @@ import { parseArgs } from 'node:util';
 import { writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadConfig } from '@mcp/shared/utils/config.js';
+import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import {
+  listFilesystemTurnTelemetry,
+  telemetryTools,
+  type FsTurnTelemetryRow,
+} from '@mcp/code-agent/sessions/fs-store/telemetry-dashboard.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -181,68 +187,65 @@ async function main(): Promise<void> {
   console.log(`[runner-baseline] DB: ${dbPath}`);
 
   const handle = new CodeIndexDB(dbPath);
-  const db = handle.raw();
   const since = values.since ?? null;
-  const sinceClause = since ? `WHERE created_at >= '${since.replace(/'/g, "''")}'` : '';
   console.log(`[runner-baseline] since: ${since ?? 'all-time'}`);
-
-  // Detect missing tables: runner may have never run on this DB.
-  const tableExists = (name: string): boolean => {
-    const row = db
-      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`)
-      .get(name) as { name?: string } | undefined;
-    return !!row?.name;
-  };
-  if (!tableExists('coder_turn_telemetry')) {
-    console.error(
-      '[runner-baseline] coder_turn_telemetry table missing — agent has not produced telemetry on this DB yet.',
-    );
-    process.exit(1);
+  const sessionStore = FsSessionStore.fromRoots({
+    dataDir: mcpDataDir(),
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) =>
+        handle.getProject(projectId)?.root_path,
+      listProjectRoots: () =>
+        handle.listProjects().map((project) => ({
+          project_id: project.id,
+          root_path: project.root_path,
+        })),
+    },
+  });
+  await sessionStore.ensureCatalog();
+  const sinceMs = since == null ? Number.NaN : Date.parse(since);
+  if (since != null && !Number.isFinite(sinceMs)) {
+    throw new Error('--since must be a valid ISO timestamp');
   }
-
-  // ── Pull turn rows ────────────────────────────────────────────────────
-  type TurnRow = {
-    session_id: number | null;
-    run_id: string;
-    turn: number;
-    is_subagent: number;
-    input_tokens: number | null;
-    output_tokens: number | null;
-    cache_read_input_tokens: number | null;
-    cache_creation_input_tokens: number | null;
-    thinking_tokens: number | null;
-    history_chars: number | null;
-    system_prompt_chars: number | null;
-    tools_def_chars: number | null;
-    largest_tool_result_chars: number | null;
-    compaction_triggered: number;
-    summarizer_ran: number;
-    paginate_count: number;
-    estimated_cost_usd: number | null;
-    created_at: string;
-  };
-
-  const turns = db
-    .prepare(`SELECT * FROM coder_turn_telemetry ${sinceClause} ORDER BY created_at ASC`)
-    .all() as TurnRow[];
+  const turnsBySession = await Promise.all(
+    sessionStore.catalog.list().map(async (entry) => ({
+      sessionId: entry.session.id,
+      turns: (
+        await listFilesystemTurnTelemetry(
+          sessionStore,
+          entry.session.id,
+        )
+      ).filter(
+        (turn) =>
+          !Number.isFinite(sinceMs) ||
+          Date.parse(turn.created_at) >= sinceMs,
+      ),
+    })),
+  );
+  const turns = turnsBySession
+    .flatMap((session) => session.turns)
+    .sort(
+      (left, right) =>
+        left.created_at.localeCompare(right.created_at) ||
+        left.id.localeCompare(right.id),
+    );
 
   if (turns.length === 0) {
     console.error(
-      `[runner-baseline] no rows in coder_turn_telemetry${since ? ` since ${since}` : ''} — nothing to baseline.`,
+      `[runner-baseline] no filesystem turn metrics${since ? ` since ${since}` : ''} — nothing to baseline.`,
     );
     process.exit(1);
   }
 
-  const sessionIds = new Set<number>();
+  const sessionIds = new Set<string>();
   const runIds = new Set<string>();
   for (const t of turns) {
-    if (t.session_id != null) sessionIds.add(t.session_id);
+    sessionIds.add(t.session_id);
     runIds.add(t.run_id);
   }
 
   // Numeric vectors with NULLs filtered out — we measure where the field
   // was populated, not artificially deflate the mean with zeros.
-  const pickNum = (key: keyof TurnRow): number[] =>
+  const pickNum = (key: keyof FsTurnTelemetryRow): number[] =>
     turns
       .map((t) => t[key])
       .filter((v): v is number => typeof v === 'number');
@@ -250,89 +253,44 @@ async function main(): Promise<void> {
   // ── Tools aggregates ──────────────────────────────────────────────────
   let topToolsRows: ToolRow[] = [];
   let phaseRows: PhaseRow[] = [];
-  let totalToolCalls = 0;
+  let totalToolCalls = turns.reduce(
+    (total, turn) => total + turn.tool_count,
+    0,
+  );
   let truncationRate = 0;
-  if (tableExists('coder_tool_calls')) {
-    const sinceJoinClause = since
-      ? `WHERE coder_tool_calls.created_at >= '${since.replace(/'/g, "''")}'`
-      : '';
-    const top = db
-      .prepare(
-        `SELECT tool_name,
-                COUNT(*) AS calls,
-                AVG(COALESCE(output_chars, 0)) AS avg_output_chars,
-                SUM(CASE WHEN truncated = 1 THEN 1 ELSE 0 END) AS truncated_count,
-                SUM(CASE WHEN truncated = 1 THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS truncated_rate
-         FROM coder_tool_calls
-         ${sinceJoinClause}
-         GROUP BY tool_name
-         ORDER BY calls DESC
-         LIMIT 20`,
-      )
-      .all() as Array<{
-      tool_name: string;
-      calls: number;
-      avg_output_chars: number;
-      truncated_count: number;
-      truncated_rate: number;
-    }>;
-    // p95 of output_chars per tool — separate query per tool to keep memory bounded
-    const stmtP95 = db.prepare(
-      `SELECT output_chars FROM coder_tool_calls WHERE tool_name = ? ${
-        since ? `AND created_at >= '${since.replace(/'/g, "''")}'` : ''
-      } AND output_chars IS NOT NULL ORDER BY output_chars`,
+  const toolCounts = new Map<string, number>();
+  for (const turn of turns) {
+    for (const tool of telemetryTools(turn.tools_called)) {
+      toolCounts.set(tool, (toolCounts.get(tool) ?? 0) + 1);
+    }
+  }
+  topToolsRows = [...toolCounts]
+    .map(([tool_name, calls]) => ({
+      tool_name,
+      calls,
+      // Per-call payload size/truncation moved to tool output artifacts. Turn
+      // metrics intentionally expose only the aggregate largest payload.
+      avg_output_chars: 0,
+      p95_output_chars: 0,
+      truncated_rate: 0,
+    }))
+    .sort(
+      (left, right) =>
+        right.calls - left.calls ||
+        left.tool_name.localeCompare(right.tool_name),
+    )
+    .slice(0, 20);
+  if (totalToolCalls === 0) {
+    totalToolCalls = [...toolCounts.values()].reduce(
+      (total, calls) => total + calls,
+      0,
     );
-    topToolsRows = top.map((r) => {
-      const rows = stmtP95.all(r.tool_name) as Array<{ output_chars: number }>;
-      const sortedVals = rows.map((x) => x.output_chars);
-      return {
-        tool_name: r.tool_name,
-        calls: r.calls,
-        avg_output_chars: Math.round(r.avg_output_chars),
-        p95_output_chars: Math.round(quantile(sortedVals, 0.95)),
-        truncated_rate: r.truncated_rate,
-      };
-    });
-
-    const totalsRow = db
-      .prepare(
-        `SELECT COUNT(*) AS calls,
-                SUM(CASE WHEN truncated = 1 THEN 1 ELSE 0 END) * 1.0 / COUNT(*) AS truncated_rate
-         FROM coder_tool_calls ${sinceJoinClause}`,
-      )
-      .get() as { calls: number; truncated_rate: number };
-    totalToolCalls = totalsRow.calls;
-    truncationRate = totalsRow.truncated_rate ?? 0;
-
-    const phaseTotalsRow = db
-      .prepare(`SELECT COUNT(*) AS total FROM coder_tool_calls ${sinceJoinClause}`)
-      .get() as { total: number };
-    const totalPhase = phaseTotalsRow.total || 1;
-    const phases = db
-      .prepare(
-        `SELECT phase, COUNT(*) AS count
-         FROM coder_tool_calls
-         ${sinceJoinClause}
-         GROUP BY phase
-         ORDER BY count DESC`,
-      )
-      .all() as Array<{ phase: string | null; count: number }>;
-    phaseRows = phases.map((p) => ({ phase: p.phase, count: p.count, share: p.count / totalPhase }));
-  } else {
-    console.log('[runner-baseline] coder_tool_calls table missing — tool aggregates skipped.');
   }
 
   // ── Turns-per-session distribution ────────────────────────────────────
-  const turnsPerSession = db
-    .prepare(
-      `SELECT session_id, COUNT(*) AS turns
-       FROM coder_turn_telemetry
-       ${sinceClause}
-       GROUP BY session_id
-       HAVING session_id IS NOT NULL`,
-    )
-    .all() as Array<{ session_id: number; turns: number }>;
-  const turnCounts = turnsPerSession.map((r) => r.turns);
+  const turnCounts = turnsBySession
+    .map((session) => session.turns.length)
+    .filter((count) => count > 0);
 
   // ── Build the snapshot ────────────────────────────────────────────────
   const baseline: RunnerBaseline = {

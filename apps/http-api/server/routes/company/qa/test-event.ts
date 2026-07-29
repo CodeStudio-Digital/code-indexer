@@ -9,7 +9,7 @@
  *                     spawning playwright). We only validate the run
  *                     belongs to the session in the URL.
  *   - `test_result` → reporter saw `onTestEnd`. We persist a row in
- *                     `qa_test_results`.
+ *                     independent QA-result JSON entities.
  *   - `completed`   → reporter saw `onEnd`. We patch the run with final
  *                     counts + duration.
  *
@@ -26,7 +26,8 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../../deps.js';
-import { parseIdParam, parseJsonBody } from '../../_helpers.js';
+import { parseJsonBody, parseSessionIdParam } from '../../_helpers.js';
+import { asCompanySessionId, isUuid } from '@mcp/session-storage';
 import type { QaTestStatus } from '@mcp/services/qa/types.js';
 import { getCompanyOrchestrator } from '../../../../sse/companyOrchestrator.js';
 import { publish as busPublish } from '../../../../coder-bus.js';
@@ -36,7 +37,10 @@ import {
   upsertBugCard,
   syncFeatureCard,
   type EvidenceUrlBuilder,
+  type QaKanbanStore,
 } from '@mcp/services/qa/kanban-bridge.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 import { classifyQaFailure } from '@mcp/services/qa/parsers/error-classifier.js';
 import {
   SIDECAR_DOWN_THRESHOLD,
@@ -47,12 +51,12 @@ import {
 
 interface StartedEvent {
   kind: 'started';
-  runId: string | number;
+  runId: string;
   count?: number;
 }
 interface TestResultEvent {
   kind: 'test_result';
-  runId: string | number;
+  runId: string;
   spec: string;
   name: string;
   status: string;
@@ -66,7 +70,7 @@ interface TestResultEvent {
 }
 interface CompletedEvent {
   kind: 'completed';
-  runId: string | number;
+  runId: string;
   passed?: number;
   failed?: number;
   skipped?: number;
@@ -86,15 +90,15 @@ const TEST_STATUS_VALUES = new Set<QaTestStatus>([
 ]);
 
 export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
-  const { qaTestRunStore, qaTestResultStore, companyStore } = deps;
+  const { qaTestRunStore, qaTestResultStore, sessionStore } = deps;
 
   app.post('/api/company/sessions/:id/qa/test-event', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = asCompanySessionId(parseSessionIdParam(c));
     const body = await parseJsonBody<Event>(c);
     const runId = parseRunId(body.runId);
     if (runId === null) return c.json({ error: 'invalid runId' }, 400);
 
-    const run = qaTestRunStore.getRun(runId);
+    const run = await qaTestRunStore.getRun(runId);
     if (!run) return c.json({ error: 'unknown runId' }, 404);
     if (run.company_session_id !== sessionId) return c.json({ error: 'session mismatch' }, 403);
 
@@ -102,7 +106,7 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
     // so the adaptive watchdog resets its clock (no-op once the run left
     // `running`). Best-effort — a store hiccup must not block the suite.
     try {
-      qaTestRunStore.touchLastEvent(runId);
+      await qaTestRunStore.touchLastEvent(runId);
     } catch (e) {
       console.warn(`[qa-test-event] touchLastEvent(${runId}) failed: ${(e as Error).message}`);
     }
@@ -129,7 +133,7 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
         const ev = body as TestResultEvent;
         const status = normaliseStatus(ev.status);
         if (!status) return c.json({ error: `invalid status "${ev.status}"` }, 400);
-        const id = qaTestResultStore.recordResult({
+        const id = await qaTestResultStore.recordResult({
           run_id: runId,
           spec_file: ev.spec ?? 'unknown',
           test_name: ev.name ?? '(anonymous)',
@@ -174,7 +178,7 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
         if (failureClass === 'sidecar_down') {
           const streak = trackSidecarFailure(runId);
           if (streak >= SIDECAR_DOWN_THRESHOLD) {
-            const terminated = completeRunSidecarDown({
+            const terminated = await completeRunSidecarDown({
               sessionId,
               runId,
               qaTestRunStore,
@@ -193,7 +197,7 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
         const ev = body as CompletedEvent;
         // B7 — run over; drop any sidecar-down streak state for it.
         clearSidecarTracker(runId);
-        const updated = qaTestRunStore.completeRun(runId, {
+        const updated = await qaTestRunStore.completeRun(runId, {
           status: 'completed',
           passed: ev.passed ?? 0,
           failed: ev.failed ?? 0,
@@ -224,11 +228,11 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
         // already carries `kanban_card_id` per failed result. Errors are
         // captured per-result inside the bridge and never bubble up.
         if (updated) {
-          runKanbanBridge({
+          await runKanbanBridge({
             sessionId,
             run: updated,
             qaResultStore: qaTestResultStore,
-            companyStore,
+            companyStore: createQaKanbanStore(sessionId, sessionStore),
           });
         }
 
@@ -251,13 +255,10 @@ export function mountQaTestEventRoute(app: Hono, deps: ServerDeps): void {
   });
 }
 
-function parseRunId(raw: unknown): number | null {
-  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
-  if (typeof raw === 'string') {
-    const n = Number(raw);
-    if (Number.isInteger(n) && n > 0) return n;
-  }
-  return null;
+function parseRunId(raw: unknown): string | null {
+  return typeof raw === 'string' && isUuid(raw)
+    ? raw.toLowerCase()
+    : null;
 }
 
 function normaliseStatus(raw: unknown): QaTestStatus | null {
@@ -278,19 +279,19 @@ function normaliseStatus(raw: unknown): QaTestStatus | null {
  * true when the run actually transitioned (idempotent under races —
  * `completeRun` is a no-op once the run left `running`).
  */
-function completeRunSidecarDown(opts: {
-  sessionId: number;
-  runId: number;
+async function completeRunSidecarDown(opts: {
+  sessionId: string;
+  runId: string;
   qaTestRunStore: ServerDeps['qaTestRunStore'];
   qaTestResultStore: ServerDeps['qaTestResultStore'];
   orchestrator: ReturnType<typeof getCompanyOrchestrator>;
-}): boolean {
+}): Promise<boolean> {
   const { sessionId, runId, qaTestRunStore, qaTestResultStore, orchestrator } = opts;
   let passed = 0;
   let failed = 0;
   let skipped = 0;
   try {
-    for (const r of qaTestResultStore.listResults(runId)) {
+    for (const r of await qaTestResultStore.listResults(runId)) {
       if (r.status === 'passed') passed++;
       else if (r.status === 'skipped') skipped++;
       else failed++;
@@ -298,7 +299,7 @@ function completeRunSidecarDown(opts: {
   } catch {
     /* keep zeros — counts are informative here */
   }
-  const updated = qaTestRunStore.completeRun(runId, {
+  const updated = await qaTestRunStore.completeRun(runId, {
     status: 'error',
     passed,
     failed,
@@ -343,12 +344,12 @@ function completeRunSidecarDown(opts: {
  * (rather than living in a service class) to keep the test-event
  * route's flow obvious.
  */
-function runKanbanBridge(opts: {
-  sessionId: number;
+async function runKanbanBridge(opts: {
+  sessionId: string;
   run: import('@mcp/services/qa/types.js').QaRun;
   qaResultStore: import('@mcp/services/qa/store/interfaces.js').IQaTestResultStore;
-  companyStore: import('@mcp/store/company-store.js').CompanyStore;
-}): void {
+  companyStore: QaKanbanStore;
+}): Promise<void> {
   const { sessionId, run, qaResultStore, companyStore } = opts;
 
   const buildEvidenceUrl: EvidenceUrlBuilder = (relPath) =>
@@ -357,9 +358,9 @@ function runKanbanBridge(opts: {
 
   // 1) Bug cards for failed/timed-out/interrupted results.
   try {
-    const failures = qaResultStore.listFailures(run.id);
+    const failures = await qaResultStore.listFailures(run.id);
     for (const result of failures) {
-      const out = upsertBugCard(
+      const out = await upsertBugCard(
         { companyStore, qaResultStore },
         { sessionId, run, result, buildEvidenceUrl, runDetailUrl },
       );
@@ -374,7 +375,7 @@ function runKanbanBridge(opts: {
   // 2) Sync the feature card status (only when the run knows its target).
   if (run.kanban_feature_card_id != null) {
     try {
-      const out = syncFeatureCard(
+      const out = await syncFeatureCard(
         { companyStore, qaResultStore },
         {
           featureCardId: run.kanban_feature_card_id,
@@ -391,4 +392,45 @@ function runKanbanBridge(opts: {
       console.warn(`[qa-kanban-bridge] syncFeatureCard failed: ${(e as Error).message}`);
     }
   }
+}
+
+function createQaKanbanStore(
+  sessionId: string,
+  sessionStore: FsSessionStore,
+): QaKanbanStore {
+  const files = new CompanySessionFiles({
+    companySessionId: sessionId,
+    sessionStore,
+  });
+  const mutate = <T>(operation: () => T): Promise<T> =>
+    sessionStore.runSessionMutation(sessionId, async () => operation());
+  return {
+    createKanbanCard: (_companySessionId, input) =>
+      mutate(() =>
+        files.createKanbanCardSync({
+          ...input,
+          createdBy: input.created_by,
+        }),
+      ),
+    getKanbanCard: (cardId) => files.getKanbanCardFullSync(cardId),
+    addKanbanComment: (cardId, authorRole, agentRunId, content) =>
+      mutate(() =>
+        files.addKanbanCommentSync(
+          cardId,
+          authorRole,
+          agentRunId,
+          content,
+        ),
+      ),
+    addCardDependency: (cardId, dependsOnId) =>
+      mutate(() =>
+        files.addKanbanDependencySync(cardId, dependsOnId),
+      ),
+    moveKanbanCard: (cardId, column) =>
+      mutate(() => {
+        const card = files.moveKanbanCardSync(cardId, column);
+        if (!card) throw new Error(`Unknown Company kanban card ${cardId}`);
+        return card;
+      }),
+  };
 }

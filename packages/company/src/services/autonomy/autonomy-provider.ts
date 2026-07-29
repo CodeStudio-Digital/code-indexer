@@ -12,9 +12,9 @@
  */
 import { resolveAutonomy, type AutonomyConfig } from './autonomy-config.js';
 
-/** Structural slice of CompanyStore — keeps this module store-agnostic. */
+/** Synchronous projection supplied by the owning Company bundle. */
 export interface AutonomySessionSource {
-  getCompanySession(id: number): { config_json: string | null } | null;
+  getCompanySession(id: string): { config_json: string | null } | null;
 }
 
 export interface AutonomyProvider {
@@ -25,8 +25,8 @@ export interface AutonomyProvider {
 }
 
 export function createAutonomyProvider(args: {
-  companyStore: AutonomySessionSource;
-  sessionId: number;
+  sessionSource: AutonomySessionSource;
+  sessionId: string;
   env?: NodeJS.ProcessEnv;
 }): AutonomyProvider {
   let cached: AutonomyConfig | null = null;
@@ -36,7 +36,7 @@ export function createAutonomyProvider(args: {
       if (cached) return cached;
       let configJson: string | null = null;
       try {
-        configJson = args.companyStore.getCompanySession(args.sessionId)?.config_json ?? null;
+        configJson = args.sessionSource.getCompanySession(args.sessionId)?.config_json ?? null;
       } catch (e) {
         // Defensive: a store hiccup must not take autonomy resolution down —
         // fall back to env+defaults (same posture as config-loader.ts).

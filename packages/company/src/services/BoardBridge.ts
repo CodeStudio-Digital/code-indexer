@@ -32,17 +32,17 @@ export class BoardBridge implements IBoardPoster {
     private readonly kanban: IKanbanNotifier,
   ) {}
 
-  get lastMasterSeenId(): number {
+  get lastMasterSeenSeq(): number {
     return this.watermark;
   }
 
-  advanceMasterWatermark(entryId: number): void {
-    this.watermark = Math.max(this.watermark, entryId);
+  advanceMasterWatermark(entrySeq: number): void {
+    this.watermark = Math.max(this.watermark, entrySeq);
   }
 
   post(
     authorRole: string,
-    agentRunId: number | null,
+    agentRunId: string | null,
     kind: BoardKind,
     content: string,
     mentions?: string[],
@@ -54,23 +54,23 @@ export class BoardBridge implements IBoardPoster {
       while ((m = re.exec(content))) extractedMentions.push(m[1]);
     }
 
-    const entry = this.ctx.companyStore.postToBoard(
-      this.ctx.companySessionId,
+    const entry = this.ctx.companyFiles.createBoardEntry({
       authorRole,
       agentRunId,
       kind,
       content,
-      extractedMentions,
-    );
+      mentions: extractedMentions,
+    });
 
     // Master "sees" its own posts and system announcements — advance watermark
     // so notifyMasterAboutSubordinate doesn't replay them.
     if (authorRole === 'master' || authorRole === 'system') {
-      this.advanceMasterWatermark(entry.id);
+      this.advanceMasterWatermark(entry.seq);
     }
 
     this.bus.publish('board_entry', {
       id: entry.id,
+      seq: entry.seq,
       author_role: entry.author_role,
       agent_run_id: entry.agent_run_id,
       kind: entry.kind,
@@ -107,9 +107,9 @@ export class BoardBridge implements IBoardPoster {
     }
   }
 
-  read(opts?: { sinceId?: number; limit?: number; mentionsRole?: string }): BoardEntry[] {
-    const entries = this.ctx.companyStore.readBoard(this.ctx.companySessionId, {
-      sinceId: opts?.sinceId,
+  read(opts?: { sinceSeq?: number; limit?: number; mentionsRole?: string }): BoardEntry[] {
+    const entries = this.ctx.companyFiles.listBoardEntriesSync({
+      sinceSeq: opts?.sinceSeq,
       limit: opts?.limit ?? 50,
     });
     if (opts?.mentionsRole) {

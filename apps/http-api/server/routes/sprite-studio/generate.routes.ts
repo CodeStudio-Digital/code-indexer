@@ -29,12 +29,11 @@ import { emitSpriteEvent } from './bus-registry.js';
 import { toVersionDto } from './mappers.js';
 
 export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
-  const projects = deps.spriteProjectsStore;
-  const jobs = deps.spriteJobsStore;
+  const store = deps.spriteFileStore;
 
   app.post('/api/sprite-studio/projects/:projectId/generate', async (c) => {
     const ideProjectId = Number(c.req.param('projectId'));
-    const project = projects.getByProjectId(ideProjectId);
+    const project = await store.projectByIdeId(ideProjectId);
     if (!project) return c.json({ error: 'not_initialized' }, 404);
     const body = (await c.req.json().catch(() => null)) as GenerateRouteBody | null;
     if (!body?.prompt) return c.json({ error: 'invalid_body' }, 400);
@@ -45,7 +44,7 @@ export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
     const editKind = editKindOf(body);
     if (editKind) {
       if (!body.assetId || !body.versionId) return c.json({ error: 'invalid_body' }, 400);
-      const version = deps.spriteAssetsStore.getVersion(body.versionId);
+      const version = await store.getVersion(body.versionId);
       const root = deps.db.getProject(ideProjectId)?.root_path;
       if (!version || version.asset_id !== body.assetId || !root) {
         return c.json({ error: 'not_found' }, 404);
@@ -56,7 +55,7 @@ export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
       } catch {
         return c.json({ error: 'version_file_missing' }, 404);
       }
-      const jobRow = jobs.insert({
+      const jobRow = await store.insertJob({
         sprite_project_id: project.id,
         asset_id: body.assetId,
         kind: 'edit',
@@ -75,19 +74,19 @@ export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
     // version as identity anchor + library versions + disk uploads, capped.
     // Versions are validated to belong to THIS sprite project.
     const root = deps.db.getProject(ideProjectId)?.root_path ?? null;
-    const readVersionPng = (versionId: number): Buffer | null => {
-      const v = deps.spriteAssetsStore.getVersion(versionId);
+    const readVersionPng = async (versionId: string): Promise<Buffer | null> => {
+      const v = await store.getVersion(versionId);
       if (!v || !root) return null;
-      const owner = deps.spriteAssetsStore.get(v.asset_id);
+      const owner = await store.getAsset(v.asset_id);
       if (!owner || owner.sprite_project_id !== project.id) return null;
       try { return fs.readFileSync(resolveInsideSpriteDir(root, v.file_rel_path)); } catch { return null; }
     };
     const currentVersionId = body.assetId
-      ? deps.spriteAssetsStore.get(body.assetId)?.current_version_id ?? null
+      ? (await store.getAsset(body.assetId))?.current_version_id ?? null
       : null;
-    const refs = buildGenerationRefs(body, readVersionPng, currentVersionId);
+    const refs = await buildGenerationRefs(body, readVersionPng, currentVersionId);
 
-    const jobRow = jobs.insert({
+    const jobRow = await store.insertJob({
       sprite_project_id: project.id,
       asset_id: body.assetId ?? null,
       kind: 'generate',
@@ -118,21 +117,21 @@ export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
     return c.json({ jobId: jobRow.id });
   });
 
-  app.get('/api/sprite-studio/projects/:projectId/jobs', (c) => {
+  app.get('/api/sprite-studio/projects/:projectId/jobs', async (c) => {
     const ideProjectId = Number(c.req.param('projectId'));
-    const project = projects.getByProjectId(ideProjectId);
+    const project = await store.projectByIdeId(ideProjectId);
     if (!project) return c.json({ jobs: [] });
-    return c.json({ jobs: jobs.listByProject(project.id, 50) });
+    return c.json({ jobs: await store.listJobs(project.id, 50) });
   });
 
-  app.post('/api/sprite-studio/jobs/:id/cancel', (c) => {
-    const jobId = Number(c.req.param('id'));
+  app.post('/api/sprite-studio/jobs/:id/cancel', async (c) => {
+    const jobId = c.req.param('id');
     const found = getSpriteJobQueue().cancel(jobId);
     if (!found) {
       // Not in the queue (already finished or unknown) — mark cancelled best-effort.
-      const row = jobs.get(jobId);
+      const row = await store.getJob(jobId);
       if (row && !['done', 'failed', 'cancelled'].includes(row.status)) {
-        jobs.updateStatus(jobId, 'cancelled');
+        await store.updateJobStatus(jobId, 'cancelled');
         emitSpriteEvent(row.sprite_project_id, { type: 'sprite_job', jobId, status: 'cancelled' });
       }
     }
@@ -143,9 +142,9 @@ export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
   // calls this when remounting the generate panel so an in-flight (or
   // finished-but-unpicked) generation is never "lost" by navigation — the
   // work already happened and the PNGs are in the scratch dir.
-  app.get('/api/sprite-studio/jobs/:id', (c) => {
-    const jobId = Number(c.req.param('id'));
-    const row = jobs.get(jobId);
+  app.get('/api/sprite-studio/jobs/:id', async (c) => {
+    const jobId = c.req.param('id');
+    const row = await store.getJob(jobId);
     if (!row) return c.json({ error: 'not_found' }, 404);
     const candidates: Array<{ index: number; candidateId: string }> = [];
     try {
@@ -170,7 +169,7 @@ export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
 
   // Staged candidate preview (before promotion). Served straight from scratch.
   app.get('/api/sprite-studio/jobs/:id/candidates/:i/thumb', (c) => {
-    const jobId = Number(c.req.param('id'));
+    const jobId = c.req.param('id');
     const i = Number(c.req.param('i'));
     const file = path.join(spriteScratchDir(jobId), candidateFileName(i));
     let png: Buffer;
@@ -181,15 +180,15 @@ export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
   // Promote a staged candidate into an immutable asset version.
   app.post('/api/sprite-studio/projects/:projectId/assets/:assetId/pick', async (c) => {
     const ideProjectId = Number(c.req.param('projectId'));
-    const project = projects.getByProjectId(ideProjectId);
-    const asset = deps.spriteAssetsStore.get(Number(c.req.param('assetId')));
+    const project = await store.projectByIdeId(ideProjectId);
+    const asset = await store.getAsset(c.req.param('assetId'));
     if (!project || !asset) return c.json({ error: 'not_found' }, 404);
-    const body = (await c.req.json().catch(() => null)) as { jobId?: number; candidateIndex?: number } | null;
+    const body = (await c.req.json().catch(() => null)) as { jobId?: string; candidateIndex?: number } | null;
     if (!body?.jobId || body.candidateIndex == null) return c.json({ error: 'invalid_body' }, 400);
     try {
       const version = await promoteCandidate(
         {
-          stores: { assets: deps.spriteAssetsStore, jobs: deps.spriteJobsStore },
+          stores: buildSpriteJobDeps(deps, project.id).stores,
           scratchDir: spriteScratchDir,
           projectRoot: makeProjectRootResolver(deps),
         },
@@ -198,7 +197,9 @@ export function mountSpriteGenerateRoutes(app: Hono, deps: ServerDeps): void {
       // Keep the packed variation's original sheet durably (re-sliceable later).
       const root = deps.db.getProject(ideProjectId)?.root_path;
       if (root) persistJobSheet(root, asset.slug, body.jobId);
-      return c.json(toVersionDto(ideProjectId, version));
+      const persisted = await store.getVersion(version.id);
+      if (!persisted) throw new Error('promoted_version_missing');
+      return c.json(toVersionDto(ideProjectId, persisted));
     } catch (e) {
       return c.json({ error: (e as Error).message }, 400);
     }

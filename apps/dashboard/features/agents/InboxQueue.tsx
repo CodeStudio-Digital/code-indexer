@@ -28,7 +28,7 @@ const STATUS_VARIANTS: Record<InboxStatus, 'default' | 'secondary' | 'destructiv
 interface InboxQueueProps {
   /** Full message set (DESC by id) from the parent. */
   messages: AgentInboxMessage[];
-  companySessionId: number;
+  companySessionId: string;
   initialized: boolean;
   onChanged: () => void;
 }
@@ -86,7 +86,7 @@ function InboxRow({
   onChanged,
 }: {
   message: AgentInboxMessage;
-  companySessionId: number;
+  companySessionId: string;
   onChanged: () => void;
 }) {
   const { t } = useTranslation(['agents', 'common']);

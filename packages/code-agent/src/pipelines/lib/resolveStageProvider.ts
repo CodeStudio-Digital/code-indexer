@@ -5,7 +5,7 @@
  * Provider construction has non-trivial cost (credentials lookup,
  * OAuth refresh in some shapes), so we cache by `(provider, model)`
  * tuple within a single execution. The cache is owned by the caller —
- * the executor instantiates one cache per `pipeline_executions` row
+ * the executor instantiates one cache per pipeline-run bundle entity
  * and discards it on completion.
  *
  * When the node has no override (or both fields are empty), we return

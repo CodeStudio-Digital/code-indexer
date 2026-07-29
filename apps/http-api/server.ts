@@ -7,7 +7,6 @@ import { loadConfig } from '@mcp/shared/utils/config.js';
 import { createAdminRouter } from './admin/index.js';
 import { createDeps } from './server/deps.js';
 import { mountProjectsRoutes } from './server/routes/projects.js';
-import { sweepOrphanGlobalWorkspaces } from './server/routes/coder/global-workspace.js';
 import { mountBuilderCheckpointRoutes } from './server/routes/builder-checkpoints.js';
 import { mountProjectScaffoldRoute } from './server/routes/projects-scaffold.js';
 import { mountHygieneRoutes } from './server/routes/hygiene.js';
@@ -31,6 +30,7 @@ import { mountAdminLshRoutes } from './server/routes/admin/lsh.js';
 import { mountWorkersDiagnosticRoute } from './server/routes/admin/workers.js';
 import { mountSupervisorAdminRoutes } from './server/routes/admin/supervisor.js';
 import { mountNotificationRoutes } from './server/routes/notifications.js';
+import { mountSessionTrashRoutes } from './server/routes/session-trash.js';
 import { mountCoderRoutes } from './server/routes/coder/index.js';
 import { mountLspRoutes } from './server/routes/lsp/lsp.routes.js';
 import { mountEditorRoutes } from './server/routes/editor.js';
@@ -54,7 +54,16 @@ import {
 import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
 import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
-import { startInboxWatchdogIfEnabled, type InboxMessageWatchdog } from '@mcp/company/services/inbox-message-watchdog.js';
+import {
+  createFileInboxWatchdogSource,
+  startInboxWatchdogIfEnabled,
+  type InboxMessageWatchdog,
+} from '@mcp/company/services/inbox-message-watchdog.js';
+import {
+  CompanySessionFiles,
+  listCompanySessionsWithPendingMasterInbox,
+} from '@mcp/company/services/CompanySessionFiles.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 // AgentSupervisor: workers-only architecture — each company-worker
 // owns its own supervisor instance. Main process holds nothing.
@@ -63,6 +72,7 @@ import { createMcpHttpApp } from '../mcp-server/http/mcp-http-transport.js';
 import { composeAuth } from './auth/composition.js';
 import { bearerMiddleware, getAuthCtx } from './auth/bearer-middleware.js';
 import { localhostOnlyMiddleware } from './server/middleware/localhost-only.js';
+import { buildCorsOrigin } from './server/middleware/cors-origin.js';
 import { createApiTokensRouter } from './admin/api-tokens.routes.js';
 import { createMcpHttpStatusRouter } from './admin/mcp-http-status.routes.js';
 import { createAppSettingsRouter } from './admin/app-settings.routes.js';
@@ -135,6 +145,8 @@ import { startFreezeWatchdog, stopFreezeWatchdog } from './server/perf/freeze-lo
 import { startPersistentPerfDiagnostics } from './server/perf/persistent-diagnostics.js';
 import { getMemoryLedger } from './server/perf/memory-ledger.js';
 import { mountPerfRoutes } from './server/routes/admin/perf.js';
+import { mountProcessRoutes } from './server/routes/admin/processes.js';
+import { disposeCensus } from './server/perf/census/census-service.js';
 import { createInProcessStructuralExecutor } from '@mcp/services/services/project-index/index.js';
 import { registerShutdownTask } from './server/shutdown-tasks.js';
 import {
@@ -154,7 +166,7 @@ import { setWorkerLspDeps } from './sse/worker-lsp-handlers.js';
 import { setGlobalAgentLspBackend } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
 import { setCompanyWorkerDocDeps, getWorkerOrchestratorPool } from './sse/workerPoolSingleton.js';
 import { McpExternalPool, setGlobalMcpExternalPool } from './sse/McpExternalPool.js';
-// Frente E — periodic watchdog for stuck coder_sessions. Started during
+// Frente E — periodic watchdog for stuck filesystem session projections. Started during
 // server bootstrap below; auto-`unref()` so it never holds process exit.
 import { startCoderWatchdog } from './sse/coder-watchdog.js';
 import { startMemorySweeper, memorySweeperEnabled } from './sse/memory-sweeper.js';
@@ -194,7 +206,7 @@ function companyAutoResumeEnabled(): boolean {
  * sessions. Deferred via an unref'd timer so it never blocks boot and runs
  * after the worker doc/research deps are wired in `createApp`.
  */
-function scheduleCompanyAutoResume(sessionIds: number[]): void {
+function scheduleCompanyAutoResume(sessionIds: CompanySessionId[]): void {
   const ids = sessionIds.slice(0, COMPANY_AUTORESUME_MAX);
   const dropped = sessionIds.length - ids.length;
   const timer = setTimeout(() => {
@@ -276,25 +288,26 @@ export function createApp() {
   // AgentRun recovery and the observational journal remain feature-gated, but
   // the pool must retain the store so any context accepted while those flags
   // are enabled can still be terminalized after a runtime flag change.
-  setCoderWorkerControlPlaneStore(
-    deps.controlPlaneStore,
-    deps.controlPlaneDivergenceStore,
-  );
-  let recoveredControlPlaneRuns = 0;
+  setCoderWorkerControlPlaneStore(deps.controlPlaneStore);
   if (coderControlPlaneShadowEnabled()) {
-    try {
-      recoveredControlPlaneRuns = deps.controlPlaneStore.recoverInterruptedRuns();
-    } catch (error) {
-      console.warn(
-        `[control-plane-agent-run] startup recovery failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+    void deps.controlPlaneStore.recoverInterruptedRuns().then(
+      (recovered) => {
+        console.log(
+          `[control-plane] filesystem recovery completed recovered=${recovered}`,
+        );
+      },
+      (error) => {
+        console.warn(
+          `[control-plane-agent-run] startup recovery failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      },
+    );
   }
   console.log(
     `[control-plane] command-ledger=authoritative ` +
       `agent-runs=${coderControlPlaneShadowEnabled() ? 'enabled' : 'disabled'} ` +
       `journal=${coderRuntimeJournalShadowEnabled() ? 'enabled' : 'disabled'} ` +
-      `recovered=${recoveredControlPlaneRuns}`,
+      'storage=filesystem',
   );
 
   // Wire the sandbox persistence store into the SandboxManager module
@@ -309,12 +322,23 @@ export function createApp() {
   // db_* v2 tools — connections come from the SAME per-project-routed store
   // instances the routes/db-client handlers use (deps.dbClientFor), so the
   // agent always sees the rows the Databases tab shows. Session projects come
-  // from CompanyStore (company_session_projects). The decryptor is resolved
+  // from the owning Company bundle. The decryptor is resolved
   // LATE (per call) because Electron injects the real safeStorage decryptor
   // after createApp().
   setDbToolsStores(
     { listConnections: (projectId) => deps.dbClientFor(projectId).listConnections(projectId) },
-    deps.companyStore,
+    {
+      listCompanySessionProjects: (companySessionId) => {
+        const session = new CompanySessionFiles({
+          companySessionId,
+          sessionStore: deps.sessionStore,
+        }).getSession();
+        return session.project_ids.map((projectId) => ({
+          project_id: projectId,
+          label: session.project_labels[String(projectId)] ?? null,
+        }));
+      },
+    },
   );
   setDbSecretDecryptor((blob) => getMainSecretDecryptor()(blob));
   // Install the global ToolSelectionPipeline filter. When
@@ -338,7 +362,7 @@ export function createApp() {
     markEnded(): void { /* watchdog never ends a run */ },
   };
   const inboxWatchdog: InboxMessageWatchdog | null = startInboxWatchdogIfEnabled({
-    companyStore: deps.companyStore,
+    source: createFileInboxWatchdogSource(deps.sessionStore),
     publisher: inboxWatchdogPublisher,
   });
   if (inboxWatchdog) {
@@ -362,9 +386,9 @@ export function createApp() {
     process.env.MCP_PIPELINES_CONTEXT_RELEVANCE === '1',
   );
   setGlobalFeedbackCollector(deps.feedbackCollector);
-  // (HotStateCache removed — bench showed SQLite p95 = 33 µs for
-  // tail-polling reads, so the cache was net-negative. See
-  // bench/results/hot-state-cache-baseline-2026-05-20.json.)
+  // HotStateCache remains removed. Company board state is now file-backed
+  // inside each session bundle, so the retired SQLite board benchmark is no
+  // longer a valid runtime or decision path.
   setQaTestRunStore(deps.qaTestRunStore);
   setQaEndpointEnvStore(deps.companySessionEnvStore);
   // Design System is gated by DESIGN_SYSTEM_ENABLED (default ON). When off,
@@ -393,10 +417,13 @@ export function createApp() {
   // `hasQaPlaywrightSkill` so non-QA sessions don't get the env vars.
   setQaPreviewConfig({
     httpApiPort: deps.config.dashboard.port,
-    hasQaPlaywrightSkill: (sessionId: number) => {
+    hasQaPlaywrightSkill: (sessionId: string) => {
       try {
-        const session = deps.companyStore.getCompanySession(sessionId);
-        return session ? hasQaPlaywrightSkill(session.config_json ?? '') : false;
+        const session = new CompanySessionFiles({
+          companySessionId: sessionId,
+          sessionStore: deps.sessionStore,
+        }).getSession();
+        return hasQaPlaywrightSkill(session.config_json);
       } catch {
         return false;
       }
@@ -408,7 +435,31 @@ export function createApp() {
   // `enabled=true` in the DB) runs below after migrations finish.
   const chromeService = new ChromeService({
     store: deps.chromeServiceStore,
-    companyStore: deps.companyStore,
+    listCompanySessions: () => {
+      const sessions: Array<{ id: string; status: string; configJson: string }> = [];
+      for (const entry of deps.sessionStore.catalog.list()) {
+        if (
+          entry.session.kind !== 'company' &&
+          entry.session.kind !== 'app_studio'
+        ) {
+          continue;
+        }
+        try {
+          const session = new CompanySessionFiles({
+            companySessionId: entry.session.id,
+            sessionStore: deps.sessionStore,
+          }).getSession();
+          sessions.push({
+            id: session.id,
+            status: session.status,
+            configJson: session.config_json,
+          });
+        } catch {
+          // A concurrently unavailable project root fails closed for this sweep.
+        }
+      }
+      return sessions;
+    },
     envStore: deps.companySessionEnvStore,
     httpApiPort: deps.config.dashboard.port,
     // B7 — lets lifecycle transitions to stopped/error fail in-flight
@@ -510,55 +561,106 @@ export function createApp() {
   // state by a previous crashed/restarted server cannot possibly still be
   // running. Sweep them to `interrupted`/`paused` so the dashboard shows
   // a coherent state and users can resume via follow-up messages.
-  try {
-    const { agentRuns, companySessions } = deps.companyStore.recoverStaleAgentRuns();
+  void (async () => {
+    await deps.sessionStore.ensureCatalog();
+    let agentRuns = 0;
+    let companySessions = 0;
+    const activeRunStatuses = new Set([
+      'running',
+      'working',
+      'waiting',
+      'waiting_plan',
+      'waiting_question',
+      'waiting_tasks',
+      'reviewing',
+      'blocked',
+    ]);
+    for (const entry of deps.sessionStore.catalog.list()) {
+      if (
+        entry.session.kind !== 'company' &&
+        entry.session.kind !== 'app_studio'
+      ) {
+        continue;
+      }
+      const files = new CompanySessionFiles({
+        companySessionId: entry.session.id,
+        sessionStore: deps.sessionStore,
+      });
+      for (const run of files.listAgentRunsSync()) {
+        if (
+          run.archive_id == null &&
+          activeRunStatuses.has(run.status)
+        ) {
+          await files.updateAgentRunStatus(
+            run.id,
+            'interrupted',
+            `${run.status_message} [interrupted by host restart]`.trim(),
+          );
+          agentRuns += 1;
+        }
+      }
+      if (
+        entry.state != null &&
+        ['running', 'in_progress', 'working'].includes(entry.state.status)
+      ) {
+        await files.updateSessionStatus('interrupted');
+        companySessions += 1;
+      }
+    }
     if (agentRuns > 0 || companySessions > 0) {
       console.log(
-        `[company] Startup recovery: ${agentRuns} agent_run(s) → interrupted, ` +
-        `${companySessions} company_session(s) → paused`,
+        `[company] Startup recovery: ${agentRuns} agent run(s) → interrupted, ` +
+        `${companySessions} Company bundle(s) → interrupted`,
       );
     }
-  } catch (e) {
-    console.warn(`[company] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  })().catch((e: unknown) => {
+    console.warn(
+      `[company] Startup recovery failed: ${
+        e instanceof Error ? e.message : String(e)
+      }`,
+    );
+  });
 
-  // Same idea for individual coder sessions: any row left in an active
+  // Same idea for individual coder sessions: any bundle left in an active
   // status after a restart belongs to a worker that no longer exists.
   // Flip them to `idle` so the dashboard renders the normal "send a
   // message" surface instead of a phantom in-flight run. Without this,
   // sessions hit by a silent worker death sat in `in_progress` forever
   // (the user couldn't engage them again — the UI thought a run was
   // still alive).
-  try {
-    const recovered = deps.sessionStore.recoverStaleSessions();
-    if (recovered > 0) {
-      console.log(`[coder] Startup recovery: ${recovered} coder_session(s) → idle`);
-    }
-  } catch (e) {
-    console.warn(`[coder] Startup recovery failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  void deps.sessionStore.recoverStaleSessions()
+    .then((recovered) => {
+      if (recovered > 0) {
+        console.log(
+          `[coder] Startup recovery: ${recovered} session bundle(s) → interrupted`,
+        );
+      }
+    })
+    .catch((e: unknown) => {
+      console.warn(
+        `[coder] Startup recovery failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    });
 
   // Subagent telemetry is append-only evidence, but an abrupt worker exit can
   // miss its terminal update. At process boot no coder workers are live yet,
   // so every incomplete row is an orphan and can be closed deterministically.
-  try {
-    const recovered = deps.sessionStore.recoverOrphanedSubagentRuns();
-    if (recovered > 0) {
-      console.log(`[coder] Startup recovery: ${recovered} subagent run(s) → interrupted`);
-    }
-  } catch (e) {
-    console.warn(`[coder] Subagent recovery failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  // GC orphan global-session virtual workspaces (synthetic union projects with
-  // no session, + stray junction dirs) left by a crash or uncovered delete path.
-  // SAFE: only unlinks junctions, never the real projects' files.
-  void sweepOrphanGlobalWorkspaces(deps)
-    .then((swept) => {
-      if (swept > 0) console.log(`[coder] Startup sweep: ${swept} orphan global workspace(s) cleaned`);
+  void deps.sessionStore.recoverOrphanedSubagentRuns()
+    .then((recovered) => {
+      if (recovered > 0) {
+        console.log(
+          `[coder] Startup recovery: ${recovered} subagent run(s) → interrupted`,
+        );
+      }
     })
-    .catch((e) => {
-      console.warn(`[coder] Global-workspace sweep failed: ${e instanceof Error ? e.message : String(e)}`);
+    .catch((e: unknown) => {
+      console.warn(
+        `[coder] Subagent recovery failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
     });
 
   // Frente E — periodic watchdog. The boot sweep above catches every
@@ -607,6 +709,7 @@ export function createApp() {
   try {
     const memoryConsolidator = startMemoryConsolidator({
       db: deps.db,
+      sessionStore: deps.sessionStore,
       snapshotService: deps.snapshotService,
       embeddingService: deps.embeddingService,
       armed: memoryConsolidateEnabled(),
@@ -623,46 +726,50 @@ export function createApp() {
   // orchestrator constructor. This log just makes the operator aware so
   // they know which sessions still need someone to "look at them" to
   // wake the master.
-  try {
-    const sessionsWithPending = deps.companyStore.listSessionsWithPendingMasterInbox();
-    if (sessionsWithPending.length > 0) {
+  void deps.sessionStore.ensureCatalog()
+    .then(() => {
+      const sessionsWithPending =
+        listCompanySessionsWithPendingMasterInbox(deps.sessionStore);
+      if (sessionsWithPending.length === 0) return;
       if (companyAutoResumeEnabled()) {
-        // Auto-resume (metabolism at rest): proactively re-arm the dormant
-        // sessions instead of just logging. Constructing each orchestrator
-        // runs `MasterInboxRouter.reviveIfPending` in the worker boot, which
-        // drains the queue and resurrects the master from its saved context
-        // — no roleConfig rebuild needed. Deferred so it fires AFTER the
-        // worker doc/research deps are wired (setCompanyWorkerDocDeps, below).
+        // Auto-resume (metabolism at rest): proactively re-arm dormant
+        // filesystem sessions. Deferred so it fires AFTER worker
+        // doc/research dependencies are wired below.
         scheduleCompanyAutoResume(sessionsWithPending);
-      } else {
-        console.log(
-          `[company] Pending master inbox: ${sessionsWithPending.length} session(s) ` +
-            `awaiting revive on next open — ids: ${sessionsWithPending.join(', ')} ` +
-            `(auto-resume off; set MCP_COMPANY_AUTORESUME=1 to re-arm at boot)`,
-        );
+        return;
       }
-    }
-  } catch (e) {
-    console.warn(
-      `[company] Master inbox scan failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
+      console.log(
+        `[company] Pending master inbox: ${sessionsWithPending.length} session(s) ` +
+          `awaiting revive on next open — ids: ${sessionsWithPending.join(', ')} ` +
+          `(auto-resume off; set MCP_COMPANY_AUTORESUME=1 to re-arm at boot)`,
+      );
+    })
+    .catch((e: unknown) => {
+      console.warn(
+        `[company] Master inbox scan failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    });
 
-  // QA test runs: any row in `status='running'` after restart cannot be
+  // QA test runs: any bundle entity in `status='running'` after restart cannot be
   // a live Playwright invocation (the host process is gone). Mark them
   // aborted so the dashboard's TestsTab stops showing the spinner
   // forever. See sessão 68 incident (run id=1 stuck running).
-  try {
-    const { recovered } = deps.qaTestRunStore.recoverStaleRuns();
-    if (recovered > 0) {
-      console.log(`[qa-recovery] Boot: ${recovered} stale qa_test_runs aborted`);
-    }
-  } catch (e) {
-    console.warn(`[qa-recovery] Boot failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  void deps.qaTestRunStore.recoverStaleRuns()
+    .then(({ recovered }) => {
+      if (recovered > 0) {
+        console.log(`[qa-recovery] Boot: ${recovered} stale QA runs aborted`);
+      }
+    })
+    .catch((e: unknown) => {
+      console.warn(
+        `[qa-recovery] Boot failed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    });
 
-  // QA orphan-run watchdog (v4.4): every minute, sweep `running` rows
-  // that have received zero `qa_test_results` for >10 min and mark them
+  // QA orphan-run watchdog (v4.4): every minute, sweep `running` entities
+  // that have received zero QA-result entities for >10 min and mark them
   // `errored`. Closes the door on session-68-style ghost runs where the
   // streaming reporter was wired wrong but the agent moved on.
   const stopQaWatchdog = startQaWatchdog(deps.qaTestRunStore);
@@ -707,7 +814,10 @@ export function createApp() {
 
   const app = new Hono();
 
-  app.use('*', cors({ origin: '*' }));
+  // Loopback origins + the Electron `mcp://app` scheme, NOT `*`. A wildcard here
+  // let any page in the user's browser read this API — project list, file
+  // contents, SSH hosts and secrets. See middleware/cors-origin.ts.
+  app.use('*', cors({ origin: buildCorsOrigin(deps.config.mcp.http.corsOrigins), credentials: true }));
 
   // Auth subsystem — instantiated once per process. Adapters and use-cases
   // are wired here exclusively. Routes and middlewares depend on the bundle.
@@ -789,10 +899,17 @@ export function createApp() {
   mountAdminPipelineTelemetryRoutes(app, deps);
   mountAdminCounterfactualRoutes(app, deps);
   mountAdminLshRoutes(app, deps);
-  mountWorkersDiagnosticRoute(app);
+  mountWorkersDiagnosticRoute(app, deps);
   mountPerfRoutes(app);
-  mountSupervisorAdminRoutes(app, { dbPath: deps.config.dbPath });
+  // Live process tree (task manager). Reads `deps.processMetricsProvider`
+  // through a closure because Electron assigns it only after createApp().
+  mountProcessRoutes(app, {
+    processMetricsProvider: () => deps.processMetricsProvider?.() ?? null,
+    processInventoryProvider: () => deps.processInventoryProvider?.() ?? [],
+  });
+  mountSupervisorAdminRoutes(app, { sessionStore: deps.sessionStore });
   mountNotificationRoutes(app, deps);
+  mountSessionTrashRoutes(app, deps);
   app.post('/api/semantic/namespaces/reconcile', async (c) => {
     const body: { namespace?: unknown } = await c.req.json<{ namespace?: unknown }>()
       .catch(() => ({}));
@@ -824,7 +941,7 @@ export function createApp() {
     probeEmbeddingTarget: (target) => deps.semanticProfileRuntime.probeEmbeddingTarget(target),
     probeRerankerTarget: (target) => deps.semanticProfileRuntime.probeRerankerTarget(target),
     rerankerDiagnostics: (purpose) => deps.semanticProfileRuntime.rerankerDiagnostics(purpose),
-  }));
+  }, deps.sessionStore));
   mountCoderRoutes(app, deps);
   mountLspRoutes(app, deps);
   mountEditorRoutes(app, deps);
@@ -857,7 +974,7 @@ export function createApp() {
   // gate rejections surface as structured JSON instead of an opaque
   // WebSocket close code 1006.
   mountTerminalDiagnoseRoute(app, {
-    companyStore: deps.companyStore,
+    sessionStore: deps.sessionStore,
     companySandboxStore: deps.companySandboxStore,
     db: deps.db,
   });
@@ -892,7 +1009,7 @@ export function createApp() {
   // `docs_deep_research` calls back to THESE singletons via the
   // MessageBridge. Zero duplication, single source of truth.
   const docsResearchBridge = new DocsResearchBridge({
-    db: deps.db.raw(),
+    sessionStore: deps.sessionStore,
     docStore: deps.docStore,
     docHybridSearch: deps.docHybridSearch,
     pipelineResolver: deps.pipelineProviderResolver,
@@ -1013,6 +1130,9 @@ export function createApp() {
   });
 
   registerShutdownTask('perf-sampler-stop', stopPerfSampler);
+  // The census collector is a real child process on Windows; the idle janitor
+  // normally reaps it, this covers a quit while the panel is open.
+  registerShutdownTask('process-census-stop', disposeCensus);
 
   // Main-loop freeze watchdog — feeds /api/admin/perf/freezes. Detects real
   // event-loop stalls (whole-app "trava todas as telas") and attributes them
@@ -1155,7 +1275,7 @@ export async function startServer(port: number, host: string) {
   // `podman exec -it`; host target spawns the operator's local shell
   // (gated by MCP_HOST_TERMINAL_ENABLED=1).
   attachTerminalUpgrade(server as unknown as import('node:http').Server, {
-    companyStore: deps.companyStore,
+    sessionStore: deps.sessionStore,
     companySandboxStore: deps.companySandboxStore,
     db: deps.db,
   });
@@ -1194,9 +1314,8 @@ if (HEAP_LOG_INTERVAL_MS > 0) {
   heapLogTimer.unref();
 }
 
-// Drain the dbWriter worker on graceful shutdown so the latest assistant
-// turn(s) land before the process exits. Without this, SIGINT/SIGTERM during
-// an active session can drop pending writes.
+// Drain runtime workers and release filesystem session writers on graceful
+// shutdown so every fsynced turn and lease is settled before process exit.
 let shuttingDown = false;
 let standaloneShutdown: ((reason: string) => Promise<void>) | null = null;
 const gracefulShutdown = (signal: NodeJS.Signals): void => {

@@ -2,9 +2,8 @@
  * Shared-drive tools for company agents.
  *
  * Every agent in a company session — master and subordinates — gets the
- * same five tools. They write to and read from a single persistent file
- * drive scoped to the company template (or to the session, when the
- * session is template-less). Use them to exchange large documents
+ * same five tools. They write to and read from a persistent drive scoped to
+ * the root Company session bundle. Use them to exchange large documents
  * (specs, dumps, transcripts, reports) without inflating board posts
  * or inbox messages.
  *
@@ -24,7 +23,7 @@ const WRITE_DESC =
   'After writing, mention the path in your message (board post, ask_master, send_to_agent) so the recipient knows what to read.\n' +
   "DON'T: living service documentation (ADRs, API refs, runbooks) — use `docs_write` for that; " +
   `the \`${DOCS_MIRROR_PREFIX}\` namespace is reserved for the docs mirror and rejected here.\n` +
-  "DON'T: store ephemeral scratch — the drive is persistent across sessions of the same company.";
+  "DON'T: store ephemeral scratch — the drive persists until this Company session is deleted.";
 
 const READ_DESC =
   'Read a file from the company shared drive. Returns up to 256KB by default; pass `max_bytes` to raise (cap 4MB) or `offset` to page.';

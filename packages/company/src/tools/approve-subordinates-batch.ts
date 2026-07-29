@@ -20,7 +20,7 @@ import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 const MAX_BATCH = 15;
 
 interface ApprovalEntry {
-  agent_run_id: number;
+  agent_run_id: string;
   approved: boolean;
   feedback?: string;
 }
@@ -52,7 +52,7 @@ export function approveSubordinatePlansTool(orchestrator: CompanyOrchestrator): 
         items: {
           type: 'object',
           properties: {
-            agent_run_id: { type: 'number', description: 'ID of the subordinate agent run whose plan is pending.' },
+            agent_run_id: { type: 'string', description: 'UUID of the subordinate agent run whose plan is pending.' },
             approved: { type: 'boolean', description: 'Approve (true) or reject (false) this plan.' },
             feedback: { type: 'string', description: 'Optional feedback relayed to the subordinate.' },
           },
@@ -88,9 +88,9 @@ export function approveSubordinatePlansTool(orchestrator: CompanyOrchestrator): 
         try {
           if (
             entry == null || typeof entry !== 'object' ||
-            typeof entry.agent_run_id !== 'number' || typeof entry.approved !== 'boolean'
+            typeof entry.agent_run_id !== 'string' || typeof entry.approved !== 'boolean'
           ) {
-            throw new Error('entry must be {agent_run_id: number, approved: boolean, feedback?}.');
+            throw new Error('entry must be {agent_run_id: UUID, approved: boolean, feedback?}.');
           }
           lines.push(`[${i + 1}/${raw.length}] ${approveOne(orchestrator, entry as ApprovalEntry)}`);
         } catch (e) {

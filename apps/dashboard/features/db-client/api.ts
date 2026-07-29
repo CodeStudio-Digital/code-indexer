@@ -282,8 +282,10 @@ export const testConnection = (spec: DbConnectSpec) =>
 export const connect = (spec: DbConnectSpec) =>
   apiCall<{ sessionToken: string; serverVersion?: string }>('dbClient.connect', { spec });
 
-export const disconnect = (connectionId: string) =>
-  apiCall<void>('dbClient.disconnect', { connectionId });
+export const disconnect = (connectionId: string) => {
+  invalidateTableInfo(connectionId);
+  return apiCall<void>('dbClient.disconnect', { connectionId });
+};
 
 export const listDatabases = (connectionId: string) =>
   withReconnect(connectionId, () => apiCall<string[]>('dbClient.listDatabases', { connectionId }));
@@ -300,8 +302,44 @@ export const searchCatalog = (connectionId: string, query: string, limit = 100) 
 export const schemaSnapshot = (connectionId: string, schema: string) =>
   withReconnect(connectionId, () => apiCall<DbSchemaSnapshot>('dbClient.schemaSnapshot', { connectionId, schema }));
 
-export const describeTable = (connectionId: string, schema: string, table: string) =>
-  withReconnect(connectionId, () => apiCall<DbTableInfo>('dbClient.describeTable', { connectionId, schema, table }));
+// ─── describeTable cache ─────────────────────────────────────────────────
+// Every surface needs a table's columns: the data grid (primary key + types),
+// the SQL editor's autocomplete, the row editor, the related-rows dialog, the
+// structure tab, and the tree's Indexes/Foreign keys folders. Uncached, opening
+// one table fired the same introspection query four or five times, and each one
+// is a multi-join over information_schema. The entry holds the PROMISE, so
+// callers that race share a single round trip instead of stampeding.
+const DESCRIBE_TTL_MS = 60_000;
+const describeCache = new Map<string, { at: number; value: Promise<DbTableInfo> }>();
+
+const describeKey = (connectionId: string, schema: string, table: string) => `${connectionId} ${schema} ${table}`;
+
+/**
+ * Drop cached column metadata. Pass a connection id (or `id@db` key) to clear
+ * just that connection — DDL anywhere on it can invalidate any of its tables.
+ */
+export function invalidateTableInfo(connectionId?: string): void {
+  if (!connectionId) {
+    describeCache.clear();
+    return;
+  }
+  const prefix = `${connectionId} `;
+  for (const key of describeCache.keys()) {
+    if (key.startsWith(prefix)) describeCache.delete(key);
+  }
+}
+
+export const describeTable = (connectionId: string, schema: string, table: string): Promise<DbTableInfo> => {
+  const key = describeKey(connectionId, schema, table);
+  const hit = describeCache.get(key);
+  if (hit && Date.now() - hit.at < DESCRIBE_TTL_MS) return hit.value;
+  const value = withReconnect(connectionId, () =>
+    apiCall<DbTableInfo>('dbClient.describeTable', { connectionId, schema, table }));
+  // A failed lookup must not be remembered — the next caller should retry.
+  value.catch(() => describeCache.delete(key));
+  describeCache.set(key, { at: Date.now(), value });
+  return value;
+};
 
 export const incomingForeignKeys = (connectionId: string, schema: string, table: string) =>
   withReconnect(connectionId, () => apiCall<DbIncomingForeignKey[]>('dbClient.incomingForeignKeys', { connectionId, schema, table }));
@@ -338,8 +376,11 @@ export const runQueryBatch = (
   opts?: { maxRows?: number; timeoutMs?: number; queryId?: string; schema?: string },
 ) => withReconnect(connectionId, () => apiCall<DbQueryBatchResult>('dbClient.queryBatch', { connectionId, statements, ...opts }));
 
-export const runMigration = (connectionId: string, changes: DbMigrationInput[], dryRun = false) =>
-  withReconnect(connectionId, () => apiCall<DbMigrationResult>('dbClient.migration', { connectionId, changes, dryRun }));
+export const runMigration = async (connectionId: string, changes: DbMigrationInput[], dryRun = false) => {
+  const result = await withReconnect(connectionId, () => apiCall<DbMigrationResult>('dbClient.migration', { connectionId, changes, dryRun }));
+  if (!dryRun) invalidateTableInfo(connectionId);
+  return result;
+};
 
 export const cancelQuery = (connectionId: string, queryId: string) =>
   apiCall<void>('dbClient.cancel', { connectionId, queryId });
@@ -360,8 +401,12 @@ export const editRow = (input: {
 export const editRows = (input: { connectionId: string; changes: DbRowChangeInput[]; dryRun?: boolean }) =>
   withReconnect(input.connectionId, () => apiCall<DbBatchEditResult>('dbClient.editRows', input));
 
-export const ddl = (input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean }) =>
-  withReconnect(input.connectionId, () => apiCall<DbEditResult>('dbClient.ddl', input));
+export const ddl = async (input: { connectionId: string; op: DbDdlOp; spec: DbDdlSpec; dryRun?: boolean }) => {
+  const result = await withReconnect(input.connectionId, () => apiCall<DbEditResult>('dbClient.ddl', input));
+  // A dry run only renders SQL; a real one may have changed any table's shape.
+  if (!input.dryRun) invalidateTableInfo(input.connectionId);
+  return result;
+};
 
 /** Run a non-relational command (Mongo document op / Redis command). */
 export const runCommand = (connectionId: string, command: DbCommand, maxRows?: number) =>
@@ -394,5 +439,9 @@ export function dumpStream(
 }
 
 /** Run a restore/import script (statement list) on one pinned connection. */
-export const runScript = (connectionId: string, statements: string[]) =>
-  withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.runScript', { connectionId, statements }));
+export const runScript = async (connectionId: string, statements: string[]) => {
+  const result = await withReconnect(connectionId, () => apiCall<DbQueryResult>('dbClient.runScript', { connectionId, statements }));
+  // A restore script is arbitrary DDL — assume every table on it moved.
+  invalidateTableInfo(connectionId);
+  return result;
+};

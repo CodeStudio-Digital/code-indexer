@@ -8,7 +8,8 @@ import type { CoderSession } from '../types.js';
 
 function importedSession(source: 'claude-code' | 'codex'): CoderSession {
   return {
-    id: 9, project_id: 1, title: 'Imported work', provider: 'openai', model: 'gpt-5',
+    id: '018f0f5e-7b2d-7a45-8c11-0123456789ab',
+    project_id: 1, title: 'Imported work', provider: 'openai', model: 'gpt-5',
     status: 'idle', total_input_tokens: 0, total_output_tokens: 0,
     total_cache_read_tokens: 0, total_cache_creation_tokens: 0, last_turn_input_tokens: 0,
     group_id: null, is_archived: false, archived_at: null, is_favorite: false, favorited_at: null,

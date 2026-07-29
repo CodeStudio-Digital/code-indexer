@@ -160,7 +160,7 @@ export interface ScaffoldProjectInput {
   builder?: boolean;
   /** Published Design System (DS Studio session id) to link at create time.
    *  Only honored when `builder` is true; link failure degrades to no link. */
-  dsSessionId?: number;
+  dsSessionId?: string;
 }
 
 /**

@@ -28,7 +28,11 @@ import {
 } from './reranker.js';
 import { LocalReranker } from './local-reranker.js';
 import { BedrockReranker } from './bedrock-reranker.js';
-import type { RerankCandidate, RerankResult } from './reranker-types.js';
+import type {
+  RerankCandidate,
+  RerankRequestOptions,
+  RerankResult,
+} from './reranker-types.js';
 import { resolveLocalReranker } from './local-reranker-policy.js';
 
 export type { EmbeddingTarget, RerankerTarget, SemanticPurpose } from '@mcp/store/semantic-store.js';
@@ -340,9 +344,20 @@ class StrictReranker implements RerankerService {
   cacheRevision(): string {
     return this.inner.cacheRevision?.() ?? `legacy:${this.inner.name}`;
   }
+  diagnostics(): unknown | Promise<unknown> {
+    return this.inner.diagnostics?.() ?? null;
+  }
+  candidatePoolSize(topK: number): number {
+    return this.inner.candidatePoolSize?.(topK) ?? Math.max(topK, topK * 2);
+  }
 
-  async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
-    const results = await this.inner.rerank(query, candidates, topK);
+  async rerank(
+    query: string,
+    candidates: RerankCandidate[],
+    topK = 10,
+    options?: RerankRequestOptions,
+  ): Promise<RerankResult[]> {
+    const results = await this.inner.rerank(query, candidates, topK, options);
     return validateRerankResults(this.inner, candidates, results, topK);
   }
 
@@ -360,8 +375,19 @@ class FailOpenReranker implements RerankerService {
   cacheRevision(): string {
     return this.inner.cacheRevision?.() ?? `legacy:${this.inner.name}`;
   }
+  diagnostics(): unknown | Promise<unknown> {
+    return this.inner.diagnostics?.() ?? null;
+  }
+  candidatePoolSize(topK: number): number {
+    return this.inner.candidatePoolSize?.(topK) ?? Math.max(topK, topK * 2);
+  }
 
-  async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
+  async rerank(
+    query: string,
+    candidates: RerankCandidate[],
+    topK = 10,
+    options?: RerankRequestOptions,
+  ): Promise<RerankResult[]> {
     const fallback = (): RerankResult[] => candidates
       .map((candidate) => ({
         id: candidate.id,
@@ -371,7 +397,7 @@ class FailOpenReranker implements RerankerService {
       .sort((a, b) => b.score - a.score)
       .slice(0, topK);
     try {
-      const results = await this.inner.rerank(query, candidates, topK);
+      const results = await this.inner.rerank(query, candidates, topK, options);
       return validateRerankResults(this.inner, candidates, results, topK);
     } catch (error) {
       console.warn(`[semantic] ${this.inner.name} reranker unavailable; preserving RRF order: ${

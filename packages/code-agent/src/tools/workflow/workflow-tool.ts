@@ -184,7 +184,11 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
       try {
         if (resumeId) {
           const observed = sessionId != null
-            ? getWorkflow(sessionId, resumeId, deps.sessionStore)
+            ? await getWorkflow(
+                sessionId,
+                resumeId,
+                deps.sessionStore,
+              )
             : undefined;
           if (!observed) {
             return err(
@@ -196,11 +200,21 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
             // Acquire before touching the cache object. After the CAS, discard
             // the pre-acquire observation and reload the authoritative row:
             // another executor may have completed steps in between.
-            if (!tryAcquireWorkflowRun(sessionId, resumeId, deps.sessionStore)) {
+            if (
+              !(await tryAcquireWorkflowRun(
+                sessionId,
+                resumeId,
+                deps.sessionStore,
+              ))
+            ) {
               return err(`workflow: '${resumeId}' is already running in this session.`);
             }
             leaseAcquired = true;
-            record = reloadWorkflowUnderLease(sessionId, resumeId, deps.sessionStore);
+            record = await reloadWorkflowUnderLease(
+              sessionId,
+              resumeId,
+              deps.sessionStore,
+            );
             if (!record) {
               return err(
                 `workflow: recovery checkpoint for '${resumeId}' changed while acquiring; ` +
@@ -225,7 +239,7 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
             const reconciliation = sessionId != null
               && step.groupId
               && deps.sessionStore?.reconcileWorkflowStepRun
-              ? deps.sessionStore.reconcileWorkflowStepRun(
+              ? await deps.sessionStore.reconcileWorkflowStepRun(
                   sessionId,
                   step.groupId,
                   step.id,
@@ -272,7 +286,14 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           }
           if (!record.steps.some((s) => s.status === 'pending')) {
             record.status = workflowStatusFromSteps(record);
-            if (sessionId != null && !saveWorkflow(sessionId, record, deps.sessionStore)) {
+            if (
+              sessionId != null &&
+              !(await saveWorkflow(
+                sessionId,
+                record,
+                deps.sessionStore,
+              ))
+            ) {
               return err(`workflow: recovery classification for '${record.id}' was fenced.`);
             }
             const content =
@@ -308,18 +329,36 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           // A fresh workflow must have a durable row before the cross-process
           // lease CAS. A resume already acquired and reloaded above.
           if (!resumeId) {
-            if (!saveWorkflow(sessionId, record, deps.sessionStore)) {
+            if (
+              !(await saveWorkflow(
+                sessionId,
+                record,
+                deps.sessionStore,
+              ))
+            ) {
               return err(
                 `workflow: unable to persist bounded recovery checkpoint for '${record.id}'; ` +
                 'the workflow was not started.',
               );
             }
-            if (!tryAcquireWorkflowRun(sessionId, record.id, deps.sessionStore)) {
+            if (
+              !(await tryAcquireWorkflowRun(
+                sessionId,
+                record.id,
+                deps.sessionStore,
+              ))
+            ) {
               return err(`workflow: '${record.id}' is already running in this session.`);
             }
             leaseAcquired = true;
           }
-          if (!saveWorkflow(sessionId, record, deps.sessionStore)) {
+          if (
+            !(await saveWorkflow(
+              sessionId,
+              record,
+              deps.sessionStore,
+            ))
+          ) {
             return err(`workflow: recovery checkpoint for '${record.id}' was fenced or unavailable.`);
           }
         }
@@ -360,7 +399,11 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
         );
       } finally {
         if (sessionId != null && leaseAcquired && record) {
-          releaseWorkflowRun(sessionId, record.id, deps.sessionStore);
+          await releaseWorkflowRun(
+            sessionId,
+            record.id,
+            deps.sessionStore,
+          );
         }
         if (runStarted && record) {
           const counts = countWorkflowOutcomes(record);

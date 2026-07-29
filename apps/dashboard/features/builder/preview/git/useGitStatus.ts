@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { workspaceApi, type GitStatusResponse } from '../api.js';
 
-export function useGitStatus(sessionId: number, projectId: number | null) {
+export function useGitStatus(sessionId: string, projectId: number | null) {
   const [status, setStatus] = useState<GitStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);

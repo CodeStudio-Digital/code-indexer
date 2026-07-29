@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { newCompanySessionId } from '@mcp/session-storage';
 import {
   engineKind,
   pickConnection,
@@ -6,6 +7,8 @@ import {
   sanitizeSlug,
   type ConnLite,
 } from '../scope.js';
+
+const COMPANY_SESSION_ID = newCompanySessionId();
 
 const conn = (over: Partial<ConnLite> = {}): ConnLite => ({
   id: 1,
@@ -27,7 +30,7 @@ describe('resolveDbScope', () => {
 
   it('company session: names are <slug>:<label>', () => {
     const scope = resolveDbScope({
-      companySessionId: 7,
+      companySessionId: COMPANY_SESSION_ID,
       connections: [
         { conn: conn(), projectSlug: 'api' },
         { conn: conn({ id: 2, project_id: 11 }), projectSlug: 'frontend' },
@@ -38,7 +41,7 @@ describe('resolveDbScope', () => {
 
   it('company session: null slug falls back to project-<id>', () => {
     const scope = resolveDbScope({
-      companySessionId: 7,
+      companySessionId: COMPANY_SESSION_ID,
       connections: [{ conn: conn({ project_id: 42 }), projectSlug: null }],
     });
     expect(scope[0].name).toBe('project-42:main');
@@ -72,7 +75,7 @@ describe('engineKind', () => {
 
 describe('pickConnection', () => {
   const scope = resolveDbScope({
-    companySessionId: 7,
+    companySessionId: COMPANY_SESSION_ID,
     connections: [
       { conn: conn({ id: 1, label: 'main' }), projectSlug: 'api' },
       { conn: conn({ id: 2, label: 'cache', project_id: 11 }), projectSlug: 'frontend' },

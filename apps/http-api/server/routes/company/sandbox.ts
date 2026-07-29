@@ -15,9 +15,13 @@
  * CRUD makes the lifecycle (start → refresh → retry → delete) easier to
  * follow.
  */
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  resolveCompanySessionContext,
+  notFound,
+} from '../_helpers.js';
 import { getSandboxManager, resolveDriver } from '@mcp/services/sandbox/index.js';
 import type {
   BuilderStack,
@@ -32,7 +36,12 @@ import {
 } from './sandbox-helpers.js';
 
 export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db } = deps;
+  const { sessionStore, db } = deps;
+  const resolveRoot = async (c: Context) =>
+    await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
 
   /**
    * Eagerly provision the builder sandbox for a session. Called by the
@@ -48,9 +57,10 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
    * — we never silently upgrade a traditional session into builder mode.
    */
   app.post('/api/company/sessions/:id/sandbox', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+    const resolved = await resolveRoot(c);
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
+    const session = resolved.root;
 
     let stack: ProvisionableStack | null = null;
     // Extract limits alongside stack in a single JSON parse. Without
@@ -105,7 +115,10 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
       builder?: { main_project_id?: number; main_project_runtime?: ExternalProjectRuntime };
     };
     const mainProjectId = cfg.builder?.main_project_id;
-    const linkedProjects = companyStore.listCompanySessionProjects(id);
+    const linkedProjects = session.project_ids.map((projectId) => ({
+      project_id: projectId,
+      label: session.project_labels[String(projectId)] ?? null,
+    }));
     const primaryLink =
       mainProjectId != null
         ? linkedProjects.find((p) => p.project_id === mainProjectId)
@@ -134,7 +147,7 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
     }
     try {
       const sandbox = await manager.provision({
-        sessionId: String(id),
+        sessionId: id,
         stack,
         retry,
         limits,
@@ -195,11 +208,13 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
    * running Vite process.
    */
   app.post('/api/company/sessions/:id/sandbox/restart-dev', async (c) => {
-    const id = parseIdParam(c);
-    const sandbox = getSandboxManager().get(String(id));
+    const resolved = await resolveRoot(c);
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
+    const sandbox = getSandboxManager().get(id);
     if (!sandbox) return c.json({ error: 'sandbox not running' }, 404);
     try {
-      await getSandboxManager().restartDevServer(String(id));
+      await getSandboxManager().restartDevServer(id);
       return c.json({ ok: true, previewUrl: sandbox.previewUrl });
     } catch (e) {
       return c.json(
@@ -210,13 +225,15 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:id/sandbox/logs', async (c) => {
-    const id = parseIdParam(c);
-    const sandbox = getSandboxManager().get(String(id));
+    const resolved = await resolveRoot(c);
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
+    const sandbox = getSandboxManager().get(id);
     if (!sandbox || !sandbox.containerId) {
       return c.json({ error: 'sandbox not running' }, 404);
     }
     // Watching the dev-server log counts as activity too.
-    getSandboxManager().touch(String(id));
+    getSandboxManager().touch(id);
     const requested = Number(c.req.query('lines') ?? '200');
     const lines = Number.isFinite(requested) ? Math.min(Math.max(requested, 10), 2_000) : 200;
     // Best-effort: if the file doesn't exist yet (dev-server still
@@ -248,10 +265,11 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
    * handler reads purely from in-memory state (no DB hit beyond the
    * initial session lookup).
    */
-  app.get('/api/company/sessions/:id/sandbox', (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+  app.get('/api/company/sessions/:id/sandbox', async (c) => {
+    const resolved = await resolveRoot(c);
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
+    const session = resolved.root;
     let stack: ProvisionableStack | null = null;
     let studio = false;
     try {
@@ -264,14 +282,14 @@ export function mountCompanySandboxRoutes(app: Hono, deps: ServerDeps): void {
     } catch {
       // Legacy sessions have arbitrary config_json — treat as non-builder.
     }
-    const sandbox = getSandboxManager().get(String(id));
+    const sandbox = getSandboxManager().get(id);
     // Treat an active poll from the dashboard as "the user is watching
     // this session" — bump the idle timer so the reaper doesn't kill
     // a live-but-silent sandbox out from under an open browser tab.
     // Without this, sandboxes died after 30 min even with the preview
     // iframe visible, because HMR is all-WebSocket after the initial
     // load and the WS upgrade only touches once.
-    if (sandbox) getSandboxManager().touch(String(id));
+    if (sandbox) getSandboxManager().touch(id);
 
     // Mint a rolling preview cookie whenever the session polls status.
     // The browser refreshes it every ~1s while provisioning and every

@@ -49,6 +49,7 @@ import { registerWorkerMemoryHandlers } from './worker-memory-handlers.js';
 import { registerWorkerSecretsHandlers } from './worker-secrets-handlers.js';
 import { registerWorkerLspHandlers } from './worker-lsp-handlers.js';
 import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js';
+import type { CompanySessionId, ProjectId } from '@mcp/session-storage';
 
 interface PoolEntry {
   host: WorkerHost;
@@ -114,8 +115,15 @@ export interface WorkerOrchestratorPoolOpts {
    * `workerData.tsEntry`. Undefined in production.
    */
   workerDevTsEntry?: string;
-  /** SQLite path passed to each worker. */
+  /** SQLite path passed to each worker for essential shared catalogs only. */
   dbPath: string;
+  /**
+   * Filesystem Company-session authority. A missing bundle/root rejects the
+   * worker spawn; there is no central-database session lookup.
+   */
+  resolveCompanySessionRuntimeContext?: (
+    sessionId: CompanySessionId,
+  ) => Promise<CompanySessionRuntimeContext>;
   /** Idle TTL before eviction. Default 5 min. */
   ttlMs?: number;
   /** Logger for diagnostic output. */
@@ -129,6 +137,13 @@ export interface WorkerOrchestratorPoolOpts {
    * `apps/http-api/workers/company-worker.ts`. Mirrors `CoderWorkerPool`.
    */
   docDeps?: CoderWorkerDocDeps;
+}
+
+export interface CompanySessionRuntimeContext {
+  sessionId: CompanySessionId;
+  bundlePath: string;
+  projectId: ProjectId | null;
+  projectRoot: string | null;
 }
 
 /**
@@ -194,7 +209,7 @@ type WorkerStartMasterOpts =
  * explicit `void ...catch(...)` at the call site.
  */
 export type WorkerBackedOrchestrator = {
-  readonly companySessionId: CompanyOrchestrator['companySessionId'];
+  readonly companySessionId: CompanySessionId;
   readonly metaBus: CoderRunBus;
 } & Omit<
   AsyncRpcObject<CompanyOrchestrator>,
@@ -211,7 +226,7 @@ export type WorkerBackedOrchestrator = {
 };
 
 export class WorkerOrchestratorPool {
-  private readonly entries = new Map<number, PoolEntry>();
+  private readonly entries = new Map<CompanySessionId, PoolEntry>();
   private readonly ttlMs: number;
   private readonly log: (level: 'info' | 'warn' | 'error', msg: string) => void;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -234,7 +249,7 @@ export class WorkerOrchestratorPool {
 
   /** Spawn (if needed) and return the worker-backed orchestrator + its mirrored bus. */
   async getOrSpawn(
-    sessionId: number,
+    sessionId: CompanySessionId,
   ): Promise<{ orchestrator: WorkerBackedOrchestrator; bus: CoderRunBus }> {
     const existing = this.entries.get(sessionId);
     if (existing) {
@@ -247,14 +262,14 @@ export class WorkerOrchestratorPool {
   }
 
   /** Return existing entry without spawning. */
-  get(sessionId: number): { orchestrator: WorkerBackedOrchestrator; bus: CoderRunBus } | null {
+  get(sessionId: CompanySessionId): { orchestrator: WorkerBackedOrchestrator; bus: CoderRunBus } | null {
     const entry = this.entries.get(sessionId);
     if (!entry) return null;
     entry.lastTouchedAt = Date.now();
     return { orchestrator: entry.orchestrator, bus: entry.bus };
   }
 
-  has(sessionId: number): boolean {
+  has(sessionId: CompanySessionId): boolean {
     return this.entries.has(sessionId);
   }
 
@@ -264,7 +279,7 @@ export class WorkerOrchestratorPool {
    * already evicted). Caller is responsible for catching timeouts.
    */
   async supervisorRpc<R = unknown>(
-    sessionId: number,
+    sessionId: CompanySessionId,
     method: string,
     args: unknown[] = [],
   ): Promise<R | null> {
@@ -276,7 +291,7 @@ export class WorkerOrchestratorPool {
   }
 
   /** Iterate session ids of currently-active workers. */
-  activeSessionIds(): number[] {
+  activeSessionIds(): CompanySessionId[] {
     return Array.from(this.entries.keys());
   }
 
@@ -286,7 +301,7 @@ export class WorkerOrchestratorPool {
    * timestamp, and the WorkerHost's lifecycle state.
    */
   snapshot(): Array<{
-    sessionId: number;
+    sessionId: CompanySessionId;
     workerState: string;
     lastTouchedAt: number;
     /** ms since `lastTouchedAt` — operator's "is this idle?" hint. */
@@ -294,7 +309,7 @@ export class WorkerOrchestratorPool {
   }> {
     const now = Date.now();
     const out: Array<{
-      sessionId: number;
+      sessionId: CompanySessionId;
       workerState: string;
       lastTouchedAt: number;
       idleMs: number;
@@ -317,7 +332,7 @@ export class WorkerOrchestratorPool {
    */
   async memStats(
     timeoutMs = 2_000,
-  ): Promise<Array<{ sessionId: number; stats: import('../workers/perf-stats.js').WorkerMemStats | null }>> {
+  ): Promise<Array<{ sessionId: CompanySessionId; stats: import('../workers/perf-stats.js').WorkerMemStats | null }>> {
     const jobs = Array.from(this.entries.entries()).map(async ([sessionId, entry]) => {
       try {
         const stats = (await entry.host
@@ -332,7 +347,7 @@ export class WorkerOrchestratorPool {
   }
 
   /** V8 CPU profile of one session's worker isolate (admin perf panel). */
-  async cpuProfile(sessionId: number, durationMs: number): Promise<object | null> {
+  async cpuProfile(sessionId: CompanySessionId, durationMs: number): Promise<object | null> {
     const entry = this.entries.get(sessionId);
     if (!entry) return null;
     return (await entry.host
@@ -341,7 +356,7 @@ export class WorkerOrchestratorPool {
   }
 
   /** Gracefully evict a session — sends `stop` and waits for worker exit. */
-  async evict(sessionId: number): Promise<void> {
+  async evict(sessionId: CompanySessionId): Promise<void> {
     closeCompanyPreviewSession(sessionId);
     const entry = this.entries.get(sessionId);
     if (!entry) return;
@@ -385,7 +400,32 @@ export class WorkerOrchestratorPool {
     }
   }
 
-  private async spawn(sessionId: number): Promise<PoolEntry> {
+  async resolveRuntimeContext(
+    sessionId: CompanySessionId,
+  ): Promise<CompanySessionRuntimeContext> {
+    const resolveRuntimeContext =
+      this.opts.resolveCompanySessionRuntimeContext;
+    if (!resolveRuntimeContext) {
+      throw new Error(
+        'company-pool: filesystem session runtime resolver is not configured',
+      );
+    }
+    const sessionContext = await resolveRuntimeContext(sessionId);
+    if (sessionContext.sessionId !== sessionId) {
+      throw new Error(
+        `company-pool: filesystem resolver returned a different session (${sessionContext.sessionId})`,
+      );
+    }
+    if (sessionContext.projectId != null && !sessionContext.projectRoot) {
+      throw new Error(
+        `company-pool: project root unavailable for filesystem session ${sessionId}`,
+      );
+    }
+    return sessionContext;
+  }
+
+  private async spawn(sessionId: CompanySessionId): Promise<PoolEntry> {
+    const sessionContext = await this.resolveRuntimeContext(sessionId);
     // Create the main-side bus up front so `onCrash` can mark it ended.
     // Otherwise a worker that dies before emitting `bus.end` leaves any
     // attached SSE stream blocked in `waitEnded` until the client
@@ -396,6 +436,7 @@ export class WorkerOrchestratorPool {
       workerFile: this.opts.workerFile,
       workerData: {
         companySessionId: sessionId,
+        sessionContext,
         dbPath: this.opts.dbPath,
         // Dev bootstrap reads this to dynamic-import the real TS entry
         // after registering tsx. Absent in production builds.
@@ -431,7 +472,12 @@ export class WorkerOrchestratorPool {
 
     // ─── Bus mirror — worker → main ─────────────────────────────
     // (the bus itself is created at the top of spawn so `onCrash` can end it)
-    const detachRuntimeLog = installRuntimeEventLog(bus, 'company', sessionId);
+    const detachRuntimeLog = installRuntimeEventLog(
+      bus,
+      'company',
+      sessionId,
+      { bundlePath: sessionContext.bundlePath },
+    );
     const bridge = host.requireBridge();
     // ─── Doc-corpus RPC bridges from worker → main ───────────────
     // `rag_search_docs` runs in the worker. Only structural navigation and
@@ -566,7 +612,7 @@ export class WorkerOrchestratorPool {
     // `supervisor.boot`. Main side just logs — Phase 3 will pipe
     // these into a structured SSE topic for the dashboard.
     const offSupervisorBoot = bridge.on('supervisor.boot', (payload) => {
-      const env = payload as { sessionId: number };
+      const env = payload as { sessionId: CompanySessionId };
       console.log(`[supervisor:worker-${env.sessionId}] started (MCP_SUPERVISOR_ENABLED=1)`);
     });
     const offSupervisorIncident = bridge.on('supervisor.incident', (payload) => {
@@ -648,7 +694,7 @@ export class WorkerOrchestratorPool {
  */
 function createOrchestratorProxy(
   host: WorkerHost,
-  sessionId: number,
+  sessionId: CompanySessionId,
   bus: CoderRunBus,
 ): WorkerBackedOrchestrator {
   const bridge = host.requireBridge();

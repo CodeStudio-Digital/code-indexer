@@ -9,6 +9,7 @@
  *  - already-approved list → no second prompt, transition + waves run.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
 
@@ -51,7 +52,7 @@ function setup(opts: SetupOpts = {}) {
   let planApproved = false;
   const runner = {
     emit: vi.fn(),
-    sessionId: 123,
+    sessionId: newSessionId(),
     agentId: 'plan' as const,
     planMode: true,
     agentLoopV2: false,

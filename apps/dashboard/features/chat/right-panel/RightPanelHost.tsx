@@ -23,24 +23,79 @@ import {
   Settings,
   Workflow,
 } from 'lucide-react';
-import { memo } from 'react';
+import { lazy, memo, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
-import { SessionStateSidebar } from '../SessionStateSidebar.js';
-import { SessionDriveView } from '../SessionDrivePanel.js';
-import { SessionConfigView } from './SessionConfigPanel.js';
-import { SessionInsightsPanel } from './SessionInsightsPanel.js';
-import { PlansPanel } from './PlansPanel.js';
-import { DiagramPanel } from './diagram/DiagramPanel.js';
-import { WorkerLogPanel } from '../WorkerLogPanel.js';
-import { NotificationsPanel } from '../notifications/NotificationsPanel.js';
 import { ConversationChaptersPanel } from '../messages/ConversationChapters.js';
-import { SubagentsPanel } from './SubagentsPanel.js';
+
+/**
+ * Every rail panel is its own async chunk.
+ *
+ * At most ONE panel is mounted at a time (see the switch below — inactive
+ * panels are deliberately never kept alive), yet static imports put all of them
+ * in the chat's eager bundle: session metrics + tool stats + session details,
+ * the draw.io diagram host, the worker-log execution map, the drive tabs. That
+ * was ~600 KB the user paid for on every session open just to read a message.
+ * A rail panel is always opened by an explicit click, so a one-frame Suspense
+ * fallback is invisible in practice.
+ *
+ * `ConversationChaptersPanel` stays eager: `MessageList` imports the chapter
+ * divider from the same module, so it is already in this chunk regardless.
+ */
+const SessionStateSidebar = lazy(() =>
+  import('../SessionStateSidebar.js').then((m) => ({ default: m.SessionStateSidebar })),
+);
+const SessionDriveView = lazy(() =>
+  import('../SessionDrivePanel.js').then((m) => ({ default: m.SessionDriveView })),
+);
+const SessionConfigView = lazy(() =>
+  import('./SessionConfigPanel.js').then((m) => ({ default: m.SessionConfigView })),
+);
+const SessionInsightsPanel = lazy(() =>
+  import('./SessionInsightsPanel.js').then((m) => ({ default: m.SessionInsightsPanel })),
+);
+const PlansPanel = lazy(() => import('./PlansPanel.js').then((m) => ({ default: m.PlansPanel })));
+const DiagramPanel = lazy(() =>
+  import('./diagram/DiagramPanel.js').then((m) => ({ default: m.DiagramPanel })),
+);
+const WorkerLogPanel = lazy(() =>
+  import('../WorkerLogPanel.js').then((m) => ({ default: m.WorkerLogPanel })),
+);
+const NotificationsPanel = lazy(() =>
+  import('../notifications/NotificationsPanel.js').then((m) => ({ default: m.NotificationsPanel })),
+);
+const SubagentsPanel = lazy(() =>
+  import('./SubagentsPanel.js').then((m) => ({ default: m.SubagentsPanel })),
+);
+const ProjectPreview = lazy(() =>
+  import('../../project/builder/ProjectPreview.js').then((m) => ({ default: m.ProjectPreview })),
+);
+
+/** Panel-body placeholder. Sits INSIDE `PanelChrome` so the header (title +
+ *  close button) never blinks while the chunk resolves. */
+function PanelBody({ children }: { children: ReactNode }) {
+  return (
+    <Suspense
+      fallback={(
+        <div className="grid h-full min-h-24 place-items-center" aria-busy="true">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted border-t-primary" />
+        </div>
+      )}
+    >
+      {children}
+    </Suspense>
+  );
+}
 import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWindow.js';
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { RightPanelId } from './types.js';
-import type { CoderSession, CoderSessionStats, SessionData } from '../types.js';
+import type {
+  AgentChatPreviewConfig,
+  CoderSession,
+  CoderSessionStats,
+  SessionData,
+} from '../types.js';
 import type {
   ActiveProcess,
   PipelineRuntimeState,
@@ -50,7 +105,7 @@ import { useAgentCurrentTurn } from '../../../hooks/useAgentStream.js';
 
 export interface RightPanelHostProps {
   activeId: RightPanelId;
-  sessionId: number;
+  sessionId: string;
   session: CoderSession | null;
   sessionData: SessionData | null;
   stats: CoderSessionStats | null;
@@ -69,6 +124,8 @@ export interface RightPanelHostProps {
   activeProcesses: ActiveProcess[];
   /** Plugin tool windows (side: 'right') the rail can activate. */
   pluginWindows?: ContribToolWindow[];
+  /** Live preview contributed by the hosting project. */
+  preview?: AgentChatPreviewConfig;
   onClose: () => void;
 }
 
@@ -101,27 +158,45 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
     case 'meta':
       return (
         <PanelChrome title={t('chat:rightRail.meta', 'Session state')} icon={Compass} onClose={onClose}>
-          <SessionStateSidebar
-            sessionId={sessionId}
-            refreshKey={props.refreshKey}
-            todos={props.todos}
-            projectId={props.projectId}
-            filePicks={props.filePicks}
-            onTogglePick={props.onTogglePick}
-            onSetManyPicks={props.onSetManyPicks}
-            onClearPicks={props.onClearPicks}
-            skillPicks={props.skillPicks}
-            onToggleSkillPick={props.onToggleSkillPick}
-            pipelineRuntime={props.pipelineRuntime}
-            activeProcesses={props.activeProcesses}
-            embedded
-          />
+          <PanelBody>
+            <SessionStateSidebar
+              sessionId={sessionId}
+              refreshKey={props.refreshKey}
+              todos={props.todos}
+              projectId={props.projectId}
+              filePicks={props.filePicks}
+              onTogglePick={props.onTogglePick}
+              onSetManyPicks={props.onSetManyPicks}
+              onClearPicks={props.onClearPicks}
+              skillPicks={props.skillPicks}
+              onToggleSkillPick={props.onToggleSkillPick}
+              pipelineRuntime={props.pipelineRuntime}
+              activeProcesses={props.activeProcesses}
+              embedded
+            />
+          </PanelBody>
         </PanelChrome>
+      );
+    case 'preview':
+      if (!props.preview || props.projectId == null) return null;
+      return (
+        <PanelBody>
+          <ProjectPreview
+            key={props.projectId}
+            projectId={props.projectId}
+            pinnedPort={props.preview.pinnedPort}
+            selectionEnabled={props.preview.selectionEnabled}
+            framework={props.preview.framework}
+            onHide={onClose}
+          />
+        </PanelBody>
       );
     case 'drive':
       return (
         <PanelChrome title={t('chat:rightRail.drive', 'Drive')} icon={HardDrive} onClose={onClose}>
-          <SessionDriveView sessionId={sessionId} active />
+          <PanelBody>
+            <SessionDriveView sessionId={sessionId} active />
+          </PanelBody>
         </PanelChrome>
       );
     case 'chapters':
@@ -138,7 +213,9 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
     case 'config':
       return (
         <PanelChrome title={t('chat:rightRail.config', 'Configuration')} icon={Settings} onClose={onClose}>
-          <SessionConfigView sessionId={sessionId} loadKey={props.refreshKey} />
+          <PanelBody>
+            <SessionConfigView sessionId={sessionId} loadKey={props.refreshKey} />
+          </PanelBody>
         </PanelChrome>
       );
     case 'insights':
@@ -149,11 +226,13 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
           onClose={onClose}
           bodyClassName="overflow-hidden"
         >
-          <SessionInsightsPanel
-            sessionId={sessionId}
-            session={props.session}
-            stats={props.stats}
-          />
+          <PanelBody>
+            <SessionInsightsPanel
+              sessionId={sessionId}
+              session={props.session}
+              stats={props.stats}
+            />
+          </PanelBody>
         </PanelChrome>
       );
     case 'subagents':
@@ -164,32 +243,42 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
           onClose={onClose}
           bodyClassName="overflow-hidden"
         >
-          <LiveSubagentsPanel sessionId={sessionId} sessionData={props.sessionData} />
+          <PanelBody>
+            <LiveSubagentsPanel sessionId={sessionId} sessionData={props.sessionData} />
+          </PanelBody>
         </PanelChrome>
       );
     case 'plans':
       return (
         <PanelChrome title={t('chat:rightRail.plans', 'Plans')} icon={ClipboardList} onClose={onClose}>
-          <PlansPanel sessionId={sessionId} active />
+          <PanelBody>
+            <PlansPanel sessionId={sessionId} active />
+          </PanelBody>
         </PanelChrome>
       );
     case 'notifications':
       return (
         <PanelChrome title={t('chat:rightRail.notifications', 'Notifications')} icon={Bell} onClose={onClose}>
-          <NotificationsPanel sessionId={sessionId} />
+          <PanelBody>
+            <NotificationsPanel sessionId={sessionId} />
+          </PanelBody>
         </PanelChrome>
       );
     case 'worker-log':
       return (
         <PanelChrome title={t('chat:rightRail.workerLog', 'Worker log')} icon={ScrollText} onClose={onClose}>
-          <WorkerLogPanel sessionId={sessionId} onClose={onClose} embedded />
+          <PanelBody>
+            <WorkerLogPanel sessionId={sessionId} onClose={onClose} embedded />
+          </PanelBody>
         </PanelChrome>
       );
     case 'diagram':
       return (
         <PanelChrome title={t('chat:rightRail.diagram', 'Diagram')} icon={Workflow} onClose={onClose}
           bodyClassName="overflow-hidden">
-          <DiagramPanel sessionId={sessionId} projectId={props.projectId} />
+          <PanelBody>
+            <DiagramPanel sessionId={sessionId} projectId={props.projectId} />
+          </PanelBody>
         </PanelChrome>
       );
     default:
@@ -201,7 +290,7 @@ function LiveSubagentsPanel({
   sessionId,
   sessionData,
 }: {
-  sessionId: number;
+  sessionId: string;
   sessionData: SessionData | null;
 }) {
   const currentTurn = useAgentCurrentTurn(sessionId);

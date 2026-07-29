@@ -24,6 +24,42 @@ afterEach(() => {
 });
 
 describe('HybridSearch semantic cache revisions', () => {
+  it('enforces one public top-K after merging file and symbol FTS rows', async () => {
+    const files = Array.from({ length: 4 }, (_, index) => ({
+      id: index + 1,
+      project_id: 7,
+      path: `src/file-${index + 1}.ts`,
+    }));
+    const symbols = Array.from({ length: 4 }, (_, index) => ({
+      id: index + 10,
+      project_id: 7,
+      file_path: `src/file-${index + 1}.ts`,
+      name: `symbol${index + 1}`,
+      kind: 'function',
+    }));
+    const db = {
+      searchFiles: vi.fn((_projectId: number, _query: string, limit: number) =>
+        files.slice(0, limit)),
+      searchSymbols: vi.fn((_projectId: number, _query: string, limit: number) =>
+        symbols.slice(0, limit)),
+      searchFileContents: vi.fn(() => []),
+    } as unknown as CodeIndexDB;
+    const hybrid = new HybridSearch(db, null, {
+      embed: vi.fn(async () => ({ vectors: [], tokens: 0 })),
+      embedQuery: vi.fn(async () => ({ vector: [], tokens: 0 })),
+    });
+
+    const results = await hybrid.search(7, 'project-seven', 'cache', {
+      mode: 'fts',
+      type: 'all',
+      limit: 3,
+    });
+
+    expect(results).toHaveLength(3);
+    expect(db.searchFiles).toHaveBeenCalledWith(7, expect.any(String), 3);
+    expect(db.searchSymbols).toHaveBeenCalledWith(7, expect.any(String), 3);
+  });
+
   it('caches within one active generation and misses after generation activation', async () => {
     let generationRevision = 'g17';
     const embedQueryForNamespace = vi.fn(async () => ({

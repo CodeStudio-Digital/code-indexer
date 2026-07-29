@@ -10,6 +10,7 @@ import type {
   CompanyAgentDispatchSource,
   RoleSkills,
 } from '@mcp/company/types.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface AppRoleRuntime {
   provider?: string;
@@ -29,13 +30,13 @@ export interface AppRoleRuntime {
 type MaybePromise<T> = T | Promise<T>;
 
 export interface AppSubordinateSnapshot {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   status: AgentRunStatus;
   projectIds: number[];
   provider: string;
   model: string;
-  coderSessionId: number;
+  coderSessionId: string;
   isAlive: boolean;
 }
 
@@ -64,9 +65,9 @@ export interface AppCompanyDispatchHost {
     projectId?: number;
     wait?: boolean;
     dispatchSource?: CompanyAgentDispatchSource;
-  }): Promise<{ agentRunId: number; coderSessionId: number; status: AgentRunStatus }>;
+  }): Promise<{ agentRunId: string; coderSessionId: string; status: AgentRunStatus }>;
   reactivateSubordinate(
-    agentRunId: number,
+    agentRunId: string,
     message: string,
     attachments?: never[],
     thinking?: boolean,
@@ -78,7 +79,7 @@ export interface AppCompanyDispatchHost {
    */
   getAppDispatchCapacity(): MaybePromise<AppDispatchCapacity>;
   getAppAgentRuntimeProvenance(
-    agentRunId: number,
+    agentRunId: string,
   ): MaybePromise<AppAgentRuntimeProvenance | null>;
 }
 
@@ -87,9 +88,9 @@ export interface AppCompanyDispatchResult {
   role: string;
   outcome: 'spawned' | 'reused' | 'skipped' | 'blocked';
   code?: 'OUTCOME_UNKNOWN';
-  workItemRunId?: number;
-  companyAgentRunId?: number;
-  coderSessionId?: number;
+  workItemRunId?: string;
+  companyAgentRunId?: string;
+  coderSessionId?: string;
   detail?: string;
 }
 
@@ -172,7 +173,7 @@ function taskFor(item: AppWorkItem): string {
 
 async function runtimeEventPayload(
   host: AppCompanyDispatchHost,
-  agentRunId: number,
+  agentRunId: string,
   configured: AppRoleRuntime,
 ): Promise<Record<string, unknown>> {
   const persisted = await host.getAppAgentRuntimeProvenance(agentRunId);
@@ -195,7 +196,7 @@ function fileScopesConflict(a: AppWorkItem, b: AppWorkItem): boolean {
   ));
 }
 
-const dispatchingReusableAgents = new Set<number>();
+const dispatchingReusableAgents = new Set<string>();
 
 async function findReusableAgent(args: {
   store: AppStudioStore;
@@ -207,7 +208,10 @@ async function findReusableAgent(args: {
   runtimeConfigHash: string;
 }): Promise<AppSubordinateSnapshot | null> {
   if (!args.runtime.provider || !args.runtime.model) return null;
-  const priorRuns = args.store.listWorkItemRuns(args.session.id, { limit: 1_000 });
+  const priorRuns = await args.store.listWorkItemRuns(
+    args.session.id,
+    { limit: 1_000 },
+  );
   return (await args.host.listSubordinates()).find((agent) =>
     !dispatchingReusableAgents.has(agent.agentRunId)
     && agent.role === args.role
@@ -257,26 +261,30 @@ function isMutationOutcomeUnknown(error: unknown): boolean {
   );
 }
 
-function approvedPlanOwnsItem(store: AppStudioStore, item: AppWorkItem): boolean {
-  return store.getLatestApprovedPlanRevision(item.app_session_id)?.id === item.plan_revision_id;
-}
-
-function openDecisionWorkItemIds(store: AppStudioStore, sessionId: number): Set<string> {
+async function openDecisionWorkItemIds(
+  store: AppStudioStore,
+  sessionId: SessionId,
+): Promise<Set<string>> {
   const blocked = new Set<string>();
-  for (const decision of store.listDecisions(sessionId)) {
+  for (const decision of await store.listDecisions(sessionId)) {
     if (decision.status !== 'open') continue;
     for (const id of json<string[]>(decision.blocked_work_item_ids_json, [])) blocked.add(id);
   }
   return blocked;
 }
 
-function blockWorkItem(
+async function blockWorkItem(
   store: AppStudioStore,
   session: AppStudioSession,
   item: AppWorkItem,
   reason: string,
-): void {
-  store.setWorkItemStatus(session.id, item.id, 'blocked', { blockedReason: reason });
+): Promise<void> {
+  await store.setWorkItemStatus(
+    session.id,
+    item.id,
+    'blocked',
+    { blockedReason: reason },
+  );
 }
 
 async function dispatchOneUnlocked(args: {
@@ -287,7 +295,7 @@ async function dispatchOneUnlocked(args: {
   source: string;
 }): Promise<AppCompanyDispatchResult> {
   const { store, session, host, item } = args;
-  let active = store.getActiveWorkItemRun(session.id, item.id);
+  let active = await store.getActiveWorkItemRun(session.id, item.id);
   if (
     active
     && active.company_agent_run_id == null
@@ -318,17 +326,17 @@ async function dispatchOneUnlocked(args: {
   const runtime = await host.getRoleDefaults(role);
   if (!runtime) {
     const reason = `No configured Company role '${role}' for App work item '${item.id}'.`;
-    blockWorkItem(store, session, item, reason);
+    await blockWorkItem(store, session, item, reason);
     return { workItemId: item.id, role, outcome: 'blocked', detail: reason };
   }
   if (runtime.enabled === false) {
     const reason = `Company role '${role}' is disabled; enable or reassign it before dispatch.`;
-    blockWorkItem(store, session, item, reason);
+    await blockWorkItem(store, session, item, reason);
     return { workItemId: item.id, role, outcome: 'blocked', detail: reason };
   }
   if (!runtime.provider || !runtime.model) {
     const reason = `Company role '${role}' has no explicit provider/model. Silent fallback is forbidden for App teams.`;
-    blockWorkItem(store, session, item, reason);
+    await blockWorkItem(store, session, item, reason);
     return { workItemId: item.id, role, outcome: 'blocked', detail: reason };
   }
 
@@ -340,7 +348,7 @@ async function dispatchOneUnlocked(args: {
       || (active.runtime_config_hash != null && active.runtime_config_hash !== configHash)
     )
   ) {
-    store.updateWorkItemRunStatus(active.id, 'interrupted', {
+    await store.updateWorkItemRunStatus(active.id, 'interrupted', {
       statusMessage: 'Unbound claim superseded because the App role runtime changed.',
     });
     active = null;
@@ -362,8 +370,10 @@ async function dispatchOneUnlocked(args: {
     return { workItemId: item.id, role, outcome: 'skipped', detail: capacityDetail };
   }
 
-  const attempt = active?.attempt ?? store.nextWorkItemRunAttempt(session.id, item.id);
-  let workRun = active ?? store.createWorkItemRun({
+  const attempt =
+    active?.attempt ??
+    await store.nextWorkItemRunAttempt(session.id, item.id);
+  let workRun = active ?? await store.createWorkItemRun({
       appSessionId: session.id,
       workItemId: item.id,
       attempt,
@@ -371,9 +381,9 @@ async function dispatchOneUnlocked(args: {
       status: 'claimed',
       runtimeConfigHash: configHash,
       idempotencyKey: `app:${session.id}:work:${item.id}:attempt:${attempt}`,
-    });
+  });
   if (active) {
-    workRun = store.updateWorkItemRunStatus(active.id, 'claimed', {
+    workRun = await store.updateWorkItemRunStatus(active.id, 'claimed', {
       runtimeConfigHash: configHash,
       statusMessage: `reclaimed unbound attempt ${attempt} from ${args.source}`,
     });
@@ -390,14 +400,14 @@ async function dispatchOneUnlocked(args: {
         runtime.thinking,
       );
       if (resumed) {
-        workRun = store.updateWorkItemRunStatus(workRun.id, 'running', {
+        workRun = await store.updateWorkItemRunStatus(workRun.id, 'running', {
           companyAgentRunId: reusable.agentRunId,
           coderSessionId: reusable.coderSessionId,
           runtimeConfigHash: configHash,
           statusMessage: `reused ${role} agent from ${args.source}`,
         });
-        store.setWorkItemStatus(session.id, item.id, 'running');
-        store.appendEvent(
+        await store.setWorkItemStatus(session.id, item.id, 'running');
+        await store.appendEvent(
           session.id,
           'agents.specialist_dispatched',
           'work_item_run',
@@ -427,7 +437,7 @@ async function dispatchOneUnlocked(args: {
         false,
       );
       if (spawnCapacityDetail) {
-        store.updateWorkItemRunStatus(workRun.id, 'cancelled', { statusMessage: spawnCapacityDetail });
+        await store.updateWorkItemRunStatus(workRun.id, 'cancelled', { statusMessage: spawnCapacityDetail });
         return {
           workItemId: item.id,
           role,
@@ -445,14 +455,14 @@ async function dispatchOneUnlocked(args: {
       wait: false,
       dispatchSource: 'app_studio',
     });
-    workRun = store.updateWorkItemRunStatus(workRun.id, 'running', {
+    workRun = await store.updateWorkItemRunStatus(workRun.id, 'running', {
       companyAgentRunId: spawned.agentRunId,
       coderSessionId: spawned.coderSessionId,
       runtimeConfigHash: configHash,
       statusMessage: `spawned ${role} agent from ${args.source}`,
     });
-    store.setWorkItemStatus(session.id, item.id, 'running');
-    store.appendEvent(
+    await store.setWorkItemStatus(session.id, item.id, 'running');
+    await store.appendEvent(
       session.id,
       'agents.specialist_dispatched',
       'work_item_run',
@@ -479,9 +489,9 @@ async function dispatchOneUnlocked(args: {
       const detail =
         `OUTCOME_UNKNOWN: App specialist dispatch lost its worker acknowledgement. ` +
         `Attempt ${attempt} remains claimed and will not be spawned again automatically.`;
-      store.updateWorkItemRunStatus(workRun.id, 'claimed', { statusMessage: detail });
+      await store.updateWorkItemRunStatus(workRun.id, 'claimed', { statusMessage: detail });
       try {
-        store.appendEvent(
+        await store.appendEvent(
           session.id,
           'agents.specialist_dispatch_outcome_unknown',
           'work_item_run',
@@ -506,7 +516,7 @@ async function dispatchOneUnlocked(args: {
       };
     }
     if (isCapacityRefusal(message)) {
-      store.updateWorkItemRunStatus(workRun.id, 'cancelled', { statusMessage: message });
+      await store.updateWorkItemRunStatus(workRun.id, 'cancelled', { statusMessage: message });
       return {
         workItemId: item.id,
         role,
@@ -515,8 +525,8 @@ async function dispatchOneUnlocked(args: {
         detail: `${message} Card remains ready and can be retried.`,
       };
     }
-    store.updateWorkItemRunStatus(workRun.id, 'error', { statusMessage: message });
-    blockWorkItem(store, session, item, message);
+    await store.updateWorkItemRunStatus(workRun.id, 'error', { statusMessage: message });
+    await blockWorkItem(store, session, item, message);
     return { workItemId: item.id, role, outcome: 'blocked', workItemRunId: workRun.id, detail: message };
   } finally {
     if (reusable) dispatchingReusableAgents.delete(reusable.agentRunId);
@@ -552,14 +562,21 @@ export async function dispatchReadyAppWork(args: {
   maxItems?: number;
 }): Promise<AppCompanyDispatchResult[]> {
   if (args.session.company_session_id == null) return [];
-  const items = args.store.refreshReadyWorkItems(args.session.id).map(hydrateItem);
+  const items = (await args.store.refreshReadyWorkItems(args.session.id))
+    .map(hydrateItem);
   const runningItems = items.filter((item) => item.status === 'running');
-  const decisionBlockedIds = openDecisionWorkItemIds(args.store, args.session.id);
+  const [decisionBlockedIds, approvedPlan] = await Promise.all([
+    openDecisionWorkItemIds(args.store, args.session.id),
+    args.store.getLatestApprovedPlanRevision(args.session.id),
+  ]);
   const limit = Math.max(1, Math.min(8, args.maxItems ?? 8));
   const selected: AppWorkItem[] = [];
   for (const item of items) {
     if (selected.length >= limit) break;
-    if (item.status !== 'ready' || !approvedPlanOwnsItem(args.store, item)) continue;
+    if (
+      item.status !== 'ready' ||
+      approvedPlan?.id !== item.plan_revision_id
+    ) continue;
     if (decisionBlockedIds.has(item.id)) continue;
     if ([...runningItems, ...selected].some((other) => fileScopesConflict(item, other))) continue;
     selected.push(item);

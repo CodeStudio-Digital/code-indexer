@@ -29,5 +29,5 @@ export function buildFrameRows(
 }
 
 /** The full display-ordered versionId list — the axis for shift-range select. */
-export const orderedVersionIds = (groups: FrameGroupView[]): number[] =>
+export const orderedVersionIds = (groups: FrameGroupView[]): string[] =>
   groups.flatMap((g) => g.versions.map((v) => v.id));

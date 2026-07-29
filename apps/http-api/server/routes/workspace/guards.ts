@@ -1,11 +1,15 @@
 import type { Context } from 'hono';
-import type { CoreDeps, CompanyDeps } from '../../deps.js';
-import { parseIdParam } from '../_helpers.js';
+import type { CoreDeps, CoderDeps } from '../../deps.js';
+import {
+  parseCompanySessionIdParam,
+  parseIdParam,
+} from '../_helpers.js';
 import { isProjectInSession } from './auth.js';
 import { resolveProjectPath, type ResolvedProjectPath } from './paths.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 export interface GuardedRequest {
-  sessionId: number;
+  sessionId: CompanySessionId;
   projectId: number;
   relPath: string;
   resolved: ResolvedProjectPath;
@@ -17,17 +21,17 @@ export interface GuardedRequest {
  * route handler trivial and ensures the three checks happen in the same
  * order everywhere.
  */
-export function guardWorkspaceRequest(
+export async function guardWorkspaceRequest(
   c: Context,
-  deps: Pick<CoreDeps, 'db'> & Pick<CompanyDeps, 'companyStore'>,
+  deps: Pick<CoreDeps, 'db'> & Pick<CoderDeps, 'sessionStore'>,
   relPath: string,
-): GuardedRequest | Response {
-  const sessionId = parseIdParam(c, 'sid');
+): Promise<GuardedRequest | Response> {
+  const sessionId = parseCompanySessionIdParam(c, 'sid');
   const projectId = parseIdParam(c, 'pid');
-  if (!Number.isFinite(sessionId) || !Number.isFinite(projectId)) {
+  if (!Number.isSafeInteger(projectId) || projectId < 1) {
     return c.json({ error: 'Invalid session or project id' }, 400);
   }
-  if (!isProjectInSession(deps, sessionId, projectId)) {
+  if (!(await isProjectInSession(deps, sessionId, projectId))) {
     return c.json({ error: 'Project not linked to session' }, 403);
   }
   const resolved = resolveProjectPath(deps, projectId, relPath);

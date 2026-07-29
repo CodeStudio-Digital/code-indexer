@@ -34,7 +34,7 @@ const WAIT_AGENTS_DESC =
   'Block until ALL specified subordinate agents reach a terminal status (completed/failed/aborted). ' +
   'Cross-tier — usable by master and subordinates. Read-only: never spawns or messages.\n' +
   '\n' +
-  'Specify targets via `paths: ["/root/master/qa-7", "/root/master/frontend-9"]` or `agent_run_ids: [7, 9]` (or both).\n' +
+  'Specify targets via paths returned by `list_agents` or raw UUID `agent_run_ids` (or both).\n' +
   '\n' +
   "USE: master after spawning peers in parallel; subordinate that depends on a sibling's output before continuing.\n" +
   "USE: with a `timeout_minutes` cap when the agents may stall.\n" +
@@ -42,13 +42,13 @@ const WAIT_AGENTS_DESC =
   "DON'T: poll. This tool is event-driven; calling it more than once per dependency turn is wasteful.";
 
 interface NormalizedTarget {
-  agentRunId: number;
+  agentRunId: string;
   path: string;
 }
 
 function normalizeTargets(args: Record<string, unknown>, cc: CompanyContext): { targets: NormalizedTarget[]; errors: string[] } {
   const errors: string[] = [];
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   const targets: NormalizedTarget[] = [];
 
   const subs = (() => {
@@ -56,11 +56,7 @@ function normalizeTargets(args: Record<string, unknown>, cc: CompanyContext): { 
   })();
   const subById = new Map(subs.map((s) => [s.agentRunId, s]));
 
-  const addId = (id: number, originLabel: string): void => {
-    if (!Number.isFinite(id)) {
-      errors.push(`${originLabel}: invalid agent_run_id`);
-      return;
-    }
+  const addId = (id: string, originLabel: string): void => {
     if (seen.has(id)) return;
     const sub = subById.get(id);
     if (!sub) {
@@ -91,8 +87,11 @@ function normalizeTargets(args: Record<string, unknown>, cc: CompanyContext): { 
 
   const ids = Array.isArray(args.agent_run_ids) ? args.agent_run_ids : [];
   for (const raw of ids) {
-    const id = typeof raw === 'number' ? raw : Number(raw);
-    addId(id, `agent_run_ids[${raw}]`);
+    if (typeof raw !== 'string') {
+      errors.push(`agent_run_ids: entries must be UUID strings, got ${typeof raw}`);
+      continue;
+    }
+    addId(raw.toLowerCase(), `agent_run_ids[${raw}]`);
   }
 
   return { targets, errors };
@@ -116,13 +115,13 @@ export const waitAgents: CoderTool = {
     properties: {
       paths: {
         type: 'array',
-        description: 'Agent paths as returned by list_agents (e.g. "/root/master/qa-7").',
+        description: 'Agent paths as returned by list_agents.',
         items: { type: 'string' },
       },
       agent_run_ids: {
         type: 'array',
-        description: 'Raw agent_run_id numbers. Equivalent to paths; for callers that prefer ids.',
-        items: { type: 'number' },
+        description: 'Raw agent_run_id UUIDs. Equivalent to paths.',
+        items: { type: 'string' },
       },
       timeout_minutes: {
         type: 'number',
@@ -149,7 +148,7 @@ export const waitAgents: CoderTool = {
     const orchestrator = cc.orchestrator;
     const targetIds = new Set(targets.map((t) => t.agentRunId));
 
-    const isTargetTerminal = (id: number): boolean => {
+    const isTargetTerminal = (id: string): boolean => {
       const sub = orchestrator.listSubordinates().find((s) => s.agentRunId === id);
       if (!sub) return true; // gone from list → treat as terminal
       return TERMINAL_STATUSES.has(sub.status);

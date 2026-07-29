@@ -81,7 +81,7 @@ export interface SupervisorManagerLike {
 }
 
 export interface ServiceSupervisorDeps {
-  sessionId: number;
+  sessionId: string;
   publisher: { publish(event: string, data: unknown): void };
   incidents: IncidentDeps;
   /** Per-session autonomy — `freeze: true` disables auto-restart LIVE. */

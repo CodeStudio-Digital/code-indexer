@@ -61,6 +61,7 @@ import { useFeatures } from './hooks/useFeatures.js';
 import { useApi } from './hooks/useApi.js';
 import { cn } from './lib/utils.js';
 import { ProjectBranchControl, ProjectRunControl } from './features/project/ProjectIdeToolbar.js';
+import { isAppStudioUuid } from './features/app-studio/session-id.js';
 
 const CommandPalette = lazy(() =>
   import('./components/CommandPalette.js').then((module) => ({ default: module.CommandPalette })),
@@ -160,7 +161,8 @@ export function AppShell() {
   // Breadcrumb name + palette sources. Both endpoints are tiny; the
   // recent-sessions one is also read by RecentSessionsDropdown (cheap).
   const isProjectView = view.page === 'project';
-  const isAppStudioWorkbench = /^\/apps\/\d+(?:\/|$)/.test(location.pathname);
+  const appStudioPathId = /^\/apps\/([^/]+)(?:\/|$)/.exec(location.pathname)?.[1];
+  const isAppStudioWorkbench = isAppStudioUuid(appStudioPathId);
   const isCompanyWorkbench = view.page === 'agents';
   const isSpriteWorkbench = view.page === 'sprites';
   const isWorkbenchView = isProjectView || isAppStudioWorkbench || isCompanyWorkbench || isSpriteWorkbench;
@@ -170,7 +172,7 @@ export function AppShell() {
   const projectName = isProjectView ? (activeProject?.name ?? null) : null;
   const { data: projectsData } = useApi<Array<{ id: number; name: string; root_path?: string }>>('/projects');
   const { data: recentData } = useApi<
-    Array<{ id: number; title: string; project_id: number; project_name: string }>
+    Array<{ id: string; title: string; project_id: number; project_name: string }>
   >('/coder/sessions/recent?limit=10');
 
   // Pinned tabs: the header button pins/unpins the CURRENT view. `currentPin`
@@ -462,14 +464,14 @@ function RecentSessionsDropdown({
   activeSessionId,
   onSelect,
 }: {
-  activeSessionId: number | null;
-  onSelect: (projectId: number, sessionId: number) => void;
+  activeSessionId: string | null;
+  onSelect: (projectId: number, sessionId: string) => void;
 }) {
   const { t } = useTranslation();
   // RecentCoderSession = CoderSession + project_name (see @mcp/code-agent
   // sessions/types). The store query joins projects on project_id.
   const { data } = useApi<
-    Array<{ id: number; title: string; project_id: number; project_name: string }>
+    Array<{ id: string; title: string; project_id: number; project_name: string }>
   >('/coder/sessions/recent?limit=10');
 
   return (

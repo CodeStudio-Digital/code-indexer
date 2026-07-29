@@ -5,20 +5,10 @@
  * `editRow` inputs (parameterized, PK-scoped) used for both preview and apply.
  */
 import { useCallback, useMemo, useState } from 'react';
-import type { DbRowChangeKind } from '../types.js';
+import { buildRowChanges, rowKeyOf, sameValue, type Row, type RowChangeInput } from './build-row-changes.js';
 
-export type Row = Record<string, unknown>;
-
-export interface RowChangeInput {
-  op: DbRowChangeKind;
-  pk?: Record<string, unknown>;
-  values?: Record<string, unknown>;
-}
-
-/** Stable key for a row from its PK column values. */
-export function rowKeyOf(row: Row, pkCols: string[]): string {
-  return JSON.stringify(pkCols.map((c) => row[c] ?? null));
-}
+export { rowKeyOf };
+export type { Row, RowChangeInput };
 
 interface NewRow {
   tempId: string;
@@ -30,7 +20,8 @@ export interface GridEdits {
   deleted: Set<string>; // rowKeys
   newRows: NewRow[];
   dirtyCount: number;
-  setCell: (rowKey: string, col: string, value: unknown) => void;
+  /** Record a cell edit. Pass `original` so typing the old value back clears it. */
+  setCell: (rowKey: string, col: string, value: unknown, original?: unknown) => void;
   toggleDelete: (rowKey: string) => void;
   addRow: () => void;
   setNewCell: (tempId: string, col: string, value: unknown) => void;
@@ -39,8 +30,11 @@ export interface GridEdits {
   /** Effective value for a cell (edit override → original). */
   cellValue: (rowKey: string, col: string, original: unknown) => unknown;
   isEdited: (rowKey: string, col: string) => boolean;
-  buildChanges: (rows: Row[], pkCols: string[]) => RowChangeInput[];
+  buildChanges: (rows: Row[], pkCols: string[], schema: string | undefined, table: string) => RowChangeInput[];
 }
+
+/** "Caller did not tell us the stored value" — distinct from a genuine `undefined`. */
+const UNKNOWN = Symbol('unknown-original');
 
 let tempSeq = 0;
 
@@ -49,8 +43,21 @@ export function useGridEdits(): GridEdits {
   const [deleted, setDeleted] = useState<Set<string>>(new Set());
   const [newRows, setNewRows] = useState<NewRow[]>([]);
 
-  const setCell = useCallback((rowKey: string, col: string, value: unknown) => {
-    setEdited((prev) => ({ ...prev, [rowKey]: { ...(prev[rowKey] ?? {}), [col]: value } }));
+  const setCell = useCallback((rowKey: string, col: string, value: unknown, original: unknown = UNKNOWN) => {
+    setEdited((prev) => {
+      const row = { ...(prev[rowKey] ?? {}) };
+      // Restoring the stored value is not an edit — drop the column (and the row
+      // entry when it was the last one) so the pending counter stays honest.
+      if (original !== UNKNOWN && sameValue(value, original)) delete row[col];
+      else row[col] = value;
+      if (Object.keys(row).length === 0) {
+        if (!(rowKey in prev)) return prev;
+        const next = { ...prev };
+        delete next[rowKey];
+        return next;
+      }
+      return { ...prev, [rowKey]: row };
+    });
   }, []);
 
   const toggleDelete = useCallback((rowKey: string) => {
@@ -92,24 +99,8 @@ export function useGridEdits(): GridEdits {
   const isEdited = useCallback((rowKey: string, col: string) => !!edited[rowKey] && col in edited[rowKey], [edited]);
 
   const buildChanges = useCallback(
-    (rows: Row[], pkCols: string[]): RowChangeInput[] => {
-      // schema/table are attached by the caller when it builds the editRow input.
-      const out: RowChangeInput[] = [];
-      for (const row of rows) {
-        const rk = rowKeyOf(row, pkCols);
-        const pk = Object.fromEntries(pkCols.map((c) => [c, row[c]]));
-        if (deleted.has(rk)) {
-          out.push({ op: 'delete', pk });
-        } else if (edited[rk]) {
-          out.push({ op: 'update', pk, values: edited[rk] });
-        }
-      }
-      for (const nr of newRows) {
-        const values = Object.fromEntries(Object.entries(nr.values).filter(([, v]) => v !== undefined));
-        if (Object.keys(values).length > 0) out.push({ op: 'insert', values });
-      }
-      return out;
-    },
+    (rows: Row[], pkCols: string[], schema: string | undefined, table: string): RowChangeInput[] =>
+      buildRowChanges({ edited, deleted, newRows }, rows, pkCols, schema, table),
     [edited, deleted, newRows],
   );
 

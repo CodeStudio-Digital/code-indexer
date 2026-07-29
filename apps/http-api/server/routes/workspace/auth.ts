@@ -1,16 +1,20 @@
-import type { CompanyDeps } from '../../deps.js';
+import type { CoderDeps } from '../../deps.js';
+import type { CompanySessionId } from '@mcp/session-storage';
+import { resolveCompanySessionContext } from '../_helpers.js';
 
 /**
- * Guard: ensures `projectId` is linked to `sessionId` in
- * `company_session_projects`. Every workspace route calls this before any
- * filesystem or git operation to block cross-session access.
+ * Guard: ensures `projectId` is linked in the root Company's session.json.
+ * Every workspace route calls this before filesystem or git access.
  */
-export function isProjectInSession(
-  deps: Pick<CompanyDeps, 'companyStore'>,
-  sessionId: number,
+export async function isProjectInSession(
+  deps: Pick<CoderDeps, 'sessionStore'>,
+  sessionId: CompanySessionId,
   projectId: number,
-): boolean {
-  if (!Number.isFinite(sessionId) || !Number.isFinite(projectId)) return false;
-  const linked = deps.companyStore.listCompanySessionProjects(sessionId);
-  return linked.some((p) => p.project_id === projectId);
+): Promise<boolean> {
+  if (!Number.isSafeInteger(projectId) || projectId < 1) return false;
+  const resolved = await resolveCompanySessionContext(
+    deps.sessionStore,
+    sessionId,
+  );
+  return resolved?.root.project_ids.includes(projectId) ?? false;
 }

@@ -1,9 +1,9 @@
 /**
- * SessionSnapshotService — business logic on top of SessionFileSnapshotStore.
+ * SessionSnapshotService — business logic on top of a session snapshot port.
  *
  * Responsibilities:
  *   - Compute live diff (baseline vs current disk) using snapshot-hunks.ts.
- *   - Surface hunk-level keep/undo state from session_file_hunk_decisions.
+ *   - Surface hunk-level keep/undo state from per-snapshot decision envelopes.
  *   - Mutate the disk for revert operations, bypassing the recording port
  *     so the revert itself isn't logged as a fresh edit.
  *   - Serialize concurrent operations on the same baseline (agent vs UI).
@@ -14,12 +14,13 @@
  */
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import {
-  type BaselineRow,
-  type HunkDecisionRow,
-  type SessionKind,
-  SessionFileSnapshotStore,
-} from '@mcp/store/session-file-snapshot-store.js';
+import type {
+  BaselineRow,
+  HunkDecisionRow,
+  RoundSnapshotRow,
+  SessionKind,
+  SessionSnapshotStorePort,
+} from './session-snapshot-port.js';
 import {
   applyHunkRevert,
   applyHunkRevertFlexible,
@@ -27,8 +28,8 @@ import {
   type Hunk,
 } from './snapshot-hunks.js';
 
-export interface FileSummary {
-  baselineId: number;
+export interface FileSummary<RecordId extends string = string> {
+  baselineId: RecordId;
   filePath: string;
   status: BaselineRow['status'];
   existedBefore: boolean;
@@ -44,22 +45,23 @@ export interface FileSummary {
   resolved: boolean;
 }
 
-export interface RoundFileSummary extends FileSummary {
+export interface RoundFileSummary<RecordId extends string = string>
+  extends FileSummary<RecordId> {
   roundMessageId: number;
-  roundSnapshotId: number;
-  globalBaselineId: number;
+  roundSnapshotId: RecordId;
+  globalBaselineId: RecordId;
   projectId: number | null;
 }
 
-export interface FileDiff {
+export interface FileDiff<RecordId extends string = string> {
   baseline: {
-    id: number;
+    id: RecordId;
     filePath: string;
     existedBefore: boolean;
     oversized: boolean;
     status: BaselineRow['status'];
     /** Present for immutable per-round diffs; the full modal still uses `id`. */
-    globalBaselineId?: number;
+    globalBaselineId?: RecordId;
     roundMessageId?: number;
   };
   hunks: Array<Hunk & { decision: 'pending' | 'kept' | 'reverted' }>;
@@ -74,8 +76,32 @@ const DEFAULT_DIFF_CONTEXT = 3;
 
 /** Project-relative POSIX path → absolute platform path inside the project. */
 function absoluteFor(projectRoot: string, relPath: string): string {
-  const parts = relPath.split('/').filter(Boolean);
-  return path.resolve(projectRoot, ...parts);
+  if (
+    relPath.length === 0 ||
+    relPath === '.' ||
+    relPath.includes('\0') ||
+    relPath.includes('\\') ||
+    relPath.startsWith('/') ||
+    /^[A-Za-z]:($|\/)/.test(relPath)
+  ) {
+    throw new Error('Invalid snapshot file path');
+  }
+  const parts = relPath.split('/');
+  if (parts.some((part) => part.length === 0 || part === '.' || part === '..')) {
+    throw new Error('Invalid snapshot file path');
+  }
+  const root = path.resolve(projectRoot);
+  const candidate = path.resolve(root, ...parts);
+  const relative = path.relative(root, candidate);
+  if (
+    relative.length === 0 ||
+    relative === '..' ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error('Snapshot file path escapes project root');
+  }
+  return candidate;
 }
 
 async function readCurrentContent(absPath: string): Promise<string | null> {
@@ -91,21 +117,24 @@ async function readCurrentContent(absPath: string): Promise<string | null> {
   }
 }
 
-export class SessionSnapshotService {
-  private readonly mutexes = new Map<number, Promise<unknown>>();
-  private readonly roundMutexes = new Map<number, Promise<unknown>>();
+export class SessionSnapshotService<
+  SessionKey extends string = string,
+  RecordId extends string = string,
+> {
+  private readonly mutexes = new Map<RecordId, Promise<unknown>>();
+  private readonly roundMutexes = new Map<RecordId, Promise<unknown>>();
 
   constructor(
-    private readonly store: SessionFileSnapshotStore,
+    private readonly store: SessionSnapshotStorePort<SessionKey, RecordId>,
     // `projectId` (migration 154) lets a GLOBAL session's baselines resolve to
     // the right root (a baseline may belong to a linked secondary project). When
     // null the resolver falls back to the session's primary project, so normal
     // sessions are unaffected.
     private readonly resolveProjectRoot: (
       kind: SessionKind,
-      sessionId: number,
+      sessionId: SessionKey,
       projectId?: number | null,
-    ) => string | null,
+    ) => string | null | Promise<string | null>,
   ) {}
 
   /**
@@ -116,15 +145,15 @@ export class SessionSnapshotService {
    */
   async listFiles(
     kind: SessionKind,
-    sessionId: number,
+    sessionId: SessionKey,
     opts: { includeClosed?: boolean } = {},
-  ): Promise<FileSummary[]> {
-    const baselines = this.store.listBaselines(kind, sessionId, opts);
-    const summaries: FileSummary[] = [];
+  ): Promise<FileSummary<RecordId>[]> {
+    const baselines = await this.store.listBaselines(kind, sessionId, opts);
+    const summaries: FileSummary<RecordId>[] = [];
     for (const b of baselines) {
       // Resolve per baseline: a global session's files can live in different
       // roots, so the diff must read each from its own project.
-      const projectRoot = this.resolveProjectRoot(kind, sessionId, b.project_id);
+      const projectRoot = await this.resolveProjectRoot(kind, sessionId, b.project_id);
       let pendingHunks = 0;
       let hunkCount = 0;
       let addedLines = 0;
@@ -136,9 +165,9 @@ export class SessionSnapshotService {
         const hunks = computeHunks(b.content_before, current);
         hunkCount = hunks.length;
         const decisions = new Map(
-          this.store
-            .listHunkDecisions(b.id)
-            .map((d: HunkDecisionRow) => [d.hunk_fingerprint, d.decision] as const),
+          (await this.store
+            .listHunkDecisions(b.id))
+            .map((d: HunkDecisionRow<RecordId>) => [d.hunk_fingerprint, d.decision] as const),
         );
         for (const h of hunks) {
           const d = decisions.get(h.fingerprint);
@@ -170,18 +199,22 @@ export class SessionSnapshotService {
   }
 
   async getDiff(
-    baselineId: number,
+    baselineId: RecordId,
     opts: { context?: number; contextBefore?: number; contextAfter?: number } = {},
-  ): Promise<FileDiff | null> {
-    const b = this.store.getBaselineById(baselineId);
+  ): Promise<FileDiff<RecordId> | null> {
+    const b = await this.store.getBaselineById(baselineId);
     if (!b) return null;
-    const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id, b.project_id);
+    const projectRoot = await this.resolveProjectRoot(
+      b.session_kind,
+      b.session_id,
+      b.project_id,
+    );
     if (!projectRoot) return null;
 
     const decisions = new Map(
-      this.store
-        .listHunkDecisions(baselineId)
-        .map((d: HunkDecisionRow) => [d.hunk_fingerprint, d.decision] as const),
+      (await this.store
+        .listHunkDecisions(baselineId))
+        .map((d: HunkDecisionRow<RecordId>) => [d.hunk_fingerprint, d.decision] as const),
     );
 
     if (b.oversized) {
@@ -229,16 +262,16 @@ export class SessionSnapshotService {
   /** List the frozen file envelope for one persisted user-message round. */
   async listRoundFiles(
     kind: SessionKind,
-    sessionId: number,
+    sessionId: SessionKey,
     roundMessageId: number,
-  ): Promise<RoundFileSummary[]> {
-    const rows = this.store.listRoundSnapshots(kind, sessionId, roundMessageId, {
+  ): Promise<RoundFileSummary<RecordId>[]> {
+    const rows = await this.store.listRoundSnapshots(kind, sessionId, roundMessageId, {
       includeClosed: true,
     });
-    return rows.map((row) => {
+    return Promise.all(rows.map(async (row) => {
       const decisions = new Map(
-        this.store
-          .listRoundHunkDecisions(row.id)
+        (await this.store
+          .listRoundHunkDecisions(row.id))
           .map((decision) => [decision.hunk_fingerprint, decision.decision] as const),
       );
       const hunks = row.oversized
@@ -274,18 +307,18 @@ export class SessionSnapshotService {
         removedLines,
         resolved: pendingHunks === 0,
       };
-    });
+    }));
   }
 
   async getRoundDiff(
-    roundSnapshotId: number,
+    roundSnapshotId: RecordId,
     opts: { context?: number; contextBefore?: number; contextAfter?: number } = {},
-  ): Promise<FileDiff | null> {
-    const row = this.store.getRoundSnapshotById(roundSnapshotId);
+  ): Promise<FileDiff<RecordId> | null> {
+    const row = await this.store.getRoundSnapshotById(roundSnapshotId);
     if (!row) return null;
     const decisions = new Map(
-      this.store
-        .listRoundHunkDecisions(row.id)
+      (await this.store
+        .listRoundHunkDecisions(row.id))
         .map((decision) => [decision.hunk_fingerprint, decision.decision] as const),
     );
     const baseline = {
@@ -328,11 +361,11 @@ export class SessionSnapshotService {
   }
 
   async acceptRoundHunk(
-    roundSnapshotId: number,
+    roundSnapshotId: RecordId,
     fingerprint: string,
   ): Promise<{ ok: boolean; closed: boolean; reason?: string }> {
     return this.withRoundMutex(roundSnapshotId, async () => {
-      const row = this.store.getRoundSnapshotById(roundSnapshotId);
+      const row = await this.store.getRoundSnapshotById(roundSnapshotId);
       if (!row || row.status !== 'active') {
         return { ok: false, closed: false, reason: 'not-active' };
       }
@@ -340,23 +373,27 @@ export class SessionSnapshotService {
       if (!diff?.hunks.some((hunk) => hunk.fingerprint === fingerprint)) {
         return { ok: false, closed: false, reason: 'stale-fingerprint' };
       }
-      this.store.upsertRoundHunkDecision(roundSnapshotId, fingerprint, 'kept');
+      await this.store.upsertRoundHunkDecision(roundSnapshotId, fingerprint, 'kept');
       const closed = await this.maybeCloseRoundIfNoPending(row.id);
       return { ok: true, closed };
     });
   }
 
   async revertRoundHunk(
-    roundSnapshotId: number,
+    roundSnapshotId: RecordId,
     fingerprint: string,
   ): Promise<{ ok: boolean; closed: boolean; reason?: string }> {
     return this.withRoundMutex(roundSnapshotId, async () => {
-      const row = this.store.getRoundSnapshotById(roundSnapshotId);
+      const row = await this.store.getRoundSnapshotById(roundSnapshotId);
       if (!row || row.status !== 'active') {
         return { ok: false, closed: false, reason: 'not-active' };
       }
       if (row.oversized) return { ok: false, closed: false, reason: 'diff-disabled' };
-      const projectRoot = this.resolveProjectRoot(row.session_kind, row.session_id, row.project_id);
+      const projectRoot = await this.resolveProjectRoot(
+        row.session_kind,
+        row.session_id,
+        row.project_id,
+      );
       if (!projectRoot) return { ok: false, closed: false, reason: 'no-project-root' };
       const diff = await this.getRoundDiff(roundSnapshotId);
       const target = diff?.hunks.find((hunk) => hunk.fingerprint === fingerprint);
@@ -377,41 +414,41 @@ export class SessionSnapshotService {
         await fs.mkdir(path.dirname(abs), { recursive: true });
         await fs.writeFile(abs, reverted, 'utf8');
       }
-      this.store.upsertRoundHunkDecision(roundSnapshotId, fingerprint, 'reverted');
+      await this.store.upsertRoundHunkDecision(roundSnapshotId, fingerprint, 'reverted');
       const closed = await this.maybeCloseRoundIfNoPending(row.id);
       return { ok: true, closed };
     });
   }
 
-  async acceptRoundFile(roundSnapshotId: number): Promise<{ ok: boolean; reason?: string }> {
-    const row = this.store.getRoundSnapshotById(roundSnapshotId);
+  async acceptRoundFile(roundSnapshotId: RecordId): Promise<{ ok: boolean; reason?: string }> {
+    const row = await this.store.getRoundSnapshotById(roundSnapshotId);
     if (!row || row.status !== 'active') return { ok: false, reason: 'not-active' };
-    this.store.closeRoundSnapshot(roundSnapshotId, 'closed_kept');
+    await this.store.closeRoundSnapshot(roundSnapshotId, 'closed_kept');
     return { ok: true };
   }
 
-  async revertRoundFile(roundSnapshotId: number): Promise<{ ok: boolean; reason?: string }> {
+  async revertRoundFile(roundSnapshotId: RecordId): Promise<{ ok: boolean; reason?: string }> {
     return this.withRoundMutex(roundSnapshotId, async () => {
-      const row = this.store.getRoundSnapshotById(roundSnapshotId);
+      const row = await this.store.getRoundSnapshotById(roundSnapshotId);
       if (!row || row.status !== 'active') return { ok: false, reason: 'not-active' };
       const planned = await this.planRoundRevert(row.id);
       if (!planned.ok) return { ok: false, reason: planned.reason };
       await this.writeRoundTarget(planned.absPath, planned.targetContent);
-      this.store.closeRoundSnapshot(row.id, 'closed_reverted');
+      await this.store.closeRoundSnapshot(row.id, 'closed_reverted');
       return { ok: true };
     });
   }
 
   async revertRoundAll(
     kind: SessionKind,
-    sessionId: number,
+    sessionId: SessionKey,
     roundMessageId: number,
   ): Promise<{ ok: boolean; reverted: number; conflicts: Array<{ filePath: string; reason: string }> }> {
-    const rows = this.store
-      .listRoundSnapshots(kind, sessionId, roundMessageId, { includeClosed: true })
+    const rows = (await this.store
+      .listRoundSnapshots(kind, sessionId, roundMessageId, { includeClosed: true }))
       .filter((row) => row.status === 'active');
     const plans: Array<{
-      row: import('@mcp/store/session-file-snapshot-store.js').RoundSnapshotRow;
+      row: RoundSnapshotRow<SessionKey, RecordId>;
       absPath: string;
       currentContent: string | null;
       targetContent: string | null;
@@ -444,34 +481,40 @@ export class SessionSnapshotService {
         }],
       };
     }
-    for (const planned of plans) this.store.closeRoundSnapshot(planned.row.id, 'closed_reverted');
+    for (const planned of plans) {
+      await this.store.closeRoundSnapshot(planned.row.id, 'closed_reverted');
+    }
     return { ok: true, reverted: plans.length, conflicts: [] };
   }
 
   async acceptHunk(
-    baselineId: number,
+    baselineId: RecordId,
     fingerprint: string,
   ): Promise<{ ok: boolean; closed: boolean; reason?: string }> {
     return this.withMutex(baselineId, async () => {
-      const b = this.store.getBaselineById(baselineId);
+      const b = await this.store.getBaselineById(baselineId);
       if (!b || b.status !== 'active') return { ok: false, closed: false, reason: 'not-active' };
-      this.store.upsertHunkDecision(baselineId, fingerprint, 'kept');
+      await this.store.upsertHunkDecision(baselineId, fingerprint, 'kept');
       const closed = await this.maybeCloseIfNoPending(b);
       return { ok: true, closed };
     });
   }
 
   async revertHunk(
-    baselineId: number,
+    baselineId: RecordId,
     fingerprint: string,
   ): Promise<{ ok: boolean; closed: boolean; reason?: string }> {
     return this.withMutex(baselineId, async () => {
-      const b = this.store.getBaselineById(baselineId);
+      const b = await this.store.getBaselineById(baselineId);
       if (!b || b.status !== 'active') return { ok: false, closed: false, reason: 'not-active' };
       if (b.oversized)
         return { ok: false, closed: false, reason: 'oversized — only file-level revert available' };
 
-      const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id, b.project_id);
+      const projectRoot = await this.resolveProjectRoot(
+        b.session_kind,
+        b.session_id,
+        b.project_id,
+      );
       if (!projectRoot) return { ok: false, closed: false, reason: 'no-project-root' };
 
       const abs = absoluteFor(projectRoot, b.file_path);
@@ -485,24 +528,28 @@ export class SessionSnapshotService {
         return { ok: false, closed: false, reason: 'hunk-no-longer-applies' };
 
       await fs.writeFile(abs, reverted, 'utf8');
-      this.store.upsertHunkDecision(baselineId, fingerprint, 'reverted');
+      await this.store.upsertHunkDecision(baselineId, fingerprint, 'reverted');
       const closed = await this.maybeCloseIfNoPending(b);
       return { ok: true, closed };
     });
   }
 
-  async acceptFile(baselineId: number): Promise<{ ok: boolean }> {
+  async acceptFile(baselineId: RecordId): Promise<{ ok: boolean }> {
     return this.withMutex(baselineId, async () => {
-      this.store.closeBaseline(baselineId, 'closed_kept');
+      await this.store.closeBaseline(baselineId, 'closed_kept');
       return { ok: true };
     });
   }
 
-  async revertFile(baselineId: number): Promise<{ ok: boolean; reason?: string }> {
+  async revertFile(baselineId: RecordId): Promise<{ ok: boolean; reason?: string }> {
     return this.withMutex(baselineId, async () => {
-      const b = this.store.getBaselineById(baselineId);
+      const b = await this.store.getBaselineById(baselineId);
       if (!b) return { ok: false, reason: 'not-found' };
-      const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id, b.project_id);
+      const projectRoot = await this.resolveProjectRoot(
+        b.session_kind,
+        b.session_id,
+        b.project_id,
+      );
       if (!projectRoot) return { ok: false, reason: 'no-project-root' };
 
       const abs = absoluteFor(projectRoot, b.file_path);
@@ -522,19 +569,19 @@ export class SessionSnapshotService {
         await fs.mkdir(path.dirname(abs), { recursive: true });
         await fs.writeFile(abs, rollbackContent, 'utf8');
       }
-      this.store.markBaselineReverted(baselineId);
+      await this.store.markBaselineReverted(baselineId);
       return { ok: true };
     });
   }
 
-  async acceptAll(kind: SessionKind, sessionId: number): Promise<{ closed: number }> {
-    const ids = this.store.listActiveBaselineIds(kind, sessionId);
+  async acceptAll(kind: SessionKind, sessionId: SessionKey): Promise<{ closed: number }> {
+    const ids = await this.store.listActiveBaselineIds(kind, sessionId);
     for (const id of ids) await this.acceptFile(id);
     return { closed: ids.length };
   }
 
-  async revertAll(kind: SessionKind, sessionId: number): Promise<{ closed: number }> {
-    const ids = this.store.listActiveBaselineIds(kind, sessionId);
+  async revertAll(kind: SessionKind, sessionId: SessionKey): Promise<{ closed: number }> {
+    const ids = await this.store.listActiveBaselineIds(kind, sessionId);
     let closed = 0;
     for (const id of ids) {
       const r = await this.revertFile(id);
@@ -545,13 +592,17 @@ export class SessionSnapshotService {
 
   // ─── Internals ───────────────────────────────────────────────────────
 
-  private async planRoundRevert(roundSnapshotId: number): Promise<
+  private async planRoundRevert(roundSnapshotId: RecordId): Promise<
     | { ok: true; absPath: string; currentContent: string | null; targetContent: string | null }
     | { ok: false; reason: string }
   > {
-    const row = this.store.getRoundSnapshotById(roundSnapshotId);
+    const row = await this.store.getRoundSnapshotById(roundSnapshotId);
     if (!row) return { ok: false, reason: 'not-found' };
-    const projectRoot = this.resolveProjectRoot(row.session_kind, row.session_id, row.project_id);
+    const projectRoot = await this.resolveProjectRoot(
+      row.session_kind,
+      row.session_id,
+      row.project_id,
+    );
     if (!projectRoot) return { ok: false, reason: 'no-project-root' };
     const absPath = absoluteFor(projectRoot, row.file_path);
     const currentContent = await readCurrentContent(absPath);
@@ -590,18 +641,24 @@ export class SessionSnapshotService {
     await fs.writeFile(absPath, content, 'utf8');
   }
 
-  private async maybeCloseRoundIfNoPending(roundSnapshotId: number): Promise<boolean> {
+  private async maybeCloseRoundIfNoPending(roundSnapshotId: RecordId): Promise<boolean> {
     const diff = await this.getRoundDiff(roundSnapshotId);
     if (!diff) return false;
     if (diff.hunks.every((hunk) => hunk.decision !== 'pending')) {
-      this.store.closeRoundSnapshot(roundSnapshotId, 'closed_kept');
+      await this.store.closeRoundSnapshot(roundSnapshotId, 'closed_kept');
       return true;
     }
     return false;
   }
 
-  private async maybeCloseIfNoPending(b: BaselineRow): Promise<boolean> {
-    const projectRoot = this.resolveProjectRoot(b.session_kind, b.session_id, b.project_id);
+  private async maybeCloseIfNoPending(
+    b: BaselineRow<SessionKey, RecordId>,
+  ): Promise<boolean> {
+    const projectRoot = await this.resolveProjectRoot(
+      b.session_kind,
+      b.session_id,
+      b.project_id,
+    );
     if (!projectRoot) return false;
     const abs = absoluteFor(projectRoot, b.file_path);
     const current = await readCurrentContent(abs);
@@ -611,21 +668,21 @@ export class SessionSnapshotService {
       // changes have been individually accepted/reverted, leaving disk == baseline
       // is the revert-all path; otherwise disk == current with kept hunks
       // baked in). Either way, nothing pending.
-      this.store.closeBaseline(b.id, 'closed_kept');
+      await this.store.closeBaseline(b.id, 'closed_kept');
       return true;
     }
     const decisions = new Set(
-      this.store.listHunkDecisions(b.id).map((d) => d.hunk_fingerprint),
+      (await this.store.listHunkDecisions(b.id)).map((d) => d.hunk_fingerprint),
     );
     const pending = hunks.filter((h) => !decisions.has(h.fingerprint));
     if (pending.length === 0) {
-      this.store.closeBaseline(b.id, 'closed_kept');
+      await this.store.closeBaseline(b.id, 'closed_kept');
       return true;
     }
     return false;
   }
 
-  private async withMutex<T>(baselineId: number, fn: () => Promise<T>): Promise<T> {
+  private async withMutex<T>(baselineId: RecordId, fn: () => Promise<T>): Promise<T> {
     const previous = this.mutexes.get(baselineId);
     const next = (async () => {
       if (previous) {
@@ -646,7 +703,7 @@ export class SessionSnapshotService {
     }
   }
 
-  private async withRoundMutex<T>(roundSnapshotId: number, fn: () => Promise<T>): Promise<T> {
+  private async withRoundMutex<T>(roundSnapshotId: RecordId, fn: () => Promise<T>): Promise<T> {
     const previous = this.roundMutexes.get(roundSnapshotId);
     const next = (async () => {
       if (previous) {

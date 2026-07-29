@@ -868,11 +868,10 @@ export function PipelineBindingsPanel() {
                           : s,
                       )
                     }
-                  >
-                    <option value="global">global</option>
-                    <option value="template">template</option>
-                    <option value="session">session</option>
-                  </select>
+                    >
+                      <option value="global">global</option>
+                      <option value="template">template</option>
+                    </select>
                 </div>
                 <div>
                   <label className="text-xs font-medium block mb-1">{t('admin:pipelines.dialog.scopeId')}</label>
@@ -1027,11 +1026,10 @@ export function PipelineBindingsPanel() {
                           : s,
                       )
                     }
-                  >
-                    <option value="global">global</option>
-                    <option value="template">template</option>
-                    <option value="session">session</option>
-                  </select>
+                    >
+                      <option value="global">global</option>
+                      <option value="template">template</option>
+                    </select>
                 </div>
                 <div>
                   <label className="text-xs font-medium block mb-1">{t('admin:pipelines.bulkDialog.scopeId')}</label>

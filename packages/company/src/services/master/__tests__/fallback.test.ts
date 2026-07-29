@@ -3,22 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   updateSessionProvider: vi.fn(),
   setLastResponseState: vi.fn(),
-  close: vi.fn(),
-  appendEvent: vi.fn(),
-}));
-
-vi.mock('@mcp/code-agent/sessions/store.js', () => ({
-  SessionStore: class {
-    updateSessionProvider = mocks.updateSessionProvider;
-    setLastResponseState = mocks.setLastResponseState;
-    close = mocks.close;
-  },
-}));
-vi.mock('@mcp/shared/utils/config.js', () => ({
-  loadConfig: () => ({ dbPath: ':memory:' }),
-}));
-vi.mock('@mcp/company/tools/app-studio/store-binding.js', () => ({
-  getAppStudioStore: () => ({ appendEvent: mocks.appendEvent }),
+  createLog: vi.fn(async () => ({})),
 }));
 
 import {
@@ -27,31 +12,41 @@ import {
   selectNextExplicitMasterFallback,
 } from '../fallback.js';
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000007';
+const CODER_SESSION_ID = '00000000-0000-4000-8000-000000000099';
+
 function deps(runtimeKind: 'app_studio' | 'company' = 'app_studio') {
-  const companyStore = {
-    getAgentRun: vi.fn(() => ({
-      id: 7,
-      company_session_id: 42,
+  const companyFiles = {
+    getAgentRun: vi.fn(async () => ({
+      id: AGENT_RUN_ID,
+      company_session_id: COMPANY_SESSION_ID,
       role: 'master',
-      coder_session_id: 99,
+      coder_session_id: CODER_SESSION_ID,
       provider: 'premium-provider',
       model: 'premium-model',
       configured_provider: 'premium-provider',
       configured_model: 'premium-model',
     })),
-    updateAgentRunProvider: vi.fn(),
+    updateAgentRunProvider: vi.fn(async () => undefined),
+    sessionStore: {
+      updateSessionProvider: mocks.updateSessionProvider,
+      setLastResponseState: mocks.setLastResponseState,
+    },
+    entities: {
+      create: mocks.createLog,
+    },
   };
   const board = { post: vi.fn() };
   return {
-    companyStore,
+    companyFiles,
     board,
     value: {
       ctx: {
         runtimeKind,
-        companySessionId: 42,
-        appStudioSessionId: 12,
-        companyStore,
-        db: { raw: () => ({}) },
+        companySessionId: COMPANY_SESSION_ID,
+        appStudioSessionId: '00000000-0000-4000-8000-000000000012',
+        companyFiles,
       },
       board,
     } as never,
@@ -92,10 +87,10 @@ describe('explicit App Master fallback', () => {
     })).toBeNull();
   });
 
-  it('persists effective provider/model and fallback reason before retry', () => {
+  it('persists effective provider/model and fallback reason before retry', async () => {
     const fixture = deps();
-    const result = applyExplicitMasterFallback(
-      7,
+    const result = await applyExplicitMasterFallback(
+      AGENT_RUN_ID,
       [{ provider: 'fallback-provider', model: 'fallback-model' }],
       'provider returned HTTP 429',
       fixture.value,
@@ -103,50 +98,52 @@ describe('explicit App Master fallback', () => {
 
     expect(result?.to).toEqual({ provider: 'fallback-provider', model: 'fallback-model' });
     expect(mocks.updateSessionProvider).toHaveBeenCalledWith(
-      99,
+      CODER_SESSION_ID,
       'fallback-provider',
       'fallback-model',
     );
-    expect(fixture.companyStore.updateAgentRunProvider).toHaveBeenCalledWith(
-      7,
+    expect(fixture.companyFiles.updateAgentRunProvider).toHaveBeenCalledWith(
+      AGENT_RUN_ID,
       'fallback-provider',
       'fallback-model',
       expect.stringContaining('master_fallback_models'),
     );
     expect(fixture.board.post).toHaveBeenCalledWith(
       'system',
-      7,
+      AGENT_RUN_ID,
       'message',
       expect.stringContaining('explicit App role fallback'),
     );
-    expect(mocks.appendEvent).toHaveBeenCalledWith(
-      12,
-      'agents.model_fallback',
-      'company_agent_run',
-      '7',
-      expect.any(String),
-      'app-master-fallback:7:fallback-provider:fallback-model',
+    expect(mocks.createLog).toHaveBeenCalledWith(
+      'log',
+      expect.objectContaining({
+        relations: { agent_run_id: AGENT_RUN_ID },
+        data: expect.objectContaining({
+          event: 'agents.model_fallback',
+          entity_id: AGENT_RUN_ID,
+        }),
+      }),
     );
   });
 
-  it('does not consume the chain for a permanent error or generic Company', () => {
+  it('does not consume the chain for a permanent error or generic Company', async () => {
     const app = deps();
-    expect(applyExplicitMasterFallback(
-      7,
+    await expect(applyExplicitMasterFallback(
+      AGENT_RUN_ID,
       [{ provider: 'fallback-provider', model: 'fallback-model' }],
       'max_turns',
       app.value,
-    )).toBeNull();
+    )).resolves.toBeNull();
 
     const company = deps('company');
-    expect(applyExplicitMasterFallback(
-      7,
+    await expect(applyExplicitMasterFallback(
+      AGENT_RUN_ID,
       [{ provider: 'fallback-provider', model: 'fallback-model' }],
       'provider returned HTTP 429',
       company.value,
-    )).toBeNull();
-    expect(app.companyStore.updateAgentRunProvider).not.toHaveBeenCalled();
-    expect(company.companyStore.updateAgentRunProvider).not.toHaveBeenCalled();
+    )).resolves.toBeNull();
+    expect(app.companyFiles.updateAgentRunProvider).not.toHaveBeenCalled();
+    expect(company.companyFiles.updateAgentRunProvider).not.toHaveBeenCalled();
   });
 
   it('retries a bootstrap failure only after provenance is updated', async () => {
@@ -157,11 +154,11 @@ describe('explicit App Master fallback', () => {
 
     await expect(runWithExplicitMasterFallback(
       run,
-      7,
+      AGENT_RUN_ID,
       [{ provider: 'fallback-provider', model: 'fallback-model' }],
       fixture.value,
     )).resolves.toBe('started');
     expect(run).toHaveBeenCalledTimes(2);
-    expect(fixture.companyStore.updateAgentRunProvider).toHaveBeenCalledTimes(1);
+    expect(fixture.companyFiles.updateAgentRunProvider).toHaveBeenCalledTimes(1);
   });
 });

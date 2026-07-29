@@ -38,13 +38,13 @@ interface KanbanCardModalProps {
   allCards: KanbanCardFull[];
   open: boolean;
   onClose: () => void;
-  onUpdate: (cardId: number, patch: { title?: string; description?: string; tag?: KanbanTag | null }) => Promise<boolean>;
-  onAddComment: (cardId: number, content: string) => Promise<boolean>;
-  onAddChecklistItem: (cardId: number, text: string) => Promise<boolean>;
-  onUpdateChecklistItem: (itemId: number, patch: { text?: string; checked?: boolean }) => Promise<boolean>;
-  onAddDependency: (cardId: number, dependsOnCardId: number) => Promise<boolean>;
-  onRemoveDependency: (cardId: number, dependsOnCardId: number) => Promise<boolean>;
-  onDelete: (cardId: number) => Promise<boolean>;
+  onUpdate: (cardId: string, patch: { title?: string; description?: string; tag?: KanbanTag | null }) => Promise<boolean>;
+  onAddComment: (cardId: string, content: string) => Promise<boolean>;
+  onAddChecklistItem: (cardId: string, text: string) => Promise<boolean>;
+  onUpdateChecklistItem: (itemId: string, patch: { text?: string; checked?: boolean }) => Promise<boolean>;
+  onAddDependency: (cardId: string, dependsOnCardId: string) => Promise<boolean>;
+  onRemoveDependency: (cardId: string, dependsOnCardId: string) => Promise<boolean>;
+  onDelete: (cardId: string) => Promise<boolean>;
 }
 
 export function KanbanCardModal({

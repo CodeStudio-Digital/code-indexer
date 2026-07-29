@@ -7,6 +7,13 @@ export interface FinishRunData {
   indexedFiles: number;
   skippedFiles: number;
   errorCount: number;
+  phaseTimings?: {
+    scanMs: number;
+    parseMs: number;
+    writeMs: number;
+    sweepMs: number;
+  };
+  peakRssMb?: number;
 }
 
 export function start(db: DB, projectId: number): number {
@@ -18,10 +25,20 @@ export function finish(db: DB, runId: number, data: FinishRunData): void {
   db.prepare(`
     UPDATE runs SET
       finished_at = datetime('now'), status = ?,
-      total_files = ?, indexed_files = ?, skipped_files = ?, error_count = ?
+      total_files = ?, indexed_files = ?, skipped_files = ?, error_count = ?,
+      phase_timings_json = ?, peak_rss_mb = ?
     WHERE id = ?
   `).run(
     data.status, data.totalFiles, data.indexedFiles, data.skippedFiles, data.errorCount,
+    data.phaseTimings
+      ? JSON.stringify({
+          scan_ms: data.phaseTimings.scanMs,
+          parse_ms: data.phaseTimings.parseMs,
+          write_ms: data.phaseTimings.writeMs,
+          sweep_ms: data.phaseTimings.sweepMs,
+        })
+      : null,
+    data.peakRssMb ?? null,
     runId
   );
 }

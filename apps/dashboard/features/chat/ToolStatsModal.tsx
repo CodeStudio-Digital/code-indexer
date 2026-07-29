@@ -27,7 +27,7 @@ interface SavingsByTool {
 }
 
 interface ToolStatsResponse {
-  sessionId: number;
+  sessionId: string;
   totalCalls: number;
   directCalls?: number;
   nestedCalls?: number;
@@ -49,7 +49,8 @@ interface ToolStatsResponse {
     lastAt: string | null;
   }>;
   recent: Array<{
-    id: number;
+    id: string;
+    seq: number;
     name: string;
     argsPreview: string;
     isError: boolean;
@@ -84,7 +85,7 @@ function formatChars(n: number): string {
 }
 
 interface ToolStatsModalProps {
-  sessionId: number;
+  sessionId: string;
   open: boolean;
   onClose: () => void;
 }
@@ -98,7 +99,7 @@ export function ToolStatsView({
   sessionId,
   active,
 }: {
-  sessionId: number;
+  sessionId: string;
   /** When false, the view skips fetching. Used by the rail to suspend
    *  the panel when it's not the active one. */
   active: boolean;

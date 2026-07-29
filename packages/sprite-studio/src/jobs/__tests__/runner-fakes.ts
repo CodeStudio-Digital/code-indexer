@@ -5,15 +5,30 @@
  */
 import path from 'node:path';
 import type { ImageGenCapabilities, ImageGenClient } from '@mcp/provider-sdk/images.js';
-import type { SpriteAssetsStore, SpriteVersionInsertInput } from '@mcp/store/sprite-studio/sprite-assets-store.js';
-import type { SpriteJobsStore } from '@mcp/store/sprite-studio/sprite-jobs-store.js';
-import type { SpriteAssetVersionRow, SpriteGenerationJobRow } from '@mcp/store/sprite-studio/types.js';
 import { encodePng } from '../../processing/png.js';
 import type { SpriteOp } from '../../processing/types.js';
-import type { ImageChainLink, SpriteJobDeps, SpriteJobStores } from '../deps.js';
+import type {
+  ImageChainLink,
+  SpriteJobDeps,
+  SpriteJobRecord,
+  SpriteJobStores,
+  SpriteJobVersionRecord,
+} from '../deps.js';
 import type { SpriteJobEvent } from '../events.js';
 
 export const RED_1PX = encodePng({ rgba: new Uint8Array([255, 0, 0, 255]), width: 1, height: 1 });
+export const spriteId = (n: number): string =>
+  `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+interface TestJobRecord extends SpriteJobRecord {
+  provider_id: string | null;
+  model_id: string | null;
+  cost_usd: number | null;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
 
 export const FULL_CAPS: ImageGenCapabilities = {
   edit: true,
@@ -43,21 +58,21 @@ export function fakeClient(
 
 export interface FakeWorld {
   deps: SpriteJobDeps;
-  jobRow: SpriteGenerationJobRow;
+  jobRow: TestJobRecord;
   events: SpriteJobEvent[];
   statuses: string[];
   errors: string[];
   results: Array<Record<string, unknown>>;
-  insertedVersions: SpriteVersionInsertInput[];
+  insertedVersions: Array<Parameters<SpriteJobStores['assets']['insertVersion']>[0]>;
   capturedOps: SpriteOp[][];
-  currentVersionSets: Array<[number, number | null]>;
+  currentVersionSets: Array<[string, string | null]>;
 }
 
 export interface WorldOptions {
   scratchRoot: string;
   chain: Array<{ link: ImageChainLink; client: ImageGenClient }>;
   projectRoot?: string;
-  assetId?: number | null;
+  assetId?: string | null;
   assetSlug?: string;
 }
 
@@ -66,13 +81,13 @@ export function makeWorld(opts: WorldOptions): FakeWorld {
   const statuses: string[] = [];
   const errors: string[] = [];
   const results: Array<Record<string, unknown>> = [];
-  const insertedVersions: SpriteVersionInsertInput[] = [];
+  const insertedVersions: Array<Parameters<SpriteJobStores['assets']['insertVersion']>[0]> = [];
   const capturedOps: SpriteOp[][] = [];
-  const currentVersionSets: Array<[number, number | null]> = [];
+  const currentVersionSets: Array<[string, string | null]> = [];
 
-  const jobRow = {
-    id: 900,
-    sprite_project_id: 5,
+  const jobRow: TestJobRecord = {
+    id: spriteId(900),
+    sprite_project_id: spriteId(5),
     asset_id: opts.assetId ?? null,
     kind: 'generate',
     status: 'queued',
@@ -87,45 +102,59 @@ export function makeWorld(opts: WorldOptions): FakeWorld {
     started_at: null,
     finished_at: null,
     created_at: '2026-07-03T00:00:00Z',
-  } as SpriteGenerationJobRow;
+  };
 
-  const jobs = {
-    get: (id: number) => (id === jobRow.id ? jobRow : null),
-    updateStatus: (_id: number, status: string) => {
+  const jobs: SpriteJobStores['jobs'] = {
+    get: async (id) => (id === jobRow.id ? jobRow : null),
+    updateStatus: async (_id, status) => {
       statuses.push(status);
-      (jobRow as { status: string }).status = status;
+      jobRow.status = status;
       return true;
     },
-    setResult: (_id: number, input: Record<string, unknown>) => {
+    setResult: async (_id, input) => {
       results.push(input);
       if (input.expanded_prompt !== undefined) jobRow.expanded_prompt = input.expanded_prompt as string;
       if (input.provider_id !== undefined) jobRow.provider_id = input.provider_id as string;
       if (input.model_id !== undefined) jobRow.model_id = input.model_id as string;
-      if (input.result_version_id !== undefined) jobRow.result_version_id = input.result_version_id as number;
+      if (input.result_version_id !== undefined) {
+        jobRow.result_version_id = input.result_version_id as string;
+      }
       return true;
     },
-    setError: (_id: number, error: string) => {
+    setError: async (_id, error) => {
       errors.push(error);
-      (jobRow as { status: string }).status = 'failed';
+      jobRow.status = 'failed';
       return true;
     },
-  } as unknown as SpriteJobsStore;
+  };
 
   let nextVersionRowId = 101;
-  const assets = {
-    get: (id: number) =>
-      id === opts.assetId ? { id, slug: opts.assetSlug ?? 'goblin', sprite_project_id: 5 } : null,
-    insertVersion: (input: SpriteVersionInsertInput): SpriteAssetVersionRow => {
+  const assets: SpriteJobStores['assets'] = {
+    get: async (id) =>
+      id === opts.assetId
+        ? {
+            id,
+            slug: opts.assetSlug ?? 'goblin',
+            current_version_id: null,
+          }
+        : null,
+    insertVersion: async (input): Promise<SpriteJobVersionRecord> => {
       insertedVersions.push(input);
-      return { id: nextVersionRowId++, ...input, created_at: 'now' } as unknown as SpriteAssetVersionRow;
+      return {
+        id: spriteId(nextVersionRowId++),
+        asset_id: input.asset_id,
+        version: input.version ?? nextVersionRowId,
+        file_rel_path: input.file_rel_path,
+        source: input.source,
+      };
     },
-    setCurrentVersion: (assetId: number, versionId: number | null) => {
+    setCurrentVersion: async (assetId, versionId) => {
       currentVersionSets.push([assetId, versionId]);
       return true;
     },
-  } as unknown as SpriteAssetsStore;
+  };
 
-  const stores: SpriteJobStores = { projects: {} as SpriteJobStores['projects'], assets, jobs };
+  const stores: SpriteJobStores = { assets, jobs };
 
   const deps: SpriteJobDeps = {
     stores,

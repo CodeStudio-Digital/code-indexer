@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process';
-import { extname, resolve, relative, isAbsolute } from 'node:path';
+import { extname, relative } from 'node:path';
 import { existsSync, statSync } from 'node:fs';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 
 /**
  * get_diagnostics — LSP-lite.
@@ -39,13 +40,6 @@ function detectLanguage(file: string): Language {
   if (ext === '.rs') return 'rs';
   if (ext === '.php') return 'php';
   return 'unknown';
-}
-
-function resolveSafe(filePath: string, cwd: string): string | null {
-  const abs = isAbsolute(filePath) ? filePath : resolve(cwd, filePath);
-  const rel = relative(cwd, abs);
-  if (rel.startsWith('..') || isAbsolute(rel)) return null;
-  return abs;
 }
 
 function runChecker(lang: Language, absPath: string, cwd: string): string {
@@ -136,7 +130,7 @@ export const getDiagnostics: CoderTool = {
     properties: {
       file_path: {
         type: 'string',
-        description: 'Project-relative path of the file to check.',
+        description: 'Project-relative path of the file to check. In a global session use "<project-slug>/...".',
       },
     },
     required: ['file_path'],
@@ -145,8 +139,15 @@ export const getDiagnostics: CoderTool = {
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     const fileArg = String(args.file_path ?? '').trim();
     if (!fileArg) return err('file_path cannot be empty');
-    const abs = resolveSafe(fileArg, ctx.cwd);
-    if (!abs) return err(`path '${fileArg}' escapes the project root — rejected`);
+    const resolved = resolveWorkspacePath(fileArg, ctx, 'read');
+    if (!resolved.ok || resolved.external) {
+      return err(
+        resolved.ok
+          ? `path '${fileArg}' is outside indexed project roots — rejected`
+          : resolved.reason,
+      );
+    }
+    const abs = resolved.abs;
     if (!existsSync(abs)) return err(`file not found: ${fileArg}`);
 
     const lang = detectLanguage(abs);
@@ -160,7 +161,7 @@ export const getDiagnostics: CoderTool = {
     const hit = cache.get(key);
     if (hit !== undefined) return ok(hit + '\n[cached by mtime]');
 
-    const out = runChecker(lang, abs, ctx.cwd);
+    const out = runChecker(lang, abs, resolved.rootPath);
     cache.set(key, out);
     // Bound cache size
     if (cache.size > 50) {

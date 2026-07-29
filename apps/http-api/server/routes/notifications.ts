@@ -8,12 +8,20 @@ import {
   subscribeToNotificationRuntimeEvents,
   type NotificationRuntimeEvent,
 } from '../../sse/notification-event-bus.js';
+import {
+  asCompanySessionId,
+  asSessionId,
+  isUuid,
+  type CompanySessionId,
+  type SessionId,
+} from '@mcp/session-storage';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 
 export interface NotificationRouteTarget {
   kind: 'project' | 'global' | 'company';
   route: string;
-  scopeId?: number;
-  sessionId: number;
+  scopeId?: number | CompanySessionId;
+  sessionId: SessionId | CompanySessionId;
   label: string;
 }
 
@@ -26,7 +34,19 @@ export interface NotificationStreamEnvelope extends NotificationRuntimeEvent {
   context: NotificationSourceContext;
 }
 
-type NotificationRouteDeps = Pick<ServerDeps, 'sessionStore' | 'companyStore' | 'db'>;
+type NotificationRouteDeps = Pick<ServerDeps, 'sessionStore' | 'db'> & {
+  /**
+   * Test/embedding override. Production resolves Company metadata directly
+   * from the filesystem bundle and never from a legacy SQL table.
+   */
+  resolveCompanyNotificationSession?: (
+    sessionId: CompanySessionId,
+  ) => Promise<{
+    id: CompanySessionId;
+    parent_session_id: CompanySessionId | null;
+    name: string;
+  } | null>;
+};
 
 /**
  * One app-wide SSE connection for native/toast and unread notifications.
@@ -52,12 +72,28 @@ export function mountNotificationRoutes(app: Hono, deps: NotificationRouteDeps):
           .catch(() => undefined);
       };
       const forward = (source: NotificationRuntimeEvent): void => {
-        const context = resolveNotificationSourceContext(deps, source);
-        if (!context) {
-          enqueue(source.id, 'cursor', { ts: source.ts });
-          return;
-        }
-        enqueue(source.id, 'notification', { ...source, context } satisfies NotificationStreamEnvelope);
+        writes = writes
+          .then(async () => {
+            const context = await resolveNotificationSourceContext(
+              deps,
+              source,
+            );
+            return context
+              ? stream.writeSSE({
+                  id: String(source.id),
+                  event: 'notification',
+                  data: JSON.stringify({
+                    ...source,
+                    context,
+                  } satisfies NotificationStreamEnvelope),
+                })
+              : stream.writeSSE({
+                  id: String(source.id),
+                  event: 'cursor',
+                  data: JSON.stringify({ ts: source.ts }),
+                });
+          })
+          .catch(() => undefined);
       };
 
       // Subscribe before taking the replay snapshot. JavaScript cannot run a
@@ -81,12 +117,15 @@ export function mountNotificationRoutes(app: Hono, deps: NotificationRouteDeps):
   });
 }
 
-export function resolveNotificationSourceContext(
+export async function resolveNotificationSourceContext(
   deps: NotificationRouteDeps,
   source: Pick<NotificationRuntimeEvent, 'kind' | 'sessionId'>,
-): NotificationSourceContext | null {
+): Promise<NotificationSourceContext | null> {
+  if (!isUuid(source.sessionId)) return null;
   if (source.kind === 'coder') {
-    const session = deps.sessionStore.getSession(source.sessionId);
+    const session = await deps.sessionStore.getSession(
+      asSessionId(source.sessionId),
+    );
     if (!session) return null;
     if (session.is_global) {
       return {
@@ -98,7 +137,9 @@ export function resolveNotificationSourceContext(
         },
       };
     }
-    if (!deps.db.getProject(session.project_id)) return null;
+    if (session.project_id == null || !deps.db.getProject(session.project_id)) {
+      return null;
+    }
     const target: NotificationRouteTarget = {
       kind: 'project',
       route: `/projects/${session.project_id}?session=${session.id}`,
@@ -109,7 +150,10 @@ export function resolveNotificationSourceContext(
     return { target, pipelineTarget: target };
   }
 
-  const session = deps.companyStore.getCompanySession(source.sessionId);
+  const companySessionId = asCompanySessionId(source.sessionId);
+  const session = deps.resolveCompanyNotificationSession
+    ? await deps.resolveCompanyNotificationSession(companySessionId)
+    : await resolveCompanySessionFromBundle(deps, companySessionId);
   if (!session) return null;
   const rootId = session.parent_session_id ?? session.id;
   const front = session.id === rootId ? 'main' : String(session.id);
@@ -125,6 +169,25 @@ export function resolveNotificationSourceContext(
     target,
     pipelineTarget: { ...target, route: `${base}/pipelines` },
   };
+}
+
+async function resolveCompanySessionFromBundle(
+  deps: Pick<NotificationRouteDeps, 'sessionStore'>,
+  companySessionId: CompanySessionId,
+): Promise<{
+  id: CompanySessionId;
+  parent_session_id: CompanySessionId | null;
+  name: string;
+} | null> {
+  await deps.sessionStore.ensureCatalog();
+  try {
+    return new CompanySessionFiles({
+      companySessionId,
+      sessionStore: deps.sessionStore,
+    }).getSession();
+  } catch {
+    return null;
+  }
 }
 
 function parseCursor(raw: string | undefined): number | null {

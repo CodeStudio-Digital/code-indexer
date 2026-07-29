@@ -14,7 +14,7 @@ export function TableSheetDialog({
   label,
   onClose,
 }: {
-  sessionId: number;
+  sessionId: string;
   table: string;
   label: string;
   onClose: () => void;

@@ -17,32 +17,18 @@ import { mergeIndexIgnorePatterns, projectIndexIgnorePatterns } from '@mcp/share
 import { FileScanner } from '@mcp/indexer/indexer/scanner.js';
 import { buildTreeSitterDispatch } from '@mcp/indexer/indexer/tree-sitter-dispatch.js';
 import { withConcurrency } from './indexer/enrich-references.js';
-import { processFileStructural } from './indexer/process-file-structural.js';
+import {
+  persistPreparedFileStructural,
+  prepareFileStructural,
+  type PreparedFileStructural,
+} from './indexer/process-file-structural.js';
+import { resolveStructuralPipelineSchedule } from './structural-pipeline-schedule.js';
 import { removeFilesStructural } from './structural-incremental.js';
 
-const STRUCTURAL_YIELD_EVERY = 50;
+export { resolveStructuralPipelineSchedule } from './structural-pipeline-schedule.js';
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-/**
- * A routed project DB has no UI-thread writers, so extraction can retain the
- * normal parallelism and only yield periodically. The central DB is shared
- * with Electron-main stores; serializing its structural writes and yielding
- * after every file gives busy handlers on those connections a real lock-free
- * window instead of letting a full index immediately reacquire the writer.
- */
-export function resolveStructuralWriteSchedule(
-  usesProjectDb: boolean,
-  requestedConcurrency: number,
-): { concurrency: number; yieldEvery: number } {
-  const concurrency = Number.isFinite(requestedConcurrency)
-    ? Math.max(1, Math.trunc(requestedConcurrency))
-    : 1;
-  return usesProjectDb
-    ? { concurrency, yieldEvery: STRUCTURAL_YIELD_EVERY }
-    : { concurrency: 1, yieldEvery: 1 };
 }
 
 export interface StructuralProgress {
@@ -55,6 +41,14 @@ export interface StructuralProgress {
 
 export interface StructuralIndexOptions {
   onProgress?: (p: StructuralProgress) => void;
+  /**
+   * Exact scanner delta, acknowledged before the first structural mutation.
+   * The semantic coordinator uses this fence to capture the previous item keys
+   * for deletes/edits instead of falling back to a whole-project wildcard.
+   */
+  onChanges?: (
+    events: ReadonlyArray<{ path: string; kind: 'upsert' | 'delete' }>,
+  ) => void | Promise<void>;
   /** Cooperative abort — remaining files are skipped, run finishes as failed. */
   signal?: AbortSignal;
   /** Candidate-count gate: above this the run bails with `aborted: 'too_large'` (project untouched). */
@@ -71,6 +65,13 @@ export interface StructuralIndexOptions {
   maxFileSizeKB?: number;
 }
 
+export interface StructuralPhaseTimings {
+  scanMs: number;
+  parseMs: number;
+  writeMs: number;
+  sweepMs: number;
+}
+
 export interface StructuralIndexResult {
   runId?: number;
   totalFiles: number;
@@ -79,6 +80,8 @@ export interface StructuralIndexResult {
   skipped: number;
   errorCount: number;
   durationMs: number;
+  phaseTimings: StructuralPhaseTimings;
+  peakRssMb: number;
   aborted?: 'too_large' | 'signal' | 'empty_scan';
 }
 
@@ -88,6 +91,16 @@ export async function runStructuralIndex(
   opts: StructuralIndexOptions = {},
 ): Promise<StructuralIndexResult> {
   const startTime = Date.now();
+  const phaseTimings: StructuralPhaseTimings = {
+    scanMs: 0,
+    parseMs: 0,
+    writeMs: 0,
+    sweepMs: 0,
+  };
+  let peakRssMb = Math.ceil(process.memoryUsage().rss / 1024 / 1024);
+  const sampleRss = (): void => {
+    peakRssMb = Math.max(peakRssMb, Math.ceil(process.memoryUsage().rss / 1024 / 1024));
+  };
   const project = db.getProject(projectId);
   if (!project) throw new Error(`project ${projectId} not found`);
 
@@ -105,18 +118,22 @@ export async function runStructuralIndex(
     mergeIndexIgnorePatterns(opts.ignorePatterns, projectIndexIgnorePatterns(project)),
     opts.maxFileSizeKB ?? 200,
   );
+  const scanStarted = Date.now();
   const scan = await scanner.scan(db, projectId, {
     maxFiles: opts.maxFiles,
     // Keep the "Scanning…" chip alive during the walk (total unknown → 0).
     onScanProgress: (scanned, total) =>
       opts.onProgress?.({ phase: 'scanning', current: scanned, total, currentFile: '' }),
   });
+  phaseTimings.scanMs = Date.now() - scanStarted;
+  sampleRss();
   const totalFiles = scan.totalFiles ?? scan.toIndex.length + scan.unchanged.length;
 
   if (scan.aborted === 'too_large' || (opts.maxFiles && totalFiles > opts.maxFiles)) {
     return {
       totalFiles, indexed: 0, removed: 0, skipped: scan.unchanged.length,
-      errorCount: 0, durationMs: Date.now() - startTime, aborted: 'too_large',
+      errorCount: 0, durationMs: Date.now() - startTime,
+      phaseTimings, peakRssMb, aborted: 'too_large',
     };
   }
 
@@ -132,7 +149,8 @@ export async function runStructuralIndex(
     );
     return {
       totalFiles: 0, indexed: 0, removed: 0, skipped: 0,
-      errorCount: 0, durationMs: Date.now() - startTime, aborted: 'empty_scan',
+      errorCount: 0, durationMs: Date.now() - startTime,
+      phaseTimings, peakRssMb, aborted: 'empty_scan',
     };
   }
 
@@ -142,6 +160,7 @@ export async function runStructuralIndex(
   // the user-facing activity history with a fake 0/N execution.
   if (scan.toIndex.length === 0 && scan.toRemove.length === 0) {
     let coverageErrors = 0;
+    const sweepStarted = Date.now();
     try {
       const sweep = sweepContentCoverage(db, projectId, project.root_path);
       if (sweep.added > 0) console.error(`[structural] Content coverage sweep: ${sweep.added} file(s) backfilled`);
@@ -149,6 +168,8 @@ export async function runStructuralIndex(
       coverageErrors++;
       console.error('[structural] Content coverage sweep failed:', err);
     }
+    phaseTimings.sweepMs += Date.now() - sweepStarted;
+    sampleRss();
     const stats = db.getStats(projectId, { fresh: true });
     const checkedAt = new Date().toISOString();
     const needsMetadataRepair = stats.file_count !== project.file_count
@@ -173,54 +194,136 @@ export async function runStructuralIndex(
       skipped: scan.unchanged.length,
       errorCount: coverageErrors,
       durationMs: Date.now() - startTime,
+      phaseTimings,
+      peakRssMb,
     };
   }
 
-  const { removed } = removeFilesStructural(db, projectId, scan.toRemove);
-  const runId = db.startRun(projectId);
+  const exactChanges = [
+    ...scan.toRemove.map((path) => ({ path, kind: 'delete' as const })),
+    ...scan.toIndex.map((file) => ({ path: file.relativePath, kind: 'upsert' as const })),
+  ];
+  await opts.onChanges?.(exactChanges);
 
-  const treeSitter = buildTreeSitterDispatch();
-  let indexed = 0;
-  let errorCount = 0;
-  let aborted: StructuralIndexResult['aborted'];
-
-  // Progress must be MONOTONIC. `withConcurrency` runs files out of order, so
-  // the enqueue index (idx) is not the completion order — reporting `idx + 1`
-  // made the bar jump forward and backward under concurrency ≥ 2. Count files
-  // as they actually finish instead. (`++completed` is a single synchronous op
-  // after each file's awaits resolve, so the single-threaded event loop makes
-  // it race-free.) Generalization (Option B): move this counter into
-  // `withConcurrency` so the embeddings/full-pipeline callers get it for free.
-  let completed = 0;
-  const writeSchedule = resolveStructuralWriteSchedule(
+  const pipelineSchedule = resolveStructuralPipelineSchedule(
     db.useProjectDb(projectId),
     opts.concurrency ?? 5,
   );
-  try {
-    await withConcurrency(scan.toIndex, async (file) => {
-      if (opts.signal?.aborted) { aborted = 'signal'; return; }
-      try {
-        await processFileStructural(db, projectId, file, treeSitter);
-        indexed++;
-      } catch (err) {
-        errorCount++;
-        console.error(`[structural] Error processing ${file.relativePath}:`, err);
-      }
-      const current = ++completed;
-      opts.onProgress?.({ phase: 'indexing', current, total: scan.toIndex.length, currentFile: file.relativePath });
-      if (current % writeSchedule.yieldEvery === 0) await yieldToEventLoop();
-    }, writeSchedule.concurrency);
 
-    try {
-      const sweep = sweepContentCoverage(db, projectId, project.root_path);
-      if (sweep.added > 0) console.error(`[structural] Content coverage sweep: ${sweep.added} file(s) backfilled`);
-    } catch (err) {
-      errorCount++;
-      console.error('[structural] Content coverage sweep failed:', err);
-    }
-  } finally {
-    treeSitter.dispose();
+  let removed = 0;
+  for (let offset = 0; offset < scan.toRemove.length; offset += pipelineSchedule.writeBatchSize) {
+    const chunk = scan.toRemove.slice(offset, offset + pipelineSchedule.writeBatchSize);
+    const writeStarted = Date.now();
+    db.indexTransaction(projectId, () => {
+      removed += removeFilesStructural(db, projectId, chunk).removed;
+    });
+    phaseTimings.writeMs += Date.now() - writeStarted;
+    sampleRss();
+    if ((offset + chunk.length) % pipelineSchedule.yieldEvery === 0) await yieldToEventLoop();
   }
+  const runId = db.startRun(projectId);
+
+  let indexed = 0;
+  let errorCount = 0;
+  let aborted: StructuralIndexResult['aborted'];
+  let completed = 0;
+  if (scan.toIndex.length > 0) {
+    const treeSitter = buildTreeSitterDispatch();
+    try {
+      for (
+        let offset = 0;
+        offset < scan.toIndex.length && !opts.signal?.aborted;
+        offset += pipelineSchedule.writeBatchSize
+      ) {
+        const wave = scan.toIndex.slice(offset, offset + pipelineSchedule.writeBatchSize);
+        const outcomes: Array<{
+          file: (typeof wave)[number];
+          prepared?: PreparedFileStructural;
+          error?: unknown;
+          aborted?: boolean;
+        }> = new Array(wave.length);
+
+        const parseStarted = Date.now();
+        await withConcurrency(wave, async (file, index) => {
+          if (opts.signal?.aborted) {
+            outcomes[index] = { file, aborted: true };
+            return;
+          }
+          try {
+            outcomes[index] = {
+              file,
+              prepared: await prepareFileStructural(file, treeSitter),
+            };
+          } catch (error) {
+            outcomes[index] = { file, error };
+          }
+        }, pipelineSchedule.parseConcurrency);
+        phaseTimings.parseMs += Date.now() - parseStarted;
+        sampleRss();
+
+        let waveIndexed = 0;
+        let waveErrors = 0;
+        const writeStarted = Date.now();
+        try {
+          db.indexTransaction(projectId, () => {
+            for (const outcome of outcomes) {
+              if (outcome.aborted) {
+                aborted = 'signal';
+                continue;
+              }
+              if (outcome.error || !outcome.prepared) {
+                waveErrors++;
+                console.error(`[structural] Error preparing ${outcome.file.relativePath}:`, outcome.error);
+                continue;
+              }
+              try {
+                persistPreparedFileStructural(db, projectId, outcome.prepared);
+                waveIndexed++;
+              } catch (error) {
+                waveErrors++;
+                console.error(`[structural] Error persisting ${outcome.file.relativePath}:`, error);
+              }
+            }
+          });
+          indexed += waveIndexed;
+          errorCount += waveErrors;
+        } catch (error) {
+          // A commit-level failure rolls the whole wave back. Per-file failures
+          // above are isolated by nested savepoints and do not reach this path.
+          errorCount += outcomes.filter((outcome) => !outcome.aborted).length;
+          console.error('[structural] Error committing structural write wave:', error);
+        }
+        phaseTimings.writeMs += Date.now() - writeStarted;
+        sampleRss();
+
+        for (const outcome of outcomes) {
+          if (outcome.aborted) continue;
+          const current = ++completed;
+          opts.onProgress?.({
+            phase: 'indexing',
+            current,
+            total: scan.toIndex.length,
+            currentFile: outcome.file.relativePath,
+          });
+        }
+        if (completed % pipelineSchedule.yieldEvery === 0) await yieldToEventLoop();
+      }
+      if (opts.signal?.aborted) aborted = 'signal';
+    } finally {
+      treeSitter.dispose();
+    }
+  }
+
+  const sweepStarted = Date.now();
+  try {
+    const sweep = sweepContentCoverage(db, projectId, project.root_path);
+    if (sweep.added > 0) console.error(`[structural] Content coverage sweep: ${sweep.added} file(s) backfilled`);
+  } catch (err) {
+    errorCount++;
+    console.error('[structural] Content coverage sweep failed:', err);
+  }
+  phaseTimings.sweepMs += Date.now() - sweepStarted;
+  sampleRss();
 
   const status = aborted || errorCount > scan.toIndex.length / 2
     ? 'failed'
@@ -247,11 +350,14 @@ export async function runStructuralIndex(
     indexedFiles: indexed,
     skippedFiles: scan.unchanged.length,
     errorCount,
+    phaseTimings,
+    peakRssMb,
   }, projectId);
 
   return {
     runId, totalFiles, indexed, removed, skipped: scan.unchanged.length,
-    errorCount, durationMs: Date.now() - startTime, aborted,
+    errorCount, durationMs: Date.now() - startTime,
+    phaseTimings, peakRssMb, aborted,
   };
 }
 

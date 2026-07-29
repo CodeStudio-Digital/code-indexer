@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
 import { formatPlanResult } from '@mcp/code-agent/tools/plan.js';
 import {
   formatTasksApprovedResult,
@@ -11,10 +13,11 @@ import { approvalAskId, buildUserDeniedText } from '@mcp/code-agent/core/permiss
 import { createChatProviderAsync } from '@mcp/services/providers/factory.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseSessionIdParam, notFound } from '../_helpers.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
+import { withSessionLock } from './sessionLock.js';
 
 interface AnswerBody {
   answer: string;
@@ -70,13 +73,13 @@ export function mountCoderInteractionRoutes(
    * the bus from the mandatory worker pool. When no run is live, the log is
    * silently dropped because no client is subscribed to receive it.
    */
-  const logRouteHit = (sessionId: number, endpoint: string, preview: unknown): void => {
+  const logRouteHit = (sessionId: SessionId, endpoint: string, preview: unknown): void => {
     const bus = workerPool.getBus(sessionId);
     emitWorkerLog(bus, 'info', 'route', `POST ${endpoint}`, preview);
   };
 
   app.post('/api/coder/sessions/:id/abort', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     try {
       await workerPool.abort(id);
       return c.json({ ok: true });
@@ -95,7 +98,7 @@ export function mountCoderInteractionRoutes(
    * the identity carried by agents_group_start/agent_progress.
    */
   app.post('/api/coder/sessions/:id/agents/abort', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json().catch(() => null) as
       { group_id?: string; agent?: number | string } | null;
     const groupId = typeof body?.group_id === 'string' ? body.group_id.trim() : '';
@@ -121,7 +124,7 @@ export function mountCoderInteractionRoutes(
    * max_chars. 404 when the worker was evicted or the state expired.
    */
   app.get('/api/coder/sessions/:id/agents/transcript', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const spawnId = (c.req.query('spawn_id') ?? '').trim();
     if (!spawnId) return c.json({ error: 'spawn_id is required' }, 400);
     const agentRaw = c.req.query('agent');
@@ -162,7 +165,7 @@ export function mountCoderInteractionRoutes(
    *                           `interject` was not set (caller decides).
    */
   app.post('/api/coder/sessions/:id/inject', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<{ content?: string; interject?: boolean; selected_skill_ids?: string[] }>();
     const content = typeof body.content === 'string' ? body.content : '';
     if (!content.trim()) return c.json({ error: 'content required' }, 400);
@@ -171,12 +174,6 @@ export function mountCoderInteractionRoutes(
       ? body.selected_skill_ids
       : undefined;
     logRouteHit(id, '/inject', { content_preview: content.slice(0, 80), interject });
-    const userMsg: AgentMessage = {
-      role: 'user',
-      content: [{ type: 'text', text: content }],
-      ...(skillIds ? { selectedSkillIds: skillIds } : {}),
-    };
-
     const bus = workerPool.getBus(id);
     if (!bus || bus.ended) return c.json({ noActiveRun: true });
     const waiting = await workerPool.isWaitingForInput(id).catch(() => false);
@@ -184,13 +181,17 @@ export function mountCoderInteractionRoutes(
       if (!interject) return c.json({ waiting: true });
       await workerPool.interruptWait(id).catch(() => undefined);
     }
-    const roundMessageId = sessionStore.appendMessage(id, userMsg);
-    await workerPool.pushUserMessage(id, content, skillIds, roundMessageId);
+    await workerPool.pushUserMessage(
+      id,
+      content,
+      skillIds,
+      `interaction:inject:${randomUUID()}`,
+    );
     return c.json({ injected: true });
   });
 
   app.post('/api/coder/sessions/:id/answer', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<AnswerBody>();
     const answer = body.answer ?? '';
     logRouteHit(id, '/answer', { answer_preview: answer.slice(0, 80) });
@@ -202,7 +203,7 @@ export function mountCoderInteractionRoutes(
         `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const pending = findPendingInteraction(id);
+    const pending = await findPendingInteraction(id);
     if (!pending || pending.name !== 'ask_user') {
       return c.json({ error: 'no pending question' }, 404);
     }
@@ -214,7 +215,11 @@ export function mountCoderInteractionRoutes(
         content: formatAskUserResult(answer),
       }],
     };
-    sessionStore.appendMessage(id, toolMsg);
+    await sessionStore.appendMessage({
+      session_id: id,
+      operation_id: `interaction:answer:${pending.toolUseId}`,
+      message: toolMsg,
+    });
     return c.json({ ok: true, resumed_via_worker: true });
   });
 
@@ -226,7 +231,7 @@ export function mountCoderInteractionRoutes(
    * mid-questionnaire still resumes.
    */
   app.post('/api/coder/sessions/:id/decide', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<DecideBody>();
     const answers = body.answers && typeof body.answers === 'object' ? body.answers : {};
     logRouteHit(id, '/decide', { questions: Object.keys(answers).length });
@@ -239,7 +244,7 @@ export function mountCoderInteractionRoutes(
         `[coder] worker provideUserInput(decide) failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const pending = findPendingInteraction(id);
+    const pending = await findPendingInteraction(id);
     if (!pending || pending.name !== 'decision_gate') {
       return c.json({ error: 'no pending decision' }, 404);
     }
@@ -260,7 +265,11 @@ export function mountCoderInteractionRoutes(
         content: formatDecisionGateResult(questions, answers),
       }],
     };
-    sessionStore.appendMessage(id, toolMsg);
+    await sessionStore.appendMessage({
+      session_id: id,
+      operation_id: `interaction:decision:${pending.toolUseId}`,
+      message: toolMsg,
+    });
     return c.json({ ok: true, resumed_via_worker: true });
   });
 
@@ -274,7 +283,7 @@ export function mountCoderInteractionRoutes(
    * re-decides on the next run.
    */
   app.post('/api/coder/sessions/:id/tool-approval', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<ToolApprovalBody>();
     const toolUseId = typeof body.tool_use_id === 'string' ? body.tool_use_id.trim() : '';
     if (!toolUseId) return c.json({ error: 'tool_use_id required' }, 400);
@@ -298,7 +307,7 @@ export function mountCoderInteractionRoutes(
         `[coder] worker provideUserInput(tool-approval) failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const dangling = findDanglingToolUse(id, toolUseId);
+    const dangling = await findDanglingToolUse(id, toolUseId);
     if (!dangling) return c.json({ error: 'no pending tool approval' }, 404);
     const toolMsg: AgentMessage = {
       role: 'tool',
@@ -311,12 +320,16 @@ export function mountCoderInteractionRoutes(
         is_error: true,
       }],
     };
-    sessionStore.appendMessage(id, toolMsg);
+    await sessionStore.appendMessage({
+      session_id: id,
+      operation_id: `interaction:approval:${toolUseId}`,
+      message: toolMsg,
+    });
     return c.json({ ok: true, resumed_via_worker: true });
   });
 
   app.post('/api/coder/sessions/:id/plan-response', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<PlanResponseBody>();
     const aborted = !!body.aborted;
     // "Recusar" wins over approved: an abort verdict ends the planning run.
@@ -331,7 +344,7 @@ export function mountCoderInteractionRoutes(
         `[coder] worker provideUserInput failed for session ${id}: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const pending = findPendingInteraction(id);
+    const pending = await findPendingInteraction(id);
     if (!pending || pending.name !== 'submit_plan') {
       return c.json({ error: 'no pending plan' }, 404);
     }
@@ -350,23 +363,28 @@ export function mountCoderInteractionRoutes(
         ...(aborted ? { is_error: true } : {}),
       }],
     };
-    sessionStore.appendMessage(id, toolMsg);
-    // Mirror the verdict into coder_plans so the Plans tab reflects the
+    await sessionStore.appendMessage({
+      session_id: id,
+      operation_id: `interaction:plan-response:${pending.toolUseId}`,
+      message: toolMsg,
+    });
+    // Mirror the verdict into the session's plan record so the Plans tab reflects the
     // resolved status even when the live runner was no longer in memory.
-    sessionStore.resolveLatestPendingPlan(
+    await sessionStore.resolveLatestPendingPlan(
       id,
       aborted ? 'aborted' : approved ? 'approved' : 'rejected',
       body.feedback,
+      `interaction:plan-state:${pending.toolUseId}`,
     );
     // Iteration 2: auto plan→build after approval. Mirrors the in-runner
     // path (plan.ts) for the case where no live runner consumed the
     // approval — the next /continue or POST /messages picks up the new
     // agent's defaults via the AGENTS lookup in runCoder.
     if (approved) {
-      const session = sessionStore.getSession(id);
+      const session = await sessionStore.getSession(id);
       if (resolveAgentSelection(deps.providerStore, session?.agent)?.baseAgentId === 'plan') {
         try {
-          sessionStore.setSessionAgent(id, 'build');
+          await sessionStore.setSessionAgent(id, 'build');
           const reminder: AgentMessage = {
             role: 'user',
             content: [{
@@ -374,7 +392,12 @@ export function mountCoderInteractionRoutes(
               text: '<system-reminder>Mode transition: Plan → Build. The plan was approved. Now execute it per build-mode instructions: read with prepare_edit / get_symbol_body before editing, apply changes, run verify after each batch. No further plan submission needed.</system-reminder>',
             }],
           };
-          sessionStore.appendMessage(id, reminder);
+          await sessionStore.appendMessage({
+            session_id: id,
+            operation_id:
+              `interaction:plan-build-reminder:${pending.toolUseId}`,
+            message: reminder,
+          });
         } catch (e) {
           console.warn(
             `[coder] mode transition (offline path) failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -387,11 +410,11 @@ export function mountCoderInteractionRoutes(
 
   /**
    * List persisted plans for a session, newest first. Backed by the
-   * coder_plans table (migration 007).
+   * session bundle's independent plan records.
    */
-  app.get('/api/coder/sessions/:id/plans', (c) => {
-    const id = parseIdParam(c);
-    return c.json(sessionStore.listPlans(id));
+  app.get('/api/coder/sessions/:id/plans', async (c) => {
+    const id = parseSessionIdParam(c);
+    return c.json(await sessionStore.listPlans(id));
   });
 
   /**
@@ -399,9 +422,9 @@ export function mountCoderInteractionRoutes(
    * bodies fetched mid-conversation, runtime system-reminders, and
    * sub-agent system prompts. Powers the Input tab in the details modal.
    */
-  app.get('/api/coder/sessions/:id/inputs', (c) => {
-    const id = parseIdParam(c);
-    return c.json(sessionStore.listSessionInputs(id));
+  app.get('/api/coder/sessions/:id/inputs', async (c) => {
+    const id = parseSessionIdParam(c);
+    return c.json(await sessionStore.listSessionInputs(id));
   });
 
   /**
@@ -409,9 +432,9 @@ export function mountCoderInteractionRoutes(
    * to render the TaskListReview when (a) the SSE buffer was missed or
    * (b) the user reopens the session tab.
    */
-  app.get('/api/coder/sessions/:id/tasks', (c) => {
-    const id = parseIdParam(c);
-    const state = sessionStore.getTasksState(id);
+  app.get('/api/coder/sessions/:id/tasks', async (c) => {
+    const id = parseSessionIdParam(c);
+    const state = await sessionStore.getTasksState(id);
     if (!state) return c.json(null);
     return c.json(state);
   });
@@ -423,7 +446,7 @@ export function mountCoderInteractionRoutes(
    * picks up where we left off.
    */
   app.post('/api/coder/sessions/:id/tasks-response', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<TasksResponseBody>();
     const approved = !!body.approved;
     logRouteHit(id, '/tasks-response', {
@@ -435,7 +458,7 @@ export function mountCoderInteractionRoutes(
     // worker's `submit_tasks` is blocked in `waitForUserInput()`; this
     // pushes the JSON it expects and unblocks the tool with the right
     // approve/reject branch. Without this path, the rest of the
-    // handler would write a synthesized tool_result to the DB while
+    // handler would write a synthesized tool_result to the bundle while
     // the worker stays blocked, leaving session state inconsistent
     // (UI shows "rejected" even when user clicked approve, because
     // `resolveTasks(approved:false)` runs on the worker side too).
@@ -458,16 +481,20 @@ export function mountCoderInteractionRoutes(
 
     // Resume path — runner is gone. Find the pending submit_tasks / task_list
     // (approve) tool_use in the message history and inject its tool_result.
-    const pending = findPendingInteraction(id);
+    const pending = await findPendingInteraction(id);
     if (!pending || (pending.name !== 'submit_tasks' && pending.name !== 'task_list')) {
       return c.json({ error: 'no pending tasks' }, 404);
     }
-    sessionStore.resolveTasks(id, {
-      approved,
-      tasks: body.tasks,
-      execution_mode: body.execution_mode ?? null,
-    });
-    const newState = sessionStore.getTasksState(id);
+    await sessionStore.resolveTasks(
+      id,
+      {
+        approved,
+        tasks: body.tasks,
+        execution_mode: body.execution_mode ?? null,
+      },
+      `interaction:tasks-state:${pending.toolUseId}`,
+    );
+    const newState = await sessionStore.getTasksState(id);
     const resultText = approved
       ? newState
         ? formatTasksApprovedResult(newState, body.feedback)
@@ -483,38 +510,60 @@ export function mountCoderInteractionRoutes(
         },
       ],
     };
-    sessionStore.appendMessage(id, toolMsg);
+    await sessionStore.appendMessage({
+      session_id: id,
+      operation_id: `interaction:tasks-response:${pending.toolUseId}`,
+      message: toolMsg,
+    });
     return c.json({ ok: true, resumed_via_worker: true });
   });
 
   // Set/clear fallback provider+model for a session
   app.patch('/api/coder/sessions/:id/fallback', async (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     const body = await c.req.json<{ provider: string | null; model: string | null }>();
-    sessionStore.setSessionFallback(id, body.provider ?? null, body.model ?? null);
+    await sessionStore.setSessionFallback(
+      id,
+      body.provider ?? null,
+      body.model ?? null,
+    );
     return c.json({ ok: true, fallback_provider: body.provider, fallback_model: body.model });
   });
 
   // Get session fallback config
-  app.get('/api/coder/sessions/:id/fallback', (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+  app.get('/api/coder/sessions/:id/fallback', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
-    const fb = sessionStore.getSessionFallback(id);
+    const fb = await sessionStore.getSessionFallback(id);
     return c.json({ fallback_provider: fb?.provider ?? null, fallback_model: fb?.model ?? null });
   });
 
   app.post('/api/coder/sessions/:id/switch', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<SwitchProviderBody>();
     if (!body.provider) return c.json({ error: 'provider required' }, 400);
-    const session = sessionStore.getSession(id);
-    if (!session) return notFound(c);
     const newProvider = await createChatProviderAsync(body.provider, body.model);
-    sessionStore.updateSessionProvider(id, body.provider, newProvider.model);
-    await workerPool.swapProvider(id, body.provider, newProvider.model);
+    const updated = await withSessionLock(id, async () => {
+      const session = await sessionStore.getSession(id);
+      if (!session) return false;
+      const persistedByWorker = await workerPool.swapProvider(
+        id,
+        body.provider,
+        newProvider.model,
+      );
+      if (!persistedByWorker) {
+        await sessionStore.updateSessionProvider(
+          id,
+          body.provider,
+          newProvider.model,
+        );
+      }
+      return true;
+    });
+    if (!updated) return notFound(c);
     return c.json({ ok: true, provider: body.provider, model: newProvider.model });
   });
 }

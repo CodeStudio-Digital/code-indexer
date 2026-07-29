@@ -47,12 +47,12 @@ export function InspectorPanel({
   mode: StudioMode;
   asset: SpriteAsset | null;
   versions: AssetVersion[];
-  activeVersionId: number | null;
-  onSelectVersion: (versionId: number) => void;
-  onPatchAsset: (assetId: number, patch: Partial<SpriteAsset>) => Promise<void>;
-  onDeleteAsset?: (assetId: number) => void | Promise<void>;
-  onDeleteVersion?: (versionId: number) => void | Promise<void>;
-  onIterateVersion?: (versionId: number, label: string) => void;
+  activeVersionId: string | null;
+  onSelectVersion: (versionId: string) => void;
+  onPatchAsset: (assetId: string, patch: Partial<SpriteAsset>) => Promise<void>;
+  onDeleteAsset?: (assetId: string) => void | Promise<void>;
+  onDeleteVersion?: (versionId: string) => void | Promise<void>;
+  onIterateVersion?: (versionId: string, label: string) => void;
   settings: StudioSettings | null;
   onSaveSettings: (next: StudioSettings) => void | Promise<void>;
   engine: EditorEngine | null;
@@ -61,15 +61,15 @@ export function InspectorPanel({
   projectId?: number;
   // Animate mode: the shared version data + frame actions for FrameInspector.
   generations?: GenerationGroup[];
-  versionById?: Map<number, AssetVersion>;
+  versionById?: Map<string, AssetVersion>;
   refreshVersions?: () => void;
-  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
+  onEditVersion?: (versionId: string, frameIndex: number, track: number) => void;
   /** Versions-list pencil → focused in-place edit session. */
-  onEditVersionInPlace?: (versionId: number) => void;
+  onEditVersionInPlace?: (versionId: string) => void;
   /** AI-enhance "Aplicar" committed a new version → refresh + focus it. */
-  onEnhanceApplied?: (versionId: number) => void;
+  onEnhanceApplied?: (versionId: string) => void;
   /** Active focused edit session (edit mode hides the version machinery). */
-  editSession?: { versionId: number; origin: 'frame' | 'version' } | null;
+  editSession?: { versionId: string; origin: 'frame' | 'version' } | null;
   onExitEditSession?: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');

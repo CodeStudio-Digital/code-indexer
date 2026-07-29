@@ -34,10 +34,10 @@ export const VersionRow = memo(function VersionRow({
   projectId?: number;
   isActive: boolean;
   isCurrent: boolean;
-  onSelect: (versionId: number) => void;
+  onSelect: (versionId: string) => void;
   onDelete?: (v: AssetVersion) => void;
-  onIterate?: (versionId: number, label: string) => void;
-  onEditInPlace?: (versionId: number) => void;
+  onIterate?: (versionId: string, label: string) => void;
+  onEditInPlace?: (versionId: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const label = vLabel(v);

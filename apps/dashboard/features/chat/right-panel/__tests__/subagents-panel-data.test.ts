@@ -8,7 +8,7 @@ function sessionData(
   result?: string,
 ): SessionData {
   return {
-    session: { id: 1, status },
+    session: { id: '018f0f5e-7b2d-7a45-8c11-0123456789ab', status },
     message_rows: [],
     messages: [
       {

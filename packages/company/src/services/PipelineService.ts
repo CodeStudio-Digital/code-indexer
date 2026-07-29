@@ -15,6 +15,7 @@ import type {
   Pipeline,
   PipelineEdge,
   PipelineGraph,
+  PipelineId,
   PipelineNode,
 } from '@mcp/company/types.js';
 
@@ -38,13 +39,13 @@ export class PipelineService {
 
   list(opts?: {
     /** When set, returns pipelines bound to this session OR globals (NULL). */
-    companySessionId?: number | null;
+    companySessionId?: string | null;
     templateId?: number | null;
-  }): Pipeline[] {
+  }): Promise<Pipeline[]> {
     return this.ctx.companyStore.listPipelines(opts);
   }
 
-  get(id: number): Pipeline | null {
+  get(id: PipelineId): Promise<Pipeline | null> {
     return this.ctx.companyStore.getPipeline(id);
   }
 
@@ -52,21 +53,21 @@ export class PipelineService {
     name: string;
     description?: string;
     graph: PipelineGraph;
-    companySessionId?: number | null;
+    companySessionId?: string | null;
     templateId?: number | null;
-  }): Pipeline {
+  }): Promise<Pipeline> {
     return this.ctx.companyStore.createPipeline(input);
   }
 
   update(
-    id: number,
+    id: PipelineId,
     patch: { name?: string; description?: string; graph?: PipelineGraph },
     opts?: { expectedVersion?: number },
-  ): Pipeline | null {
+  ): Promise<Pipeline | null> {
     return this.ctx.companyStore.updatePipeline(id, patch, opts);
   }
 
-  delete(id: number): boolean {
+  delete(id: PipelineId): Promise<boolean> {
     return this.ctx.companyStore.deletePipeline(id);
   }
 

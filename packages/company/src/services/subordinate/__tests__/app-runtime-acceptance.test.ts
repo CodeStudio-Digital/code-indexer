@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '@mcp/store/db.js';
-import { CompanyStore } from '@mcp/store/company-store.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import {
+  SessionLocator,
+  asCompanySessionId,
+  type JsonValue,
+} from '@mcp/session-storage';
 import { ConcurrencyPolicy } from '@mcp/company/ConcurrencyPolicy.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import { SessionContext } from '@mcp/company/services/SessionContext.js';
 import {
   spawnSubordinate,
@@ -14,7 +18,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   runCoder: vi.fn(async (options: {
-    session: { id: number };
+    session: { id: string };
     profile?: string;
     onRunnerReady?: (runner: unknown) => void;
   }) => {
@@ -55,79 +59,103 @@ vi.mock('@mcp/company/services/memory/spawn-injection.js', () => ({
 
 describe('App Studio authoritative role runtime acceptance', () => {
   let dir: string;
-  let dbPath: string;
-  let db: CodeIndexDB;
-  let companyStore: CompanyStore;
-  let sessionStore: SessionStore;
-  let previousDbPath: string | undefined;
+  let project: { id: number; name: string; root_path: string };
+  let companyFiles: CompanySessionFiles;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     mocks.runCoder.mockClear();
     dir = mkdtempSync(join(tmpdir(), 'mcp-app-role-runtime-'));
-    dbPath = join(dir, 'test.db');
-    previousDbPath = process.env.MCP_INDEX_DB;
-    process.env.MCP_INDEX_DB = dbPath;
-    db = new CodeIndexDB(dbPath);
-    companyStore = new CompanyStore(dbPath);
-    sessionStore = new SessionStore(dbPath);
-  });
-
-  afterEach(() => {
-    companyStore.close();
-    sessionStore.close();
-    db.close();
-    if (previousDbPath === undefined) delete process.env.MCP_INDEX_DB;
-    else process.env.MCP_INDEX_DB = previousDbPath;
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it('persists backend and frontend configured models even when the caller requests the global mini override', async () => {
-    const project = db.createProject('app', join(dir, 'app'));
-    const team = companyStore.createCompanySession({
-      name: 'App team',
-      runtime_kind: 'app_studio',
-      config_json: JSON.stringify({
-        runtime_kind: 'app_studio',
-        master_provider: 'openai-chatgpt',
-        master_model: 'gpt-5.6-terra',
-        role_assignments: [
-          {
-            role: 'backend',
-            enabled: true,
-            provider: 'openai-chatgpt',
-            model: 'gpt-5.6-sol',
-            tier: 'full',
-            projectIds: [project.id],
-          },
-          {
-            role: 'frontend',
-            enabled: true,
-            provider: 'openai-chatgpt',
-            model: 'gpt-5.6-luna',
-            tier: 'full',
-            projectIds: [project.id],
-          },
-        ],
-        allowed_models: [
-          { provider: 'openai-chatgpt', model: 'gpt-5.6-terra' },
-          { provider: 'openai-chatgpt', model: 'gpt-5.6-sol' },
-          { provider: 'openai-chatgpt', model: 'gpt-5.6-luna' },
-          { provider: 'openai-chatgpt', model: 'gpt-5.4-mini', is_default: true },
-        ],
-      }),
+    const dataDir = join(dir, 'data');
+    const projectRoot = join(dir, 'app');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(projectRoot, { recursive: true });
+    project = { id: 7, name: 'app', root_path: projectRoot };
+    const locator = new SessionLocator({
+      dataDir,
+      projectRootResolver: {
+        resolveProjectRoot: (projectId) =>
+          projectId === project.id ? project.root_path : null,
+        listProjectRoots: () => [{
+          project_id: project.id,
+          root_path: project.root_path,
+        }],
+      },
     });
-    companyStore.addProjectToCompanySession(team.id, project.id);
+    const sessionStore = new FsSessionStore({ locator });
+    const company = await sessionStore.repository.createSession({
+      kind: 'app_studio',
+      scope: { kind: 'global' },
+      owner_project_id: project.id,
+      linked_projects: [{
+        project_id: project.id,
+        root_path: project.root_path,
+      }],
+      title: 'App team',
+      status: 'idle',
+      metadata: {
+        company: {
+          name: 'App team',
+          template_id: null,
+          runtime_kind: 'app_studio',
+          config_json: JSON.stringify({
+            runtime_kind: 'app_studio',
+            master_provider: 'openai-chatgpt',
+            master_model: 'gpt-5.6-terra',
+            role_assignments: [
+              {
+                role: 'backend',
+                enabled: true,
+                provider: 'openai-chatgpt',
+                model: 'gpt-5.6-sol',
+                tier: 'full',
+                projectIds: [project.id],
+              },
+              {
+                role: 'frontend',
+                enabled: true,
+                provider: 'openai-chatgpt',
+                model: 'gpt-5.6-luna',
+                tier: 'full',
+                projectIds: [project.id],
+              },
+            ],
+            allowed_models: [
+              { provider: 'openai-chatgpt', model: 'gpt-5.6-terra' },
+              { provider: 'openai-chatgpt', model: 'gpt-5.6-sol' },
+              { provider: 'openai-chatgpt', model: 'gpt-5.6-luna' },
+              {
+                provider: 'openai-chatgpt',
+                model: 'gpt-5.4-mini',
+                is_default: true,
+              },
+            ],
+          }),
+          master_session_id: null,
+          project_labels: { [project.id]: 'app' },
+          recovered_at: null,
+          recovered_reason: null,
+        },
+      } as unknown as Record<string, JsonValue>,
+    });
+    await sessionStore.refresh();
+    companyFiles = new CompanySessionFiles({
+      companySessionId: asCompanySessionId(company.session.id),
+      sessionStore,
+    });
 
-    const masterCoder = sessionStore.createSession({
+    const masterCoder = await sessionStore.createSession({
       project_id: project.id,
       title: 'App Master',
       provider: 'openai-chatgpt',
       model: 'gpt-5.6-terra',
       agent: 'app_orchestrator',
+      metadata: {
+        company_session_id: company.session.id,
+        companySessionId: company.session.id,
+      },
     });
-    companyStore.setMasterSessionId(team.id, masterCoder.id);
-    companyStore.createAgentRun({
-      company_session_id: team.id,
+    await companyFiles.setMasterSessionId(masterCoder.id);
+    await companyFiles.createAgentRun({
       role: 'master',
       coder_session_id: masterCoder.id,
       project_ids: [project.id],
@@ -137,16 +165,26 @@ describe('App Studio authoritative role runtime acceptance', () => {
       configured_model: 'gpt-5.6-terra',
       dispatch_source: 'app_studio',
     });
+  });
 
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('persists backend and frontend configured models even when the caller requests the global mini override', async () => {
     const ctx = new SessionContext({
-      companySessionId: team.id,
-      companyStore,
-      db,
+      companySessionId: companyFiles.companySessionId,
+      companyFiles,
+      companyStore: {} as never,
+      db: {
+        getProject: (projectId: number) =>
+          projectId === project.id ? project : null,
+      } as never,
       metaBus: { ended: false } as never,
       runtimeKind: 'app_studio',
-      appStudioSessionId: 77,
+      appStudioSessionId: '00000000-0000-4000-8000-000000000077',
     });
-    const runningIds = new Set<number>();
+    const runningIds = new Set<string>();
     const subordinates = new Map();
     const deps = {
       ctx,
@@ -183,7 +221,7 @@ describe('App Studio authoritative role runtime acceptance', () => {
       }, deps);
     }
 
-    const runs = companyStore.listAgentRuns(team.id);
+    const runs = await companyFiles.listAgentRuns();
     const master = runs.find((run) => run.role === 'master');
     const specialists = runs.filter((run) => run.role !== 'master');
 

@@ -1,6 +1,6 @@
 /** Static prompt contributions for App Studio sessions hosted by Company. */
 
-export function buildAppStudioMasterRuntimeBlock(appSessionId: number): string {
+export function buildAppStudioMasterRuntimeBlock(appSessionId: string): string {
   return `# APP STUDIO MULTI-AGENT RUNTIME
 
 You are the persistent Master for App Studio session ${appSessionId}. The App
@@ -23,7 +23,7 @@ app_record_work_evidence records proof for the current plan and workspace.`;
 }
 
 export function buildAppStudioSubordinateRuntimeBlock(args: {
-  appSessionId: number;
+  appSessionId: string;
   role: string;
 }): string {
   return `# APP STUDIO SPECIALIST

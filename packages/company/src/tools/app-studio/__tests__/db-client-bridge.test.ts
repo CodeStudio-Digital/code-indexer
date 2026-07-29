@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AppStudioSession } from '@mcp/store/app-studio-store.js';
+import { asSessionId } from '@mcp/session-storage';
 import type {
   CreateDbConnectionInput,
   DbConnection,
@@ -12,7 +13,8 @@ import {
 
 function session(overrides: Partial<AppStudioSession> = {}): AppStudioSession {
   return {
-    id: 7,
+    id: asSessionId('11111111-1111-4111-8111-111111111111'),
+    seq: 1,
     project_id: 42,
     name: 'FutebolFantasy',
     app_slug: 'futebol-fantasy',
@@ -96,7 +98,7 @@ describe('ensureAppStudioDbConnection', () => {
     });
     expect(JSON.parse(result.connection.options_json)).toMatchObject({
       managedBy: 'app-studio',
-      appSessionId: 7,
+      appSessionId: '11111111-1111-4111-8111-111111111111',
       appSlug: 'futebol-fantasy',
       bindingName: 'DB',
     });

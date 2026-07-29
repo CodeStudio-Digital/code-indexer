@@ -50,7 +50,7 @@ export interface MasterInboxRouterDeps {
 }
 
 export interface MasterEnqueueArgs {
-  fromAgentRunId: number;
+  fromAgentRunId: string;
   fromRole: string;
   kind: InboxKind;
   body: string;
@@ -86,8 +86,7 @@ export class MasterInboxRouter {
    */
   enqueueForMaster(args: MasterEnqueueArgs): MasterEnqueueResult {
     const alive = this.deps.master.isAlive;
-    const message = this.deps.ctx.companyStore.createInboxMessage({
-      companySessionId: this.deps.ctx.companySessionId,
+    const message = this.deps.ctx.companyFiles.createInboxMessageSync({
       fromAgentRunId: args.fromAgentRunId,
       fromRole: args.fromRole,
       toRole: MASTER_INBOX_SENTINEL,
@@ -151,9 +150,10 @@ export class MasterInboxRouter {
           throw e;
         }
       }
-      const claimed = this.deps.ctx.companyStore.claimAllPendingMasterMessages(
-        this.deps.ctx.companySessionId,
-      );
+      const claimed =
+        this.deps.ctx.companyFiles.claimAllPendingMasterMessagesSync(
+          MASTER_INBOX_SENTINEL,
+        );
       if (claimed.length === 0) return;
 
       for (const msg of claimed) {
@@ -188,8 +188,7 @@ export class MasterInboxRouter {
    * drain. Resolve o caso "Node restart com fila não consumida".
    */
   reviveIfPending(): void {
-    const pending = this.deps.ctx.companyStore.listInboxMessages({
-      companySessionId: this.deps.ctx.companySessionId,
+    const pending = this.deps.ctx.companyFiles.listInboxMessagesSync({
       toRole: MASTER_INBOX_SENTINEL,
       status: 'pending',
       limit: 1,

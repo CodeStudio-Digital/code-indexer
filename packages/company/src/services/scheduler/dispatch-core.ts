@@ -24,17 +24,17 @@ const DISPATCHABLE_COLUMNS = new Set(['backlog', 'todo']);
 /** Minimal card shape the core needs. Structural — avoids importing the full
  *  KanbanCardFull and lets tests pass plain literals. */
 export interface SchedulerCard {
-  id: number;
+  id: string;
   column: string;
   /** Ids of `depends_on` cards that are NOT yet `done` (store-computed). */
-  blockedBy: number[];
+  blockedBy: string[];
   /** Agent runs currently assigned to this card (excludes unassigned). */
-  assignedAgentRunIds: number[];
+  assignedAgentRunIds: string[];
 }
 
 /** Minimal agent-run shape. */
 export interface SchedulerRun {
-  agentRunId: number;
+  agentRunId: string;
   /** Whether this run is still doing useful work (running/waiting/etc.). A
    *  terminal/ghost run is NOT live. */
   live: boolean;
@@ -52,9 +52,9 @@ export interface SchedulerRun {
 export function findOrphanedCards(
   cards: ReadonlyArray<SchedulerCard>,
   runs: ReadonlyArray<SchedulerRun>,
-): number[] {
+): string[] {
   const liveRunIds = new Set(runs.filter((r) => r.live).map((r) => r.agentRunId));
-  const orphaned: number[] = [];
+  const orphaned: string[] = [];
   for (const card of cards) {
     if (card.column !== 'in_progress') continue;
     const hasLiveAgent = card.assignedAgentRunIds.some((id) => liveRunIds.has(id));
@@ -92,7 +92,7 @@ export interface DispatchSelectionInput {
  * Returns [] when the fleet is already at the cap — the scheduler never
  * exceeds the same limit the master's spawn path enforces.
  */
-export function selectDispatchTargets(input: DispatchSelectionInput): number[] {
+export function selectDispatchTargets(input: DispatchSelectionInput): string[] {
   const freeSlots = Math.max(0, input.concurrencyLimit - input.runningCount);
   if (freeSlots === 0) return [];
   let budget = input.maxPerSweep != null
@@ -105,7 +105,7 @@ export function selectDispatchTargets(input: DispatchSelectionInput): number[] {
   }
   if (budget === 0) return [];
 
-  const targets: number[] = [];
+  const targets: string[] = [];
   for (const card of input.prioritizedCards) {
     if (targets.length >= budget) break;
     if (!DISPATCHABLE_COLUMNS.has(card.column)) continue;

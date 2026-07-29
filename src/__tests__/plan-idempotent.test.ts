@@ -6,6 +6,8 @@ import { askUser, formatInterruptedResult } from '@mcp/code-agent/tools/interact
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const submitTasks = tasksTools.find((t) => t.name === 'submit_tasks')!;
+const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000007';
+const OTHER_AGENT_RUN_ID = '00000000-0000-4000-8000-000000000001';
 
 /**
  * Minimal fake runner that satisfies the bits the interactive tools touch:
@@ -87,7 +89,12 @@ describe('submit_plan idempotency', () => {
 
   it('returns interrupted envelope when waitForUserInput resolves with interrupted', async () => {
     const runner = new FakeRunner();
-    runner.enqueue(JSON.stringify({ interrupted: true, kind: 'question', agentRunId: 7, role: 'qa' }));
+    runner.enqueue(JSON.stringify({
+      interrupted: true,
+      kind: 'question',
+      agentRunId: AGENT_RUN_ID,
+      role: 'qa',
+    }));
     const r = await submitPlan.handler({ plan: 'X' }, ctx(runner));
     expect(r.isError).toBe(true);
     expect(r.content).toContain('answer_subordinate_question');
@@ -115,26 +122,38 @@ describe('submit_tasks validation', () => {
 
 describe('formatInterruptedResult', () => {
   it('produces a JSON envelope with next_action and a human-readable hint', () => {
-    const out = formatInterruptedResult('ask_user', { kind: 'plan', agentRunId: 42, role: 'frontend' });
+    const out = formatInterruptedResult('ask_user', {
+      kind: 'plan',
+      agentRunId: AGENT_RUN_ID,
+      role: 'frontend',
+    });
     const [envelope, hint] = out.split('\n');
     const parsed = JSON.parse(envelope);
     expect(parsed.interrupted).toBe(true);
     expect(parsed.interrupted_tool).toBe('ask_user');
     expect(parsed.next_action).toBe('approve_subordinate_plan');
-    expect(parsed.agent_run_id).toBe(42);
+    expect(parsed.agent_run_id).toBe(AGENT_RUN_ID);
     expect(parsed.role).toBe('frontend');
     expect(hint).toContain('approve_subordinate_plan');
     expect(hint).toContain('frontend');
   });
 
   it('routes question kind to answer_subordinate_question', () => {
-    const out = formatInterruptedResult('submit_plan', { kind: 'question', agentRunId: 1, role: 'r' });
+    const out = formatInterruptedResult('submit_plan', {
+      kind: 'question',
+      agentRunId: OTHER_AGENT_RUN_ID,
+      role: 'r',
+    });
     const parsed = JSON.parse(out.split('\n')[0]);
     expect(parsed.next_action).toBe('answer_subordinate_question');
   });
 
   it('routes tasks kind to approve_subordinate_tasks', () => {
-    const out = formatInterruptedResult('submit_plan', { kind: 'tasks', agentRunId: 1, role: 'r' });
+    const out = formatInterruptedResult('submit_plan', {
+      kind: 'tasks',
+      agentRunId: OTHER_AGENT_RUN_ID,
+      role: 'r',
+    });
     const parsed = JSON.parse(out.split('\n')[0]);
     expect(parsed.next_action).toBe('approve_subordinate_tasks');
   });
@@ -149,13 +168,18 @@ describe('formatInterruptedResult', () => {
 describe('ask_user — interrupted path', () => {
   it('returns structured envelope on interrupt', async () => {
     const runner = new FakeRunner();
-    runner.enqueue(JSON.stringify({ interrupted: true, kind: 'tasks', agentRunId: 9, role: 'be' }));
+    runner.enqueue(JSON.stringify({
+      interrupted: true,
+      kind: 'tasks',
+      agentRunId: AGENT_RUN_ID,
+      role: 'be',
+    }));
     const r = await askUser.handler({ question: 'x?' }, ctx(runner));
     expect(r.isError).toBe(true);
     expect(r.content).toContain('approve_subordinate_tasks');
     const envelope = JSON.parse(r.content.split('\n')[0]);
     expect(envelope.interrupted).toBe(true);
     expect(envelope.next_action).toBe('approve_subordinate_tasks');
-    expect(envelope.agent_run_id).toBe(9);
+    expect(envelope.agent_run_id).toBe(AGENT_RUN_ID);
   });
 });

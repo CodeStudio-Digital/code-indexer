@@ -9,8 +9,13 @@ import {
 
 describe('resolveCompanyStreamTransport', () => {
   it('routes the App surface exclusively through its App-owned facade', () => {
-    expect(resolveCompanyStreamTransport(90, { kind: 'app_studio', appSessionId: 7 })).toEqual({
-      basePath: '/api/app-studio/apps/7/team/commands',
+    const companySessionId = '0000005a-0000-4000-8000-000000000000';
+    const appSessionId = '00000007-0000-4000-8000-000000000000';
+    expect(resolveCompanyStreamTransport(companySessionId, {
+      kind: 'app_studio',
+      appSessionId,
+    })).toEqual({
+      basePath: `/api/app-studio/apps/${appSessionId}/team/commands`,
       statePath: '/state',
       includeKanban: false,
       allowDirectAgentControls: false,
@@ -20,8 +25,9 @@ describe('resolveCompanyStreamTransport', () => {
   });
 
   it('preserves the generic Company transport for Company mode', () => {
-    expect(resolveCompanyStreamTransport(90)).toEqual({
-      basePath: '/api/company/sessions/90',
+    const companySessionId = '0000005a-0000-4000-8000-000000000000';
+    expect(resolveCompanyStreamTransport(companySessionId)).toEqual({
+      basePath: `/api/company/sessions/${companySessionId}`,
       statePath: '',
       includeKanban: true,
       allowDirectAgentControls: true,

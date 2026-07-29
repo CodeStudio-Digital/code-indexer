@@ -12,13 +12,13 @@ import { create } from 'zustand';
 export interface EditorTab {
   /** Stable identity: the versionId, or `new:<assetId>` for a blank asset. */
   key: string;
-  assetId: number;
-  versionId: number | null;
+  assetId: string;
+  versionId: string | null;
   label: string;
 }
 
 /** The tab key for an (asset, version) pair — shared by open/active/close. */
-export const editorTabKey = (assetId: number, versionId: number | null): string =>
+export const editorTabKey = (assetId: string, versionId: string | null): string =>
   versionId != null ? String(versionId) : `new:${assetId}`;
 
 interface EditorTabsState {
@@ -27,7 +27,7 @@ interface EditorTabsState {
   openTab: (tab: EditorTab) => void;
   closeTab: (key: string) => void;
   /** Close every tab of one asset (asset deletion). */
-  closeAssetTabs: (assetId: number) => void;
+  closeAssetTabs: (assetId: string) => void;
   reset: () => void;
 }
 

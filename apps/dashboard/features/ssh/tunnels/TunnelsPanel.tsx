@@ -22,6 +22,10 @@ interface TunnelsPanelProps {
 const FIELD = 'flex flex-col gap-1';
 const LABEL = 'text-[10px] uppercase tracking-wide text-muted-foreground/70';
 
+/** Poll cadence while traffic is moving, and once the counters go quiet. */
+const FAST_POLL_MS = 1500;
+const SLOW_POLL_MS = 5000;
+
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -68,12 +72,42 @@ export function TunnelsPanel({ hosts, identities }: TunnelsPanelProps) {
     void tunnelList().then(setTunnels).catch(() => undefined);
   }, []);
 
-  // Poll active tunnels (and their byte counters) while mounted.
+  /**
+   * Poll active tunnels (and their byte counters).
+   *
+   * Adaptive rather than a flat 1.5 s: the old loop issued an IPC round-trip
+   * every 1.5 s for as long as the tab was mounted, even with ZERO tunnels and
+   * even while the window was hidden — pure background churn on the main
+   * process. Now it pauses when the document is hidden, stops entirely with no
+   * tunnels (a start/stop refreshes explicitly), and backs off to 5 s while the
+   * counters are unchanged so an idle tunnel costs almost nothing.
+   */
+  const tunnelCount = tunnels.length;
   useEffect(() => {
     refresh();
-    const id = setInterval(refresh, 1500);
-    return () => clearInterval(id);
-  }, [refresh]);
+    if (tunnelCount === 0) return;
+    let timer: ReturnType<typeof setTimeout>;
+    let delay = FAST_POLL_MS;
+    let lastSignature = '';
+
+    const tick = async (): Promise<void> => {
+      if (document.visibilityState === 'visible') {
+        try {
+          const list = await tunnelList();
+          setTunnels(list);
+          const signature = list.map((x) => `${x.id}:${x.bytesUp}:${x.bytesDown}`).join('|');
+          delay = signature === lastSignature ? SLOW_POLL_MS : FAST_POLL_MS;
+          lastSignature = signature;
+        } catch {
+          delay = SLOW_POLL_MS;
+        }
+      }
+      timer = setTimeout(() => void tick(), delay);
+    };
+
+    timer = setTimeout(() => void tick(), delay);
+    return () => clearTimeout(timer);
+  }, [refresh, tunnelCount]);
 
   async function start(): Promise<void> {
     setError(null);

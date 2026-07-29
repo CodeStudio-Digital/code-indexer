@@ -9,6 +9,7 @@
  * sandbox manager always agree on the same path.
  */
 import { join, resolve } from 'node:path';
+import { asSessionId } from '@mcp/agent-runtime-contracts/ids.js';
 import { mcpDataDir } from './config.js';
 
 /**
@@ -20,12 +21,12 @@ export function virtualProjectsBaseDir(env: NodeJS.ProcessEnv = process.env): st
   return override ? resolve(override) : join(mcpDataDir(env), 'virtual-projects');
 }
 
-/** Workdir for a single session/project id. */
+/** Workdir for a single filesystem-backed session. */
 export function virtualProjectDir(
-  id: string | number,
+  sessionId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return join(virtualProjectsBaseDir(env), String(id));
+  return join(virtualProjectsBaseDir(env), asSessionId(sessionId));
 }
 
 /**
@@ -38,26 +39,10 @@ export function globalWorkspacesBaseDir(env: NodeJS.ProcessEnv = process.env): s
 
 /** The virtual union dir for a single global workspace id. */
 export function globalWorkspaceDir(
-  id: string | number,
+  sessionId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return join(globalWorkspacesBaseDir(env), String(id));
-}
-
-/** Side-file storage for coder tool outputs that must not live in a project. */
-export function coderToolOutputsBaseDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(mcpDataDir(env), 'coder-tool-outputs');
-}
-
-/**
- * Off-heap storage for spilled TERMINAL (completed) subagent transcripts —
- * `<base>/<sessionId>/<spawnId>.<agentIndex>.jsonl`. Keeps the resume
- * registry's worker RAM bounded while transcripts stay readable on demand.
- * The dedicated `MCP_SUBAGENT_TRANSCRIPT_DIR` override lives in the spill
- * module; this is just the default location.
- */
-export function subagentTranscriptsBaseDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(mcpDataDir(env), 'subagent-transcripts');
+  return join(globalWorkspacesBaseDir(env), asSessionId(sessionId));
 }
 
 /** Uploaded Design System theme zips. */
@@ -71,26 +56,12 @@ export function designSystemMcpDir(env: NodeJS.ProcessEnv = process.env): string
 }
 
 /**
- * Sandbox workdir archives (`<dir>/<sessionId>.tar`). Honors
- * `MCP_SANDBOX_ARCHIVE_DIR`.
- */
-export function sandboxArchiveDir(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.MCP_SANDBOX_ARCHIVE_DIR?.trim();
-  return override ? resolve(override) : join(mcpDataDir(env), 'sandboxes');
-}
-
-/**
  * Verdaccio registry storage. The `MCP_VERDACCIO_STORAGE_DIR` override
  * (absolute-only, validated) stays in `verdaccio/storage-paths.ts`; this
  * is just the default location.
  */
 export function verdaccioStorageDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(mcpDataDir(env), 'packages');
-}
-
-/** Persisted QA (Playwright) report artifacts. */
-export function qaReportsDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(mcpDataDir(env), 'qa-reports');
 }
 
 /** Managed LSP server installs — `<dataDir>/lsp-servers/<id>@<version>/`. */

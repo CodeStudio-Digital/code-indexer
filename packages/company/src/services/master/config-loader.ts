@@ -28,7 +28,7 @@ export interface ParsedMasterConfig {
 export function parseMasterConfigFromDb(
   configJson: string | null | undefined,
   currentRoleConfigs: readonly RoleConfig[],
-  sessionIdForLog: number | string,
+  sessionIdForLog: string,
 ): ParsedMasterConfig {
   const allowedModels: AllowedModel[] = [];
   let roleConfigs: RoleConfig[] = [...currentRoleConfigs];

@@ -110,9 +110,9 @@ export async function fetchSidecarVersion(
  */
 export function collectPlaywrightBaseUrls(
   store: CompanySessionEnvStore | null,
-  sessionId: number | null,
+  sessionId: string | null,
 ): Array<{ key: string; value: string }> {
-  if (!store || sessionId == null || !Number.isFinite(sessionId)) return [];
+  if (!store || sessionId == null) return [];
   try {
     return store
       .list(sessionId)
@@ -221,7 +221,7 @@ export function formatEnvProbeReply(
 export function qaGetBrowserEndpoint(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
-  agentRunId: number | null,
+  agentRunId: string | null,
 ): CoderTool {
   void agentRole;
   void agentRunId;

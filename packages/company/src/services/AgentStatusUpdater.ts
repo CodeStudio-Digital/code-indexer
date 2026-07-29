@@ -1,5 +1,5 @@
 /**
- * AgentStatusUpdater — centralises all writes to `company_agent_runs.status`
+ * AgentStatusUpdater — centralises all writes to file-backed Company agent runs
  * and the matching `agent_status` meta-bus event. Services inject this
  * narrow port so they don't need the full CompanyStore surface just to
  * update a single row.
@@ -15,12 +15,15 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
     private readonly bus: IMetaBusPublisher,
   ) {}
 
-  setStatus(agentRunId: number, status: AgentRunStatus, message?: string): void {
-    try {
-      this.ctx.companyStore.updateAgentRunStatus(agentRunId, status, message);
-    } catch {
-      /* DB write failures must never break the stream. */
-    }
+  setStatus(agentRunId: string, status: AgentRunStatus, message?: string): void {
+    void this.ctx.companyFiles
+      .updateAgentRunStatus(agentRunId, status, message)
+      .catch((error) => {
+        console.warn(
+          `[company s=${this.ctx.companySessionId}] failed to persist agent ${agentRunId} status:`,
+          error,
+        );
+      });
   }
 
   /**
@@ -30,23 +33,45 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
    * separate "Spawned @role" board line is already posted.
    */
   publishStatus(
-    agentRunId: number,
+    agentRunId: string,
     role: string,
     status: AgentRunStatus,
-    opts?: { message?: string; coderSessionId?: number },
+    opts?: { message?: string; coderSessionId?: string },
   ): void {
     this.setStatus(agentRunId, status, opts?.message);
-    const run = this.ctx.runtimeKind === 'app_studio'
-      ? this.ctx.companyStore.getAgentRun(agentRunId)
-      : null;
-    const runtime = run && run.company_session_id === this.ctx.companySessionId ? {
-      configuredProvider: run.configured_provider,
-      configuredModel: run.configured_model,
-      effectiveProvider: run.provider,
-      effectiveModel: run.model,
-      dispatchSource: run.dispatch_source,
-      fallbackReason: run.fallback_reason,
-    } : {};
+    if (this.ctx.runtimeKind !== 'app_studio') {
+      this.publishStatusEvent(agentRunId, role, status, opts);
+      return;
+    }
+    try {
+      const run = this.ctx.companyFiles.getAgentRunSync(agentRunId);
+      const runtime = run?.company_session_id === this.ctx.companySessionId
+        ? {
+            configuredProvider: run.configured_provider,
+            configuredModel: run.configured_model,
+            effectiveProvider: run.provider,
+            effectiveModel: run.model,
+            dispatchSource: run.dispatch_source,
+            fallbackReason: run.fallback_reason,
+          }
+        : {};
+      this.publishStatusEvent(agentRunId, role, status, opts, runtime);
+    } catch (error) {
+      console.warn(
+        `[company s=${this.ctx.companySessionId}] failed to read agent ${agentRunId} runtime provenance:`,
+        error,
+      );
+      this.publishStatusEvent(agentRunId, role, status, opts);
+    }
+  }
+
+  private publishStatusEvent(
+    agentRunId: string,
+    role: string,
+    status: AgentRunStatus,
+    opts?: { message?: string; coderSessionId?: string },
+    runtime: Record<string, unknown> = {},
+  ): void {
     this.bus.publish('agent_status', {
       agentRunId,
       role,
@@ -62,11 +87,11 @@ export class AgentStatusUpdater implements IAgentStatusUpdater {
    * board message. Used by the public setAgentStatus() API.
    */
   setStatusWithBoard(
-    agentRunId: number,
+    agentRunId: string,
     role: string,
     status: AgentRunStatus,
     message: string,
-    boardPoster: { post: (a: string, b: number | null, k: 'message', c: string) => void },
+    boardPoster: { post: (a: string, b: string | null, k: 'message', c: string) => void },
   ): void {
     this.publishStatus(agentRunId, role, status, { message });
     boardPoster.post(role, agentRunId, 'message',

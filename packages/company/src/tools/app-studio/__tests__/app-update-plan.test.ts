@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppStudioSession, AppStudioStore } from '@mcp/store/app-studio-store.js';
 import { emptyAppPlan } from '@mcp/app-studio/plan/types.js';
+import { asSessionId } from '@mcp/session-storage';
 import { appUpdatePlan } from '../app-workflow.js';
 import { setAppStudioStore } from '../store-binding.js';
 
-const SESSION = { id: 77 } as AppStudioSession;
+const SESSION = {
+  id: asSessionId('11111111-1111-4111-8111-111111111111'),
+} as unknown as AppStudioSession;
 const BINDING = {
-  resolveAppSession: () => SESSION,
-  describeBinding: () => 'app_session_id=77',
+  resolveAppSession: async () => SESSION,
+  describeBinding: () => `app_session_id=${SESSION.id}`,
 };
 
 describe('app_update_plan validation', () => {
@@ -50,7 +53,10 @@ describe('app_update_plan validation', () => {
   });
 
   it('audits and persists a complete plan inside the guarded handler', async () => {
-    const savePlanRevision = vi.fn(() => ({ id: 91, revision_number: 2 }));
+    const savePlanRevision = vi.fn(async () => ({
+      id: '22222222-2222-4222-8222-222222222222',
+      revision_number: 2,
+    }));
     setAppStudioStore({ savePlanRevision } as unknown as AppStudioStore);
     const plan = emptyAppPlan();
 
@@ -69,7 +75,7 @@ describe('app_update_plan validation', () => {
 
   it('does not leak an unexpected TypeError from processing or persistence', async () => {
     setAppStudioStore({
-      savePlanRevision: vi.fn(() => {
+      savePlanRevision: vi.fn(async () => {
         throw new TypeError("Cannot read properties of undefined (reading 'length')");
       }),
     } as unknown as AppStudioStore);

@@ -68,7 +68,7 @@ interface MessageViewProps {
   messageId?: number;
   /** Session id — needed to lazy-fetch attachment base64 stripped from the
    *  list payload (see sessions.ts trimMessageBlocks). */
-  sessionId?: number;
+  sessionId?: string;
   toolResultsById: Map<string, ToolResultView>;
   usage?: MessageRow;
   providerId: string;
@@ -78,7 +78,8 @@ interface MessageViewProps {
   onDecide?: PromptHandlers['onDecide'];
   onFork?: PromptHandlers['onFork'];
   onRollback?: PromptHandlers['onRollback'];
-  /** Persisted task list state from coder_tasks_state — used to overlay live
+  rollbackPendingSeq?: number | null;
+  /** Persisted task list state from the session task projection — used to overlay live
    *  task statuses on top of the frozen tool_use input snapshot. */
   tasksState?: PersistedTasksState | null;
   /** tool_use id of the session's CURRENT task list. Only the card with this
@@ -103,7 +104,8 @@ export const MessageView = React.memo(MessageViewInner, (prev, next) => {
     prev.onPlanResponse === next.onPlanResponse &&
     prev.onTasksResponse === next.onTasksResponse &&
     prev.onFork === next.onFork &&
-    prev.onRollback === next.onRollback
+    prev.onRollback === next.onRollback &&
+    prev.rollbackPendingSeq === next.rollbackPendingSeq
   );
 });
 
@@ -120,6 +122,7 @@ function MessageViewInner({
   onDecide,
   onFork,
   onRollback,
+  rollbackPendingSeq,
   tasksState,
   activeTasksToolUseId,
 }: MessageViewProps) {
@@ -146,6 +149,8 @@ function MessageViewInner({
         tokenBadge={tokenBadge}
         onFork={onFork && messageId != null ? () => onFork(messageId) : undefined}
         onRollback={onRollback && messageId != null ? () => onRollback(messageId) : undefined}
+        rollbackPending={rollbackPendingSeq === messageId}
+        rollbackDisabled={rollbackPendingSeq != null}
       />
     );
   if (message.role === 'tool') return null;
@@ -197,13 +202,17 @@ function UserMessage({
   tokenBadge,
   onFork,
   onRollback,
+  rollbackPending,
+  rollbackDisabled,
 }: {
   message: PersistedMessage;
-  sessionId?: number;
+  sessionId?: string;
   messageId?: number;
   tokenBadge: React.ReactNode;
   onFork?: () => void;
   onRollback?: () => void;
+  rollbackPending?: boolean;
+  rollbackDisabled?: boolean;
 }) {
   const { t } = useTranslation('chat');
   // Suppress the synthetic tool-image plumbing caption ("(Image(s) attached
@@ -262,7 +271,10 @@ function UserMessage({
     <div className="group/user group/msg w-full">
       <article className="w-full min-w-0 px-3 py-2">
         <div className="mb-1 flex items-center justify-end gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/75">
-          <div className="flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/user:opacity-100 focus-within:opacity-100">
+          <div className={cn(
+            'flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/user:opacity-100 focus-within:opacity-100',
+            rollbackPending && 'opacity-100',
+          )}>
             {onFork && (
               <button
                 type="button"
@@ -278,10 +290,14 @@ function UserMessage({
               <button
                 type="button"
                 onClick={onRollback}
+                disabled={rollbackDisabled}
+                aria-busy={rollbackPending}
                 title={t('messages.rollbackTitle')}
-                className="group/action inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-all duration-200"
+                className="group/action inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-all duration-200 disabled:pointer-events-none disabled:opacity-60"
               >
-                <RotateCcw className="h-3 w-3" />
+                {rollbackPending
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <RotateCcw className="h-3 w-3" />}
                 <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/action:max-w-24 group-hover/action:opacity-100 group-focus/action:max-w-24 group-focus/action:opacity-100">{t('messages.rollback')}</span>
               </button>
             )}
@@ -536,7 +552,7 @@ export function renderAssistantBlock(
   toolResultsById: Map<string, ToolResultView>,
   tasksState: PersistedTasksState | null | undefined,
   activeTasksToolUseId?: string | null,
-  sessionId?: number,
+  sessionId?: string,
 ) {
   const maybeThinking = b as unknown as { type?: string; text?: string };
   if (maybeThinking.type === 'thinking') {
@@ -603,7 +619,7 @@ export function renderAssistantBlock(
     // the readable list. This avoids dumping a giant raw JSON tool_use block on
     // the user when they reopen an old session.
     //
-    // The session keeps ONE coder_tasks_state row (latest approve list wins),
+    // The session keeps ONE current task projection (latest approve list wins),
     // so only the ACTIVE card (matching activeTasksToolUseId) overlays the live
     // `tasksState` for runtime status; superseded cards render their own frozen
     // tool_use.input snapshot. See deriveTaskCardState for the resolved logic.

@@ -10,9 +10,9 @@
  * `running` indefinitely, and the dashboard shows a phantom spinner.
  *
  * The watchdog wakes up every `intervalMs` (default 5 minutes) and
- * scans coder_sessions for rows whose `updated_at` is older than
- * `staleAfterMs` (default 10 minutes). Anything that old is forced
- * back to `idle`, freeing the dashboard.
+ * scans filesystem session projections whose `updated_at` is older than
+ * `staleAfterMs` (default 10 minutes). Anything that old is forced back to
+ * `idle`, freeing the dashboard.
  *
  * Conservative thresholds — a long compaction or a slow provider
  * shouldn't trip the watchdog. The boot-time `recoverStaleSessions()`
@@ -26,8 +26,6 @@
  * `running` whose orchestrator never even started because the worker
  * crashed mid-`runCoder()` invocation).
  */
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
-
 const DEFAULT_INTERVAL_MS = Number(process.env.CODER_WATCHDOG_INTERVAL_MS ?? 5 * 60 * 1000);
 const DEFAULT_STALE_AFTER_MS = Number(process.env.CODER_WATCHDOG_STALE_AFTER_MS ?? 10 * 60 * 1000);
 
@@ -35,14 +33,18 @@ export interface CoderWatchdogHandle {
   /** Stop the periodic sweep. Idempotent. */
   stop(): void;
   /** Force a one-shot sweep RIGHT NOW (returns the number of rows touched). */
-  runOnce(): number;
+  runOnce(): Promise<number>;
   /** Inspect current configuration for logging / tests. */
   readonly intervalMs: number;
   readonly staleAfterMs: number;
 }
 
 export interface StartCoderWatchdogArgs {
-  sessionStore: SessionStore;
+  sessionStore: {
+    recoverStuckRunningSessions(options: {
+      maxAgeMs?: number;
+    }): Promise<number>;
+  };
   /** Override for tests / tighter monitoring. Defaults to 5 minutes. */
   intervalMs?: number;
   /** Override for tests. Defaults to 10 minutes. */
@@ -62,12 +64,14 @@ export function startCoderWatchdog(args: StartCoderWatchdogArgs): CoderWatchdogH
 
   let stopped = false;
 
-  const sweepOnce = (): number => {
+  const sweepOnce = async (): Promise<number> => {
     if (stopped) return 0;
     const startedAt = Date.now();
     let recovered = 0;
     try {
-      recovered = args.sessionStore.recoverStuckRunningSessions({ maxAgeMs: staleAfterMs });
+      recovered = await args.sessionStore.recoverStuckRunningSessions({
+        maxAgeMs: staleAfterMs,
+      });
     } catch (e) {
       console.warn(
         `[coder/watchdog] recoverStuckRunningSessions failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -91,7 +95,9 @@ export function startCoderWatchdog(args: StartCoderWatchdogArgs): CoderWatchdogH
     return recovered;
   };
 
-  const timer = setInterval(sweepOnce, intervalMs);
+  const timer = setInterval(() => {
+    void sweepOnce();
+  }, intervalMs);
   // Don't keep the Node process alive solely for the watchdog — if every
   // other handle drains (request close, DB close), let the runtime exit.
   if (typeof timer.unref === 'function') timer.unref();
@@ -108,7 +114,7 @@ export function startCoderWatchdog(args: StartCoderWatchdogArgs): CoderWatchdogH
       clearInterval(timer);
       console.log('[coder/watchdog] stopped');
     },
-    runOnce(): number {
+    runOnce(): Promise<number> {
       return sweepOnce();
     },
     intervalMs,

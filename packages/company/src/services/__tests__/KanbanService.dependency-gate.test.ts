@@ -11,27 +11,32 @@
  *   5. Reorders within the SAME active column are not gated.
  *   6. Advancing to `review`/`done` is also gated while a blocker is open.
  *
- * Setup uses a real temp SQLite via CodeIndexDB (runs all migrations).
+ * Setup keeps only the essential project catalog in SQLite. All Company
+ * session and kanban state lives in the filesystem bundle.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '@mcp/store/db.js';
-import { CompanyStore } from '@mcp/store/company-store.js';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import {
+  SessionLocator,
+  asCompanySessionId,
+  type JsonValue,
+} from '@mcp/session-storage';
+import { CompanySessionFiles } from '../CompanySessionFiles.js';
 import { SessionContext } from '../SessionContext.js';
 import { KanbanService } from '../KanbanService.js';
 import type { IMetaBusPublisher } from '../ports.js';
 
 interface Harness {
-  db: CodeIndexDB;
   dir: string;
-  companyStore: CompanyStore;
+  companyFiles: CompanySessionFiles;
   kanban: KanbanService;
   events: Array<{ event: string; data: unknown }>;
-  companySessionId: number;
-  blockerId: number;
-  dependentId: number;
+  companySessionId: string;
+  blockerId: string;
+  dependentId: string;
 }
 
 function makeStubBus(events: Array<{ event: string; data: unknown }>): IMetaBusPublisher {
@@ -42,40 +47,90 @@ function makeStubBus(events: Array<{ event: string; data: unknown }>): IMetaBusP
   };
 }
 
-function setup(): Harness {
+async function setup(): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-kanban-dep-test-'));
-  const dbPath = join(dir, 'test.db');
-  const db = new CodeIndexDB(dbPath);
-  const companyStore = new CompanyStore(dbPath);
-
-  db.createProject('p', '/tmp/proj');
-  const cs = companyStore.createCompanySession({ name: 's' });
+  const dataDir = join(dir, 'data');
+  const projectRoot = join(dir, 'project');
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(projectRoot, { recursive: true });
+  const project = { id: 7, root_path: projectRoot };
+  const locator = new SessionLocator({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) =>
+        projectId === project.id ? projectRoot : null,
+      listProjectRoots: () => [{
+        project_id: project.id,
+        root_path: projectRoot,
+      }],
+    },
+  });
+  const sessionStore = new FsSessionStore({ locator });
+  const company = await sessionStore.repository.createSession({
+    kind: 'company',
+    scope: { kind: 'project', project_id: project.id },
+    owner_project_id: project.id,
+    linked_projects: [{ project_id: project.id, root_path: projectRoot }],
+    title: 's',
+    status: 'idle',
+    metadata: {
+      company: {
+        name: 's',
+        template_id: null,
+        runtime_kind: 'company',
+        config_json: '{}',
+        master_session_id: null,
+        project_labels: { [project.id]: null },
+        recovered_at: null,
+        recovered_reason: null,
+      },
+    } as unknown as Record<string, JsonValue>,
+  });
+  await sessionStore.refresh();
+  const companySessionId = asCompanySessionId(company.session.id);
+  const companyFiles = new CompanySessionFiles({
+    companySessionId,
+    sessionStore,
+  });
   // Blocker starts in todo (not done) → it blocks. Dependent starts in todo.
-  const blocker = companyStore.createKanbanCard(cs.id, { title: 'blocker', column: 'todo' });
-  const dependent = companyStore.createKanbanCard(cs.id, { title: 'dependent', column: 'todo' });
-  companyStore.addCardDependency(dependent.id, blocker.id);
+  const blocker = companyFiles.createKanbanCardSync({
+    title: 'blocker',
+    column: 'todo',
+  });
+  const dependent = companyFiles.createKanbanCardSync({
+    title: 'dependent',
+    column: 'todo',
+  });
+  companyFiles.addKanbanDependencySync(dependent.id, blocker.id);
 
   const events: Harness['events'] = [];
   const ctx = new SessionContext({
-    companySessionId: cs.id,
-    companyStore,
-    db,
+    companySessionId,
+    companyFiles,
+    companyStore: {} as never,
+    db: {} as never,
     metaBus: {} as never,
   });
   const kanban = new KanbanService(ctx, makeStubBus(events));
 
-  return { db, dir, companyStore, kanban, events, companySessionId: cs.id, blockerId: blocker.id, dependentId: dependent.id };
+  return {
+    dir,
+    companyFiles,
+    kanban,
+    events,
+    companySessionId,
+    blockerId: blocker.id,
+    dependentId: dependent.id,
+  };
 }
 
 function teardown(h: Harness): void {
-  try { h.companyStore.close(); } catch { /* */ }
-  try { h.db.close(); } catch { /* */ }
   try { rmSync(h.dir, { recursive: true, force: true }); } catch { /* */ }
 }
 
 describe('KanbanService dependency gate', () => {
   let h: Harness;
-  beforeEach(() => { h = setup(); });
+  beforeEach(async () => { h = await setup(); });
   afterEach(() => teardown(h));
 
   it('refuses to advance a card with an open blocker into in_progress', () => {
@@ -87,7 +142,7 @@ describe('KanbanService dependency gate', () => {
     const payload = moveEvent!.data as {
       requestedColumn?: string;
       dependencyBlocked?: boolean;
-      blockingCardIds?: number[];
+      blockingCardIds?: string[];
       toColumn?: string;
     };
     expect(payload.dependencyBlocked).toBe(true);
@@ -109,7 +164,7 @@ describe('KanbanService dependency gate', () => {
   });
 
   it('allows the move once the blocker reaches done', () => {
-    h.companyStore.moveKanbanCard(h.blockerId, 'done');
+    h.companyFiles.moveKanbanCardSync(h.blockerId, 'done');
     const moved = h.kanban.moveCard(h.dependentId, 'in_progress');
     expect(moved.column).toBe('in_progress');
     const blockedEvent = h.events.find(
@@ -119,7 +174,10 @@ describe('KanbanService dependency gate', () => {
   });
 
   it('does not gate a card with no dependencies', () => {
-    const free = h.companyStore.createKanbanCard(h.companySessionId, { title: 'free', column: 'todo' });
+    const free = h.companyFiles.createKanbanCardSync({
+      title: 'free',
+      column: 'todo',
+    });
     const moved = h.kanban.moveCard(free.id, 'in_progress');
     expect(moved.column).toBe('in_progress');
   });
@@ -127,7 +185,7 @@ describe('KanbanService dependency gate', () => {
   it('does not gate a reorder within the same active column', () => {
     // Put the dependent in in_progress directly (bypassing the gate), then a
     // same-column "move" must not be refused even though a blocker is open.
-    h.companyStore.moveKanbanCard(h.dependentId, 'in_progress');
+    h.companyFiles.moveKanbanCardSync(h.dependentId, 'in_progress');
     const moved = h.kanban.moveCard(h.dependentId, 'in_progress', 0);
     expect(moved.column).toBe('in_progress');
     const blockedEvent = h.events.find(

@@ -14,6 +14,7 @@
  * wins — the global is only the FALLBACK.
  */
 import type { RunnerOptions } from '../core/runner.js';
+import type { SessionId } from '@mcp/session-storage';
 
 type Filter = NonNullable<RunnerOptions['toolSelectionFilter']>;
 
@@ -42,7 +43,11 @@ export function getGlobalToolSelectionFilter(): Filter | undefined {
 // rows with what tools the agent actually invoked.
 // ─────────────────────────────────────────────────────────────────────────
 
-export type ToolSelectionOutcomeObserver = (taskText: string, toolsCalled: ReadonlyArray<string>) => void;
+export type ToolSelectionOutcomeObserver = (
+  taskText: string,
+  toolsCalled: ReadonlyArray<string>,
+  sessionId?: SessionId,
+) => void;
 
 let globalObserver: ToolSelectionOutcomeObserver | undefined;
 

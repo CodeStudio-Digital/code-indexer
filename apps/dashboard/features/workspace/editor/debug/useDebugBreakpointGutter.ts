@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import type * as MonacoNs from 'monaco-editor';
 import type { DebugBreakpoint } from '@mcp/api-bus';
 import type { OpenFile } from '../../../../state/workspace.js';
@@ -21,6 +22,7 @@ export function useDebugBreakpointGutter(
   editor: MonacoNs.editor.IStandaloneCodeEditor | null,
   monaco: typeof MonacoNs | null,
 ): void {
+  const { t } = useTranslation('workspace');
   const session = useDebugSessions((state) => activeDebugSessionForProject(state.sessions, file.projectId));
   const breakpoints = useDebugBreakpoints((state) => selectDebugBreakpoints(state, file.projectId, file.path));
   const runtime = useDebugBreakpoints((state) => selectDebugBreakpointRuntime(
@@ -71,12 +73,12 @@ export function useDebugBreakpointGutter(
       if (active) setDebugBreakpointRuntime(file.projectId, file.path, session.sessionId, breakpoints, resolved);
     }).catch((error) => {
       if (!active) return;
-      toast.error('Não foi possível sincronizar os breakpoints', {
+      toast.error(t('debug.breakpoints.syncFailed'), {
         description: error instanceof Error ? error.message : String(error),
       });
     });
     return () => { active = false; };
-  }, [breakpoints, eligible, file.path, session?.sessionId, session?.state]);
+  }, [breakpoints, eligible, file.path, session?.sessionId, session?.state, t]);
 
   useEffect(() => {
     if (!eligible || !session) return;

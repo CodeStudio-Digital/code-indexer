@@ -16,59 +16,62 @@ import {
   previewPathPrefixOf,
 } from '@mcp/services/sandbox/manager/util/preview-url.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const UPPERCASE_SESSION_ID = 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA';
+
 // ─── naming.ts ──────────────────────────────────────────────────
 
 describe('nodeModulesVolumeFor', () => {
-  it('prefixes with mcp-sbx-nm- and uses the raw id when already safe', () => {
-    expect(nodeModulesVolumeFor('42')).toBe('mcp-sbx-nm-42');
+  it('prefixes a canonical session UUID with mcp-sbx-nm-', () => {
+    expect(nodeModulesVolumeFor(SESSION_ID)).toBe(`mcp-sbx-nm-${SESSION_ID}`);
   });
 
-  it('keeps allowed alnum / underscore / dot / dash characters intact', () => {
-    expect(nodeModulesVolumeFor('abc_123.test-x')).toBe('mcp-sbx-nm-abc_123.test-x');
+  it('normalizes UUID case', () => {
+    expect(nodeModulesVolumeFor(UPPERCASE_SESSION_ID)).toBe(
+      `mcp-sbx-nm-${UPPERCASE_SESSION_ID.toLowerCase()}`,
+    );
   });
 
-  it('replaces forbidden characters with dashes', () => {
-    expect(nodeModulesVolumeFor('a/b c:d')).toBe('mcp-sbx-nm-a-b-c-d');
-  });
-
-  it('truncates session id to 48 chars', () => {
-    const longId = 'x'.repeat(100);
-    const out = nodeModulesVolumeFor(longId);
-    expect(out).toBe('mcp-sbx-nm-' + 'x'.repeat(48));
-  });
-
-  it('handles numeric ids by string-coercing', () => {
-    expect(nodeModulesVolumeFor(42 as unknown as string)).toBe('mcp-sbx-nm-42');
+  it('rejects malformed and numeric session ids', () => {
+    expect(() => nodeModulesVolumeFor('42')).toThrow(/canonical UUID/);
+    expect(() => nodeModulesVolumeFor(42 as unknown as string)).toThrow(/canonical UUID/);
   });
 });
 
 describe('projectImageTag', () => {
   it('builds a :latest tag with the default "main" service id', () => {
-    expect(projectImageTag('42')).toBe('mcp-session-42-main:latest');
+    expect(projectImageTag(SESSION_ID)).toBe(`mcp-session-${SESSION_ID}-main:latest`);
   });
 
   it('uses the provided service id when given', () => {
-    expect(projectImageTag('42', 'api')).toBe('mcp-session-42-api:latest');
+    expect(projectImageTag(SESSION_ID, 'api')).toBe(`mcp-session-${SESSION_ID}-api:latest`);
   });
 
-  it('sanitises both session and service id independently', () => {
-    expect(projectImageTag('a/b', 'foo:bar')).toBe('mcp-session-a-b-foo-bar:latest');
+  it('sanitises the service id without weakening the session UUID boundary', () => {
+    expect(projectImageTag(SESSION_ID, 'foo:bar')).toBe(
+      `mcp-session-${SESSION_ID}-foo-bar:latest`,
+    );
   });
 
   it('truncates service id to 32 chars', () => {
     const longService = 'y'.repeat(100);
-    const out = projectImageTag('1', longService);
-    expect(out).toBe('mcp-session-1-' + 'y'.repeat(32) + ':latest');
+    const out = projectImageTag(SESSION_ID, longService);
+    expect(out).toBe(`mcp-session-${SESSION_ID}-${'y'.repeat(32)}:latest`);
+  });
+
+  it('rejects a legacy numeric session id', () => {
+    expect(() => projectImageTag(42 as unknown as string)).toThrow(/canonical UUID/);
   });
 });
 
 describe('sessionNetworkName', () => {
   it('prefixes with mcp-sbx-net-', () => {
-    expect(sessionNetworkName('42')).toBe('mcp-sbx-net-42');
+    expect(sessionNetworkName(SESSION_ID)).toBe(`mcp-sbx-net-${SESSION_ID}`);
   });
 
-  it('sanitises and truncates same as the volume name', () => {
-    expect(sessionNetworkName('a/b')).toBe('mcp-sbx-net-a-b');
+  it('rejects malformed and numeric session ids', () => {
+    expect(() => sessionNetworkName('a/b')).toThrow(/canonical UUID/);
+    expect(() => sessionNetworkName(42 as unknown as string)).toThrow(/canonical UUID/);
   });
 });
 
@@ -258,7 +261,7 @@ describe('resolvePublicBase', () => {
 
 describe('defaultPreviewUrl', () => {
   it('builds a direct loopback URL pointing at the sandbox host port', () => {
-    expect(defaultPreviewUrl('42', 34001)).toBe('http://127.0.0.1:34001/');
+    expect(defaultPreviewUrl(SESSION_ID, 34001)).toBe('http://127.0.0.1:34001/');
   });
 
   it('ignores the session id (Phase C: no proxy path)', () => {
@@ -266,7 +269,7 @@ describe('defaultPreviewUrl', () => {
   });
 
   it('honors the host port', () => {
-    expect(defaultPreviewUrl('42', 99999)).toBe('http://127.0.0.1:99999/');
+    expect(defaultPreviewUrl(SESSION_ID, 99999)).toBe('http://127.0.0.1:99999/');
   });
 });
 

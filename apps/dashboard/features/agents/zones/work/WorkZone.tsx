@@ -15,7 +15,7 @@ import type { BoardMessage } from '../../../../state/company/types.js';
 import type { WorkTab } from '../types.js';
 
 interface WorkZoneProps {
-  sessionId: number;
+  sessionId: string;
   sessionName: string;
   tab: WorkTab;
   stream: ReturnType<typeof useCompanyStream>;

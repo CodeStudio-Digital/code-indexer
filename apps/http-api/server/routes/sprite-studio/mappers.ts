@@ -5,18 +5,20 @@
  * The URL builders match the frontend's `versionFileUrl`/`versionThumbUrl`.
  */
 import type {
-  SpriteAssetRow,
-  SpriteAssetVersionRow,
   SpriteProjectRow,
 } from '@mcp/store/sprite-studio/types.js';
+import type {
+  SpriteAssetFileRow,
+  SpriteVersionFileRow,
+} from '../../sprite-files.js';
 import { styleToStudioSettings } from './settings-map.js';
 
 const base = (projectId: number) => `/api/sprite-studio/projects/${projectId}`;
 
-export function versionFileUrl(projectId: number, versionId: number): string {
+export function versionFileUrl(projectId: number, versionId: string): string {
   return `${base(projectId)}/versions/${versionId}/file`;
 }
-export function versionThumbUrl(projectId: number, versionId: number, s = 128): string {
+export function versionThumbUrl(projectId: number, versionId: string, s = 128): string {
   return `${base(projectId)}/versions/${versionId}/thumb?s=${s}`;
 }
 
@@ -41,7 +43,7 @@ export function toProjectInfo(row: SpriteProjectRow): Record<string, unknown> {
 /** Asset row → SpriteAsset DTO. `thumbUrl` points at the current version. */
 export function toAssetDto(
   ideProjectId: number,
-  row: SpriteAssetRow,
+  row: SpriteAssetFileRow,
   size: { width: number; height: number },
 ): Record<string, unknown> {
   return {
@@ -69,13 +71,16 @@ export function toAssetDto(
  * from versionIds via versionThumbUrl.
  */
 export function toGenerationGroupDto(
-  group: { jobId: number | null; versionIds: number[]; createdAt: string },
+  group: { jobId: string | null; versionIds: string[]; createdAt: string },
   job: { kind: string; user_intent: string | null; request: Record<string, unknown> | null } | null,
   animationName: string | null,
   hasSheet: boolean,
 ): Record<string, unknown> {
   const animationId =
-    job?.request && typeof job.request.animation_id === 'number' ? job.request.animation_id : null;
+    job?.request &&
+    typeof job.request.animation_id === 'string'
+      ? job.request.animation_id
+      : null;
   return {
     jobId: group.jobId,
     kind: group.jobId == null ? 'manual' : job?.kind ?? 'generate',
@@ -93,7 +98,7 @@ export function toGenerationGroupDto(
 /** Version row → AssetVersion DTO with file + thumb URLs. */
 export function toVersionDto(
   ideProjectId: number,
-  row: SpriteAssetVersionRow,
+  row: SpriteVersionFileRow,
 ): Record<string, unknown> {
   return {
     id: row.id,

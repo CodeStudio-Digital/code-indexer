@@ -10,10 +10,9 @@
  * (data / observation / decisions) testable in isolation. The tracker
  * is pure synchronous code; everything else builds on top.
  *
- * **Cross-restart persistence** lives in Phase 2 via the
- * `agent_supervision` SQLite table. Phase 1 is intentionally
- * in-memory only — surviving a process crash isn't required for the
- * foundation; it's a Phase 2 hardening step.
+ * Cross-restart persistence is provided by independent files inside the
+ * owning Company session bundle. Heartbeats remain hot in memory and are
+ * flushed in batches by the supervisor.
  */
 import {
   DEFAULT_STATE_TIMEOUT_MS,
@@ -27,8 +26,8 @@ import type { SupervisionPersistence } from './persistence.js';
 
 /** Per-agent supervisory record. */
 export interface AgentSupervisionRecord {
-  agentRunId: number;
-  companySessionId: number;
+  agentRunId: string;
+  companySessionId: string;
   role: string;
   state: SupervisionState;
   /** Wall-clock ms when the agent ENTERED the current state. */
@@ -79,7 +78,7 @@ export interface StuckAgent {
 }
 
 export class HeartbeatTracker {
-  private readonly records = new Map<number, AgentSupervisionRecord>();
+  private readonly records = new Map<string, AgentSupervisionRecord>();
   /** Optional persistence — when set, every mutation is mirrored to DB. */
   private persistence: SupervisionPersistence | null = null;
 
@@ -116,7 +115,7 @@ export class HeartbeatTracker {
    * spawn events shouldn't reset state).
    */
   register(
-    args: { agentRunId: number; companySessionId: number; role: string },
+    args: { agentRunId: string; companySessionId: string; role: string },
     nowMs: number = Date.now(),
   ): AgentSupervisionRecord {
     const existing = this.records.get(args.agentRunId);
@@ -140,7 +139,7 @@ export class HeartbeatTracker {
   }
 
   /** Look up an agent. Returns null when not tracked. */
-  get(agentRunId: number): AgentSupervisionRecord | null {
+  get(agentRunId: string): AgentSupervisionRecord | null {
     return this.records.get(agentRunId) ?? null;
   }
 
@@ -158,7 +157,7 @@ export class HeartbeatTracker {
    * state. The most common operation — every observable event from a
    * healthy agent (text_delta, tool_progress, etc.) calls this.
    */
-  heartbeat(agentRunId: number, nowMs: number = Date.now()): boolean {
+  heartbeat(agentRunId: string, nowMs: number = Date.now()): boolean {
     const record = this.records.get(agentRunId);
     if (!record) return false;
     record.lastHeartbeatAt = nowMs;
@@ -174,7 +173,7 @@ export class HeartbeatTracker {
    * Same-state "transitions" pass through as heartbeat refreshes.
    */
   transition(
-    agentRunId: number,
+    agentRunId: string,
     toState: SupervisionState,
     nowMs: number = Date.now(),
     payload?: { toolUseId?: string | null; toolName?: string | null },
@@ -210,7 +209,7 @@ export class HeartbeatTracker {
    * Increment incident counter for the agent. Returns the new count
    * (so the caller can implement "after N incidents, escalate").
    */
-  recordIncident(agentRunId: number): number {
+  recordIncident(agentRunId: string): number {
     const record = this.records.get(agentRunId);
     if (!record) return 0;
     record.incidentCount += 1;
@@ -219,7 +218,7 @@ export class HeartbeatTracker {
   }
 
   /** Increment recovery attempts counter. Used by circuit breakers. */
-  recordRecoveryAttempt(agentRunId: number): number {
+  recordRecoveryAttempt(agentRunId: string): number {
     const record = this.records.get(agentRunId);
     if (!record) return 0;
     record.recoveryAttempts += 1;
@@ -233,11 +232,12 @@ export class HeartbeatTracker {
    * the record in memory for diagnostics; Phase 2 syncs to DB then
    * evicts after a TTL.
    */
-  unregister(agentRunId: number): boolean {
+  unregister(agentRunId: string): boolean {
     const had = this.records.delete(agentRunId);
     if (had) {
       try {
-        this.persistence?.deleteRecord(agentRunId);
+        const pending = this.persistence?.deleteRecord(agentRunId);
+        if (pending) void Promise.resolve(pending).catch(() => undefined);
       } catch {
         /* best-effort */
       }
@@ -253,7 +253,7 @@ export class HeartbeatTracker {
    *
    * Returns true on apply. Persisted via the normal write-through.
    */
-  setStateTimeoutOverride(agentRunId: number, ms: number | null): boolean {
+  setStateTimeoutOverride(agentRunId: string, ms: number | null): boolean {
     const record = this.records.get(agentRunId);
     if (!record) return false;
     record.stateTimeoutMsOverride = ms;
@@ -266,8 +266,8 @@ export class HeartbeatTracker {
    * Used by the supervisor's periodic tick to batch-write heartbeats
    * to disk without persisting on every event.
    */
-  heartbeatSnapshot(): Array<{ agentRunId: number; lastHeartbeatAt: number }> {
-    const out: Array<{ agentRunId: number; lastHeartbeatAt: number }> = [];
+  heartbeatSnapshot(): Array<{ agentRunId: string; lastHeartbeatAt: number }> {
+    const out: Array<{ agentRunId: string; lastHeartbeatAt: number }> = [];
     for (const r of this.records.values()) {
       if (isTerminalState(r.state)) continue;
       out.push({ agentRunId: r.agentRunId, lastHeartbeatAt: r.lastHeartbeatAt });
@@ -279,7 +279,8 @@ export class HeartbeatTracker {
   private persist(record: AgentSupervisionRecord): void {
     if (!this.persistence) return;
     try {
-      this.persistence.saveRecord(record);
+      const pending = this.persistence.saveRecord({ ...record });
+      if (pending) void Promise.resolve(pending).catch(() => undefined);
     } catch {
       // Persistence failure must never break the supervisor.
     }

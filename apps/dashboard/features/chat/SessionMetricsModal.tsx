@@ -37,7 +37,7 @@ interface FirstTurnPayload {
 }
 
 interface TurnRow {
-  id: number;
+  id: string;
   /** Stable per-round identifier. All turns of one user message share the
    *  same `run_id`; we group the timeline by it so each round renders as
    *  one collapsible block. */
@@ -143,7 +143,7 @@ interface SessionTelemetrySummary {
 interface SessionMetricsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  sessionId: number | null;
+  sessionId: string | null;
 }
 
 function formatK(n: number): string {
@@ -174,7 +174,7 @@ export function SessionMetricsView({
   sessionId,
   active,
 }: {
-  sessionId: number | null;
+  sessionId: string | null;
   active: boolean;
 }) {
   const { t } = useTranslation(['chat', 'common']);
@@ -628,7 +628,7 @@ function TurnsTimeline({
   // Previous turn in GLOBAL session order (per main/subagent class) — a
   // round's T1 compares against the LAST turn of the previous round, which
   // is exactly where a toolset flip shows up. Used by the cache-bust badge.
-  const prevById = new Map<number, TurnRow | null>();
+  const prevById = new Map<string, TurnRow | null>();
   {
     let prevMain: TurnRow | null = null;
     let prevSub: TurnRow | null = null;
@@ -707,7 +707,7 @@ function RoundGroup({
   maxInput: number;
   forceOpen: boolean;
   defaultOpen: boolean;
-  prevById: Map<number, TurnRow | null>;
+  prevById: Map<string, TurnRow | null>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   t: any;
 }) {

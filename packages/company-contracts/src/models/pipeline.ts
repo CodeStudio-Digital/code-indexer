@@ -98,8 +98,16 @@ export interface PipelineGraph {
   startNodeId?: string;
 }
 
+/**
+ * Reusable/global/project definitions are essential SQLite catalog rows and
+ * retain numeric IDs. Company-session definitions are bundle-local entities
+ * and use opaque UUID strings. The runtime always discriminates by type/
+ * UUID syntax; it never probes one backend after a miss in the other.
+ */
+export type PipelineId = number | string;
+
 export interface Pipeline {
-  id: number;
+  id: PipelineId;
   name: string;
   description: string;
   /**
@@ -110,7 +118,7 @@ export interface Pipeline {
    *   - both NULL → global/template.
    */
   project_id: number | null;
-  company_session_id: number | null;
+  company_session_id: string | null;
   template_id: number | null;
   graph: PipelineGraph;
   version: number;
@@ -127,17 +135,19 @@ export type PipelineExecutionStatus =
  * reads from the snapshot, never from the live `pipelines.graph_json`,
  * so editing a pipeline mid-flight cannot mutate a running execution.
  *
- * Exactly one of `company_session_id` / `coder_session_id` is set
- * (DB-level CHECK in migration 077). Company executions belong to the
- * orchestrator path; chat executions are owned by a `coder_sessions` row.
+ * Exactly one of `company_session_id` / `coder_session_id` is set.
+ * Operational executions are bundle-local filesystem entities; reusable
+ * pipeline definitions remain in the essential SQLite catalog.
  */
 export interface PipelineExecution {
-  id: number;
-  pipeline_id: number;
+  id: string;
+  /** Monotonic order within the owning session bundle. */
+  seq: number;
+  pipeline_id: PipelineId;
   /** Project that owns this run (chat/project executions). NULL for company runs. */
   project_id: number | null;
-  company_session_id: number | null;
-  coder_session_id: number | null;
+  company_session_id: string | null;
+  coder_session_id: string | null;
   status: PipelineExecutionStatus;
   current_node_id: string | null;
   initial_input: string;
@@ -157,20 +167,21 @@ export type PipelineNodeStatus =
   | 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'aborted';
 
 export interface PipelineNodeExecution {
-  id: number;
-  execution_id: number;
+  id: string;
+  /** Monotonic order within the owning session bundle. */
+  seq: number;
+  execution_id: string;
   node_id: string;
   node_label: string;
   role: string;
   status: PipelineNodeStatus;
-  agent_run_id: number | null;
-  kanban_card_id: number | null;
+  agent_run_id: string | null;
+  kanban_card_id: string | null;
   /**
-   * Reserved for future persisted child sessions (a chat pipeline stage
-   * that runs as a real `coder_sessions` row instead of in-memory). NULL
-   * today for both company and chat pipelines.
+   * Optional child coder bundle used by a persisted chat-pipeline stage.
+   * NULL today for both Company and chat pipelines.
    */
-  coder_session_id: number | null;
+  coder_session_id: string | null;
   input_text: string;
   output_text: string | null;
   outcome_branch: string | null;

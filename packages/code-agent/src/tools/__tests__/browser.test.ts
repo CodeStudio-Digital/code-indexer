@@ -4,6 +4,7 @@ import type { IResearchBrowser, ResearchBrowserInvoke } from '@mcp/shared/resear
 import { setGlobalResearchBrowser } from '@mcp/code-agent/tools/browser/bridge.js';
 import { browserTools } from '@mcp/code-agent/tools/browser/index.js';
 import { isResearchToolAllowed } from '@mcp/code-agent/tools/browser/policy.js';
+import { asSessionId } from '@mcp/session-storage';
 
 class FakeBrowser implements IResearchBrowser {
   requests: ResearchBrowserInvoke[] = [];
@@ -15,7 +16,12 @@ class FakeBrowser implements IResearchBrowser {
   }
 }
 
-const context = { cwd: 'D:\\MCP', projectName: 'MCP', sessionId: 42 } as ToolContext;
+const SESSION_ID = asSessionId('00000000-0000-4000-8000-000000000042');
+const context = {
+  cwd: 'D:\\MCP',
+  projectName: 'MCP',
+  sessionId: SESSION_ID,
+} as ToolContext;
 const tool = (name: string) => {
   const found = browserTools.find((candidate) => candidate.name === name);
   if (!found) throw new Error(`Missing browser tool ${name}`);
@@ -32,7 +38,7 @@ describe('research browser tools', () => {
     const result = await tool('browser_open').handler({ url: 'https://example.com' }, context);
 
     expect(browser.requests[0]).toMatchObject({
-      key: 'coder-42',
+      key: `coder-${SESSION_ID}`,
       method: 'open',
       args: { url: 'https://example.com' },
     });

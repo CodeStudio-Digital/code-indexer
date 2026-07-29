@@ -2,12 +2,18 @@ import { describe, expect, it } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { recallConversationTool } from '../conversation-chapters.js';
 
+const CHAPTER_ID = '11111111-1111-4111-8111-111111111111';
+const SESSION_ID = '22222222-2222-4222-8222-222222222222';
+const MESSAGE_ID = '33333333-3333-4333-8333-333333333333';
+
 const chapter = {
-  id: 7,
-  session_id: 1,
+  id: CHAPTER_ID,
+  seq: 2,
+  revision: 1,
+  session_id: SESSION_ID,
   ordinal: 2,
-  start_message_id: 10,
-  end_message_id: 12,
+  start_message_seq: 10,
+  end_message_seq: 12,
   source: 'auto' as const,
   trigger: 'threshold',
   title: 'Authentication decision',
@@ -19,6 +25,8 @@ const chapter = {
   metrics_json: null,
   created_at: '2026-07-10 10:00:00',
   superseded_at: null,
+  chapter_kind: 'context' as const,
+  advances_context_boundary: 1 as const,
 };
 
 function context(overrides: { chapterText?: string; sourceText?: string } = {}): ToolContext {
@@ -29,11 +37,14 @@ function context(overrides: { chapterText?: string; sourceText?: string } = {}):
     conversationHistory: {
       list: () => ({ items: [selectedChapter], next_cursor: null }),
       search: () => ({ items: [{ ...selectedChapter, rank: -1 }], next_cursor: null }),
-      get: (id: number) => id === 7 ? selectedChapter : null,
+      get: (id: string) => id === CHAPTER_ID ? selectedChapter : null,
       source: () => ({
         items: [{
-          id: 10,
-          session_id: 1,
+          id: MESSAGE_ID,
+          seq: 10,
+          turn_seq: 1,
+          operation_id: 'message-one',
+          session_id: SESSION_ID,
           role: 'user',
           content_json: JSON.stringify([{ type: 'text', text: overrides.sourceText ?? 'original request' }]),
           input_tokens: 0,
@@ -41,6 +52,9 @@ function context(overrides: { chapterText?: string; sourceText?: string } = {}):
           cache_read_tokens: 0,
           cache_creation_tokens: 0,
           created_at: '2026-07-10 09:00:00',
+          is_meta: 0,
+          selected_skill_ids_json: null,
+          artifact_refs: [],
         }],
         next_cursor: null,
       }),
@@ -55,16 +69,19 @@ describe('recall_conversation', () => {
     expect(list.content).toContain('Authentication decision');
     const search = await recallConversationTool.handler({ mode: 'search', query: 'cookies' }, ctx);
     expect(search.content).toContain('signed cookies');
-    const get = await recallConversationTool.handler({ mode: 'get', chapter_id: 7 }, ctx);
+    const get = await recallConversationTool.handler({ mode: 'get', chapter_id: CHAPTER_ID }, ctx);
     expect(get.content).toContain('Resume snapshot');
-    const source = await recallConversationTool.handler({ mode: 'source', chapter_id: 7 }, ctx);
+    const source = await recallConversationTool.handler({ mode: 'source', chapter_id: CHAPTER_ID }, ctx);
     expect(source.content).toContain('original request');
   });
 
   it('requires query/id and stays session-scoped through the injected port', async () => {
     const ctx = context();
     expect((await recallConversationTool.handler({ mode: 'search' }, ctx)).isError).toBe(true);
-    expect((await recallConversationTool.handler({ mode: 'get', chapter_id: 99 }, ctx)).isError).toBe(true);
+    expect((await recallConversationTool.handler({
+      mode: 'get',
+      chapter_id: '99999999-9999-4999-8999-999999999999',
+    }, ctx)).isError).toBe(true);
   });
 
   it('keeps source messages intact and marks only the recoverable search preview', async () => {
@@ -82,7 +99,7 @@ describe('recall_conversation', () => {
       recoverable: true,
     }]);
 
-    const source = await recallConversationTool.handler({ mode: 'source', chapter_id: 7 }, ctx);
+    const source = await recallConversationTool.handler({ mode: 'source', chapter_id: CHAPTER_ID }, ctx);
     expect(source.content).toContain('SOURCE-BEGIN-');
     expect(source.content).toContain('-SOURCE-END');
     expect(source.sourceTruncations).toBeUndefined();

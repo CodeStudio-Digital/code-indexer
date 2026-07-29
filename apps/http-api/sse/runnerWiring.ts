@@ -38,6 +38,11 @@ export function wireRunnerEventsToBus(
   runner.on('thinking_delta', (text) => {
     publish(bus, 'thinking', { text });
   });
+  // Retraction of a mid-stream-failed attempt's deltas. Rides the same bus as
+  // the deltas it cancels so the attach replay reproduces it in order.
+  runner.on('stream_rollback', (payload) => {
+    publish(bus, 'stream_rollback', payload);
+  });
   runner.on('tool_call_start', (id, name, input) => {
     publish(bus, 'tool_call_start', { id, name, input });
   });

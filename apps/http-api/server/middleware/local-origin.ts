@@ -32,3 +32,31 @@ export async function requireLocalRequest(c: Context, next: Next): Promise<Respo
   }
   await next();
 }
+
+/**
+ * Hono `env` handed to `app.fetch` by every in-process dispatcher (the
+ * `mcp://` protocol handler and the IPC fallback in hono-dispatch.ts).
+ * Exported so the marker can't drift between producer and consumer.
+ */
+export const IN_PROCESS_ENV = { inProcess: true } as const;
+
+/**
+ * Same protection as `requireLocalRequest`, but ALSO admits the in-process
+ * dispatch path used by the packaged Electron app.
+ *
+ * The renderer reaches these routes over `mcp://app/...`, which the main
+ * process intercepts and hands to `honoApp.fetch(req, { inProcess: true })` —
+ * there is no socket at all, so the loopback-peer check above can never pass
+ * and `requireLocalRequest` would 403 the whole surface in production.
+ *
+ * The marker MUST travel in Hono's `env` (the 2nd arg of `app.fetch`), never in
+ * a header: a compromised renderer can forge any header it likes, but it cannot
+ * reach into the main process to construct `env`.
+ */
+export async function requireTrustedLocalRequest(c: Context, next: Next): Promise<Response | void> {
+  if ((c.env as { inProcess?: boolean } | undefined)?.inProcess === true) {
+    await next();
+    return;
+  }
+  return requireLocalRequest(c, next);
+}

@@ -64,7 +64,7 @@ export interface IndexDocUseCaseDeps {
    */
   progressTracker?: import('../progress-tracker.js').DocIngestProgressTracker;
   /** Optional context for hierarchical provider resolution. */
-  resolveContext?: { sessionId?: number; companySessionId?: number; templateId?: number };
+  resolveContext?: { sessionId?: string; companySessionId?: string; templateId?: number };
 }
 
 export interface IndexPdfInput {

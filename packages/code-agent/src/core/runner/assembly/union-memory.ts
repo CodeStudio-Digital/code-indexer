@@ -1,11 +1,10 @@
 /**
  * Memory READ-union helpers for GLOBAL (multi-project) sessions.
  *
- * A global session runs over a SYNTHETIC union project (mig 155) whose own
- * memory is empty/ephemeral. So instead of reading one project's memory we read
- * EVERY real constituent and merge — labeling each entry with its project name
- * so the agent knows which project a learning came from. These are pure: the
- * caller does the per-project DB/port fetches, then hands the results here.
+ * A global session carries explicit links to real projects. Instead of reading
+ * only the primary project's memory, read every linked project and merge the
+ * results, labeling each entry with its project name. These helpers are pure:
+ * the caller performs each project/port fetch and hands the results here.
  *
  * Single-project (the common case) is the identity path: one input project,
  * NO label, NO re-rank, NO cap — byte-equivalent to the pre-union behaviour.

@@ -1,252 +1,255 @@
 /**
- * Master-inbox DAO tests (Phase A "living company").
- *
- * Covers the two new store methods that back `MasterInboxRouter`:
- *   - `claimAllPendingMasterMessages` — batch claim under one transaction
- *   - `listSessionsWithPendingMasterInbox` — boot-time scan helper
- *
- * Seeding shortcut: foreign_keys=OFF for the duration of the seed; only
- * the FK relationship matters at runtime — not for these CRUD checks.
- * Mirrors `inbox-store.test.ts` so future readers see the same shape.
+ * Master-inbox persistence tests against the session filesystem bundle.
+ * No operational Company table or SQLite transaction participates.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '@mcp/store/db.js';
-import { CompanyStore } from '@mcp/store/company-store.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import {
   MASTER_INBOX_SENTINEL,
   formatMasterInboxPrompt,
 } from '@mcp/company/services/MasterInboxRouter.js';
+import {
+  SessionLocator,
+  asCompanySessionId,
+  type AgentRunId,
+  type JsonValue,
+} from '@mcp/session-storage';
 
 let dir: string;
-let cdb: CodeIndexDB;
-let store: CompanyStore;
-let dbPath: string;
+let projectRoot: string;
+let sessionStore: FsSessionStore;
+let filesA: CompanySessionFiles;
+let filesB: CompanySessionFiles;
+let backendRunA: AgentRunId;
+let frontendRunA: AgentRunId;
+let qaRunA: AgentRunId;
+let backendRunB: AgentRunId;
 
-const SESSION_A = 1;
-const SESSION_B = 2;
-const BACKEND_RUN = 100;
-const FRONTEND_RUN = 101;
-const QA_RUN = 102;
-
-function seed(): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = (cdb as any).db as import('better-sqlite3').Database;
-  raw.pragma('foreign_keys = OFF');
-  try {
-    raw.prepare(`INSERT INTO company_sessions (id, name, status, config_json) VALUES (?, ?, 'idle', '{}')`)
-      .run(SESSION_A, 'a');
-    raw.prepare(`INSERT INTO company_sessions (id, name, status, config_json) VALUES (?, ?, 'idle', '{}')`)
-      .run(SESSION_B, 'b');
-    for (const [id, sess, role, cs] of [
-      [BACKEND_RUN, SESSION_A, 'backend', 1],
-      [FRONTEND_RUN, SESSION_A, 'frontend', 2],
-      [QA_RUN, SESSION_A, 'qa', 3],
-    ] as const) {
-      raw
-        .prepare(
-          `INSERT INTO company_agent_runs (id, company_session_id, role, coder_session_id, project_ids_json, provider, model, status)
-           VALUES (?, ?, ?, ?, '[]', '', '', 'waiting')`,
-        )
-        .run(id, sess, role, cs);
-    }
-  } finally {
-    raw.pragma('foreign_keys = ON');
-  }
+async function createCompanyFiles(name: string): Promise<CompanySessionFiles> {
+  const created = await sessionStore.repository.createSession({
+    kind: 'company',
+    scope: { kind: 'project', project_id: 1 },
+    owner_project_id: 1,
+    linked_projects: [{ project_id: 1, root_path: projectRoot }],
+    title: name,
+    status: 'idle',
+    metadata: {
+      company: {
+        name,
+        template_id: null,
+        runtime_kind: 'company',
+        config_json: '{}',
+        master_session_id: null,
+        project_labels: { 1: 'main' },
+        recovered_at: null,
+        recovered_reason: null,
+      },
+    } as unknown as Record<string, JsonValue>,
+  });
+  await sessionStore.refresh();
+  return new CompanySessionFiles({
+    companySessionId: asCompanySessionId(created.session.id),
+    sessionStore,
+  });
 }
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'mcp-master-inbox-'));
-  dbPath = join(dir, 'test.db');
-  cdb = new CodeIndexDB(dbPath);
-  store = new CompanyStore(dbPath);
-  seed();
+async function createRun(
+  files: CompanySessionFiles,
+  role: string,
+): Promise<AgentRunId> {
+  return (
+    await files.createAgentRun({
+      role,
+      coder_session_id: randomUUID(),
+      project_ids: [1],
+      provider: 'openai',
+      model: 'gpt-5',
+      status: 'waiting',
+    })
+  ).id;
+}
+
+beforeEach(async () => {
+  dir = mkdtempSync(join(tmpdir(), 'mcp-master-inbox-fs-'));
+  const dataDir = join(dir, 'data');
+  projectRoot = join(dir, 'project');
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(projectRoot, { recursive: true });
+  sessionStore = new FsSessionStore({
+    locator: new SessionLocator({
+      dataDir,
+      projectRootResolver: {
+        resolveProjectRoot: (projectId) =>
+          projectId === 1 ? projectRoot : null,
+        listProjectRoots: () => [{
+          project_id: 1,
+          root_path: projectRoot,
+        }],
+      },
+    }),
+  });
+
+  filesA = await createCompanyFiles('a');
+  filesB = await createCompanyFiles('b');
+  backendRunA = await createRun(filesA, 'backend');
+  frontendRunA = await createRun(filesA, 'frontend');
+  qaRunA = await createRun(filesA, 'qa');
+  backendRunB = await createRun(filesB, 'backend');
 });
 
 afterEach(() => {
-  store.close();
-  cdb.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
-describe('CompanyStore — master inbox sentinel', () => {
-  it('createInboxMessage accepts the __master__ sentinel as a free-form to_role', () => {
-    const msg = store.createInboxMessage({
-      companySessionId: SESSION_A,
-      fromAgentRunId: BACKEND_RUN,
+describe('CompanySessionFiles — master inbox sentinel', () => {
+  it('accepts the __master__ sentinel as a free-form to_role', () => {
+    const message = filesA.createInboxMessageSync({
+      fromAgentRunId: backendRunA,
       fromRole: 'backend',
       toRole: MASTER_INBOX_SENTINEL,
       kind: 'notify',
       body: 'deploy ok',
     });
-    expect(msg.to_role).toBe(MASTER_INBOX_SENTINEL);
-    expect(msg.status).toBe('pending');
+    expect(message.to_role).toBe(MASTER_INBOX_SENTINEL);
+    expect(message.status).toBe('pending');
   });
 
-  it('claimAllPendingMasterMessages batches every pending master row in FIFO order', () => {
-    const m1 = store.createInboxMessage({
-      companySessionId: SESSION_A,
-      fromAgentRunId: BACKEND_RUN,
+  it('claims every pending master message in sequence order exactly once', () => {
+    const first = filesA.createInboxMessageSync({
+      fromAgentRunId: backendRunA,
       fromRole: 'backend',
       toRole: MASTER_INBOX_SENTINEL,
       kind: 'question',
       body: 'q1',
     });
-    const m2 = store.createInboxMessage({
-      companySessionId: SESSION_A,
-      fromAgentRunId: FRONTEND_RUN,
+    const second = filesA.createInboxMessageSync({
+      fromAgentRunId: frontendRunA,
       fromRole: 'frontend',
       toRole: MASTER_INBOX_SENTINEL,
       kind: 'question',
       body: 'q2',
     });
-    const m3 = store.createInboxMessage({
-      companySessionId: SESSION_A,
-      fromAgentRunId: QA_RUN,
+    const third = filesA.createInboxMessageSync({
+      fromAgentRunId: qaRunA,
       fromRole: 'qa',
       toRole: MASTER_INBOX_SENTINEL,
       kind: 'notify',
       body: 'q3',
     });
 
-    const claimed = store.claimAllPendingMasterMessages(SESSION_A);
-    expect(claimed.map((m) => m.id)).toEqual([m1.id, m2.id, m3.id]);
-    for (const m of claimed) expect(m.status).toBe('delivered');
-
-    // Second claim must return [] — rows already delivered.
-    const second = store.claimAllPendingMasterMessages(SESSION_A);
-    expect(second).toEqual([]);
+    const claimed = filesA.claimAllPendingMasterMessagesSync();
+    expect(claimed.map((message) => message.id)).toEqual([
+      first.id,
+      second.id,
+      third.id,
+    ]);
+    expect(claimed.every((message) => message.status === 'delivered')).toBe(
+      true,
+    );
+    expect(filesA.claimAllPendingMasterMessagesSync()).toEqual([]);
   });
 
-  it('claimAllPendingMasterMessages ignores rows for sibling sessions and non-master targets', () => {
-    // Same session, but addressed to a peer subordinate — should be skipped.
-    store.createInboxMessage({
-      companySessionId: SESSION_A,
-      fromAgentRunId: BACKEND_RUN,
+  it('does not claim sibling-session or peer-targeted messages', () => {
+    filesA.createInboxMessageSync({
+      fromAgentRunId: backendRunA,
       fromRole: 'backend',
       toRole: 'frontend',
       kind: 'question',
       body: 'peer-only',
     });
-    // Master target on a DIFFERENT session — should not leak.
-    store.createInboxMessage({
-      companySessionId: SESSION_B,
-      fromAgentRunId: BACKEND_RUN,
+    filesB.createInboxMessageSync({
+      fromAgentRunId: backendRunB,
       fromRole: 'backend',
       toRole: MASTER_INBOX_SENTINEL,
       kind: 'notify',
       body: 'wrong-session',
     });
-    const claimed = store.claimAllPendingMasterMessages(SESSION_A);
-    expect(claimed).toEqual([]);
+    expect(filesA.claimAllPendingMasterMessagesSync()).toEqual([]);
   });
 
-  it('listSessionsWithPendingMasterInbox returns every session with at least one pending master row', () => {
-    store.createInboxMessage({
-      companySessionId: SESSION_A,
-      fromAgentRunId: BACKEND_RUN,
+  it('catalog scan returns every bundle with pending master work', () => {
+    filesA.createInboxMessageSync({
+      fromAgentRunId: backendRunA,
       fromRole: 'backend',
       toRole: MASTER_INBOX_SENTINEL,
       kind: 'notify',
       body: 'a',
     });
-    store.createInboxMessage({
-      companySessionId: SESSION_B,
-      fromAgentRunId: BACKEND_RUN,
+    filesB.createInboxMessageSync({
+      fromAgentRunId: backendRunB,
       fromRole: 'backend',
       toRole: MASTER_INBOX_SENTINEL,
       kind: 'notify',
       body: 'b',
     });
 
-    const ids = store.listSessionsWithPendingMasterInbox().sort();
-    expect(ids).toEqual([SESSION_A, SESSION_B]);
+    expect(
+      filesA.listSessionsWithPendingMasterInboxAcrossCatalog().sort(),
+    ).toEqual([filesA.companySessionId, filesB.companySessionId].sort());
   });
 
-  it('listSessionsWithPendingMasterInbox excludes already-delivered rows', () => {
-    store.createInboxMessage({
-      companySessionId: SESSION_A,
-      fromAgentRunId: BACKEND_RUN,
+  it('catalog scan excludes already-delivered rows', () => {
+    filesA.createInboxMessageSync({
+      fromAgentRunId: backendRunA,
       fromRole: 'backend',
       toRole: MASTER_INBOX_SENTINEL,
       kind: 'notify',
       body: 'will-be-drained',
     });
-    store.claimAllPendingMasterMessages(SESSION_A);
-    expect(store.listSessionsWithPendingMasterInbox()).toEqual([]);
+    filesA.claimAllPendingMasterMessagesSync();
+    expect(
+      filesA.listSessionsWithPendingMasterInboxAcrossCatalog(),
+    ).toEqual([]);
   });
 });
 
 describe('formatMasterInboxPrompt', () => {
-  it('combines multiple messages with per-source attribution', () => {
-    const out = formatMasterInboxPrompt([
-      {
-        id: 101,
-        company_session_id: SESSION_A,
-        from_agent_run_id: BACKEND_RUN,
-        from_role: 'backend',
-        to_role: MASTER_INBOX_SENTINEL,
-        to_agent_run_id: null,
-        kind: 'question',
-        body: 'how to handle auth headers?',
-        status: 'delivered',
-        answer: null,
-        wait_token: 'tok1',
-        created_at: '',
-        delivered_at: null,
-        answered_at: null,
-      },
-      {
-        id: 102,
-        company_session_id: SESSION_A,
-        from_agent_run_id: FRONTEND_RUN,
-        from_role: 'frontend',
-        to_role: MASTER_INBOX_SENTINEL,
-        to_agent_run_id: null,
-        kind: 'notify',
-        body: 'smoke tests green',
-        status: 'delivered',
-        answer: null,
-        wait_token: null,
-        created_at: '',
-        delivered_at: null,
-        answered_at: null,
-      },
-    ]);
-    expect(out).toContain('[INBOX — 2 message(s) from subordinates]');
-    expect(out).toContain('[from @backend, run=100, message_id=101, kind=question]');
-    expect(out).toContain('how to handle auth headers?');
-    expect(out).toContain('[from @frontend, run=101, message_id=102, kind=notify]');
-    expect(out).toContain('smoke tests green');
-    expect(out).toContain('respond_to_inbox(message_id, answer)');
+  it('combines UUID-addressed messages with per-source attribution', () => {
+    const question = filesA.createInboxMessageSync({
+      fromAgentRunId: backendRunA,
+      fromRole: 'backend',
+      toRole: MASTER_INBOX_SENTINEL,
+      kind: 'question',
+      body: 'how to handle auth headers?',
+    });
+    const notice = filesA.createInboxMessageSync({
+      fromAgentRunId: frontendRunA,
+      fromRole: 'frontend',
+      toRole: MASTER_INBOX_SENTINEL,
+      kind: 'notify',
+      body: 'smoke tests green',
+    });
+    const output = formatMasterInboxPrompt([question, notice]);
+
+    expect(output).toContain('[INBOX — 2 message(s) from subordinates]');
+    expect(output).toContain(
+      `[from @backend, run=${backendRunA}, message_id=${question.id}, kind=question]`,
+    );
+    expect(output).toContain('how to handle auth headers?');
+    expect(output).toContain(
+      `[from @frontend, run=${frontendRunA}, message_id=${notice.id}, kind=notify]`,
+    );
+    expect(output).toContain('smoke tests green');
+    expect(output).toContain('respond_to_inbox(message_id, answer)');
   });
 
-  it('uses the question-only footer when no notify is present', () => {
-    const out = formatMasterInboxPrompt([
-      {
-        id: 1,
-        company_session_id: SESSION_A,
-        from_agent_run_id: BACKEND_RUN,
-        from_role: 'backend',
-        to_role: MASTER_INBOX_SENTINEL,
-        to_agent_run_id: null,
-        kind: 'question',
-        body: 'x?',
-        status: 'delivered',
-        answer: null,
-        wait_token: null,
-        created_at: '',
-        delivered_at: null,
-        answered_at: null,
-      },
-    ]);
-    expect(out).toContain('Respond via respond_to_inbox');
-    expect(out).not.toContain('FYI notification');
-  });
-
-  it('returns empty string for an empty list', () => {
+  it('uses the question-only footer and handles an empty list', () => {
+    const question = filesA.createInboxMessageSync({
+      fromAgentRunId: backendRunA,
+      fromRole: 'backend',
+      toRole: MASTER_INBOX_SENTINEL,
+      kind: 'question',
+      body: 'x?',
+    });
+    const output = formatMasterInboxPrompt([question]);
+    expect(output).toContain('Respond via respond_to_inbox');
+    expect(output).not.toContain('FYI notification');
     expect(formatMasterInboxPrompt([])).toBe('');
   });
 });

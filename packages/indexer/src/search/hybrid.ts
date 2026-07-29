@@ -1,4 +1,5 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import { randomUUID } from 'node:crypto';
 import type { VectorStore } from '@mcp/store/vectors.js';
 import { buildFtsMatch, ftsTokens } from '@mcp/store/db/fts-query.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
@@ -18,9 +19,16 @@ import {
   createHybridSearchPipeline,
   rerankDocumentText,
   runHybridSearchPipeline,
+  semanticProjectContext,
   type HybridSearchPipelineCandidate,
   type HybridSearchPipelineQuery,
 } from '@mcp/indexer/search/hybrid-pipeline.js';
+import type {
+  SemanticQueryClass,
+  SemanticSearchTelemetryContext,
+  SemanticSearchTelemetrySink,
+  SemanticSearchTelemetrySummary,
+} from '@mcp/indexer/search/search-telemetry.js';
 
 /** Diagnostic info returned alongside search results. */
 export interface SearchDiagnostics {
@@ -71,6 +79,8 @@ export interface SearchDiagnostics {
   rerankerReturned?: number;
   /** Reranker error when the pipeline preserved the RRF ordering. */
   rerankerError?: string;
+  /** Correlates this response with privacy-safe project telemetry/outcomes. */
+  telemetryRequestId?: string;
 }
 
 export interface HybridSearchOptions {
@@ -83,6 +93,8 @@ export interface HybridSearchOptions {
   signal?: AbortSignal;
   /** Force a fresh execution for diagnostics/benchmarks. Never used by normal consumers. */
   bypassCache?: boolean;
+  /** Transport/session attribution. Raw query text is never persisted. */
+  telemetryContext?: SemanticSearchTelemetryContext;
 }
 
 export interface GlobalHybridSearchResult {
@@ -97,6 +109,23 @@ const RRF_K = 60;
 function envInt(name: string, fallback: number): number {
   const v = Number(process.env[name]);
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
+}
+
+function classifyQuery(
+  query: string,
+  plannedMode: 'fts' | 'vector' | 'hybrid',
+): SemanticQueryClass {
+  if (plannedMode === 'fts') return 'identifier';
+  const trimmed = query.trim();
+  if (!trimmed) return 'unknown';
+  if (
+    /^(?:how|what|where|why|when|which|find|show|explain|como|onde|porque|qual|encontre|mostre)\b/i
+      .test(trimmed)
+    || /\s/.test(trimmed)
+  ) {
+    return 'natural_language';
+  }
+  return 'concept';
 }
 
 /**
@@ -140,6 +169,7 @@ export class HybridSearch {
    * pipeline still works, just no observability writes.
    */
   private pipelineTelemetry: TelemetrySink | null;
+  private searchTelemetry: SemanticSearchTelemetrySink | null;
   /**
    * Lazy-instantiated hybrid pipeline. Built on first invocation; reused
    * across calls. The factory is cheap (no I/O), but constructing it
@@ -166,12 +196,14 @@ export class HybridSearch {
     pipelineTelemetry?: TelemetrySink | null,
     memoryEmbeddingService?: EmbeddingService | null,
     memoryReranker?: RerankerService | null,
+    searchTelemetry?: SemanticSearchTelemetrySink | null,
   ) {
     this.reranker = reranker ?? new NullReranker();
     this.recentFilesSource = recentFilesSource ?? null;
     this.pipelineTelemetry = pipelineTelemetry ?? null;
     this.memoryEmbeddingService = memoryEmbeddingService ?? embeddingService;
     this.memoryReranker = memoryReranker ?? new NullReranker();
+    this.searchTelemetry = searchTelemetry ?? null;
   }
 
   /** Single production path for hybrid retrieval. */
@@ -184,7 +216,10 @@ export class HybridSearch {
     overFetch: number,
     diagAccum: SearchDiagnostics,
     includeReranker = true,
-    requestOptions: Pick<HybridSearchOptions, 'supersessionKey' | 'signal'> = {},
+    requestOptions: Pick<
+      HybridSearchOptions,
+      'supersessionKey' | 'signal' | 'telemetryContext'
+    > = {},
   ): Promise<HybridSearchResult[]> {
     let pipeline = includeReranker ? this.hybridPipeline : this.globalRetrievalPipeline;
     if (!pipeline) {
@@ -202,7 +237,9 @@ export class HybridSearch {
       else this.globalRetrievalPipeline = pipeline;
     }
     const pipelineQuery: HybridSearchPipelineQuery = {
-      queryId: `hybrid:${projectId}:${query}:${type}:${limit}`,
+      queryId: `hybrid:${projectId}:${
+        requestOptions.telemetryContext?.requestId ?? randomUUID()
+      }`,
       projectId,
       projectName,
       query,
@@ -211,6 +248,14 @@ export class HybridSearch {
       limit,
       supersessionKey: requestOptions.supersessionKey,
       signal: requestOptions.signal,
+      resolveContext: {
+        sessionId: requestOptions.telemetryContext?.sessionId,
+        companySessionId: requestOptions.telemetryContext?.companySessionId,
+        requestId: requestOptions.telemetryContext?.requestId,
+        projectId,
+        consumer: requestOptions.telemetryContext?.consumer,
+        queryClass: classifyQuery(query, 'hybrid'),
+      },
       diag: {},
     };
     const results = await runHybridSearchPipeline(pipeline, pipelineQuery);
@@ -352,6 +397,30 @@ export class HybridSearch {
     this.queryCache.clear();
   }
 
+  async telemetrySummary(
+    projectId: number,
+    periodDays = 30,
+  ): Promise<SemanticSearchTelemetrySummary | null> {
+    return await this.searchTelemetry?.summarize?.(projectId, periodDays) ?? null;
+  }
+
+  recordTelemetryOutcome(input: {
+    projectId: number;
+    requestId: string;
+    semanticWin: boolean;
+  }): void {
+    if (!this.searchTelemetry?.recordOutcome) return;
+    this.searchTelemetry.recordOutcome({
+      schema_version: 1,
+      kind: 'outcome',
+      recorded_at: new Date().toISOString(),
+      request_id: input.requestId,
+      project_id: input.projectId,
+      outcome: 'opened',
+      semantic_win: input.semanticWin,
+    });
+  }
+
   /**
    * Build a cache key without doing inference. A revision resolver failure
    * disables caching for this request: serving a fresh result is safer than
@@ -422,6 +491,42 @@ export class HybridSearch {
     } else {
       mode = requestedMode;
     }
+    const telemetryContext = options?.telemetryContext;
+    const telemetryRequestId = telemetryContext?.requestId ?? randomUUID();
+    const queryClass = classifyQuery(query, mode);
+    const recordTelemetry = (response: {
+      results: HybridSearchResult[];
+      diagnostics: SearchDiagnostics;
+    }): void => {
+      response.diagnostics.telemetryRequestId = telemetryRequestId;
+      try {
+        this.searchTelemetry?.emit({
+          schema_version: 1,
+          kind: 'search',
+          recorded_at: new Date().toISOString(),
+          request_id: telemetryRequestId,
+          project_id: projectId,
+          consumer: telemetryContext?.consumer ?? 'unknown',
+          query_class: queryClass,
+          requested_mode: requestedMode,
+          planned_mode: mode,
+          effective_mode: response.diagnostics.effectiveMode ?? mode,
+          generation_id: response.diagnostics.generationUsed ?? null,
+          cache_hit: response.diagnostics.cacheHit === true,
+          fallback: response.diagnostics.fallback === true,
+          result_count: response.results.length,
+          total_time_ms: response.diagnostics.totalTimeMs ?? 0,
+          reranker_applied: response.diagnostics.rerankerApplied === true,
+          reranker_failed: !!response.diagnostics.rerankerError,
+          session_scoped: !!(
+            telemetryContext?.sessionId
+            || telemetryContext?.companySessionId
+          ),
+        });
+      } catch {
+        // Search results must never depend on observability persistence.
+      }
+    };
 
     // Check cache (key includes resolved mode so `auto` and `hybrid`
     // share a result row when the planner picks `hybrid`).
@@ -434,14 +539,17 @@ export class HybridSearch {
       // stripped object here made consumers (e.g. the agent-facing
       // diagnostics trailer) report "all fine" on cache hits even when the
       // cached run had degraded to FTS-only.
-      return {
+      const response = {
         results: cached.results,
         diagnostics: {
           ...cached.diagnostics,
           cacheHit: true,
           totalTimeMs: performance.now() - startedAt,
+          telemetryRequestId,
         },
       };
+      recordTelemetry(response);
+      return response;
     }
 
     const diag: SearchDiagnostics = {
@@ -451,6 +559,7 @@ export class HybridSearch {
       plannedMode: mode,
       effectiveMode: mode,
       cacheHit: false,
+      telemetryRequestId,
       ...(mode !== 'fts'
         ? { embedder: this.embeddingService.cacheRevisionForNamespace?.(codeNamespace(projectId))
             ?? this.embeddingService.fingerprint?.()
@@ -478,6 +587,7 @@ export class HybridSearch {
         }
         this.queryCache.set(cacheKey, { results: r.results, diagnostics: r.diagnostics, ts: Date.now() });
       }
+      recordTelemetry(r);
       return r;
     };
 
@@ -617,7 +727,10 @@ export class HybridSearch {
       }
     }
 
-    return results;
+    // Files and symbols are queried independently, so `all` can otherwise
+    // return up to `limit * 2`. The public contract is one top-K across the
+    // merged result set.
+    return results.slice(0, limit);
   }
 
   /**
@@ -661,7 +774,10 @@ export class HybridSearch {
       if (skipExpansion) {
         variants = [query.trim()];
       } else if (this.hydeService) {
-        const hypothetical = await this.hydeService.generate(query);
+        const hypothetical = await this.hydeService.generate(
+          query,
+          semanticProjectContext(this.db, projectId, projectName),
+        );
         variants =
           hypothetical && hypothetical !== query
             ? [query, hypothetical]

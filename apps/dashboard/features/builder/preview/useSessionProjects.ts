@@ -15,7 +15,7 @@ interface SessionResponse {
  * Fetches the projects linked to a company session. Shared by FilesTab
  * and GitTab via the parent container so each tab doesn't refetch.
  */
-export function useSessionProjects(sessionId: number) {
+export function useSessionProjects(sessionId: string) {
   const { data, loading, error, refetch } = useApi<SessionResponse>(
     `/company/sessions/${sessionId}`,
   );

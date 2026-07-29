@@ -10,6 +10,11 @@ import { resolveAutonomy } from '../autonomy/autonomy-config.js';
 
 type PlanHandler = (block: { plan: string; toolUseId?: string }) => void;
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const MASTER_RUN_ID = '00000000-0000-4000-8000-000000000011';
+const QA_RUN_ID = '00000000-0000-4000-8000-000000000042';
+const OTHER_RUN_ID = '00000000-0000-4000-8000-000000000043';
+
 function fakeAutonomy(autonomy: Record<string, unknown>) {
   return { get: () => resolveAutonomy(JSON.stringify({ autonomy }), {}) };
 }
@@ -24,12 +29,12 @@ function makeHarness(autonomy: { get: () => ReturnType<typeof resolveAutonomy> }
   const bus = { publish: vi.fn(), markEnded: vi.fn(), bus: {} } as never;
   const board = { post: vi.fn() } as never;
   const status = { setStatus: vi.fn(), publishStatus: vi.fn() } as never;
-  const master = { notify: vi.fn(), handle: null, agentRunId: 1 } as never;
+  const master = { notify: vi.fn(), handle: null, agentRunId: MASTER_RUN_ID } as never;
   const attention = { signal: vi.fn(), on: () => () => {} } as never;
-  const ctx = { companySessionId: 1 } as never;
+  const ctx = { companySessionId: COMPANY_SESSION_ID } as never;
 
   const hitl = new HumanInTheLoop(bus, board, status, master, attention, ctx, autonomy);
-  hitl.wireSubordinatePlan(handle, 42, 'qa');
+  hitl.wireSubordinatePlan(handle, QA_RUN_ID, 'qa');
   return { hitl, fire: (plan: string) => planHandler?.({ plan }) };
 }
 
@@ -39,60 +44,60 @@ const AUTO_OFF = fakeAutonomy({ autoApproveRoles: null });
 describe('HumanInTheLoop.approvedPlans', () => {
   it('starts empty — hasApprovedPlan is null before any plan', () => {
     const { hitl } = makeHarness(AUTO_OFF);
-    expect(hitl.hasApprovedPlan(42)).toBeNull();
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toBeNull();
   });
 
   it('fast-path auto-approve registers auto=true', () => {
     const { hitl, fire } = makeHarness(AUTO_ON);
     fire('1. test the login flow');
-    expect(hitl.hasApprovedPlan(42)).toEqual({ approved: true, auto: true });
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toEqual({ approved: true, auto: true });
   });
 
   it('manual resolvePlan(approved=true) registers auto=false', () => {
     const { hitl, fire } = makeHarness(AUTO_OFF);
     fire('1. test the login flow');
-    expect(hitl.hasApprovedPlan(42)).toBeNull(); // pending, not approved
-    expect(hitl.resolvePlan(42, true, 'lgtm')).toBe(true);
-    expect(hitl.hasApprovedPlan(42)).toEqual({ approved: true, auto: false });
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toBeNull(); // pending, not approved
+    expect(hitl.resolvePlan(QA_RUN_ID, true, 'lgtm')).toBe(true);
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toEqual({ approved: true, auto: false });
   });
 
   it('rejection clears any approval', () => {
     const { hitl, fire } = makeHarness(AUTO_OFF);
     fire('plan v1');
-    hitl.resolvePlan(42, true);
+    hitl.resolvePlan(QA_RUN_ID, true);
     fire('plan v2'); // re-plan → pending again
-    expect(hitl.hasApprovedPlan(42)).toBeNull();
-    hitl.resolvePlan(42, false, 'not enough coverage');
-    expect(hitl.hasApprovedPlan(42)).toBeNull();
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toBeNull();
+    hitl.resolvePlan(QA_RUN_ID, false, 'not enough coverage');
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toBeNull();
   });
 
   it('a newly POSTED plan invalidates the previous approval', () => {
     const { hitl, fire } = makeHarness(AUTO_OFF);
     fire('plan v1');
-    hitl.resolvePlan(42, true);
-    expect(hitl.hasApprovedPlan(42)).not.toBeNull();
+    hitl.resolvePlan(QA_RUN_ID, true);
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).not.toBeNull();
     fire('plan v2');
-    expect(hitl.hasApprovedPlan(42)).toBeNull();
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toBeNull();
   });
 
   it('clearForAgent wipes the approval (abort/pause teardown)', () => {
     const { hitl, fire } = makeHarness(AUTO_ON);
     fire('plan');
-    expect(hitl.hasApprovedPlan(42)).not.toBeNull();
-    hitl.clearForAgent(42);
-    expect(hitl.hasApprovedPlan(42)).toBeNull();
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).not.toBeNull();
+    hitl.clearForAgent(QA_RUN_ID);
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toBeNull();
   });
 
   it('clearAll wipes every approval (finalize)', () => {
     const { hitl, fire } = makeHarness(AUTO_ON);
     fire('plan');
     hitl.clearAll();
-    expect(hitl.hasApprovedPlan(42)).toBeNull();
+    expect(hitl.hasApprovedPlan(QA_RUN_ID)).toBeNull();
   });
 
   it('is per-agent — other run ids stay null', () => {
     const { hitl, fire } = makeHarness(AUTO_ON);
     fire('plan');
-    expect(hitl.hasApprovedPlan(43)).toBeNull();
+    expect(hitl.hasApprovedPlan(OTHER_RUN_ID)).toBeNull();
   });
 });

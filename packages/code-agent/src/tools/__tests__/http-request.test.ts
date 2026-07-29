@@ -11,8 +11,12 @@ import type { ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 let server: Server;
 let base = '';
 
-const ctx = (sessionId: number) => ({ sessionId }) as unknown as ToolContext;
-const run = (args: Record<string, unknown>, sessionId = 1) =>
+const DEFAULT_SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const AUTHENTICATED_SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const ISOLATED_SESSION_ID = '00000000-0000-4000-8000-000000000099';
+
+const ctx = (sessionId: string) => ({ sessionId }) as unknown as ToolContext;
+const run = (args: Record<string, unknown>, sessionId = DEFAULT_SESSION_ID) =>
   httpRequestTool.handler(args, ctx(sessionId)) as Promise<ToolResult>;
 
 beforeAll(async () => {
@@ -91,16 +95,25 @@ describe('http_request', () => {
   });
 
   it('login flow: POST sets a cookie, then GET /me stays authenticated (cookie jar)', async () => {
-    const login = await run({ method: 'POST', url: `${base}/login`, json: { email: 'a', senha: 'b' } }, 42);
+    const login = await run(
+      { method: 'POST', url: `${base}/login`, json: { email: 'a', senha: 'b' } },
+      AUTHENTICATED_SESSION_ID,
+    );
     expect(login.content).toContain('200');
     expect(login.content).toMatch(/set-cookie:\s*1 cookie/);
-    const me = await run({ url: `${base}/me` }, 42); // same session → cookie carried
+    const me = await run(
+      { url: `${base}/me` },
+      AUTHENTICATED_SESSION_ID,
+    ); // same session → cookie carried
     expect(me.content).toContain('200');
     expect(me.content).toContain('maicon');
   });
 
   it('isolates the cookie jar per session', async () => {
-    const me = await run({ url: `${base}/me` }, 99); // different session → no cookie
+    const me = await run(
+      { url: `${base}/me` },
+      ISOLATED_SESSION_ID,
+    ); // different session → no cookie
     expect(me.content).toContain('401');
   });
 

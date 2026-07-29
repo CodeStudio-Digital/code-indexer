@@ -12,6 +12,7 @@
     "@mcp/candidate-pipeline": "workspace:*",
     "@mcp/provider-sdk": "workspace:*",
     "@mcp/provider-engine": "workspace:*",
+    "@mcp/session-storage": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "cheerio": "^1.2.0",

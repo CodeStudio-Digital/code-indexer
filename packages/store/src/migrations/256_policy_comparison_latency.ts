@@ -18,6 +18,10 @@ export const policyComparisonLatency256: Migration = {
   up(db: DB): void {
     const columns = (db.prepare('PRAGMA table_info(policy_decision_comparisons)').all() as Array<{ name: string }>)
       .map((row) => row.name);
+    // `policy_decision_comparisons` ∈ CENTRAL_DROP_TABLES — on a per-project DB the
+    // table is trimmed away, so table_info returns [] and the ALTER below would
+    // throw `no such table` (see project-db/trim/drop-list.ts and migration 175).
+    if (columns.length === 0) return;
     if (!columns.includes('evaluation_ms')) {
       db.exec('ALTER TABLE policy_decision_comparisons ADD COLUMN evaluation_ms REAL');
     }

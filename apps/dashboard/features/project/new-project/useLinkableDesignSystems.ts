@@ -11,7 +11,7 @@ import {
 } from '../../design-systems/design-system-api.js';
 
 export interface LinkableDs {
-  sessionId: number;
+  sessionId: string;
   name: string;
   packageName: string;
   stack: DsStack;

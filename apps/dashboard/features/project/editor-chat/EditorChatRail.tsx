@@ -30,8 +30,8 @@ interface Props {
   projectId: number;
   projectName: string;
   onClose: () => void;
-  initialSessionId?: number | null;
-  onSelectedSessionChange?: (sessionId: number | null) => void;
+  initialSessionId?: string | null;
+  onSelectedSessionChange?: (sessionId: string | null) => void;
   selectionPrefixSessionId?: number;
   includeEditorContext?: boolean;
   initialAgent?: AgentPreset;
@@ -180,7 +180,7 @@ export function EditorChatRail({
     await s.createGroup(name);
   };
 
-  const renameSession = async (id: number, currentTitle: string) => {
+  const renameSession = async (id: string, currentTitle: string) => {
     const title = await prompt({
       title: t('chat:renameSession'),
       placeholder: t('chat:sessionNamePlaceholder'),
@@ -191,7 +191,7 @@ export function EditorChatRail({
     await s.renameSession(id, title);
   };
 
-  const deleteSession = async (id: number) => {
+  const deleteSession = async (id: string) => {
     const ok = await confirm({
       title: t('chat:deleteSession'),
       description: t('chat:deleteSessionDescription'),

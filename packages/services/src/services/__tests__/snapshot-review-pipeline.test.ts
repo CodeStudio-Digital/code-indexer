@@ -27,10 +27,10 @@ function binding(id: string): ResolvedBinding {
   };
 }
 
-function diff(): FileDiff {
+function diff(): FileDiff<string> {
   return {
     baseline: {
-      id: 10,
+      id: '00000000-0000-4000-8000-000000000010',
       filePath: 'src/a.ts',
       existedBefore: true,
       oversized: false,
@@ -73,10 +73,11 @@ function pipeline(bindings: ResolvedBinding[]): SnapshotReviewPipeline {
 }
 
 function input() {
+  const sessionId = '00000000-0000-4000-8000-000000000042';
   return {
     sessionKind: 'coder' as const,
-    sessionId: 42,
-    resolveContext: { sessionId: 42 },
+    sessionId,
+    resolveContext: { sessionId },
     diffs: [diff()],
   };
 }
@@ -138,5 +139,23 @@ describe('SnapshotReviewPipeline structured response recovery', () => {
     expect(result.errorCode).toBe('review_pipeline_invalid_response');
     expect(result.error).toContain('findings array');
     expect(result.raw).toBe('{}');
+  });
+
+  it('rejects a legacy numeric baseline id instead of reviving the old record contract', async () => {
+    mocks.callConfiguredChat.mockResolvedValue(chat(JSON.stringify({
+      findings: [{
+        severity: 'high',
+        filePath: 'src/a.ts',
+        baselineId: 10,
+        body: 'Legacy numeric id must not cross the filesystem-session boundary.',
+      }],
+    })));
+
+    const result = await pipeline([binding('primary')]).review(input());
+
+    expect(result.ok).toBe(false);
+    expect(result.errorCode).toBe('review_pipeline_invalid_response');
+    expect(result.error).toMatch(/baselineId.*UUID/i);
+    expect(mocks.callConfiguredChat).toHaveBeenCalledTimes(2);
   });
 });

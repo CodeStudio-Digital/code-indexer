@@ -8,6 +8,7 @@
  */
 
 import type { ResolveContext } from '@mcp/services/pipelines/index.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export type DocsResearchTrigger = 'user' | 'coder';
 
@@ -21,17 +22,17 @@ export interface RunDocsAgentOptions {
    */
   collections?: string[];
   /**
-   * Who triggered the run. Persisted on `docs_research_sessions.triggered_by`
-   * and used to decide whether to render the result inline in a coder
-   * session timeline.
+   * Who triggered the run. Persisted in the docs bundle and used to decide
+   * whether to render the result inline in a coder session timeline.
    */
   triggeredBy: DocsResearchTrigger;
   /**
    * Optional link back to a coder session that called `docs_deep_research`.
-   * Stored as FK so the dashboard can render the research inline with the
-   * calling chat. Null/undefined for `triggeredBy='user'`.
+   * Stored as the bundle's parent UUID so the dashboard can render the
+   * research inline with the calling chat. Null/undefined for
+   * `triggeredBy='user'`.
    */
-  parentCoderSessionId?: number | null;
+  parentCoderSessionId?: SessionId | null;
   /** Maximum turns the runner will execute before aborting. Default 6. */
   maxTurns?: number;
   /** Optional abort signal — surfaces through to the underlying CoderRunner. */
@@ -64,8 +65,8 @@ export interface DocsResearchTelemetry {
 }
 
 export interface DocsResearchResult {
-  /** Persistent session id (`docs_research_sessions.id`). */
-  sessionId: number;
+  /** Opaque UUID of the persistent filesystem session bundle. */
+  sessionId: SessionId;
   /**
    * Markdown answer with footnote citations [^1] [^2] resolved against
    * `chunks_cited`. The DocsAgent renders this via the `docs_synthesize`
@@ -90,8 +91,8 @@ export interface DocsResearchResult {
 }
 
 export interface RunDocsAgentHandle {
-  /** The persistent research session id. */
-  sessionId: number;
+  /** The persistent research-session bundle UUID. */
+  sessionId: SessionId;
   /** Resolves with the final result once the runner finishes. */
   done: Promise<DocsResearchResult>;
   /** Imperative cancel — aborts the underlying CoderRunner. */

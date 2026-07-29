@@ -25,13 +25,13 @@ interface Result {
 
 export function useInlineFileDiff(
   scope: SessionScope,
-  sessionId: number,
-  baselineId: number,
+  sessionId: string,
+  baselineId: string,
   actions: SnapshotActions | null,
   /** Bumping value (e.g. the file's `lastEditedAt`) that forces a refetch. */
   refreshKey: string | number | undefined,
   roundMessageId?: number,
-  globalBaselineId?: number,
+  globalBaselineId?: string,
   onMutated?: () => void,
 ): Result {
   const [diff, setDiff] = useState<SnapshotFileDiff | null>(null);

@@ -10,7 +10,7 @@ import { Badge } from '../../../components/ui/badge.js';
 import type { SnapshotReviewComment } from '../types.js';
 
 export type OnUpdateComment = (
-  id: number,
+  id: string,
   patch: Partial<Pick<SnapshotReviewComment, 'status'>>,
 ) => void | Promise<void>;
 

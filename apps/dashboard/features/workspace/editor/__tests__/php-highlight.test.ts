@@ -8,6 +8,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { compile } from 'monaco-editor/esm/vs/editor/standalone/common/monarch/monarchCompile.js';
 import { enrichPhpHighlighting, enrichedPhp, PHP_EXTRA_RULES } from '../php-highlight.js';
+import { tokenizeLine, tokenFor } from './monarch-tokenize.js';
+
+/** PHP's own entry state is the HTML host; code lives in `phpRoot`. */
+const php = (line: string) => tokenizeLine(enrichedPhp(), line, { languageId: 'php', start: 'phpRoot' });
 
 // The function-call rule is the last EXTRA rule; its `cases` decide keyword vs
 // construct vs function for an identifier before `(`.
@@ -92,6 +96,43 @@ describe('enriched PHP grammar', () => {
     const keys = Object.keys(callRuleCases);
     expect(keys.indexOf('@phpConstructs')).toBeLessThan(keys.indexOf('@phpKeywords'));
     expect(callRuleCases['@phpConstructs']).toBe('entity.name.function');
+  });
+
+  // PHP 8 attributes open with `#`, which the bundled grammar reads as a line
+  // comment — the whole declaration greyed out. They are annotations, not
+  // comments, so they must carry the `annotation` scope every theme paints.
+  describe('PHP 8 attributes', () => {
+    it('scopes the attribute and its name as an annotation, never a comment', () => {
+      const tokens = php("#[Route(path: '/users', code: StatusCode::OK)]");
+      expect(tokens.filter((t) => t.token.startsWith('comment'))).toEqual([]);
+      expect(tokenFor(tokens, '#[')).toMatch(/^annotation/);
+      expect(tokenFor(tokens, 'Route')).toMatch(/^annotation/);
+      expect(tokenFor(tokens, ']')).toMatch(/^annotation/);
+    });
+
+    it('keeps ordinary PHP colours inside the argument list', () => {
+      const tokens = php("#[Route(path: '/users', code: StatusCode::OK)]");
+      expect(tokenFor(tokens, '/users')).toMatch(/^string/);
+      expect(tokenFor(tokens, 'StatusCode')).toMatch(/^entity\.name\.type/);
+      expect(tokenFor(tokens, 'OK')).toMatch(/^variable\.other\.constant/);
+    });
+
+    it('handles grouped and namespaced attributes', () => {
+      const tokens = php('#[Deprecated, App\\Attr\\Authenticated]');
+      expect(tokenFor(tokens, 'Deprecated')).toMatch(/^annotation/);
+      expect(tokenFor(tokens, 'App\\Attr\\Authenticated')).toMatch(/^annotation/);
+    });
+
+    it('closes on the matching bracket, so following code is normal again', () => {
+      const tokens = php('#[Attr([1, 2])] class UserService {}');
+      expect(tokenFor(tokens, 'class')).toMatch(/^keyword/);
+      expect(tokenFor(tokens, 'UserService')).toMatch(/^entity\.name\.type/);
+    });
+
+    it('still treats a real `#` line comment as a comment', () => {
+      const tokens = php('# plain note about the code');
+      expect(tokens.every((t) => t.token.startsWith('comment'))).toBe(true);
+    });
   });
 
   it('classifies isset/empty as constructs but if/while as keywords', () => {

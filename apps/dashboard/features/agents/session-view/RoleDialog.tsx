@@ -9,7 +9,7 @@ interface ProviderOption {
 }
 
 interface RoleDialogProps {
-  sessionId: number;
+  sessionId: string;
   config: Record<string, unknown>;
   initialDraft: RoleConfig;
   /** When set, the dialog EDITS `role_assignments[editIdx]` instead of appending. */

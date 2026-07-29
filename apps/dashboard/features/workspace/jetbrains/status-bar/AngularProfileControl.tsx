@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { LspServerInfo, LspServerStatus } from '@mcp/api-bus';
 import { apiCall } from '../../../../lib/api-client.js';
 
@@ -11,6 +12,7 @@ export function AngularProfileControl({
   status: LspServerStatus;
   onApplied(): void;
 }) {
+  const { t } = useTranslation('workspace');
   const [editing, setEditing] = useState(false);
   const [catalog, setCatalog] = useState<LspServerInfo[]>([]);
   const [selected, setSelected] = useState(status.route?.profileId ?? '');
@@ -58,7 +60,7 @@ export function AngularProfileControl({
   if (!editing) {
     return (
       <button type="button" className="mt-1 rounded border px-1.5 py-0.5 text-[11px] hover:bg-muted" onClick={() => setEditing(true)}>
-        Alterar perfil Angular
+        {t('angularProfile.change')}
       </button>
     );
   }
@@ -67,18 +69,18 @@ export function AngularProfileControl({
     <div className="mt-1.5 space-y-1">
       <div className="flex gap-1">
         <select className="h-6 min-w-0 flex-1 rounded border bg-background px-1 text-[11px]" value={selected} onChange={(event) => setSelected(event.target.value)}>
-          <option value="">Selecione uma versão...</option>
+          <option value="">{t('angularProfile.selectVersion')}</option>
           {profiles.map((profile) => (
             <option key={profile.id} value={profile.profileId}>{profile.profileId}</option>
           ))}
         </select>
         <button type="button" disabled={saving || !selected} className="rounded border px-1.5 text-[11px] disabled:opacity-50" onClick={() => void save(selected)}>
-          Aplicar
+          {t('angularProfile.apply')}
         </button>
       </div>
       {route.versionSource === 'override' && (
         <button type="button" disabled={saving} className="text-[10.5px] underline disabled:opacity-50" onClick={() => void save(null)}>
-          Usar detecção automática
+          {t('angularProfile.useAutoDetection')}
         </button>
       )}
       {error && <div className="text-[10.5px] text-red-400">{error}</div>}

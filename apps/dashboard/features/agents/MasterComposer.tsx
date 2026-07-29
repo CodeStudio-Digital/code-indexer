@@ -32,7 +32,7 @@ interface MasterComposerProps {
    */
   buildPrefix?: () => string;
   /** Company session id — keys the per-session draft persistence (`company:<id>`). */
-  sessionId?: number | null;
+  sessionId?: string | null;
 }
 
 export function MasterComposer({ onSend, placeholder, disabled, supportsThinking, reasoningEffort, setReasoningEffort, reasoningLevels, buildPrefix, sessionId }: MasterComposerProps) {

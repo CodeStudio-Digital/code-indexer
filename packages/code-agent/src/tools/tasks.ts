@@ -420,7 +420,7 @@ export const submitTasks: CoderTool = {
       approved: false,
       current_task_id: null,
     };
-    ctx.recordTasks?.(toolUseId, initialState);
+    await ctx.recordTasks?.(toolUseId, initialState);
     runner.emit('tasks_posted', {
       tool_use_id: toolUseId,
       summary: initialState.summary,
@@ -443,7 +443,7 @@ export const submitTasks: CoderTool = {
     }
 
     if (parsed.aborted) {
-      ctx.resolveTasks?.({ approved: false });
+      await ctx.resolveTasks?.({ approved: false });
       return err('Task list review aborted by user.');
     }
     if (parsed.approved) {
@@ -452,7 +452,7 @@ export const submitTasks: CoderTool = {
         `[coder/tasks] submit_tasks approved — execution_mode=${resolvedMode} ` +
         `(received=${parsed.execution_mode ?? 'undefined'}) tasks=${parsed.tasks?.length ?? '?'}`,
       );
-      ctx.resolveTasks?.({
+      await ctx.resolveTasks?.({
         approved: true,
         tasks: parsed.tasks,
         execution_mode: resolvedMode,
@@ -466,7 +466,7 @@ export const submitTasks: CoderTool = {
       };
       return ok(formatTasksApprovedResult(finalState, parsed.feedback));
     }
-    ctx.resolveTasks?.({ approved: false });
+    await ctx.resolveTasks?.({ approved: false });
     return ok(formatTasksRejectedResult(parsed.feedback));
   },
 };
@@ -519,8 +519,19 @@ export const listTasks: CoderTool = {
 
 // ─── task list mutation helpers ─────────────────────────────────
 
-function persistTaskList(ctx: { recordTasks?: (toolUseId: string, state: TasksState) => void }, state: TasksState): void {
-  ctx.recordTasks?.(`tasks_edit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`, state);
+async function persistTaskList(
+  ctx: {
+    recordTasks?: (
+      toolUseId: string,
+      state: TasksState,
+    ) => void | Promise<void>;
+  },
+  state: TasksState,
+): Promise<void> {
+  await ctx.recordTasks?.(
+    `tasks_edit_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    state,
+  );
 }
 
 function emitTaskListUpdated(runner: { emit: (event: 'task_updated', payload: { task_id: string; patch: Partial<CoderTask> }) => void }): void {
@@ -600,7 +611,7 @@ export const cancelTasks: CoderTool = {
       if (!task || task.status === 'done' || task.status === 'skipped') continue;
       if (runner.currentTaskScopeId() === taskId) runner.endTaskScope();
       const result = { summary: reason, files_modified: [], errors: reason };
-      const updated = ctx.updateTaskStatus?.(taskId, {
+      const updated = await ctx.updateTaskStatus?.(taskId, {
         status: 'skipped',
         finished_at: finishedAt,
         result,
@@ -681,7 +692,7 @@ export const deleteTasks: CoderTool = {
       tasks: remaining,
       current_task_id: state.current_task_id && selected.has(state.current_task_id) ? null : state.current_task_id,
     };
-    persistTaskList(ctx, nextState);
+    await persistTaskList(ctx, nextState);
     emitTaskListUpdated(runner);
     return ok(`delete_tasks: deleted ${removed} task(s). Remaining tasks: ${remaining.length}.`);
   },
@@ -715,10 +726,10 @@ export const archiveTaskList: CoderTool = {
     if (active) runner.endTaskScope();
 
     if (ctx.clearTasksState) {
-      const okClear = ctx.clearTasksState();
+      const okClear = await ctx.clearTasksState();
       if (!okClear) return err('archive_task_list: failed to clear persisted task list.');
     } else {
-      persistTaskList(ctx, {
+      await persistTaskList(ctx, {
         summary: '',
         tasks: [],
         execution_mode: null,
@@ -783,7 +794,7 @@ export const taskComplete: CoderTool = {
 
     const finishedAt = new Date().toISOString();
     const status = errors ? 'failed' : 'done';
-    ctx.updateTaskStatus?.(taskId, {
+    await ctx.updateTaskStatus?.(taskId, {
       status,
       finished_at: finishedAt,
       result: {
@@ -955,7 +966,7 @@ export const updateTask: CoderTool = {
     if (newTitle && newTitle !== task.title) patch.title = newTitle;
     if (newDescription && newDescription !== task.description) patch.description = newDescription;
 
-    const updated = ctx.updateTaskStatus?.(taskId, patch);
+    const updated = await ctx.updateTaskStatus?.(taskId, patch);
     if (!updated) return err(`update_task: failed to persist update for '${taskId}'.`);
 
     // Emit a dedicated event so the dashboard sidebar can refresh immediately
@@ -981,7 +992,7 @@ void extractPathsFromToolArgs;
 // ONE always-on tool that replaces the todos/tasks selection fork. A single
 // `gate` field picks intensity; the handler dispatches to the existing,
 // well-tested track (todo_write/update_todo) and approve (submit_tasks)
-// handlers, which all write the SAME store (`coder_tasks_state`). The legacy
+// handlers, which all write the same session-local task record. The legacy
 // names stay registered as back-compat aliases (demoted out of bootstrap).
 
 /**

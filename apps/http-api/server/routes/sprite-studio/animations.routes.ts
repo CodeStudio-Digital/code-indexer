@@ -24,7 +24,7 @@ import type { SpriteGenerationJobParams } from '@mcp/sprite-studio/jobs/generati
 import { runGenerationJob } from '@mcp/sprite-studio/jobs/job-runner.js';
 import { promoteFrames } from '@mcp/sprite-studio/jobs/promote-frames.js';
 import { resolveInsideSpriteDir } from '@mcp/sprite-studio/repo/paths.js';
-import type { SpriteAnimationRow, SpriteLoopMode } from '@mcp/store/sprite-studio/types.js';
+import type { SpriteLoopMode } from '@mcp/store/sprite-studio/types.js';
 import { normalizeTracks } from '@mcp/store/sprite-studio/track-settings.js';
 import type { ServerDeps } from '../../deps.js';
 import {
@@ -36,23 +36,28 @@ import { getSpriteJobQueue } from './queue-singleton.js';
 import { writeEditedVersion } from './version-write.js';
 
 export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
-  const store = deps.spriteAnimationsStore;
-  const dto = (anim: SpriteAnimationRow) => toAnimDto(anim, store.listFrames(anim.id));
+  const store = deps.spriteFileStore;
+  const dto = async (anim: NonNullable<Awaited<ReturnType<typeof store.getAnimation>>>) =>
+    toAnimDto(anim, await store.listFrames(anim.id));
 
   app.get('/api/sprite-studio/animation-actions', (c) => c.json({
     actions: SPRITE_ACTION_CATALOG.map(({ phrase: _phrase, ...action }) => action),
     directions: ['S', 'N', 'E', 'W', 'SE', 'SW', 'NE', 'NW', 'side'],
   }));
 
-  app.get('/api/sprite-studio/projects/:projectId/assets/:assetId/animations', (c) => {
-    const assetId = Number(c.req.param('assetId'));
-    if (!deps.spriteAssetsStore.get(assetId)) return c.json({ animations: [] });
-    return c.json({ animations: store.listByAsset(assetId).map(dto) });
+  app.get('/api/sprite-studio/projects/:projectId/assets/:assetId/animations', async (c) => {
+    const assetId = c.req.param('assetId');
+    if (!await store.getAsset(assetId)) return c.json({ animations: [] });
+    return c.json({
+      animations: await Promise.all(
+        (await store.listAnimations(assetId)).map(dto),
+      ),
+    });
   });
 
   app.post('/api/sprite-studio/projects/:projectId/assets/:assetId/animations', async (c) => {
-    const assetId = Number(c.req.param('assetId'));
-    if (!deps.spriteAssetsStore.get(assetId)) return c.json({ error: 'not_found' }, 404);
+    const assetId = c.req.param('assetId');
+    if (!await store.getAsset(assetId)) return c.json({ error: 'not_found' }, 404);
     const body = (await c.req.json().catch(() => null)) as
       | { name?: string; fps?: number; frames?: number; loopMode?: SpriteLoopMode;
           actionKey?: string; direction?: string; exportName?: string }
@@ -61,7 +66,7 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
     if (!name) return c.json({ error: 'invalid_body' }, 400);
     const spec = actionSpec(name);
     try {
-      const anim = store.create({
+      const anim = await store.createAnimation({
         asset_id: assetId,
         name,
         fps: clampFps(body?.fps, spec?.fps ?? 8),
@@ -74,14 +79,14 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
           pivot: { x: 0.5, y: 1 },
         },
       });
-      return c.json(dto(anim));
+      return c.json(await dto(anim));
     } catch {
       return c.json({ error: 'name_taken' }, 409); // UNIQUE(asset_id, name)
     }
   });
 
   app.patch('/api/sprite-studio/animations/:id', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
+    const found = await resolveAnim(deps, c.req.param('id'));
     if (!found) return c.json({ error: 'not_found' }, 404);
     const body = (await c.req.json().catch(() => ({}))) as {
       fps?: number; loopMode?: string; frameCount?: number;
@@ -107,47 +112,51 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
       };
       touched = true;
     }
-    store.update(found.anim.id, {
+    const updated = await store.updateAnimation(found.anim.id, {
       fps: body.fps !== undefined ? clampFps(body.fps, found.anim.fps) : undefined,
       loop_mode: typeof body.loopMode === 'string' && LOOP_MODES.has(body.loopMode)
         ? (body.loopMode as SpriteLoopMode) : undefined,
       settings: touched ? settings : undefined,
     });
-    return c.json(dto(store.get(found.anim.id) as SpriteAnimationRow));
+    return c.json(await dto(updated!));
   });
 
   // Frames rows go too; the version files/rows STAY (they are asset versions).
-  app.delete('/api/sprite-studio/animations/:id', (c) => {
-    store.delete(Number(c.req.param('id')));
+  app.delete('/api/sprite-studio/animations/:id', async (c) => {
+    await store.deleteAnimation(c.req.param('id'));
     return c.json({ ok: true });
   });
 
   // Enqueue a frame-pack generation: ONE n×1 grid image, sliced into staged
   // candidates. Adoption (below) is a separate call made when the job is done.
   app.post('/api/sprite-studio/animations/:id/frames/generate', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
+    const found = await resolveAnim(deps, c.req.param('id'));
     if (!found || !found.root) return c.json({ error: 'not_found' }, 404);
     const { anim, asset, spriteProject, root } = found;
     const body = (await c.req.json().catch(() => ({}))) as
-      { intent?: string; direction?: string; anchorVersionId?: number; frameCount?: number };
+      { intent?: string; direction?: string; anchorVersionId?: string; frameCount?: number };
     // Frame count: an explicit body.frameCount (the GenerateBar stepper) wins
     // and is persisted so a later regen/rehydrate keeps it; otherwise fall back
     // to the animation's stored target (or the current frame count).
     const n = body.frameCount !== undefined
       ? clampFrames(body.frameCount, typeof anim.settings.frameCount === 'number' ? anim.settings.frameCount : 4)
-      : clampFrames(anim.settings.frameCount, store.listFrames(anim.id).length || 4);
-    if (body.frameCount !== undefined) store.mergeSettings(anim.id, { frameCount: n });
+      : clampFrames(anim.settings.frameCount, (await store.listFrames(anim.id)).length || 4);
+    if (body.frameCount !== undefined) {
+      await store.mergeAnimationSettings(anim.id, { frameCount: n });
+    }
     const direction = typeof body.direction === 'string'
       ? body.direction
       : typeof anim.settings.direction === 'string' ? anim.settings.direction : undefined;
-    if (typeof body.direction === 'string') store.mergeSettings(anim.id, { direction: body.direction });
+    if (typeof body.direction === 'string') {
+      await store.mergeAnimationSettings(anim.id, { direction: body.direction });
+    }
     const intent = buildAnimationIntent(body.intent?.trim() || anim.name, n, direction);
 
     // Character consistency (layer B): the ANCHOR version conditions the pack
     // — an explicit body anchorVersionId (must belong to this asset) or the
     // asset's current version when omitted.
-    const anchor = pickAnchorVersion(
-      (id) => deps.spriteAssetsStore.getVersion(id),
+    const anchor = await pickAnchorVersion(
+      (id) => store.getVersion(id),
       asset.id, asset.current_version_id, body.anchorVersionId,
     );
     if (!anchor.ok) return c.json({ error: 'invalid_anchor' }, 400);
@@ -160,10 +169,12 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
     }
     // Provenance: an explicitly chosen anchor sticks to the animation.
     if (anchor.explicit && anchor.version) {
-      store.mergeSettings(anim.id, { anchorVersionId: anchor.version.id });
+      await store.mergeAnimationSettings(anim.id, {
+        anchorVersionId: anchor.version.id,
+      });
     }
 
-    const jobRow = deps.spriteJobsStore.insert({
+    const jobRow = await store.insertJob({
       sprite_project_id: spriteProject.id,
       asset_id: asset.id,
       kind: 'generate',
@@ -192,17 +203,23 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
 
   // Adopt a finished job's staged candidates as THE frame list (replace-all).
   app.post('/api/sprite-studio/animations/:id/frames/adopt', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
+    const found = await resolveAnim(deps, c.req.param('id'));
     if (!found) return c.json({ error: 'not_found' }, 404);
-    const body = (await c.req.json().catch(() => null)) as { jobId?: number } | null;
-    const job = body?.jobId != null ? deps.spriteJobsStore.get(body.jobId) : null;
+    const body = (await c.req.json().catch(() => null)) as { jobId?: string } | null;
+    const job = body?.jobId != null ? await store.getJob(body.jobId) : null;
     if (!job) return c.json({ error: 'unknown_job' }, 400);
     if (job.request?.animation_id !== found.anim.id) return c.json({ error: 'job_animation_mismatch' }, 400);
     if (job.status !== 'done') return c.json({ error: 'job_not_done' }, 409);
     try {
       await promoteFrames(
         {
-          stores: { assets: deps.spriteAssetsStore, jobs: deps.spriteJobsStore, animations: store },
+          stores: {
+            ...buildSpriteJobDeps(deps, found.spriteProject.id).stores,
+            animations: {
+              replaceFrames: (animationId, frames) =>
+                store.replaceFrames(animationId, frames),
+            },
+          },
           scratchDir: spriteScratchDir,
           projectRoot: makeProjectRootResolver(deps),
         },
@@ -210,10 +227,12 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
       );
       // Provenance: every current frame came from this job (frames also carry
       // per-version job_id — this is the animation-level shortcut).
-      store.mergeSettings(found.anim.id, { lastGenJobId: job.id });
+      await store.mergeAnimationSettings(found.anim.id, {
+        lastGenJobId: job.id,
+      });
       // Keep the original combined sheet durably so it can be re-sliced later.
       if (found.root) persistJobSheet(found.root, found.asset.slug, job.id);
-      return c.json(dto(store.get(found.anim.id) as SpriteAnimationRow));
+      return c.json(await dto((await store.getAnimation(found.anim.id))!));
     } catch (e) {
       return c.json({ error: (e as Error).message }, 400);
     }
@@ -224,10 +243,10 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
   // 0..n-1 rewrite (legacy contract); overlay tracks honor EXPLICIT sparse
   // frameIndex values (an absent index is an empty cell of the shared grid).
   app.patch('/api/sprite-studio/animations/:id/frames', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
+    const found = await resolveAnim(deps, c.req.param('id'));
     if (!found) return c.json({ error: 'not_found' }, 404);
     const body = (await c.req.json().catch(() => null)) as
-      | { track?: number; frames?: Array<{ frameIndex?: number; versionId?: number; durationMs?: number | null }> }
+      | { track?: number; frames?: Array<{ frameIndex?: number; versionId?: string; durationMs?: number | null }> }
       | null;
     if (!body?.frames || !Array.isArray(body.frames)) return c.json({ error: 'invalid_body' }, 400);
     const track = typeof body.track === 'number' ? Math.floor(body.track) : 0;
@@ -235,10 +254,10 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'unknown_track' }, 400);
     }
     const ordered = [...body.frames].sort((a, b) => (a.frameIndex ?? 0) - (b.frameIndex ?? 0));
-    const inputs: Array<{ frame_index: number; version_id: number; duration_ms: number | null }> = [];
+    const inputs: Array<{ frame_index: number; version_id: string; duration_ms: number | null }> = [];
     const seen = new Set<number>();
     for (const [i, f] of ordered.entries()) {
-      const version = f.versionId != null ? deps.spriteAssetsStore.getVersion(f.versionId) : null;
+      const version = f.versionId != null ? await store.getVersion(f.versionId) : null;
       if (!version || version.asset_id !== found.asset.id) return c.json({ error: 'invalid_version' }, 400);
       // Durations live on the master line only (shared time grid).
       const ms = track === 0 && typeof f.durationMs === 'number'
@@ -251,18 +270,18 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
       seen.add(idx);
       inputs.push({ frame_index: idx, version_id: version.id, duration_ms: ms });
     }
-    store.replaceTrackFrames(found.anim.id, track, inputs);
-    return c.json(dto(store.get(found.anim.id) as SpriteAnimationRow));
+    await store.replaceTrackFrames(found.anim.id, track, inputs);
+    return c.json(await dto((await store.getAnimation(found.anim.id))!));
   });
 
   // Safe frame edit: create an immutable child version, then repoint only the
   // addressed timeline cell. Other clips/cells sharing the source stay intact.
   app.post('/api/sprite-studio/animations/:id/frames/:track/:index/version', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
+    const found = await resolveAnim(deps, c.req.param('id'));
     if (!found?.root) return c.json({ error: 'not_found' }, 404);
     const track = Math.max(0, Math.floor(Number(c.req.param('track'))));
     const index = Math.max(0, Math.floor(Number(c.req.param('index'))));
-    const cells = store.listFrames(found.anim.id, track);
+    const cells = await store.listFrames(found.anim.id, track);
     const current = cells.find((cell) => cell.frame_index === index);
     if (!current) return c.json({ error: 'frame_not_found' }, 404);
     let png: Buffer;
@@ -270,8 +289,8 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
       const form = await c.req.formData();
       const file = form.get('file');
       if (!(file instanceof File)) return c.json({ error: 'no_file' }, 400);
-      const expected = Number(form.get('expectedVersionId'));
-      if (Number.isFinite(expected) && expected > 0 && expected !== current.version_id) {
+      const expected = String(form.get('expectedVersionId') ?? '');
+      if (expected && expected !== current.version_id) {
         return c.json({ error: 'frame_changed' }, 409);
       }
       png = Buffer.from(await file.arrayBuffer());
@@ -279,15 +298,18 @@ export function mountSpriteAnimationRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'invalid_multipart' }, 400);
     }
     try {
-      const version = writeEditedVersion(deps, found.root, found.asset, png, {
+      const version = await writeEditedVersion(deps, found.root, found.asset, png, {
         setCurrent: false, parentVersionId: current.version_id, source: 'edited',
       });
-      store.replaceTrackFrames(found.anim.id, track, cells.map((cell) => ({
+      await store.replaceTrackFrames(found.anim.id, track, cells.map((cell) => ({
         frame_index: cell.frame_index,
         version_id: cell.frame_index === index ? version.id : cell.version_id,
         duration_ms: cell.duration_ms,
       })));
-      return c.json({ animation: dto(store.get(found.anim.id) as SpriteAnimationRow), versionId: version.id });
+      return c.json({
+        animation: await dto((await store.getAnimation(found.anim.id))!),
+        versionId: version.id,
+      });
     } catch (error) {
       return c.json({ error: (error as Error).message }, 400);
     }

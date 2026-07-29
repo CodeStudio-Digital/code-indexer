@@ -2,17 +2,25 @@
  * Tests for resolveAndRunMaster — the resume-or-start decision shared by
  * /start and /resume.
  *
- * Regression (company session 104): a session that ALREADY has a master run
+ * Regression: a session that ALREADY has a master run
  * must RESUME it (reuse the coder-session, keep context), never spawn a fresh
  * master. Only a session with no master run cold-starts.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { resolveAndRunMaster } from '../master-resolve.js';
 
+const MASTER_SESSION_ID = 'd0000000-0000-4000-8000-000000000001';
+
 function makeOrch() {
   return {
-    startMaster: vi.fn(async (_o: unknown) => ({ masterSessionId: 1, indexStatus: null })),
-    resumeExistingMaster: vi.fn(async (_o: unknown) => ({ masterSessionId: 1, indexStatus: null })),
+    startMaster: vi.fn(async (_o: unknown) => ({
+      masterSessionId: MASTER_SESSION_ID,
+      indexStatus: null,
+    })),
+    resumeExistingMaster: vi.fn(async (_o: unknown) => ({
+      masterSessionId: MASTER_SESSION_ID,
+      indexStatus: null,
+    })),
   };
 }
 type Orch = Parameters<typeof resolveAndRunMaster>[0];

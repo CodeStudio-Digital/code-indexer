@@ -8,7 +8,7 @@ export type HunkDecision = 'pending' | 'kept' | 'reverted';
 export type SessionScope = 'coder' | 'company';
 
 export interface SnapshotFileSummary {
-  baselineId: number;
+  baselineId: string;
   filePath: string;
   status: BaselineStatus;
   existedBefore: boolean;
@@ -35,8 +35,8 @@ export interface SnapshotHunkLine {
 
 export interface RoundSnapshotFileSummary extends SnapshotFileSummary {
   roundMessageId: number;
-  roundSnapshotId: number;
-  globalBaselineId: number;
+  roundSnapshotId: string;
+  globalBaselineId: string;
   projectId: number | null;
 }
 
@@ -58,12 +58,12 @@ export interface SnapshotHunk {
 
 export interface SnapshotFileDiff {
   baseline: {
-    id: number;
+    id: string;
     filePath: string;
     existedBefore: boolean;
     oversized: boolean;
     status: BaselineStatus;
-    globalBaselineId?: number;
+    globalBaselineId?: string;
     roundMessageId?: number;
   };
   hunks: SnapshotHunk[];
@@ -72,8 +72,8 @@ export interface SnapshotFileDiff {
 }
 
 export interface RoundSnapshotReviewFinding {
-  id: number;
-  round_snapshot_id: number;
+  id: string;
+  round_snapshot_id: string;
   hunk_fingerprint: string | null;
   old_line: number | null;
   new_line: number | null;
@@ -89,9 +89,9 @@ export type SnapshotReviewStatus = 'open' | 'accepted' | 'dismissed' | 'sent';
 export type SnapshotReviewSeverity = 'critical' | 'high' | 'medium' | 'low' | null;
 
 export interface SnapshotReviewRun {
-  id: number;
+  id: string;
   session_kind: string;
-  session_id: number;
+  session_id: string;
   source: SnapshotReviewSource;
   status: 'running' | 'completed' | 'error';
   provider_id: string | null;
@@ -103,9 +103,9 @@ export interface SnapshotReviewRun {
 }
 
 export interface SnapshotReviewComment {
-  id: number;
-  run_id: number | null;
-  baseline_id: number;
+  id: string;
+  run_id: string | null;
+  baseline_id: string;
   source: SnapshotReviewSource;
   status: SnapshotReviewStatus;
   file_path: string;

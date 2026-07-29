@@ -1,6 +1,12 @@
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { err, ok } from '@mcp/code-agent/core/tool.js';
-import type { CoderMessageRow, ConversationChapterRow } from '@mcp/code-agent/sessions/types.js';
+import { isUuid } from '@mcp/session-storage';
+import type {
+  FsConversationChapterRow,
+} from '@mcp/code-agent/sessions/fs-store/history-metrics-types.js';
+import type {
+  FsCoderMessageRow,
+} from '@mcp/code-agent/sessions/fs-store/types.js';
 
 const UNAVAILABLE = 'Conversation chapters are not available in this session.';
 const MAX_LIST_LIMIT = 50;
@@ -19,19 +25,19 @@ function cursor(value: unknown): string | null | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function chapterId(value: unknown): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null;
+function chapterId(value: unknown): string | null {
+  return typeof value === 'string' && isUuid(value) ? value : null;
 }
 
-function chapterHeader(row: ConversationChapterRow): string {
-  return `#${row.ordinal} [id=${row.id}; ${row.source}; ${row.created_at}; messages ${row.start_message_id}-${row.end_message_id}] ${row.title}`;
+function chapterHeader(row: FsConversationChapterRow): string {
+  return `#${row.ordinal} [id=${row.id}; ${row.source}; ${row.created_at}; messages ${row.start_message_seq}-${row.end_message_seq}] ${row.title}`;
 }
 
 function parseJson(text: string): unknown {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-function safeSourceContent(row: CoderMessageRow): unknown {
+function safeSourceContent(row: FsCoderMessageRow): unknown {
   const parsed = parseJson(row.content_json);
   if (!Array.isArray(parsed)) return parsed;
   return parsed.map((raw) => {
@@ -67,7 +73,7 @@ export const recallConversationTool: CoderTool = {
     properties: {
       mode: { type: 'string', enum: ['list', 'search', 'get', 'source'] },
       query: { type: 'string', description: 'Keywords to search (required for mode=search).' },
-      chapter_id: { type: 'number', description: 'Chapter id from list/search (required for get/source).' },
+      chapter_id: { type: 'string', description: 'Opaque chapter UUID from list/search (required for get/source).' },
       limit: { type: 'number', description: 'Page size. Maximum 50 for chapters and 20 for source messages.' },
       cursor: { type: 'string', description: 'Opaque next cursor returned by the previous call.' },
     },
@@ -81,7 +87,7 @@ export const recallConversationTool: CoderTool = {
 
     try {
       if (mode === 'list') {
-        const page = port.list({
+        const page = await port.list({
           limit: limit(args.limit, 10, MAX_LIST_LIMIT),
           cursor: cursor(args.cursor),
         });
@@ -95,7 +101,7 @@ export const recallConversationTool: CoderTool = {
       if (mode === 'search') {
         const query = typeof args.query === 'string' ? args.query.trim() : '';
         if (!query) return err('recall_conversation: `query` is required for mode="search".');
-        const page = port.search(query, {
+        const page = await port.search(query, {
           limit: limit(args.limit, 8, MAX_LIST_LIMIT),
           cursor: cursor(args.cursor),
         });
@@ -123,8 +129,8 @@ export const recallConversationTool: CoderTool = {
 
       if (mode === 'get') {
         const id = chapterId(args.chapter_id);
-        if (id == null) return err('recall_conversation: positive integer `chapter_id` is required for mode="get".');
-        const row = port.get(id);
+        if (id == null) return err('recall_conversation: UUID `chapter_id` is required for mode="get".');
+        const row = await port.get(id);
         if (!row) return err(`Conversation chapter ${id} was not found in this session.`);
         return ok([
           chapterHeader(row),
@@ -139,14 +145,17 @@ export const recallConversationTool: CoderTool = {
 
       if (mode === 'source') {
         const id = chapterId(args.chapter_id);
-        if (id == null) return err('recall_conversation: positive integer `chapter_id` is required for mode="source".');
-        if (!port.get(id)) return err(`Conversation chapter ${id} was not found in this session.`);
-        const page = port.source(id, {
+        if (id == null) return err('recall_conversation: UUID `chapter_id` is required for mode="source".');
+        if (!(await port.get(id))) {
+          return err(`Conversation chapter ${id} was not found in this session.`);
+        }
+        const page = await port.source(id, {
           limit: limit(args.limit, 10, MAX_SOURCE_LIMIT),
           cursor: cursor(args.cursor),
         });
         const rows = page.items.map((row) => JSON.stringify({
           id: row.id,
+          seq: row.seq,
           role: row.role,
           is_meta: row.is_meta ?? 0,
           content: safeSourceContent(row),

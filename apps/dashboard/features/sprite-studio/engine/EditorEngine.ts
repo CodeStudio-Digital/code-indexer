@@ -48,7 +48,7 @@ export class EditorEngine {
    * lets the view reload when the active version changes and the doc has no
    * unsaved edits, instead of trusting "layers exist" forever).
    */
-  loadedVersionId: number | null = null;
+  loadedVersionId: string | null = null;
   /** The undo-stack top command at the last save/load. isDirty compares the
    *  CURRENT top against it by identity — undo-then-repaint and history
    *  eviction (which trims the bottom) can't fool it the way stack length did.
@@ -284,7 +284,7 @@ export class EditorEngine {
   // ── I/O ──────────────────────────────────────────────────────────────────
 
   /** Reset to a single-layer document from an image (dimension-aware). */
-  loadFromImage(src: ImageData | HTMLImageElement, versionId: number | null = null): void {
+  loadFromImage(src: ImageData | HTMLImageElement, versionId: string | null = null): void {
     const img = imageDataFromSource(src);
     this.doc.resizeTo(img.width, img.height);
     this.selection.resize(img.width, img.height);

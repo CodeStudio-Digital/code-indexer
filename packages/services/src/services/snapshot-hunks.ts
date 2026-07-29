@@ -9,12 +9,15 @@
  *     survive re-renders, but get invalidated when the agent re-edits the
  *     same region)
  *
- * The classic LCS-based algorithm is O(N*M) in space, which is fine for the
- * file sizes we cap at (4 MB → at most ~60k lines). For larger files the
- * SnapshotService marks them `oversized` and skips hunk computation.
+ * The line-level edit script itself lives in `snapshot-line-diff.ts` — it is
+ * the only CPU-bound part and is guarded against pathological allocations
+ * there. This module is just the hunk grouping/fingerprinting on top.
  */
 
 import { createHash } from 'node:crypto';
+import { type EditOp, diffOps, normalizeForDiff, splitLines } from './snapshot-line-diff.js';
+
+export { normalizeForDiff } from './snapshot-line-diff.js';
 
 export interface HunkLine {
   /** 'context' = unchanged, 'add' = present in after only, 'remove' = present in before only. */
@@ -45,86 +48,6 @@ export interface Hunk {
   hiddenAfter: number;
   canExpandBefore: boolean;
   canExpandAfter: boolean;
-}
-
-/**
- * Normalize line endings to \n. We do NOT trim or modify content otherwise —
- * the raw bytes still live in `content_before`, this is only for diff.
- */
-export function normalizeForDiff(s: string): string {
-  return s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-}
-
-/** Split into lines preserving the trailing-newline distinction. */
-function splitLines(s: string): string[] {
-  if (s === '') return [];
-  // We split on \n but keep track of whether the last line has no trailing
-  // newline. For our diff purposes (line-grouped), we can drop the empty
-  // final element introduced by a trailing \n.
-  const parts = s.split('\n');
-  if (parts[parts.length - 1] === '') parts.pop();
-  return parts;
-}
-
-/**
- * Compute the LCS table for two line arrays. Returns the table itself —
- * caller does the trace-back.
- */
-function lcsTable(a: string[], b: string[]): Uint32Array {
-  const m = a.length;
-  const n = b.length;
-  // Single flat array for cache friendliness; index [i*(n+1)+j].
-  const t = new Uint32Array((m + 1) * (n + 1));
-  for (let i = 1; i <= m; i++) {
-    const ai = a[i - 1];
-    const rowOffset = i * (n + 1);
-    const prevRowOffset = (i - 1) * (n + 1);
-    for (let j = 1; j <= n; j++) {
-      if (ai === b[j - 1]) {
-        t[rowOffset + j] = t[prevRowOffset + j - 1] + 1;
-      } else {
-        const up = t[prevRowOffset + j];
-        const left = t[rowOffset + j - 1];
-        t[rowOffset + j] = up >= left ? up : left;
-      }
-    }
-  }
-  return t;
-}
-
-type EditOp = { kind: 'eq' | 'del' | 'add'; line: string };
-
-function traceback(a: string[], b: string[], t: Uint32Array): EditOp[] {
-  const n = b.length;
-  const ops: EditOp[] = [];
-  let i = a.length;
-  let j = b.length;
-  while (i > 0 && j > 0) {
-    if (a[i - 1] === b[j - 1]) {
-      ops.push({ kind: 'eq', line: a[i - 1] });
-      i--;
-      j--;
-    } else {
-      const up = t[(i - 1) * (n + 1) + j];
-      const left = t[i * (n + 1) + j - 1];
-      if (up >= left) {
-        ops.push({ kind: 'del', line: a[i - 1] });
-        i--;
-      } else {
-        ops.push({ kind: 'add', line: b[j - 1] });
-        j--;
-      }
-    }
-  }
-  while (i > 0) {
-    ops.push({ kind: 'del', line: a[i - 1] });
-    i--;
-  }
-  while (j > 0) {
-    ops.push({ kind: 'add', line: b[j - 1] });
-    j--;
-  }
-  return ops.reverse();
 }
 
 function fingerprint(removedLines: string[], addedLines: string[], anchor: string): string {
@@ -354,8 +277,7 @@ export function computeHunks(
   const b = splitLines(normalizeForDiff(after ?? ''));
   if (a.length === 0 && b.length === 0) return [];
   if (a.join('\n') === b.join('\n')) return [];
-  const t = lcsTable(a, b);
-  const ops = traceback(a, b, t);
+  const ops = diffOps(a, b);
   return groupIntoHunks(ops, Math.max(0, contextBefore), Math.max(0, contextAfter));
 }
 

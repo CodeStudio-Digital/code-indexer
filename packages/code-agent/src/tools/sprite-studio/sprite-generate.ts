@@ -28,7 +28,7 @@ const PARAMETERS: JsonSchema = {
         'new asset. Ignored when `asset_id` is given.',
     },
     asset_id: {
-      type: 'number',
+      type: 'string',
       description: 'Id of an existing asset to add a new version to (from sprite_list_assets).',
     },
     category: {
@@ -59,7 +59,9 @@ export function spriteGenerate(projectId: number): CoderTool {
 
       const intent = typeof args.intent === 'string' ? args.intent.trim() : '';
       if (!intent) return err('sprite_generate: `intent` is required.');
-      const assetId = typeof args.asset_id === 'number' ? args.asset_id : undefined;
+      const assetId = typeof args.asset_id === 'string' && args.asset_id.trim()
+        ? args.asset_id.trim()
+        : undefined;
       const assetName = typeof args.asset_name === 'string' ? args.asset_name.trim() : undefined;
       if (assetId === undefined && !assetName) {
         return err('sprite_generate: provide `asset_name` (new asset) or `asset_id` (existing).');

@@ -47,7 +47,7 @@ export interface SessionPin extends PinBase {
   kind: 'session';
   scope: SessionScope;
   /** Session id (for company scope this is the root session id). */
-  sessionId: number;
+  sessionId: string;
   /** Present for scope === 'project'. */
   projectId?: number;
 }
@@ -65,7 +65,7 @@ export type Pin = ProjectPin | SessionPin | RailPin;
 export function projectPinId(projectId: number): string {
   return `project:${projectId}`;
 }
-export function sessionPinId(scope: SessionScope, sessionId: number): string {
+export function sessionPinId(scope: SessionScope, sessionId: string): string {
   return `session:${scope}:${sessionId}`;
 }
 export function railPinId(projectId: number, tabId: string): string {

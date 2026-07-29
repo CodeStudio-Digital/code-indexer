@@ -14,7 +14,7 @@ import {
 } from './timeline-model.js';
 
 export interface TimelineOps {
-  setCellAt: (track: number, col: number, versionId: number) => void;
+  setCellAt: (track: number, col: number, versionId: string) => void;
   clearCellAt: (track: number, col: number) => void;
   setDuration: (col: number, ms: number | null) => void;
   columnDrag: (from: number, to: number) => void;
@@ -25,14 +25,14 @@ export interface TimelineOps {
   copyColumn: () => void;
   pasteColumn: () => void;
   moveColumnBy: (dir: -1 | 1) => void;
-  appendVersion: (versionId: number) => void;
+  appendVersion: (versionId: string) => void;
 }
 
 /** Replace/restore a batch as a clean base timeline. Overlay cells are dropped
  *  deliberately: their old columns were aligned to the previous base sequence. */
-export function replaceWithBaseTimeline(versionIds: number[]): AnimFrame[] {
+export function replaceWithBaseTimeline(versionIds: string[]): AnimFrame[] {
   return versionIds.map((versionId, i) => ({
-    id: -1,
+    id: `draft:0:${i}:${versionId}`,
     frameIndex: i,
     versionId,
     durationMs: null,
@@ -44,8 +44,8 @@ export function replaceFrameIfCurrent(
   frames: AnimFrame[],
   track: number,
   col: number,
-  versionId: number,
-  expectedVersionId?: number,
+  versionId: string,
+  expectedVersionId?: string,
 ): AnimFrame[] {
   const current = frames.find((f) => f.track === track && f.frameIndex === col)?.versionId ?? null;
   if (expectedVersionId != null && current !== expectedVersionId) return frames;
@@ -63,7 +63,7 @@ export function useTimelineOps(args: {
 }): TimelineOps {
   const { model, frames, activeTrack, frameIdx, setFrameIdx, applyFlat, hasAnimation } = args;
   const publishBridge = useAnimateSession((s) => s.publishBridge);
-  const clip = useRef<Array<{ track: number; versionId: number }> | null>(null);
+  const clip = useRef<Array<{ track: number; versionId: string }> | null>(null);
 
   useEffect(() => {
     if (!hasAnimation) return;

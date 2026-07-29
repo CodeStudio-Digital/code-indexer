@@ -22,9 +22,9 @@ const clampDim = (v: number): number => Math.max(1, Math.min(16, Math.round(v)))
 export function mountSpriteImportSheetRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/sprite-studio/projects/:projectId/assets/:assetId/import-sheet', async (c) => {
     const ideProjectId = Number(c.req.param('projectId'));
-    const assetId = Number(c.req.param('assetId'));
+    const assetId = c.req.param('assetId');
     const root = deps.db.getProject(ideProjectId)?.root_path ?? null;
-    const asset = deps.spriteAssetsStore.get(assetId);
+    const asset = await deps.spriteFileStore.getAsset(assetId);
     if (!root || !asset) return c.json({ error: 'not_found' }, 404);
 
     let sheet: Buffer;
@@ -66,11 +66,11 @@ export function mountSpriteImportSheetRoutes(app: Hono, deps: ServerDeps): void 
       return c.json({ error: (e as Error).message }, 400);
     }
     try {
-      const versions = pngs.map((png) =>
+      const versions = await Promise.all(pngs.map((png) =>
         writeEditedVersion(deps, root, asset, png, {
           setCurrent: false, source: 'imported', dims: { width: cellWidth, height: cellHeight },
         }),
-      );
+      ));
       return c.json({
         versions: versions.map((v) => toVersionDto(ideProjectId, v)),
         versionIds: versions.map((v) => v.id),

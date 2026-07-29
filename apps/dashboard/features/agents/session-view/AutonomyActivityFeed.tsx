@@ -47,7 +47,7 @@ function relativeTime(atMs: number, lang: string): string {
   }
 }
 
-export function AutonomyActivityFeed({ sessionId = null }: { sessionId?: number | null }) {
+export function AutonomyActivityFeed({ sessionId = null }: { sessionId?: string | null }) {
   const { t, i18n } = useTranslation('agents');
   const state = useCompanyStore((s) => selectAutonomy(s, sessionId ?? null));
   const [filter, setFilter] = useState<Filter>('all');

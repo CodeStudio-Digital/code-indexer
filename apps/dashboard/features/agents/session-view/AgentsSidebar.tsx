@@ -28,7 +28,7 @@ interface ProviderOption {
 }
 
 interface AgentsSidebarProps {
-  sessionId: number;
+  sessionId: string;
   open: boolean;
   config: Record<string, unknown> | null;
   projects: SessionProject[];
@@ -40,8 +40,8 @@ interface AgentsSidebarProps {
   getModelsForProvider: (provider: string) => Array<{ id: string; name: string; mode?: string }>;
   getDefaultModel: (provider: string) => string;
   refetch: () => void;
-  onOpenAgentRun: (agentRunId: number, role: string, status: string) => void;
-  onOpenPersistedRun: (coderSessionId: number, role: string, status: string) => void;
+  onOpenAgentRun: (agentRunId: string, role: string, status: string) => void;
+  onOpenPersistedRun: (coderSessionId: string, role: string, status: string) => void;
   /** Open the role modal: `{ draft }` creates, `{ draft, editIdx }` edits that row. */
   onOpenRoleDialog: (args: { draft: RoleConfig; editIdx?: number }) => void;
   /** App-owned teams are inspected here but configured/controlled via App Studio. */
@@ -395,25 +395,29 @@ export function AgentsSidebar({
           />
         )}
 
-        {subordinates.map((agent) => (
-          <AgentPane
-            key={agent.agentRunId}
-            agent={agent}
-            onClick={() => onOpenAgentRun(agent.agentRunId, agent.role, agent.status)}
-            onPause={readOnly ? undefined : () => void stream.pauseAgent(agent.agentRunId)}
-            onResume={readOnly ? undefined : () => void stream.resumeAgent(agent.agentRunId)}
-            onDelete={readOnly ? undefined : async () => {
+        {subordinates.map((agent) => {
+          const agentRunId = agent.agentRunId;
+          if (!agentRunId) return null;
+          return (
+            <AgentPane
+              key={agentRunId}
+              agent={agent}
+              onClick={() => onOpenAgentRun(agentRunId, agent.role, agent.status)}
+              onPause={readOnly ? undefined : () => void stream.pauseAgent(agentRunId)}
+              onResume={readOnly ? undefined : () => void stream.resumeAgent(agentRunId)}
+              onDelete={readOnly ? undefined : async () => {
               if (await confirm({
                 title: t('agentActions.delete'),
                 description: t('agentActions.deleteConfirm', { role: agent.role }),
                 confirmLabel: t('agentActions.delete'),
                 tone: 'destructive',
               })) {
-                void stream.deleteAgent(agent.agentRunId);
+                void stream.deleteAgent(agentRunId);
               }
             }}
-          />
-        ))}
+            />
+          );
+        })}
 
         {!stream.masterState && !subordinates.length && (
           <p className="text-[10px] text-muted-foreground text-center py-3">

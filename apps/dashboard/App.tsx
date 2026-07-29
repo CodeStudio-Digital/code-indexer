@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react';
 import {
-  createBrowserRouter,
+  createHashRouter,
   Navigate,
   RouterProvider,
   useLocation,
@@ -27,6 +27,17 @@ import { installWebviewBridge } from './features/workspace/webview-bridge.js';
 import { startProjectRoute } from './lib/perf/route-startup-metrics.js';
 import { GlobalNotificationListener } from './features/notifications/GlobalNotificationListener.js';
 import { PushDialogHost } from './features/git-push/PushDialogHost.js';
+import { isAppStudioUuid } from './features/app-studio/session-id.js';
+
+const SESSION_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function sessionIdFromQuery(value: string | null): string | undefined {
+  const candidate = value?.trim();
+  return candidate && SESSION_UUID_PATTERN.test(candidate)
+    ? candidate
+    : undefined;
+}
 
 // Every top-level surface is its own async boundary. Previously App.tsx
 // statically imported the entire dashboard, so opening the project list also
@@ -159,23 +170,10 @@ function AppRoot() {
     };
   }, []);
 
-  // Deep-link from `window.electronAPI.openInNewWindow(route)`. In dev
-  // the main process appends the route to the Vite URL and BrowserRouter
-  // picks it up via pathname automatically. In production we `loadFile`
-  // the bundled index.html with `{ hash: route }` — BrowserRouter can't
-  // read that, so we navigate manually on mount. The hash is consumed
-  // (cleared) so refresh inside the window doesn't double-fire.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const hash = window.location.hash;
-    if (!hash || hash === '#' || hash === '#/') return;
-    const route = hash.startsWith('#') ? hash.slice(1) : hash;
-    if (!route.startsWith('/')) return;
-    // Clear the hash so a manual refresh in the new window doesn't
-    // re-run navigation if the user has since navigated elsewhere.
-    window.history.replaceState(null, '', window.location.pathname + window.location.search);
-    navigate(route, { replace: true });
-  }, [navigate]);
+  // Deep links (`openInNewWindow(route)`) need no handling here: the main
+  // process puts the route in the hash, which under `createHashRouter` IS the
+  // location the router boots from. This used to hand-navigate on mount and
+  // then clear the hash — under hash routing that would wipe the current route.
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -270,14 +268,13 @@ function ProjectViewRoute() {
     return <div className="px-4 py-6 text-sm text-muted-foreground">Loading project…</div>;
   }
 
-  const sessionIdRaw = searchParams.get('session');
-  const initialSessionId = sessionIdRaw ? Number(sessionIdRaw) : undefined;
+  const initialSessionId = sessionIdFromQuery(searchParams.get('session'));
 
   return (
     <ProjectView
       projectId={projectId}
       projectName={project.data.name}
-      initialSessionId={Number.isFinite(initialSessionId) ? initialSessionId : undefined}
+      initialSessionId={initialSessionId}
     />
   );
 }
@@ -289,19 +286,18 @@ function ProjectViewRoute() {
  */
 function GlobalSessionRoute() {
   const [searchParams] = useSearchParams();
-  const sessionIdRaw = searchParams.get('session');
-  const initialSessionId = sessionIdRaw ? Number(sessionIdRaw) : undefined;
+  const initialSessionId = sessionIdFromQuery(searchParams.get('session'));
   return (
     <GlobalSessionWorkbench
-      initialSessionId={Number.isFinite(initialSessionId) ? initialSessionId : undefined}
+      initialSessionId={initialSessionId}
     />
   );
 }
 
 function CompanyRedirectRoute() {
   const { rootId } = useParams<{ rootId: string }>();
-  const id = Number(rootId);
-  if (!Number.isFinite(id)) return <Navigate to="/agents" replace />;
+  const id = rootId?.trim();
+  if (!id) return <Navigate to="/agents" replace />;
   return <Navigate to={buildAgentsDefaultUrl(id)} replace />;
 }
 
@@ -329,12 +325,11 @@ function AppStudioSessionRoute() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const location = useLocation();
   if (!features.appStudioEnabled) return <Navigate to="/" replace />;
-  const id = Number(sessionId);
-  if (!Number.isFinite(id)) return <Navigate to="/apps" replace />;
-  const state = (location.state ?? {}) as { masterSessionId?: number; idea?: string };
+  if (!isAppStudioUuid(sessionId)) return <Navigate to="/apps" replace />;
+  const state = (location.state ?? {}) as { masterSessionId?: string; idea?: string };
   return (
     <AppStudioView
-      sessionId={id}
+      sessionId={sessionId}
       initialMasterSessionId={state.masterSessionId}
       initialIdeaPrompt={state.idea ? `Minha ideia inicial: ${state.idea}` : null}
       onBack={() => navigate('/apps')}
@@ -344,22 +339,19 @@ function AppStudioSessionRoute() {
 
 // ─── Router setup ────────────────────────────────────────────
 
-// Janelas popout (openInNewWindow) carregam, em produção, `index.html` com
-// `{ hash: '/popout/…' }` (main.ts). `createBrowserRouter` lê a location inicial
-// UMA vez no module scope, então reescrevemos o hash → pathname AQUI, antes da
-// criação do router, para que ele case a rota `/popout/:kind` direto — sem
-// passar pelo AppRoot/AppShell (evita o flash do chrome). Em dev a rota já chega
-// pelo pathname, então isto é no-op. Escopado a `/popout/` para não interferir
-// no deep-link normal (que o AppRoot trata após montar).
-(function hoistPopoutHash() {
-  if (typeof window === 'undefined') return;
-  const h = window.location.hash;
-  if (h.startsWith('#/popout/')) {
-    window.history.replaceState(null, '', h.slice(1));
-  }
-})();
-
-const router = createBrowserRouter([
+// Hash routing, not `createBrowserRouter`, because the desktop app loads the
+// renderer off disk (`win.loadFile` → `file://`). A pathname router has to push
+// its routes onto `history`, and under `file://` that collapses `location` to
+// the drive root (`file:///D:/`) — measured in a packaged build. Everything the
+// browser resolves against the document afterwards (relative asset URLs, plain
+// `<a href="/route">`) then points outside the app and 404s.
+//
+// With the route in the hash the document URL never leaves `index.html`, so
+// resolution stays correct and deep links survive a reload. It also matches how
+// the main process already opens popouts: `loadFile(index, { hash: '/popout/…' })`
+// in production and `<devUrl>/#/popout/…` in dev (main.ts) — the hash IS the
+// route now, so no rewriting happens before the router reads it.
+const router = createHashRouter([
   // Rota top-level SEM AppShell: o popout é chrome-less (PopoutRoot traz a
   // própria caption). Por isso é irmã de `/`, não filha do AppRoot.
   { path: '/popout/:kind', element: <RouteBoundary><PopoutRoot /></RouteBoundary> },

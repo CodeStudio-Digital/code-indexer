@@ -14,7 +14,7 @@ import type { ToolContext } from '@mcp/code-agent/core/tool.js';
  *  (mig 132), but profile 'company' remains the audit's strict mode. */
 const strictBinding: DsToolBinding = {
   profile: 'company',
-  resolveDsSession: () => null,
+  resolveDsSession: async () => null,
   describeBinding: () => 'test-strict',
 };
 
@@ -345,16 +345,21 @@ export default {
     expect(failing.errors.some((e) => e.code === 'docs.aggregate_missing')).toBe(true);
   });
 
-  it('studio binding resolves the DS session by project id', () => {
-    const session = { id: 9, project_id: 77, kind: 'studio' };
+  it('studio binding resolves the DS session by project id', async () => {
+    const session = {
+      id: '11111111-1111-4111-8111-111111111111',
+      project_id: 77,
+      kind: 'studio',
+    };
     const store = {
-      getSessionByProjectId: (pid: number) => (pid === 77 ? session : null),
-      getSessionByCompanySessionId: () => null,
+      getSessionByProjectId: async (pid: number) =>
+        pid === 77 ? session : null,
+      getSessionByCompanySessionId: async () => null,
     } as never;
     const binding = studioBinding(77);
     expect(binding.profile).toBe('studio');
-    expect(binding.resolveDsSession(store)).toEqual(session);
+    await expect(binding.resolveDsSession(store)).resolves.toEqual(session);
     expect(binding.describeBinding()).toBe('project_id=77');
-    expect(studioBinding(1).resolveDsSession(store)).toBeNull();
+    await expect(studioBinding(1).resolveDsSession(store)).resolves.toBeNull();
   });
 });

@@ -362,7 +362,7 @@ function goalLifecycleSection(available?: ReadonlySet<string>): string {
     return '';
   }
   return `# Goal lifecycle
-Before non-trivial work, call \`create_goal\`. Verify, then complete. On explicit pivot, supersede with a reason, then create a replacement.
+Goals are optional durable context and telemetry; they never authorize tools or block a final response. Use \`create_goal\` when continuity across turns or compaction is useful. \`update_goal(status="complete")\` persists immediately and reports verification health as advisory. On explicit pivot, supersede with a reason before creating a replacement.
   `;
 }
 

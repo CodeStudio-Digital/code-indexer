@@ -15,19 +15,19 @@ export function useAnimGeneration({
   applyServer, onSaved, refreshVersions, onError,
 }: {
   current: anim.SpriteAnimation | null;
-  assetId: number;
-  jobs: Map<number, JobState>;
+  assetId: string;
+  jobs: Map<string, JobState>;
   direction: string;
-  anchorId: number | null;
+  anchorId: string | null;
   frameCount: number;
   applyServer: (updated: anim.SpriteAnimation) => void;
-  onSaved: (assetId: number, versionId: number) => void;
+  onSaved: (assetId: string, versionId: string) => void;
   refreshVersions: () => void;
   onError: (msg: string) => void;
 }): { generate: () => void; running: boolean; adopting: boolean; failed: boolean; genState: JobState | undefined } {
-  const [genJobId, setGenJobId] = useState<number | null>(null);
+  const [genJobId, setGenJobId] = useState<string | null>(null);
   const [adopting, setAdopting] = useState(false);
-  const adoptedRef = useRef<Set<number>>(new Set());
+  const adoptedRef = useRef<Set<string>>(new Set());
 
   // Drop any in-flight job reference when the focused asset changes.
   useEffect(() => { setGenJobId(null); }, [assetId]);
@@ -55,7 +55,8 @@ export function useAnimGeneration({
       .then((updated) => {
         applyServer(updated);
         setGenJobId(null);
-        onSaved(assetId, updated.frames[0]?.versionId ?? 0);
+        const firstVersionId = updated.frames[0]?.versionId;
+        if (firstVersionId) onSaved(assetId, firstVersionId);
         refreshVersions();
       })
       .catch((e) => onError((e as Error).message))

@@ -3,6 +3,7 @@ import { createRunEndMemory } from '../run-end.js';
 import type { MemoryCandidate, MemoryDistiller, MemoryWriter, MemoryDedupeSearch } from '../extractor.js';
 import type { ContextSnapshot } from '@mcp/shared/types.js';
 import type { PipelineProviderResolver } from '../../pipelines/index.js';
+import { asSessionId } from '@mcp/session-storage';
 
 function fakeWriter() {
   const creates: Array<{ projectId: number; data: Record<string, unknown> }> = [];
@@ -166,6 +167,9 @@ describe('createRunEndMemory', () => {
   });
 
   it('promotes durable session notes as literal candidates and logs the pass', async () => {
+    const sessionId = asSessionId(
+      '00000000-0000-4000-8000-000000000042',
+    );
     const w = fakeWriter();
     const logs: Array<{ projectId: number; entry: Record<string, unknown> }> = [];
     const noop: MemoryDistiller = { async distill() { return []; } };
@@ -179,7 +183,7 @@ describe('createRunEndMemory', () => {
     const result = await rem.extractAndPersist(7, 'proj', {
       summary: 's',
       trigger: 'compaction',
-      sessionId: 42,
+      sessionId,
       sessionNotes: [
         { title: 'ABI mismatch on tests', body: 'rebuild with app closed', kind: 'gotcha', pinned: false },
         { title: 'WIP scratch', body: 'ignore me', kind: 'fact', pinned: false },
@@ -193,6 +197,11 @@ describe('createRunEndMemory', () => {
     expect(w.creates.map((c) => c.data.source)).toEqual(['session', 'session']);
     expect(logs).toHaveLength(1);
     expect(logs[0].projectId).toBe(7);
-    expect(logs[0].entry).toMatchObject({ trigger: 'compaction', sessionId: 42, status: 'ok', created: 2 });
+    expect(logs[0].entry).toMatchObject({
+      trigger: 'compaction',
+      sessionId,
+      status: 'ok',
+      created: 2,
+    });
   });
 });

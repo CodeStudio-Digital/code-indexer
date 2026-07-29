@@ -18,6 +18,7 @@ import {
 } from '../../snapshots/api.js';
 import { FileChangeRow } from './FileChangeRow.js';
 import { useSnapshotActions, useSnapshotFiles } from './snapshot-files-context.js';
+import { matchSnapshotPath } from './snapshot-path-match.js';
 import type { EditFileRef } from './edit-tools.js';
 import type {
   RoundSnapshotFileSummary,
@@ -86,7 +87,7 @@ export function TurnFilesSummary({
   const { added, removed, globalBaselineIds } = useMemo(() => {
     let a = 0;
     let r = 0;
-    const ids = new Set<number>();
+    const ids = new Set<string>();
     for (const snapshot of roundFiles) {
       a += snapshot.addedLines;
       r += snapshot.removedLines;
@@ -97,7 +98,7 @@ export function TurnFilesSummary({
     // never for the round counts or inline diff.
     if (ids.size === 0) {
       for (const ref of paths) {
-        const global = byPath.get(ref.path);
+        const global = matchSnapshotPath(byPath, ref.path).file;
         if (global) ids.add(global.baselineId);
       }
     }

@@ -8,13 +8,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { DEFAULT_SPRITE_STYLE } from '@mcp/store/sprite-studio/types.js';
-import type { SpriteFrameRow } from '@mcp/store/sprite-studio/types.js';
 import { actionSpec, SPRITE_ACTION_CATALOG } from '../action-catalog.js';
 import { buildAnimationIntent } from '../animation-prompt.js';
 import { runGenerationJob } from '../job-runner.js';
 import { promoteFrames, stagedCandidateIndices } from '../promote-frames.js';
 import { writeAssetManifest } from '../../repo/manifest.js';
-import { fakeClient, makeWorld, RED_1PX } from './runner-fakes.js';
+import { fakeClient, makeWorld, RED_1PX, spriteId } from './runner-fakes.js';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sprite-anim-test-'));
 afterAll(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
@@ -92,19 +91,22 @@ describe('promoteFrames', () => {
     });
     const w = makeWorld({
       scratchRoot: path.join(tmpRoot, 'promote'),
-      chain: [], projectRoot, assetId: 7, assetSlug: 'goblin',
+      chain: [], projectRoot, assetId: spriteId(7), assetSlug: 'goblin',
     });
-    const scratch = w.deps.scratchDir(900);
+    const scratch = w.deps.scratchDir(spriteId(900));
     fs.mkdirSync(scratch, { recursive: true });
     for (const i of [0, 1, 2]) fs.writeFileSync(path.join(scratch, `candidate-${i}.png`), RED_1PX);
 
-    const replaced: Array<{ animationId: number; versionIds: number[] }> = [];
+    const replaced: Array<{ animationId: string; versionIds: string[] }> = [];
     const animations = {
-      replaceFrames: (animationId: number, frames: Array<{ frame_index: number; version_id: number; duration_ms?: number | null }>): SpriteFrameRow[] => {
+      replaceFrames: async (
+        animationId: string,
+        frames: Array<{ frame_index: number; version_id: string }>,
+      ) => {
         replaced.push({ animationId, versionIds: frames.map((f) => f.version_id) });
         return frames.map((f, i) => ({
-          id: i + 1, animation_id: animationId, frame_index: i,
-          version_id: f.version_id, duration_ms: f.duration_ms ?? null, track: 0,
+          id: spriteId(i + 1), animation_id: animationId, frame_index: i,
+          version_id: f.version_id, duration_ms: null, track: 0,
         }));
       },
     };
@@ -115,12 +117,19 @@ describe('promoteFrames', () => {
         projectRoot: () => projectRoot,
         now: () => '2026-07-03T00:00:00.000Z',
       },
-      { jobId: 900, animationId: 42, asset: { id: 7, slug: 'goblin' } },
+      {
+        jobId: spriteId(900),
+        animationId: spriteId(42),
+        asset: { id: spriteId(7), slug: 'goblin' },
+      },
     );
 
     expect(result.versions.map((v) => v.version)).toEqual([1, 2, 3]);
     expect(w.insertedVersions).toHaveLength(3);
-    expect(replaced).toEqual([{ animationId: 42, versionIds: [101, 102, 103] }]);
+    expect(replaced).toEqual([{
+      animationId: spriteId(42),
+      versionIds: [spriteId(101), spriteId(102), spriteId(103)],
+    }]);
     expect(result.frames.map((f) => f.frame_index)).toEqual([0, 1, 2]);
     for (const v of [1, 2, 3]) {
       expect(
@@ -129,7 +138,7 @@ describe('promoteFrames', () => {
     }
     // The asset had no current version → the FIRST frame becomes it (not the
     // last one promoteCandidate happened to touch).
-    expect(w.currentVersionSets.at(-1)).toEqual([7, 101]);
+    expect(w.currentVersionSets.at(-1)).toEqual([spriteId(7), spriteId(101)]);
   });
 
   it('stops candidate discovery at the first index gap and fails on none', async () => {
@@ -140,7 +149,7 @@ describe('promoteFrames', () => {
     expect(stagedCandidateIndices(path.join(tmpRoot, 'missing-dir'))).toEqual([]);
 
     const w = makeWorld({ scratchRoot: path.join(tmpRoot, 'none'), chain: [] });
-    const animations = { replaceFrames: (): SpriteFrameRow[] => [] };
+    const animations = { replaceFrames: async () => [] };
     await expect(
       promoteFrames(
         {
@@ -148,7 +157,11 @@ describe('promoteFrames', () => {
           scratchDir: w.deps.scratchDir,
           projectRoot: () => tmpRoot,
         },
-        { jobId: 900, animationId: 1, asset: { id: 7, slug: 'goblin' } },
+        {
+          jobId: spriteId(900),
+          animationId: spriteId(1),
+          asset: { id: spriteId(7), slug: 'goblin' },
+        },
       ),
     ).rejects.toThrow(/No staged candidates/);
   });

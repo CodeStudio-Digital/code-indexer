@@ -5,8 +5,8 @@
  * principles section of the company-mode plan.
  *
  * Scope:
- *   - `packages/{services,company,company-contracts,store,shared,indexer,code-agent,design-system}/src/**\/*.{ts,tsx}`
- *   - `apps/{http-api,dashboard,cli}/**\/*.{ts,tsx}`
+ *   - core TypeScript packages and apps (`*.ts`, `*.tsx`);
+ *   - the Rust agent crates (`*.rs`);
  *   - Test files (`*.test.ts`, `__tests__/`) and seeds are excluded.
  *
  * Two levels:
@@ -36,7 +36,10 @@ const ROOTS = [
   'packages/shared/src',
   'packages/indexer/src',
   'packages/code-agent/src',
+  'packages/agent-runtime-contracts/src',
+  'packages/agent-runtime-host/src',
   'packages/design-system/src',
+  'native/agent-runtime/crates',
   'apps/http-api',
   'apps/dashboard',
   'apps/cli',
@@ -48,6 +51,7 @@ const EXCLUDE_DIRS = new Set([
   '__tests__',
   'tests',
   '__snapshots__',
+  'generated',
   '.next',
   'data',
 ]);
@@ -192,7 +196,7 @@ function shouldSkipFile(name: string): boolean {
   for (const re of EXCLUDE_FILE_PATTERNS) {
     if (re.test(name)) return true;
   }
-  if (!/\.(ts|tsx)$/.test(name)) return true;
+  if (!/\.(ts|tsx|rs)$/.test(name)) return true;
   return false;
 }
 

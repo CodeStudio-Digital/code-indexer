@@ -6,6 +6,9 @@ import {
   SPRITE_ASSET_MIME,
 } from '../library/asset-drag.js';
 
+const ASSET_ID = '00000000-0000-4000-8000-000000000003';
+const VERSION_ID = '00000000-0000-4000-8000-000000000009';
+
 function fakeDataTransfer(): DataTransfer {
   const store = new Map<string, string>();
   return {
@@ -21,15 +24,25 @@ describe('asset-drag payload', () => {
     const dt = fakeDataTransfer();
     expect(hasAssetDragData(dt)).toBe(false);
 
-    setAssetDragData(dt, { assetId: 3, slug: 'hero', versionId: 9, thumbUrl: '/thumb.png' });
+    setAssetDragData(dt, { assetId: ASSET_ID, slug: 'hero', versionId: VERSION_ID, thumbUrl: '/thumb.png' });
     expect(dt.effectAllowed).toBe('copy');
     expect(hasAssetDragData(dt)).toBe(true);
-    expect(readAssetDragData(dt)).toEqual({ assetId: 3, slug: 'hero', versionId: 9, thumbUrl: '/thumb.png' });
+    expect(readAssetDragData(dt)).toEqual({
+      assetId: ASSET_ID,
+      slug: 'hero',
+      versionId: VERSION_ID,
+      thumbUrl: '/thumb.png',
+    });
   });
 
   it('uses a dedicated MIME so version/OS drags never collide', () => {
     const dt = fakeDataTransfer();
-    dt.setData('application/x-sprite-version', JSON.stringify({ versionId: 1, assetId: 1, version: 1, label: 'v001' }));
+    dt.setData('application/x-sprite-version', JSON.stringify({
+      versionId: VERSION_ID,
+      assetId: ASSET_ID,
+      version: 1,
+      label: 'v001',
+    }));
     dt.setData('text/plain', 'not-an-asset');
     expect(SPRITE_ASSET_MIME).toBe('application/x-sprite-asset');
     expect(hasAssetDragData(dt)).toBe(false);
@@ -38,11 +51,19 @@ describe('asset-drag payload', () => {
 
   it('rejects optional fields with wrong types', () => {
     const wrongVersion = fakeDataTransfer();
-    wrongVersion.setData(SPRITE_ASSET_MIME, JSON.stringify({ assetId: 3, slug: 'hero', versionId: '9' }));
+    wrongVersion.setData(SPRITE_ASSET_MIME, JSON.stringify({
+      assetId: ASSET_ID,
+      slug: 'hero',
+      versionId: 9,
+    }));
     expect(readAssetDragData(wrongVersion)).toBeNull();
 
     const wrongThumb = fakeDataTransfer();
-    wrongThumb.setData(SPRITE_ASSET_MIME, JSON.stringify({ assetId: 3, slug: 'hero', thumbUrl: 42 }));
+    wrongThumb.setData(SPRITE_ASSET_MIME, JSON.stringify({
+      assetId: ASSET_ID,
+      slug: 'hero',
+      thumbUrl: 42,
+    }));
     expect(readAssetDragData(wrongThumb)).toBeNull();
   });
 });

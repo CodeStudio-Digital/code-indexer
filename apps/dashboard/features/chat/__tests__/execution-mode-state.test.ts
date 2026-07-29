@@ -12,11 +12,11 @@ import {
 } from '../execution-mode-state.js';
 import type { CoderSession, ProviderOption, SessionData } from '../types.js';
 
-function session(id: number, patch: Partial<CoderSession> = {}): CoderSession {
+function session(id: string, patch: Partial<CoderSession> = {}): CoderSession {
   return {
     id,
     project_id: 1,
-    title: `Session ${id}`,
+    title: `Session ${id.slice(0, 8)}`,
     provider: 'test',
     model: 'reasoner',
     status: 'idle',
@@ -57,6 +57,9 @@ const providers: ProviderOption[] = [{
   ],
 }];
 
+const SESSION_ID = '018f0f5e-7b2d-7a45-8c11-0123456789ab';
+const LEGACY_SESSION_ID = '018f0f5e-7b2d-7a45-8c11-0123456789ac';
+
 describe('execution-mode dashboard state', () => {
   it('defaults every new session class, including global sessions, to Standard', () => {
     expect(DEFAULT_NEW_EXECUTION_MODE).toBe('standard');
@@ -85,14 +88,14 @@ describe('execution-mode dashboard state', () => {
   });
 
   it('derives legacy Ultra but never hydrates a stale session payload', () => {
-    const legacy = session(7, {
+    const legacy = session(LEGACY_SESSION_ID, {
       execution_mode_override: 'standard',
       reasoning_effort_override: '  ULTRA ',
     });
-    expect(hydratedExecutionMode(legacy, 7)).toBe('ultra');
-    expect(hydratedReasoningEffort(legacy, 7)).toBeNull();
-    expect(hydratedExecutionMode(legacy, 8)).toBeNull();
-    expect(hydratedReasoningEffort(legacy, 8)).toBeUndefined();
+    expect(hydratedExecutionMode(legacy, LEGACY_SESSION_ID)).toBe('ultra');
+    expect(hydratedReasoningEffort(legacy, LEGACY_SESSION_ID)).toBeNull();
+    expect(hydratedExecutionMode(legacy, SESSION_ID)).toBeNull();
+    expect(hydratedReasoningEffort(legacy, SESSION_ID)).toBeUndefined();
   });
 
   it('filters stale Ultra, blanks, and duplicate native reasoning levels', () => {
@@ -115,19 +118,24 @@ describe('execution-mode dashboard state', () => {
     expect(executionModeChangeLocked(true, 'idle')).toBe(true);
     expect(executionModeChangeLocked(false, 'running')).toBe(true);
     expect(executionModeChangeLocked(false, 'idle')).toBe(false);
-    expect(executionModeChangeLocked(false, 'running', 4, 5)).toBe(false);
+    expect(executionModeChangeLocked(
+      false,
+      'running',
+      SESSION_ID,
+      LEGACY_SESSION_ID,
+    )).toBe(false);
   });
 
   it('merges server state only into the matching session cache and clears legacy effort', () => {
-    const current = data(session(4, { reasoning_effort_override: 'ultra' }));
-    const stale = mergeExecutionModeSessionData(current, 5, 'ultra');
+    const current = data(session(SESSION_ID, { reasoning_effort_override: 'ultra' }));
+    const stale = mergeExecutionModeSessionData(current, LEGACY_SESSION_ID, 'ultra');
     expect(stale).toBe(current);
 
     const merged = mergeExecutionModeSessionData(
       current,
-      4,
+      SESSION_ID,
       'ultra',
-      session(4, { title: 'Server title', reasoning_effort_override: null }),
+      session(SESSION_ID, { title: 'Server title', reasoning_effort_override: null }),
     );
     expect(merged.session.title).toBe('Server title');
     expect(merged.session.execution_mode_override).toBe('ultra');

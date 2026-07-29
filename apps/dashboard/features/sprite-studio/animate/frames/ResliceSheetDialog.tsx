@@ -29,8 +29,8 @@ export function ResliceSheetDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   projectId: number;
-  assetId: number;
-  jobId: number;
+  assetId: string;
+  jobId: string;
   defaultGrid: { cols: number; rows: number };
   refresh: () => void;
 }) {

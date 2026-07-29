@@ -357,18 +357,18 @@ export interface ToolContext {
   cwd: string;
   /**
    * Session project name injected into MCP calls. In ordinary sessions this is
-   * the real project; in global sessions it is the synthetic union project.
-   * Use `globalWorkspace` for the real linked projects/folders.
+   * the real project; in global sessions it is the primary real project.
+   * Use `globalWorkspace` for every linked project/root.
    */
   projectName: string;
   /**
-   * Global-session virtual union metadata. The filesystem root (`cwd`) is a
-   * directory containing one link per real project, addressed by `slug`.
-   * Undefined for ordinary sessions.
+   * Global-session multi-root metadata. `cwd` is the primary real project and
+   * every project entry carries its own authorized root. No union directory or
+   * symbolic link is created. Undefined for ordinary sessions.
    */
   globalWorkspace?: {
-    syntheticProjectName: string;
-    rootPath: string;
+    sessionTitle: string;
+    primaryRootPath: string;
     projects: ReadonlyArray<{
       projectId: number;
       name: string;
@@ -378,20 +378,18 @@ export interface ToolContext {
     }>;
   };
   /**
-   * Linked SECONDARY roots for a GLOBAL (multi-project) session (migration 152).
-   * The PRIMARY stays `cwd`/`projectName`/`projectId`; these are additional roots
-   * the agent can read/write by passing `project: "<slug>"` (or `project_name`)
-   * to the native fs tools. Each `slug` matches the `mcp__<slug>__*` read-tool
-   * prefix the model already sees for that project. Empty/undefined for normal
-   * sessions, so single-root behaviour (and the cross-project refusal guard) is
-   * unchanged for them.
+   * Linked secondary roots for a global session. Public native-tool paths use
+   * `<slug>/...`; the primary remains the unprefixed `cwd`. Each slug also
+   * matches the `mcp__<slug>__*` tool prefix. Empty for ordinary sessions.
    */
   roots?: ReadonlyArray<{ projectId: number; name: string; slug: string; rootPath: string }>;
   /** Host directories explicitly authorized for this session. These are kept
    * separate from linked projects: they are not indexed/config roots and are
    * reachable only through native filesystem tools using absolute paths. */
   externalRoots?: ReadonlyArray<{
-    id: number;
+    id: string;
+    /** Numeric ordering key; never used as public identity. */
+    seq?: number;
     rootPath: string;
     access: 'read' | 'write';
   }>;
@@ -415,7 +413,17 @@ export interface ToolContext {
    * persists large tool results here so the `get_tool_output` native tool
    * can fetch the full content later. Undefined inside subagents and tests.
    */
-  toolOutputStore?: import('@mcp/code-agent/overlay/tool-output-store.js').ToolOutputStore;
+  /**
+   * Session-owned large-output store. Implementations may keep a synchronous
+   * hot cache for tool execution, but `drain()` is the durability barrier the
+   * host awaits before committing the containing turn.
+   */
+  toolOutputStore?: {
+    put(content: string): string | null;
+    get(id: string): string | null;
+    hasOutputs(): boolean;
+    drain?(): Promise<void>;
+  };
   /**
    * Exact inline ceiling resolved by the active runner/model. Pagination tools
    * use it BEFORE slicing so their page is not truncated a second time by the
@@ -430,16 +438,15 @@ export interface ToolContext {
    * `capFor(level, <its base>, <its ceiling>)` (`MCP_OUTPUT_HARD_CAP` in
    * mcp-bridge, `MAX_OUTPUT_BYTES` in code_exec, `READ_FILE_HARD_MAX` clamp on
    * read_file, and the runner push-time cap). Undefined → 'economic' (production
-   * defaults). Auto-compaction still runs. Mirrors the
-   * `coder_sessions.tool_output_cap_level` column.
+   * defaults). Auto-compaction still runs. Mirrors the bundle state projection.
    */
   toolOutputCapLevel?: import('./runner/output-caps.js').ToolOutputCapLevel;
   /**
    * Per-session tool permission gate (ask/auto/unrestricted). Consulted by
    * executing-dispatch and code_exec BEFORE invoking gated tools. Holds the
    * PARENT runner's waitForUserInput/emit, so subagent context copies surface
-   * and resolve approvals at session level. Mirrors
-   * `coder_sessions.tool_permission_mode`. Undefined in tests/legacy paths.
+   * and resolve approvals at session level. Mirrors `state.json`.
+   * Undefined in ephemeral tests.
    */
   permissionGate?: import('./permission-gate.js').PermissionGate;
   /**
@@ -490,10 +497,10 @@ export interface ToolContext {
    */
   sessionChanges?: {
     /** Reviewable pending diffs (filtered, cumulative baselines). */
-    getDiffs(): Promise<import('@mcp/services/services/session-snapshots.js').FileDiff[]>;
+    getDiffs(): Promise<import('@mcp/services/services/session-snapshots.js').FileDiff<string>[]>;
     /** Pre-edit content of one baseline. Null when the file did not exist OR
      *  the content is unavailable (oversized/binary baseline) — never ''. */
-    getBeforeContent(baselineId: number): Promise<string | null>;
+    getBeforeContent(baselineId: string): Promise<string | null>;
   };
   /** Optional abort signal for long-running operations. */
   signal?: AbortSignal;
@@ -525,16 +532,16 @@ export interface ToolContext {
   projectIndexed?: boolean;
   /**
    * Optional persistence sinks for the submit_plan tool. When wired by
-   * runCoder() they delegate to the SessionStore so plans show up in
+   * runCoder() they delegate to the filesystem session repository so plans show up in
    * the dashboard's "Plans" tab. Tools (and tests) that don't have a
    * store available simply leave these undefined.
    */
-  recordPlan?: (toolUseId: string, planText: string) => void;
+  recordPlan?: (toolUseId: string, planText: string) => void | Promise<void>;
   resolvePlan?: (
     toolUseId: string,
     status: 'approved' | 'rejected' | 'aborted',
     feedback?: string,
-  ) => void;
+  ) => void | Promise<void>;
   /**
    * Persist a new built-in agent for the current session — used by mode
    * transitions (e.g. plan→build after a plan is approved). When wired by
@@ -543,7 +550,9 @@ export interface ToolContext {
    * etc.) automatically. The in-memory runner's `opts.agentId` stays put;
    * the transition takes full effect on the next message turn.
    */
-  setSessionAgent?: (agent: import('@mcp/code-agent/agents/index.js').AgentId) => void;
+  setSessionAgent?: (
+    agent: import('@mcp/code-agent/agents/index.js').AgentId,
+  ) => void | Promise<void>;
   /**
    * Optional persistence sinks for the submit_tasks / execute_task /
    * task_complete tools. Wired by runCoder() so the dashboard's task list
@@ -553,18 +562,23 @@ export interface ToolContext {
   recordTasks?: (
     toolUseId: string,
     state: import('@mcp/code-agent/sessions/types.js').TasksState,
-  ) => void;
+  ) => void | Promise<void>;
   resolveTasks?: (verdict: {
     approved: boolean;
     tasks?: import('@mcp/code-agent/sessions/types.js').CoderTask[];
     execution_mode?: import('@mcp/code-agent/sessions/types.js').TaskExecutionMode | null;
-  }) => void;
+  }) => void | Promise<void>;
   updateTaskStatus?: (
     taskId: string,
     patch: Partial<import('@mcp/code-agent/sessions/types.js').CoderTask>,
-  ) => import('@mcp/code-agent/sessions/types.js').TasksState | null;
-  getTasksState?: () => import('@mcp/code-agent/sessions/types.js').TasksState | null;
-  clearTasksState?: () => boolean;
+  ) =>
+    | import('@mcp/code-agent/sessions/types.js').TasksState
+    | null
+    | Promise<import('@mcp/code-agent/sessions/types.js').TasksState | null>;
+  getTasksState?: () =>
+    | import('@mcp/code-agent/sessions/types.js').TasksState
+    | null;
+  clearTasksState?: () => boolean | Promise<boolean>;
   /**
    * Optional persistence sinks for the goal tools (`create_goal`,
    * `get_goal`, `update_goal`). Wired by `runCoder` so the goal survives
@@ -596,6 +610,17 @@ export interface ToolContext {
     },
   ) => void | Promise<void>;
   /**
+   * Declares that a SUCCESSFUL goal tool call intentionally changed no state
+   * (redundant create against an in_progress goal, update to the status the
+   * goal already has). Without it the persistence invariant — every successful
+   * goal tool must carry a staged mutation — treats the idempotent success as
+   * a lost write and fails the whole turn.
+   */
+  noteGoalUnchanged?: (attribution: {
+    toolUseId: string;
+    toolName: 'create_goal' | 'update_goal';
+  }) => void;
+  /**
    * Runtime-owned objective authority. `update_goal(status="superseded")`
    * is accepted only for an explicit user pivot classified required_pivot.
    */
@@ -619,9 +644,22 @@ export interface ToolContext {
    * "not available here" message instead of throwing).
    */
   sessionDrive?: {
-    readActivePlan(): { text: string; status: string } | null;
-    remember(input: { title: string; body: string; kind?: string; pinned?: boolean }): { title: string };
-    listMemory(opts?: { kind?: string }): Array<{ kind: string; title: string; body: string; pinned: number; updated_at: string }>;
+    readActivePlan(): Promise<{ text: string; status: string } | null>;
+    remember(input: {
+      title: string;
+      body: string;
+      kind?: string;
+      pinned?: boolean;
+    }): Promise<{ title: string }>;
+    listMemory(opts?: { kind?: string }): Promise<
+      Array<{
+        kind: string;
+        title: string;
+        body: string;
+        pinned: boolean;
+        updated_at: string;
+      }>
+    >;
     recallInvestigations(query: string, limit?: number): Promise<Array<{ topic: string; summary: string; source_label: string | null; agent_type: string | null; created_at: string }>>;
   };
   /**
@@ -631,10 +669,10 @@ export interface ToolContext {
    * historical summaries (or raw transcript) into every prompt.
    */
   conversationHistory?: {
-    list(opts?: { limit?: number; cursor?: string | null }): import('@mcp/code-agent/sessions/types.js').ConversationChapterPage<import('@mcp/code-agent/sessions/types.js').ConversationChapterRow>;
-    search(query: string, opts?: { limit?: number; cursor?: string | null }): import('@mcp/code-agent/sessions/types.js').ConversationChapterPage<import('@mcp/code-agent/sessions/types.js').ConversationChapterSearchResult>;
-    get(chapterId: number): import('@mcp/code-agent/sessions/types.js').ConversationChapterRow | null;
-    source(chapterId: number, opts?: { limit?: number; cursor?: string | null }): import('@mcp/code-agent/sessions/types.js').ConversationChapterPage<import('@mcp/code-agent/sessions/types.js').CoderMessageRow>;
+    list(opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterPage<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterRow>>;
+    search(query: string, opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterPage<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterSearchResult>>;
+    get(chapterId: string): Promise<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterRow | null>;
+    source(chapterId: string, opts?: { limit?: number; cursor?: string | null }): Promise<import('@mcp/code-agent/sessions/fs-store/history-metrics-types.js').FsConversationChapterSourcePage>;
   };
   /**
    * Durable PROJECT memory ports (cross-session, snapshots table). Wired by
@@ -687,7 +725,7 @@ export interface ToolContext {
    * per-agent resources like the dedicated preview/devtools window. Company
    * agents key off `companyContext.agentRunId/companySessionId` instead.
    */
-  sessionId?: number;
+  sessionId?: import('@mcp/session-storage').SessionId;
   /**
    * Opaque identity of the current root AgentRun, established by the host
    * before worker dispatch. Subagent creation uses it as the authoritative
@@ -697,7 +735,7 @@ export interface ToolContext {
    */
   controlPlaneParentAgentRunId?: string;
   /**
-   * The session's project id (coder_sessions.project_id). Lets project-aware
+   * The session bundle's owning project id. Lets project-aware
    * tools (`rag_search_docs` linked-collection scoping, the `<indexed-docs>`
    * hint) resolve project-scoped state without a DB round-trip per call.
    */

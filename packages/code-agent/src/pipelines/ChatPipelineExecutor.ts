@@ -1,6 +1,6 @@
 /**
  * ChatPipelineExecutor — orchestrates a pipeline graph owned by a
- * `coder_sessions` row (the chat pipeline mode).
+ * filesystem session bundle (the chat pipeline mode).
  *
  * Mirrors the public API of the company `PipelineExecutor` so the HTTP
  * route layer (PR-3) can swap which executor handles a request without
@@ -15,9 +15,9 @@
  *      `verdictTokenResolver` plugged into `resolveBranchVerdictPure`
  *      lets the kernel route along `pass | fail | review` edges.
  *
- * Persistence still lands in the tables created by migration 058 (and
- * extended by migration 077 for `coder_session_id` + `usage_json`), so
- * the dashboard's pipeline read paths continue to work.
+ * Templates remain in CompanyStore, while every execution and node state
+ * is persisted as an independent entity in the owner session's `company/`
+ * directory. No operational pipeline state touches SQLite.
  */
 
 import { runSubagent } from '@mcp/code-agent/tools/implement-subagent.js';
@@ -49,17 +49,20 @@ import type { ChatPipelineBus } from '@mcp/code-agent/pipelines/lib/eventBus.js'
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import type { CompanyStore } from '@mcp/store/company-store.js';
 import type {
+  FsChatPipelineExecution,
+  FsChatPipelineNodeExecution,
+  FsSessionStore,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/session-storage';
+import type {
+  Pipeline,
   PipelineEdge,
-  PipelineExecution,
   PipelineExecutionContext,
   PipelineExecutionStatus,
   PipelineGraph,
   PipelineNode,
-  PipelineNodeExecution,
-} from '@mcp/company/types.js';
+} from '@mcp/company-contracts';
 
 const DEFAULT_NODE_MAX_ATTEMPTS = 3;
 const GLOBAL_NODE_EXECUTION_CAP = 50;
@@ -68,29 +71,34 @@ const DEFAULT_VALIDATOR_MAX_TURNS = 6;
 
 export interface ChatPipelineExecutorDeps {
   /** Owner chat session — published on every event and stored on every row. */
-  coderSessionId: number;
+  coderSessionId: SessionId;
   /** Default provider for stages without `model_override`. */
   defaultProvider: ChatProvider;
   /** Tools the parent chat session has registered. Filtered per-stage. */
   parentTools: CoderTool[];
   /** Tool context inherited by each stage subagent (cwd, overlay, etc.). */
   baseContext: Pick<ToolContext, 'cwd' | 'projectName' | 'overlay'>;
-  sessionStore: SessionStore;
-  companyStore: CompanyStore;
+  sessionStore: FsSessionStore;
+  companyStore: {
+    getPipeline(id: number): Pipeline | null | Promise<Pipeline | null>;
+  };
   bus: ChatPipelineBus;
   /** Optional V2 framing flag, propagated to each stage's runSubagent. */
   agentLoopV2?: boolean;
 }
 
 interface ActiveStage {
-  executionId: number;
+  executionId: string;
   controller: AbortController;
-  nodeExecutionId: number;
+  nodeExecutionId: string;
 }
+
+type ChatPipelineExecution =
+  FsChatPipelineExecution<PipelineExecutionContext>;
 
 export class ChatPipelineExecutor {
   /** Per-execution AbortController so pause/abort can interrupt the running stage. */
-  private readonly activeStages = new Map<number, ActiveStage>();
+  private readonly activeStages = new Map<string, ActiveStage>();
   /** Provider cache lives per-executor; identical (provider, model) pairs reuse instances. */
   private readonly providerCache: ProviderCache = makeProviderCache();
 
@@ -102,8 +110,8 @@ export class ChatPipelineExecutor {
     pipelineId: number,
     initialInput: string,
     startedBy = 'user',
-  ): Promise<PipelineExecution> {
-    const pipeline = this.deps.companyStore.getPipeline(pipelineId);
+  ): Promise<ChatPipelineExecution> {
+    const pipeline = await this.deps.companyStore.getPipeline(pipelineId);
     if (!pipeline) throw new Error(`Pipeline ${pipelineId} not found.`);
 
     const startNode = resolveStartNode(pipeline.graph);
@@ -114,15 +122,24 @@ export class ChatPipelineExecutor {
       vars: {},
     };
 
-    const execution = this.deps.companyStore.createPipelineExecution({
-      pipelineId,
-      projectId: this.deps.sessionStore.getSession(this.deps.coderSessionId)?.project_id ?? null,
-      coderSessionId: this.deps.coderSessionId,
-      initialInput,
-      context,
-      startedBy,
-      currentNodeId: startNode.id,
-    });
+    const owner = await this.deps.sessionStore.getSession(
+      this.deps.coderSessionId,
+    );
+    if (!owner) {
+      throw new Error(
+        `Session ${this.deps.coderSessionId} not found.`,
+      );
+    }
+    const execution =
+      await this.deps.sessionStore.chatPipelines.createExecution({
+        session_id: this.deps.coderSessionId,
+        pipeline_id: pipelineId,
+        project_id: owner.project_id,
+        initial_input: initialInput,
+        context,
+        started_by: startedBy,
+        current_node_id: startNode.id,
+      });
 
     this.deps.bus.publish({
       name: 'pipeline_started',
@@ -136,18 +153,27 @@ export class ChatPipelineExecutor {
     return execution;
   }
 
-  abort(executionId: number, reason?: string): boolean {
-    const exec = this.deps.companyStore.getPipelineExecution(executionId);
+  async abort(executionId: string, reason?: string): Promise<boolean> {
+    const exec =
+      await this.deps.sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+      this.deps.coderSessionId,
+      executionId,
+    );
     if (!exec) return false;
     if (exec.status !== 'running' && exec.status !== 'paused') return false;
 
     this.detachStage(executionId, { abort: true });
 
-    this.deps.companyStore.updatePipelineExecution(executionId, {
+    await this.deps.sessionStore.chatPipelines.updateExecution(
+      this.deps.coderSessionId,
+      executionId,
+      {
       status: 'aborted',
       finishedAt: nowIso(),
       errorMessage: reason ?? null,
-    });
+      },
+    );
 
     this.deps.bus.publish({
       name: 'pipeline_aborted',
@@ -159,24 +185,37 @@ export class ChatPipelineExecutor {
     return true;
   }
 
-  pause(executionId: number): boolean {
-    const exec = this.deps.companyStore.getPipelineExecution(executionId);
+  async pause(executionId: string): Promise<boolean> {
+    const exec =
+      await this.deps.sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+      this.deps.coderSessionId,
+      executionId,
+    );
     if (!exec) return false;
     if (exec.status !== 'running') return false;
 
     const stage = this.activeStages.get(executionId);
-    let pausedNodeRowId: number | null = null;
+    let pausedNodeRowId: string | null = null;
     if (stage) {
       pausedNodeRowId = stage.nodeExecutionId;
-      this.deps.companyStore.updatePipelineNodeExecution(stage.nodeExecutionId, {
-        status: 'aborted',
-        finishedAt: nowIso(),
-        errorMessage: 'paused by operator',
-      });
+      await this.deps.sessionStore.chatPipelines.updateNodeExecution(
+        this.deps.coderSessionId,
+        stage.nodeExecutionId,
+        {
+          status: 'aborted',
+          finishedAt: nowIso(),
+          errorMessage: 'paused by operator',
+        },
+      );
     }
     this.detachStage(executionId, { abort: true });
 
-    this.deps.companyStore.updatePipelineExecution(executionId, { status: 'paused' });
+    await this.deps.sessionStore.chatPipelines.updateExecution(
+      this.deps.coderSessionId,
+      executionId,
+      { status: 'paused' },
+    );
     this.deps.bus.publish({
       name: 'pipeline_paused',
       coderSessionId: this.deps.coderSessionId,
@@ -187,8 +226,13 @@ export class ChatPipelineExecutor {
     return true;
   }
 
-  async resume(executionId: number): Promise<boolean> {
-    const exec = this.deps.companyStore.getPipelineExecution(executionId);
+  async resume(executionId: string): Promise<boolean> {
+    const exec =
+      await this.deps.sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+      this.deps.coderSessionId,
+      executionId,
+    );
     if (!exec) return false;
     if (exec.status !== 'paused') return false;
 
@@ -196,11 +240,15 @@ export class ChatPipelineExecutor {
       ? exec.context.snapshot.nodes.find((n) => n.id === exec.current_node_id)
       : null;
     if (!node) {
-      this.failExecution(executionId, exec.pipeline_id, 'Resume failed: current_node_id is missing or unknown.');
+      await this.failExecution(executionId, exec.pipeline_id, 'Resume failed: current_node_id is missing or unknown.');
       return false;
     }
 
-    this.deps.companyStore.updatePipelineExecution(executionId, { status: 'running' });
+    await this.deps.sessionStore.chatPipelines.updateExecution(
+      this.deps.coderSessionId,
+      executionId,
+      { status: 'running' },
+    );
     this.deps.bus.publish({
       name: 'pipeline_resumed',
       coderSessionId: this.deps.coderSessionId,
@@ -214,13 +262,22 @@ export class ChatPipelineExecutor {
     return true;
   }
 
-  status(executionId: number): {
-    execution: PipelineExecution;
-    nodes: PipelineNodeExecution[];
-  } | null {
-    const execution = this.deps.companyStore.getPipelineExecution(executionId);
+  async status(executionId: string): Promise<{
+    execution: ChatPipelineExecution;
+    nodes: FsChatPipelineNodeExecution[];
+  } | null> {
+    const execution =
+      await this.deps.sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+      this.deps.coderSessionId,
+      executionId,
+    );
     if (!execution) return null;
-    const nodes = this.deps.companyStore.listPipelineNodeExecutions(executionId);
+    const nodes =
+      await this.deps.sessionStore.chatPipelines.listNodeExecutions(
+        this.deps.coderSessionId,
+        executionId,
+      );
     return { execution, nodes };
   }
 
@@ -228,13 +285,16 @@ export class ChatPipelineExecutor {
     pipelineId?: number;
     status?: PipelineExecutionStatus;
     limit?: number;
-  }): PipelineExecution[] {
-    return this.deps.companyStore.listPipelineExecutions({
-      coderSessionId: this.deps.coderSessionId,
-      pipelineId: opts?.pipelineId,
-      status: opts?.status,
-      limit: opts?.limit,
-    });
+  }): Promise<ChatPipelineExecution[]> {
+    return this.deps.sessionStore.chatPipelines
+      .listExecutions<PipelineExecutionContext>(
+        this.deps.coderSessionId,
+        {
+          pipeline_id: opts?.pipelineId,
+          status: opts?.status,
+          limit: opts?.limit,
+        },
+      );
   }
 
   /**
@@ -243,22 +303,36 @@ export class ChatPipelineExecutor {
    * decide whether to resume — same semantics as the company executor.
    */
   async recoverRunning(): Promise<{ paused: number }> {
-    const running = this.deps.companyStore.listPipelineExecutions({
-      coderSessionId: this.deps.coderSessionId,
-      status: 'running',
-    });
+    const running =
+      await this.deps.sessionStore.chatPipelines
+        .listExecutions<PipelineExecutionContext>(
+        this.deps.coderSessionId,
+        { status: 'running' },
+      );
     let paused = 0;
     for (const exec of running) {
-      const rows = this.deps.companyStore.listPipelineNodeExecutions(exec.id);
+      const rows =
+        await this.deps.sessionStore.chatPipelines.listNodeExecutions(
+          this.deps.coderSessionId,
+          exec.id,
+        );
       const last = rows[rows.length - 1];
       if (last && last.status === 'running') {
-        this.deps.companyStore.updatePipelineNodeExecution(last.id, {
-          status: 'aborted',
-          finishedAt: nowIso(),
-          errorMessage: 'server restart — subagent no longer alive',
-        });
+        await this.deps.sessionStore.chatPipelines.updateNodeExecution(
+          this.deps.coderSessionId,
+          last.id,
+          {
+            status: 'aborted',
+            finishedAt: nowIso(),
+            errorMessage: 'server restart — subagent no longer alive',
+          },
+        );
       }
-      this.deps.companyStore.updatePipelineExecution(exec.id, { status: 'paused' });
+      await this.deps.sessionStore.chatPipelines.updateExecution(
+        this.deps.coderSessionId,
+        exec.id,
+        { status: 'paused' },
+      );
       this.deps.bus.publish({
         name: 'pipeline_paused',
         coderSessionId: this.deps.coderSessionId,
@@ -274,20 +348,29 @@ export class ChatPipelineExecutor {
   // ─── Internal: node loop ────────────────────────────────────────
 
   private async runNode(
-    executionId: number,
+    executionId: string,
     node: PipelineNode,
     initialInput: string,
     previousOutput: string,
   ): Promise<void> {
-    const exec = this.deps.companyStore.getPipelineExecution(executionId);
+    const exec =
+      await this.deps.sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+      this.deps.coderSessionId,
+      executionId,
+    );
     if (!exec || exec.status !== 'running') return;
 
     // Global cap defends against pathological cycles that escape the
     // per-node `maxAttempts` guard (e.g. wide fan-out with rotating
     // verdicts).
-    const allRows = this.deps.companyStore.listPipelineNodeExecutions(executionId);
+    const allRows =
+      await this.deps.sessionStore.chatPipelines.listNodeExecutions(
+        this.deps.coderSessionId,
+        executionId,
+      );
     if (allRows.length >= GLOBAL_NODE_EXECUTION_CAP) {
-      this.failExecution(
+      await this.failExecution(
         executionId,
         exec.pipeline_id,
         `Aborted after ${GLOBAL_NODE_EXECUTION_CAP} node executions (global cycle cap).`,
@@ -298,7 +381,7 @@ export class ChatPipelineExecutor {
     const previousAttemptsForNode = allRows.filter((r) => r.node_id === node.id).length;
     const maxAttempts = Math.max(1, node.maxAttempts ?? DEFAULT_NODE_MAX_ATTEMPTS);
     if (previousAttemptsForNode >= maxAttempts) {
-      this.failExecution(
+      await this.failExecution(
         executionId,
         exec.pipeline_id,
         `Node "${node.id}" exceeded maxAttempts (${maxAttempts}).`,
@@ -313,12 +396,14 @@ export class ChatPipelineExecutor {
       vars: exec.context.vars,
     });
 
-    const nodeExec = this.deps.companyStore.createPipelineNodeExecution({
-      executionId,
-      nodeId: node.id,
-      nodeLabel: node.label,
+    const nodeExec =
+      await this.deps.sessionStore.chatPipelines.createNodeExecution({
+      session_id: this.deps.coderSessionId,
+      execution_id: executionId,
+      node_id: node.id,
+      node_label: node.label,
       role: node.role,
-      inputText: renderedTask,
+      input_text: renderedTask,
       attempt: previousAttemptsForNode + 1,
     });
 
@@ -348,11 +433,15 @@ export class ChatPipelineExecutor {
       stageOutcome = await this.executeStage(node, renderedTask, previousOutput, controller.signal);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      this.deps.companyStore.updatePipelineNodeExecution(nodeExec.id, {
-        status: 'failed',
-        finishedAt: nowIso(),
-        errorMessage: msg,
-      });
+      await this.deps.sessionStore.chatPipelines.updateNodeExecution(
+        this.deps.coderSessionId,
+        nodeExec.id,
+        {
+          status: 'failed',
+          finishedAt: nowIso(),
+          errorMessage: msg,
+        },
+      );
       this.deps.bus.publish({
         name: 'pipeline_node_failed',
         coderSessionId: this.deps.coderSessionId,
@@ -361,27 +450,20 @@ export class ChatPipelineExecutor {
         payload: { nodeId: node.id, error: msg },
       });
       this.detachStage(executionId, { abort: false });
-      this.failExecution(executionId, exec.pipeline_id, `Node "${node.id}" threw: ${msg}`);
+      await this.failExecution(executionId, exec.pipeline_id, `Node "${node.id}" threw: ${msg}`);
       return;
     }
 
     // pause/abort happened mid-flight — don't advance.
-    const refreshed = this.deps.companyStore.getPipelineExecution(executionId);
+    const refreshed =
+      await this.deps.sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+        this.deps.coderSessionId,
+        executionId,
+      );
     if (!refreshed || refreshed.status !== 'running') {
       this.detachStage(executionId, { abort: false });
       return;
-    }
-
-    // Roll usage up onto the parent chat session so the header counter
-    // reflects pipeline cost.
-    if (stageOutcome.usage) {
-      this.deps.sessionStore.bumpUsage(
-        this.deps.coderSessionId,
-        stageOutcome.usage.input_tokens,
-        stageOutcome.usage.output_tokens,
-        stageOutcome.usage.cache_read_input_tokens ?? 0,
-        stageOutcome.usage.cache_creation_input_tokens ?? 0,
-      );
     }
 
     const branchMode: BranchMode = node.branchMode ?? 'linear';
@@ -403,30 +485,38 @@ export class ChatPipelineExecutor {
         },
       },
     };
-    this.deps.companyStore.updatePipelineNodeExecution(nodeExec.id, {
-      status: 'completed',
-      outputText: stageOutcome.finalText,
-      outcomeBranch: next?.outcome ?? null,
-      finishedAt: nowIso(),
-      usageJson: stageOutcome.usage ? JSON.stringify(stageOutcome.usage) : null,
-    });
-    this.deps.companyStore.updatePipelineExecution(executionId, {
-      context: updatedContext,
-    });
+    await this.deps.sessionStore.chatPipelines.updateNodeExecution(
+      this.deps.coderSessionId,
+      nodeExec.id,
+      {
+        status: 'completed',
+        outputText: stageOutcome.finalText,
+        outcomeBranch: next?.outcome ?? null,
+        finishedAt: nowIso(),
+        usageJson: stageOutcome.usage
+          ? JSON.stringify(stageOutcome.usage)
+          : null,
+      },
+    );
+    await this.deps.sessionStore.chatPipelines.updateExecution(
+      this.deps.coderSessionId,
+      executionId,
+      { context: updatedContext },
+    );
 
     // First-class: mirror the stage output into the chat transcript as a
     // real assistant turn so the conversation isn't empty, the user can
     // continue with context, and the session's Mensagens/Turnos counters
-    // reflect the pipeline. `usage: null` — tokens were already rolled onto
-    // the session via bumpUsage above (avoid double-counting). Best-effort.
+    // reflect the pipeline. The immutable turn metric carries the stage usage,
+    // so global totals are rebuilt from files rather than a side counter.
     try {
-      this.deps.sessionStore.persistAssistantTurn({
+      await this.deps.sessionStore.persistAssistantTurn({
         session_id: this.deps.coderSessionId,
         message: {
           role: 'assistant',
           content: [{ type: 'text', text: `**Pipeline · ${node.label}**\n\n${stageOutcome.finalText}` }],
         },
-        usage: null,
+        usage: stageOutcome.usage,
         tool_calls: [],
       });
     } catch (e) {
@@ -451,7 +541,7 @@ export class ChatPipelineExecutor {
     if (!next) {
       // Zero outgoing → terminal node, completed.
       if (outgoing.length === 0) {
-        this.completeExecution(executionId, exec.pipeline_id);
+        await this.completeExecution(executionId, exec.pipeline_id);
         return;
       }
       // 'review' verdict with no 'review' edge: pause for HUMAN review
@@ -473,11 +563,15 @@ export class ChatPipelineExecutor {
               },
             },
           };
-          this.deps.companyStore.updatePipelineExecution(executionId, {
-            currentNodeId: passNode.id,
-            context: ctxReview,
-            status: 'paused',
-          });
+          await this.deps.sessionStore.chatPipelines.updateExecution(
+            this.deps.coderSessionId,
+            executionId,
+            {
+              currentNodeId: passNode.id,
+              context: ctxReview,
+              status: 'paused',
+            },
+          );
           this.deps.bus.publish({
             name: 'pipeline_paused',
             coderSessionId: this.deps.coderSessionId,
@@ -489,7 +583,7 @@ export class ChatPipelineExecutor {
         }
       }
       // Genuine dead-end — surface an actionable message (which edge to add).
-      this.failExecution(
+      await this.failExecution(
         executionId,
         exec.pipeline_id,
         `Node "${node.id}" has no '${verdict ?? branchMode}' edge (mode=${branchMode}). Add an outgoing '${verdict ?? ''}' edge from "${node.id}" in the builder.`,
@@ -499,7 +593,7 @@ export class ChatPipelineExecutor {
 
     const nextNode = exec.context.snapshot.nodes.find((n) => n.id === next.targetId);
     if (!nextNode) {
-      this.failExecution(
+      await this.failExecution(
         executionId,
         exec.pipeline_id,
         `Edge from "${node.id}" points at missing node "${next.targetId}".`,
@@ -523,11 +617,15 @@ export class ChatPipelineExecutor {
           },
         },
       };
-      this.deps.companyStore.updatePipelineExecution(executionId, {
-        currentNodeId: nextNode.id,
-        context: ctxWithPending,
-        status: 'paused',
-      });
+      await this.deps.sessionStore.chatPipelines.updateExecution(
+        this.deps.coderSessionId,
+        executionId,
+        {
+          currentNodeId: nextNode.id,
+          context: ctxWithPending,
+          status: 'paused',
+        },
+      );
       this.deps.bus.publish({
         name: 'pipeline_paused',
         coderSessionId: this.deps.coderSessionId,
@@ -542,9 +640,11 @@ export class ChatPipelineExecutor {
       return;
     }
 
-    this.deps.companyStore.updatePipelineExecution(executionId, {
-      currentNodeId: nextNode.id,
-    });
+    await this.deps.sessionStore.chatPipelines.updateExecution(
+      this.deps.coderSessionId,
+      executionId,
+      { currentNodeId: nextNode.id },
+    );
 
     void this.runNode(executionId, nextNode, initialInput, stageOutcome.finalText);
   }
@@ -555,8 +655,13 @@ export class ChatPipelineExecutor {
    * verb so the dashboard's button label and the audit log read clearly.
    * Returns false when the execution isn't paused awaiting confirmation.
    */
-  async confirm(executionId: number): Promise<boolean> {
-    const exec = this.deps.companyStore.getPipelineExecution(executionId);
+  async confirm(executionId: string): Promise<boolean> {
+    const exec =
+      await this.deps.sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+      this.deps.coderSessionId,
+      executionId,
+    );
     if (!exec) return false;
     if (exec.status !== 'paused') return false;
     const pending = exec.context.vars._pending_confirmation;
@@ -569,7 +674,11 @@ export class ChatPipelineExecutor {
         Object.entries(exec.context.vars).filter(([k]) => k !== '_pending_confirmation'),
       ),
     };
-    this.deps.companyStore.updatePipelineExecution(executionId, { context: cleared });
+    await this.deps.sessionStore.chatPipelines.updateExecution(
+      this.deps.coderSessionId,
+      executionId,
+      { context: cleared },
+    );
     return this.resume(executionId);
   }
 
@@ -624,6 +733,7 @@ export class ChatPipelineExecutor {
           tools: [verdictTool, ...extraTools],
           ctx: subContext,
           sessionId: this.deps.coderSessionId,
+          sessionStore: this.deps.sessionStore,
           agentLoopV2: this.deps.agentLoopV2,
         },
         {
@@ -672,11 +782,18 @@ export class ChatPipelineExecutor {
 
   // ─── Internal: terminal transitions ─────────────────────────────
 
-  private completeExecution(executionId: number, pipelineId: number): void {
-    this.deps.companyStore.updatePipelineExecution(executionId, {
-      status: 'completed',
-      finishedAt: nowIso(),
-    });
+  private async completeExecution(
+    executionId: string,
+    pipelineId: number,
+  ): Promise<void> {
+    await this.deps.sessionStore.chatPipelines.updateExecution(
+      this.deps.coderSessionId,
+      executionId,
+      {
+        status: 'completed',
+        finishedAt: nowIso(),
+      },
+    );
     this.deps.bus.publish({
       name: 'pipeline_completed',
       coderSessionId: this.deps.coderSessionId,
@@ -685,12 +802,20 @@ export class ChatPipelineExecutor {
     });
   }
 
-  private failExecution(executionId: number, pipelineId: number, message: string): void {
-    this.deps.companyStore.updatePipelineExecution(executionId, {
-      status: 'failed',
-      finishedAt: nowIso(),
-      errorMessage: message,
-    });
+  private async failExecution(
+    executionId: string,
+    pipelineId: number,
+    message: string,
+  ): Promise<void> {
+    await this.deps.sessionStore.chatPipelines.updateExecution(
+      this.deps.coderSessionId,
+      executionId,
+      {
+        status: 'failed',
+        finishedAt: nowIso(),
+        errorMessage: message,
+      },
+    );
     this.deps.bus.publish({
       name: 'pipeline_failed',
       coderSessionId: this.deps.coderSessionId,
@@ -700,7 +825,7 @@ export class ChatPipelineExecutor {
     });
   }
 
-  private detachStage(executionId: number, opts: { abort: boolean }): void {
+  private detachStage(executionId: string, opts: { abort: boolean }): void {
     const stage = this.activeStages.get(executionId);
     if (!stage) return;
     if (opts.abort) {
@@ -748,5 +873,5 @@ function lastOutputForResume(context: PipelineExecutionContext, nodeId: string):
 }
 
 function nowIso(): string {
-  return new Date().toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, '');
+  return new Date().toISOString();
 }

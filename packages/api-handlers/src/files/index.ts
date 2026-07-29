@@ -14,7 +14,6 @@
 
 import path from 'node:path';
 import { promises as fs, type Stats } from 'node:fs';
-import AdmZip from 'adm-zip';
 import { ApiError, type FilesApi, type FileTreeNode } from '@mcp/api-bus';
 import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
 import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
@@ -23,12 +22,21 @@ import {
   getProjectIgnoreRulesAsync,
   shouldIgnoreProjectPath,
 } from '@mcp/shared/utils/project-ignore.js';
+import { mapLimit } from '@mcp/shared/utils/map-limit.js';
 import type { HandlerDeps } from '../types.js';
 import { createDirCache } from './dir-cache.js';
+import { cancelArchive, runArchiveJob, runArchiveJobToEnd } from './archive-runner.js';
 import { captureLocalHistory } from './local-history.js';
 import { createHistoryHandlers } from './history-handlers.js';
 
 // Baseline + Java/.NET/Unity project profiles live in project-ignore.ts.
+
+/**
+ * Cap on concurrent `fs.stat` calls while listing a directory. libuv's default
+ * threadpool is 4; going much wider just queues, and queuing thousands blocks
+ * every other async fs operation in the process behind them.
+ */
+const STAT_CONCURRENCY = 32;
 
 /**
  * Resolve a project-relative path to an absolute one, refusing any
@@ -56,6 +64,44 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
     const project = db.getProject(projectId);
     if (!project) throw new ApiError('not_found', 404, 'project not found');
     return project;
+  }
+
+  // ─── archive/extract helpers ────────────────────────────────────────
+  // Path resolution and index bookkeeping stay on the main thread; only the
+  // blocking compression crosses into the worker. `resolveSafe` runs HERE, so
+  // a traversal attempt is refused before a thread is even spawned (the worker
+  // re-validates archive member names independently — see archive-plan.ts).
+
+  function planArchiveJob(projectId: number, paths: string[] | undefined, out: string) {
+    const project = requireProject(projectId);
+    if (!paths?.length) throw new ApiError('bad_request', 400, 'no paths to archive');
+    const roots = paths.map((rel) => resolveSafe(project.root_path, rel));
+    return {
+      job: { kind: 'archive' as const, roots, out: resolveSafe(project.root_path, out) },
+      outRel: out,
+    };
+  }
+
+  function afterArchive(projectId: number, outRel: string): void {
+    // A new file on disk → mark it for (re)indexing, same as `write`.
+    deps.projectIndexService.markDirty(projectId, [{ path: outRel.replace(/\\/g, '/'), kind: 'upsert' }]);
+    dirCache.invalidate(projectId, outRel);
+  }
+
+  function planExtractJob(projectId: number, zipRel: string, dest: string) {
+    const project = requireProject(projectId);
+    return {
+      kind: 'extract' as const,
+      zip: resolveSafe(project.root_path, zipRel),
+      dest: resolveSafe(project.root_path, dest),
+    };
+  }
+
+  function afterExtract(projectId: number, dest: string): void {
+    const project = requireProject(projectId);
+    deps.projectIndexService.publishFsEvents(projectId, [{ path: dest.replace(/\\/g, '/'), kind: 'upsert', isDir: true }]);
+    clearProjectIgnoreRulesCache(project.root_path);
+    dirCache.invalidate(projectId, dest);
   }
 
   return {
@@ -205,57 +251,44 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
       return { ok: true as const };
     },
 
+    // ─── archive / extract ──────────────────────────────────────────
+    //
+    // Both run in a short-lived worker thread. adm-zip is fully synchronous
+    // (readFileSync per member, deflateRawSync over the whole archive, sync
+    // write), so doing this inline froze every window, all IPC and every PTY
+    // stream for the duration. See archive-runner.ts / archive-worker.ts.
+    //
+    // The `*Stream` variants below are what the UI uses; these two drain the
+    // same job so non-UI callers keep a plain promise.
+
     async archive({ projectId, paths, out }) {
-      const project = requireProject(projectId);
-      if (!paths?.length) throw new ApiError('bad_request', 400, 'no paths to archive');
-      const zip = new AdmZip();
-      for (const rel of paths) {
-        const abs = resolveSafe(project.root_path, rel);
-        const stat = await fs.stat(abs).catch(() => null);
-        if (!stat) throw new ApiError('not_found', 404, `not found: ${rel}`);
-        // A folder goes under a top-level entry named after it; a file goes at the root.
-        if (stat.isDirectory()) zip.addLocalFolder(abs, path.basename(abs));
-        else zip.addLocalFile(abs);
-      }
-      const outAbs = resolveSafe(project.root_path, out);
-      await fs.mkdir(path.dirname(outAbs), { recursive: true });
-      zip.writeZip(outAbs);
-      // A new file on disk → mark it for (re)indexing, same as `write`.
-      deps.projectIndexService.markDirty(projectId, [{ path: out.replace(/\\/g, '/'), kind: 'upsert' }]);
-      dirCache.invalidate(projectId, out);
-      return { ok: true as const, path: out };
+      const { job, outRel } = planArchiveJob(projectId, paths, out);
+      await runArchiveJobToEnd(`archive:${projectId}:${outRel}`, job);
+      afterArchive(projectId, outRel);
+      return { ok: true as const, path: outRel };
+    },
+
+    async *archiveStream({ projectId, paths, out, archiveId }) {
+      const { job, outRel } = planArchiveJob(projectId, paths, out);
+      yield* runArchiveJob(archiveId ?? `archive:${projectId}:${outRel}`, job);
+      afterArchive(projectId, outRel);
     },
 
     async extract({ projectId, zip: zipRel, dest }) {
-      const project = requireProject(projectId);
-      const zipAbs = resolveSafe(project.root_path, zipRel);
-      const destAbs = resolveSafe(project.root_path, dest);
-      await fs.mkdir(destAbs, { recursive: true });
-      let archive: AdmZip;
-      try {
-        archive = new AdmZip(zipAbs);
-      } catch {
-        throw new ApiError('bad_archive', 400, 'not a readable zip archive');
-      }
-      const MAX_BYTES = 500 * 1024 * 1024;
-      let files = 0;
-      let bytes = 0;
-      for (const entry of archive.getEntries()) {
-        if (entry.isDirectory) continue;
-        // resolveSafe rejects any entry that would escape the project root
-        // (traversal / absolute paths) → throws path_escape.
-        const target = resolveSafe(project.root_path, path.posix.join(dest, entry.entryName.replace(/\\/g, '/')));
-        const data = entry.getData();
-        bytes += data.length;
-        if (bytes > MAX_BYTES) throw new ApiError('archive_too_large', 413, 'extracted content exceeds 500 MB');
-        await fs.mkdir(path.dirname(target), { recursive: true });
-        await fs.writeFile(target, data);
-        files += 1;
-      }
-      deps.projectIndexService.publishFsEvents(projectId, [{ path: dest.replace(/\\/g, '/'), kind: 'upsert', isDir: true }]);
-      clearProjectIgnoreRulesCache(project.root_path);
-      dirCache.invalidate(projectId, dest);
-      return { ok: true as const, files, bytes };
+      const job = planExtractJob(projectId, zipRel, dest);
+      const res = await runArchiveJobToEnd(`extract:${projectId}:${dest}`, job);
+      afterExtract(projectId, dest);
+      return { ok: true as const, files: res.files, bytes: res.bytes };
+    },
+
+    async *extractStream({ projectId, zip: zipRel, dest, archiveId }) {
+      const job = planExtractJob(projectId, zipRel, dest);
+      yield* runArchiveJob(archiveId ?? `extract:${projectId}:${dest}`, job);
+      afterExtract(projectId, dest);
+    },
+
+    async archiveCancel({ archiveId }) {
+      return { ok: true as const, cancelled: cancelArchive(archiveId) };
     },
 
     async tree({ projectId, maxDepth = 6, root = '.', withStats }) {
@@ -274,8 +307,9 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
         // Skip the cache entirely for withStats requests — a previously cached
         // zero-stat node (from the FileTreeRail) would lack size/mtime/mode and
         // render the SFTP columns blank.
-        if (cacheEnabled() && !withStats) {
-          const cached = dirCache.get(projectId, startRel);
+        const variant = withStats ? 'stats' : 'plain';
+        if (cacheEnabled()) {
+          const cached = dirCache.get(projectId, startRel, variant);
           if (cached) return cached;
         }
         const entries = await fs.readdir(startAbs, { withFileTypes: true }).catch(() => []);
@@ -283,7 +317,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           const relPath = path.posix.join(startRel, e.name);
           return !shouldIgnoreProjectPath(projectIgnore, relPath, e.isDirectory());
         });
-        const children = await Promise.all(filtered.map(async (e): Promise<FileTreeNode> => {
+        // Bounded fan-out. `Promise.all` over every child queued one fs.stat per
+        // entry against a 4-thread libuv pool — a 5k-entry directory starved
+        // every other async fs op in the process while it drained.
+        const children = await mapLimit(filtered, STAT_CONCURRENCY, async (e): Promise<FileTreeNode> => {
           const relPath = path.posix.join(startRel, e.name);
           // Symlinked dirs (pnpm links) report as symlink, not directory —
           // they're the only case worth a stat (rare outside node_modules).
@@ -304,7 +341,7 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
             node.mode = st.mode;
           }
           return node;
-        }));
+        });
         children.sort((a, b) => {
           if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
           return a.name.localeCompare(b.name);
@@ -315,9 +352,10 @@ export function createFilesHandlers(deps: HandlerDeps): FilesApi {
           type: 'dir',
           children,
         };
-        // Don't cache withStats results — they'd leak stat data into the
-        // zero-stat fast path for the FileTreeRail.
-        if (cacheEnabled() && !withStats) dirCache.set(projectId, startRel, node);
+        // Cached per VARIANT, so a zero-stat FileTreeRail node can never be
+        // served to the SFTP pane (which would render its columns blank) and
+        // the pane's repeated navigations stop re-statting the whole directory.
+        if (cacheEnabled()) dirCache.set(projectId, startRel, node, variant);
         return node;
       }
 

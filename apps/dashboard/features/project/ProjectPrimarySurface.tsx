@@ -18,7 +18,7 @@ interface ProjectPrimarySurfaceProps {
   projectId: number;
   projectName: string;
   onOpenFile: (path: string) => void;
-  initialSessionId?: number;
+  initialSessionId?: string;
   contribWindows: ContribToolWindow[];
   builderJson: { stack: string; port: number } | null;
   previewEnabled: boolean;

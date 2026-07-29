@@ -3,7 +3,12 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import type { Hono } from 'hono';
 import type { SessionFilesystemAccess } from '@mcp/code-agent/sessions/types.js';
 import type { ServerDeps } from '../../deps.js';
-import { notFound, parseIdParam, parseJsonBody } from '../_helpers.js';
+import {
+  notFound,
+  parseJsonBody,
+  parseSessionIdParam,
+  parseSessionRecordIdParam,
+} from '../_helpers.js';
 import { canonicalizeExternalRoot } from '@mcp/code-agent/tools/paths.js';
 
 const ACCESS_LEVELS = new Set<SessionFilesystemAccess>(['read', 'write']);
@@ -17,11 +22,11 @@ function contains(root: string, candidate: string): boolean {
 export function mountCoderFilesystemRootRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
 
-  app.get('/api/coder/sessions/:id/filesystem-roots', (c) => {
-    const sessionId = parseIdParam(c);
-    const session = sessionStore.getSession(sessionId);
+  app.get('/api/coder/sessions/:id/filesystem-roots', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c);
-    const roots = sessionStore.listSessionFilesystemRoots(sessionId).map((root) => ({
+    const roots = (await sessionStore.listSessionFilesystemRoots(sessionId)).map((root) => ({
       ...root,
       kind: (() => {
         try { return statSync(root.root_path).isFile() ? 'file' as const : 'directory' as const; }
@@ -32,8 +37,8 @@ export function mountCoderFilesystemRootRoutes(app: Hono, deps: ServerDeps): voi
   });
 
   app.post('/api/coder/sessions/:id/filesystem-roots', async (c) => {
-    const sessionId = parseIdParam(c);
-    const session = sessionStore.getSession(sessionId);
+    const sessionId = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c);
     if (session.status === 'running') {
       return c.json({ error: 'filesystem roots cannot be changed while the session is running' }, 409);
@@ -46,9 +51,16 @@ export function mountCoderFilesystemRootRoutes(app: Hono, deps: ServerDeps): voi
     const canonical = canonicalizeExternalRoot(body.path);
     if (!canonical.ok) return c.json({ error: canonical.reason }, 400);
 
+    const ownerProject = session.project_id == null
+      ? null
+      : db.getProject(session.project_id);
     const projectRoots = [
-      db.getProject(session.project_id)?.root_path,
-      ...sessionStore.getSessionProjects(sessionId).map((project) => project.root_path),
+      ownerProject && !ownerProject.is_synthetic
+        ? ownerProject.root_path
+        : null,
+      ...(await sessionStore.getSessionProjects(sessionId)).map(
+        (project) => project.root_path,
+      ),
     ].filter((path): path is string => !!path).map((path) => {
       try { return realpathSync(resolve(path)); } catch { return resolve(path); }
     });
@@ -56,36 +68,39 @@ export function mountCoderFilesystemRootRoutes(app: Hono, deps: ServerDeps): voi
       return c.json({ error: 'directory is already inside an authorized project root' }, 400);
     }
 
-    const existing = sessionStore.listSessionFilesystemRoots(sessionId);
+    const existing = await sessionStore.listSessionFilesystemRoots(sessionId);
     const exact = existing.find((root) => root.root_path.toLowerCase() === canonical.path.toLowerCase());
     if (!exact && existing.length >= MAX_ROOTS_PER_SESSION) {
       return c.json({ error: `session filesystem root limit reached (${MAX_ROOTS_PER_SESSION})` }, 409);
     }
-    const root = sessionStore.upsertSessionFilesystemRoot(sessionId, canonical.path, body.access!);
+    const root = await sessionStore.upsertSessionFilesystemRoot(
+      sessionId,
+      canonical.path,
+      body.access!,
+    );
     return c.json({ root, applies: 'next_run' }, exact ? 200 : 201);
   });
 
-  app.delete('/api/coder/sessions/:id/filesystem-roots/:rootId', (c) => {
-    const sessionId = parseIdParam(c);
-    const session = sessionStore.getSession(sessionId);
+  app.delete('/api/coder/sessions/:id/filesystem-roots/:rootId', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c);
     if (session.status === 'running') {
       return c.json({ error: 'filesystem roots cannot be changed while the session is running' }, 409);
     }
-    const rootId = parseIdParam(c, 'rootId');
-    const activeSnapshot = sessionStore.getDb().prepare(`
-      SELECT 1
-        FROM session_file_baselines
-       WHERE session_kind = 'coder' AND session_id = ?
-         AND project_id = ? AND status = 'active'
-       LIMIT 1
-    `).get(sessionId, -rootId);
+    const rootId = parseSessionRecordIdParam(c, 'rootId');
+    const roots = await sessionStore.listSessionFilesystemRoots(sessionId);
+    const target = roots.find((root) => root.id === rootId);
+    if (!target) return notFound(c, 'filesystem root not found');
+    const activeSnapshot = (
+      await sessionStore.listBaselines('coder', sessionId)
+    ).some((baseline) => baseline.project_id === -target.seq);
     if (activeSnapshot) {
       return c.json({
         error: 'review or accept pending file snapshots for this folder before removing its authorization',
       }, 409);
     }
-    if (!sessionStore.removeSessionFilesystemRoot(sessionId, rootId)) {
+    if (!(await sessionStore.removeSessionFilesystemRoot(sessionId, rootId))) {
       return notFound(c, 'filesystem root not found');
     }
     return c.body(null, 204);

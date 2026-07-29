@@ -18,10 +18,10 @@ import {
 } from '../messages/plan-card-state.js';
 
 interface CoderPlanRow {
-  id: number;
-  session_id: number;
+  id: string;
+  session_id: string;
   tool_use_id: string;
-  message_id: number | null;
+  message_seq: number | null;
   plan_text: string;
   status: PersistedPlanStatus;
   feedback: string | null;
@@ -36,7 +36,7 @@ const STATUS_STYLES: Record<PersistedPlanDisplayStatus, string> = {
   rejected: 'bg-red-500/15 text-red-600 dark:text-red-400',
 };
 
-export function PlansPanel({ sessionId, active }: { sessionId: number | null; active: boolean }) {
+export function PlansPanel({ sessionId, active }: { sessionId: string | null; active: boolean }) {
   const { t } = useTranslation(['chat', 'common']);
   const url = active && sessionId ? `/coder/sessions/${sessionId}/plans` : '';
   const { data: plans, loading } = useApi<CoderPlanRow[]>(url);

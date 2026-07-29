@@ -5,7 +5,7 @@ import ignore from 'ignore';
 import { minimatch } from 'minimatch';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
+import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 import { truncationMarker } from '@mcp/code-agent/tools/truncation-marker.js';
 
 /**
@@ -71,7 +71,7 @@ export const globTool: CoderTool = {
       },
       path: {
         type: 'string',
-        description: 'Optional project-relative subdirectory or absolute path under an authorized external root. Defaults to the project root.',
+        description: 'Optional project-relative subdirectory or absolute path under an authorized external root. In a global session use "<project-slug>/subdir".',
       },
       respect_ignore: {
         type: 'boolean',
@@ -98,22 +98,23 @@ export const globTool: CoderTool = {
     let searchRoot = ctx.cwd;
     let outputRoot = ctx.cwd;
     let externalSearch = false;
+    let outputPrefix: string | undefined;
     if (args.path) {
       const subdir = String(args.path).trim();
-      const resolved = resolveAuthorizedPath(subdir, ctx.cwd, ctx.externalRoots, 'read');
+      const resolved = resolveWorkspacePath(subdir, ctx, 'read');
       if (!resolved.ok) return err(resolved.reason);
       if (!existsSync(resolved.abs)) return err(`path not found: ${subdir}`);
       searchRoot = resolved.abs;
       outputRoot = resolved.rootPath;
       externalSearch = resolved.external;
+      outputPrefix = resolved.workspacePrefix;
     }
 
     const filtered: Array<{ rel: string; mtime: number }> = [];
     try {
       if (!args.path && ctx.globalWorkspace) {
-        // Glob does not follow junctions by default (intentionally). Enumerate
-        // only the DB-derived real roots carried in ToolContext, then restore
-        // the virtual workspace path prefix in the result.
+        // Enumerate the real linked roots carried in ToolContext and expose
+        // each result through the stable public `<project-slug>/...` namespace.
         for (const project of ctx.globalWorkspace.projects) {
           const matches = await fastGlob('**/*', {
             cwd: project.rootPath,
@@ -146,7 +147,14 @@ export const globTool: CoderTool = {
           if (ig && ig.ignores(projectRel)) continue;
           let mtime = 0;
           try { mtime = statSync(absPath).mtimeMs; } catch { continue; }
-          filtered.push({ rel: externalSearch ? absPath : projectRel, mtime });
+          filtered.push({
+            rel: externalSearch
+              ? absPath
+              : outputPrefix
+                ? `${outputPrefix}/${projectRel}`
+                : projectRel,
+            mtime,
+          });
         }
       }
     } catch (e) {

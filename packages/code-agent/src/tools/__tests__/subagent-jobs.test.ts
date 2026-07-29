@@ -6,6 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
 import { SubagentJobManager, type BackgroundAgentSlot } from '@mcp/code-agent/tools/subagent-jobs.js';
+import { newSessionId, type SessionId } from '@mcp/session-storage';
 
 const usage: ChatUsage = { input_tokens: 1, output_tokens: 1 };
 
@@ -14,8 +15,11 @@ function slots(n = 1): BackgroundAgentSlot[] {
 }
 
 let mgr: SubagentJobManager;
-let SID = 0;
-beforeEach(() => { mgr = new SubagentJobManager(); SID += 1; });
+let SID: SessionId;
+beforeEach(() => {
+  mgr = new SubagentJobManager();
+  SID = newSessionId();
+});
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();

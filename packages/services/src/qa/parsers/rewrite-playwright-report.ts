@@ -24,7 +24,7 @@
  */
 
 export interface RewriteOptions {
-  sessionId: number;
+  sessionId: string;
   serviceId: string;
   /**
    * Path of the HTML being served, used to resolve `./foo.css` against.

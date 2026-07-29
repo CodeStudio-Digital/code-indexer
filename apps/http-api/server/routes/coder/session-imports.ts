@@ -117,13 +117,17 @@ export function mountCoderSessionImportRoutes(app: Hono, deps: ServerDeps): void
       const offsetMatch = /^offset:(\d+)$/.exec(c.req.query('cursor') ?? '');
       const offset = offsetMatch ? Number(offsetMatch[1]) : 0;
       let items = await discoverExternalSessions(sourceRaw as ExternalSessionSource | undefined);
-      items = items.map((candidate) => ({
+      items = await Promise.all(items.map(async (candidate) => ({
         ...candidate,
         matches_project: project ? cwdMatches(candidate.cwd, project.root_path) : undefined,
         already_imported_session_id: project
-          ? deps.sessionStore.findImportedSession(project.id, candidate.source, candidate.external_id)
+          ? await deps.sessionStore.findImportedSession(
+              project.id,
+              candidate.source,
+              candidate.external_id,
+            )
           : null,
-      }));
+      })));
       if (search) items = items.filter((item) => `${item.title} ${item.cwd ?? ''} ${item.external_id}`.toLowerCase().includes(search));
       if (matchFilter === 'match') items = items.filter((item) => item.matches_project === true);
       if (matchFilter === 'mismatch') items = items.filter((item) => item.matches_project === false);
@@ -174,7 +178,7 @@ export function mountCoderSessionImportRoutes(app: Hono, deps: ServerDeps): void
         : { summary: null, provider: null, model: null, providerChain: [], errors: chain.errors };
       const usedFallback = summarized.summary == null;
       const summary = summarized.summary ?? buildDeterministicImportSummary(document);
-      const result = deps.sessionStore.importExternalSession({
+      const result = await deps.sessionStore.importExternalSession({
         project_id: project.id,
         provider: body.provider.trim(),
         model: bareModel.trim(),

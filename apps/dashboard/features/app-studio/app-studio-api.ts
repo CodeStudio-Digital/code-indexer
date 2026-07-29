@@ -1,12 +1,14 @@
 import type { AppFitnessReport, AppPlanRevisionStatus, AppPlanV1 } from '@mcp/app-studio/plan/types.js';
+export { isAppStudioUuid } from './session-id.js';
 
 export type AppStage = 'planning' | 'building' | 'reviewing' | 'ready' | 'live';
 export type AppWorkItemStatus = 'backlog' | 'ready' | 'running' | 'review' | 'done' | 'blocked' | 'stale' | 'cancelled';
 
 export interface AppStudioSession {
-  id: number;
+  id: string;
+  seq: number;
   project_id: number;
-  company_session_id: number | null;
+  company_session_id: string | null;
   name: string;
   app_slug: string;
   stack_profile_id: 'cf-fullstack-v1';
@@ -17,10 +19,10 @@ export interface AppStudioSession {
 export interface AppTeamSessionView {
   runtime_kind: 'app_studio';
   state: 'ready';
-  company_session_id: number;
+  company_session_id: string;
   company_status: 'idle' | 'running' | 'paused' | 'completed' | 'error';
-  master_session_id: number;
-  master_agent_run_id: number;
+  master_session_id: string;
+  master_agent_run_id: string;
 }
 
 export interface AppTeamModelRef {
@@ -47,15 +49,16 @@ export interface AppTeamRoleConfig {
 }
 
 export interface AppTeamConfigView {
-  company_session_id: number;
+  company_session_id: string;
   status: AppTeamSessionView['company_status'];
   operational_rules: string;
   roles: AppTeamRoleConfig[];
 }
 
 export interface AppPlanRevisionView {
-  id: number;
-  app_session_id: number;
+  id: string;
+  seq: number;
+  app_session_id: string;
   revision_number: number;
   status: AppPlanRevisionStatus;
   created_by: string;
@@ -68,8 +71,9 @@ export interface AppPlanRevisionView {
 
 export interface AppWorkItemView {
   id: string;
-  app_session_id: number;
-  plan_revision_id: number;
+  seq: number;
+  app_session_id: string;
+  plan_revision_id: string;
   slice_id: string | null;
   title: string;
   outcome: string;
@@ -93,12 +97,13 @@ export interface AppWorkItemView {
 }
 
 export interface AppWorkAttemptView {
-  id: number;
+  id: string;
+  seq: number;
   work_item_id?: string;
   attempt: number;
   role: string;
-  company_agent_run_id: number | null;
-  coder_session_id: number | null;
+  company_agent_run_id: string | null;
+  coder_session_id: string | null;
   status: 'claimed' | 'running' | 'waiting' | 'paused' | 'completed' | 'blocked' | 'error' | 'aborted' | 'interrupted' | 'cancelled';
   status_message: string | null;
   created_at?: string;
@@ -108,7 +113,9 @@ export interface AppWorkAttemptView {
 }
 
 export interface AppRecentEventView {
-  id: number;
+  id: string;
+  /** Monotonic per-session cursor used for ordering and SSE replay. */
+  seq: number;
   /** `kind` is canonical; `event_type` keeps the client compatible with early previews. */
   kind?: string;
   event_type?: string;
@@ -119,7 +126,10 @@ export interface AppRecentEventView {
 }
 
 export interface AppDecisionView {
-  id: number;
+  id: string;
+  seq: number;
+  app_session_id: string;
+  plan_revision_id: string;
   question: string;
   options: Array<{ label?: string; value?: string }>;
   blocked_work_item_ids: string[];
@@ -130,7 +140,10 @@ export interface AppDecisionView {
 }
 
 export interface AppDeploymentView {
-  id: number;
+  id: string;
+  seq: number;
+  app_session_id: string;
+  plan_revision_id: string;
   status: 'publishing' | 'live' | 'failed';
   url: string | null;
   account: string | null;
@@ -153,7 +166,7 @@ export interface AppStudioSessionDetail {
   deployment: AppDeploymentView | null;
   evidence_current: boolean;
   team: AppTeamSessionView | null;
-  master_session_id: number | null;
+  master_session_id: string | null;
 }
 
 export type AppStudioListEntry = AppStudioSessionDetail;
@@ -184,16 +197,16 @@ export async function listAppStudioSessions(): Promise<AppStudioListEntry[]> {
   return (await unwrap<{ apps: AppStudioListEntry[] }>(await fetch('/api/app-studio/apps'))).apps;
 }
 
-export function getAppStudioSession(id: number): Promise<AppStudioSessionDetail> {
+export function getAppStudioSession(id: string): Promise<AppStudioSessionDetail> {
   return unwrap(fetch(`/api/app-studio/apps/${id}`));
 }
 
-export function getAppTeamConfig(id: number): Promise<AppTeamConfigView> {
+export function getAppTeamConfig(id: string): Promise<AppTeamConfigView> {
   return unwrap(fetch(`/api/app-studio/apps/${id}/team/config`));
 }
 
 export function updateAppTeamConfig(
-  id: number,
+  id: string,
   patch: { operational_rules?: string; roles?: AppTeamRoleConfig[] },
 ): Promise<AppTeamConfigView> {
   return unwrap(fetch(`/api/app-studio/apps/${id}/team/config`, {
@@ -203,25 +216,25 @@ export function updateAppTeamConfig(
   }));
 }
 
-export async function deleteAppStudioSession(id: number): Promise<void> {
+export async function deleteAppStudioSession(id: string): Promise<void> {
   await unwrap(await fetch(`/api/app-studio/apps/${id}`, { method: 'DELETE' }));
 }
 
 export type AppStudioAction = 'approve_plan_and_build' | 'dispatch_ready_work' | 'run_checks' | 'pause' | 'resume' | 'cancel';
 
-export function runAppAction(id: number, action: AppStudioAction): Promise<AppStudioSessionDetail | { ok: true }> {
+export function runAppAction(id: string, action: AppStudioAction): Promise<AppStudioSessionDetail | { ok: true }> {
   return unwrap(fetch(`/api/app-studio/apps/${id}/actions`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }),
   }));
 }
 
-export function answerAppDecision(id: number, decisionId: number, answer: string): Promise<{ decision: AppDecisionView }> {
+export function answerAppDecision(id: string, decisionId: string, answer: string): Promise<{ decision: AppDecisionView }> {
   return unwrap(fetch(`/api/app-studio/apps/${id}/actions`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'answer_decision', decision_id: decisionId, answer }),
   }));
 }
 
-export function updateAppPlan(id: number, plan: AppPlanV1, expectedRevisionNumber?: number): Promise<{ revision: AppPlanRevisionView }> {
+export function updateAppPlan(id: string, plan: AppPlanV1, expectedRevisionNumber?: number): Promise<{ revision: AppPlanRevisionView }> {
   return unwrap(fetch(`/api/app-studio/apps/${id}/plan`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ plan, expected_revision_number: expectedRevisionNumber, created_by: 'user' }),
@@ -231,8 +244,8 @@ export function updateAppPlan(id: number, plan: AppPlanV1, expectedRevisionNumbe
 export interface AppStudioCreated {
   project: { id: number; name: string; root_path: string };
   app_session: AppStudioSession;
-  master_session_id: number;
-  company_session_id: number;
+  master_session_id: string;
+  company_session_id: string;
   team: AppTeamSessionView;
 }
 

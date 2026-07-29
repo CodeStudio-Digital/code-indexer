@@ -14,7 +14,7 @@ export function CloudflareConnectCard({
   whoami,
   onConnected,
 }: {
-  sessionId: number;
+  sessionId: string;
   whoami: CfWhoami | null;
   onConnected: (who: CfWhoami) => void;
 }) {

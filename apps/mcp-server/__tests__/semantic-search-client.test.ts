@@ -8,7 +8,10 @@ const config = {
 
 describe('MCP semantic localhost client', () => {
   it('delegates code and memory reads to loopback endpoints', async () => {
-    const fetchImpl = vi.fn(async (url: string | URL | Request) => {
+    const fetchImpl = vi.fn(async (
+      url: string | URL | Request,
+      _init?: RequestInit,
+    ) => {
       const value = String(url);
       if (value.includes('/agent-memory/search')) {
         return new Response(JSON.stringify({ results: [] }), {
@@ -22,14 +25,21 @@ describe('MCP semantic localhost client', () => {
     const client = createMcpSemanticSearchClient(config, fetchImpl as typeof fetch);
 
     await expect(client.searchProject(7, 'related behavior', {
-      mode: 'hybrid', type: 'symbols', limit: 9,
+      mode: 'hybrid',
+      type: 'symbols',
+      limit: 9,
+      consumer: 'agent',
+      sessionId: 'session-7',
     })).resolves.toMatchObject({ ok: true });
     await expect(client.searchProjectMemory(7, 'build recipe', 4))
       .resolves.toMatchObject({ ok: true });
 
     expect(String(fetchImpl.mock.calls[0]![0])).toBe(
-      'http://127.0.0.1:7333/api/projects/7/search?q=related+behavior&mode=hybrid&type=symbols&limit=9',
+      'http://127.0.0.1:7333/api/projects/7/search?q=related+behavior&mode=hybrid&type=symbols&limit=9&consumer=agent',
     );
+    expect(fetchImpl.mock.calls[0]![1]).toMatchObject({
+      headers: expect.objectContaining({ 'x-mcp-session-id': 'session-7' }),
+    });
     expect(String(fetchImpl.mock.calls[1]![0])).toBe(
       'http://127.0.0.1:7333/api/projects/7/agent-memory/search?q=build+recipe&limit=4',
     );
@@ -46,4 +56,3 @@ describe('MCP semantic localhost client', () => {
     });
   });
 });
-

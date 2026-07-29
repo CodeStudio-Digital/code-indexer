@@ -16,7 +16,7 @@ import {
 import { useTestPlan } from './useTestPlan.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
 }
 
 export function TestPlanView({ sessionId }: Props) {

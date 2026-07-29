@@ -685,22 +685,17 @@ export class CoderRunner extends EventEmitter {
   public currentPhase: string | null = null;
 
   /**
-   * Id of the most recent `coder_turn_telemetry` row inserted by the runner.
-   * Exposed (public) so the persistence layer in index.ts can stamp the
-   * tool_calls of this turn with `turn_telemetry_id`, giving dashboards a
-   * clean JOIN between per-call cost and per-turn token usage. Null when
-   * sessionStore is absent (subagents/tests) or the insert failed.
+   * UUID of the most recent immutable metrics/turns record. Exposed so the
+   * conversation commit can stamp its tool-call metadata with the same
+   * filesystem record id.
    */
-  public lastTurnTelemetryId: number | null = null;
+  public lastTurnTelemetryId: string | null = null;
 
   /**
-   * Perf W1 — pending id of the CURRENT turn's telemetry row when the
-   * async writer (dbWriter) handled the insert. `flushPendingTurn` captures
-   * this synchronously alongside `lastTurnTelemetryId` and awaits it before
-   * stamping tool_calls, so the FK survives the off-thread round-trip. Null
-   * on the synchronous path. Never rejects.
+   * Pending UUID of the current turn's filesystem metric. The host awaits it
+   * before committing the transcript/tool metadata. Never rejects.
    */
-  public lastTurnTelemetryIdPromise: Promise<number | null> | null = null;
+  public lastTurnTelemetryIdPromise: Promise<string | null> | null = null;
 
   /**
    * Currently active tool tiers. When null, no tier filtering is applied
@@ -758,10 +753,12 @@ export class CoderRunner extends EventEmitter {
   }
 
   /** Public mirrors of opts.sessionId / opts.isSubagent so subagent factories can inherit them. */
-  public readonly sessionId: number | undefined;
+  public readonly sessionId: import('@mcp/session-storage').SessionId | undefined;
   public readonly isSubagent: boolean;
   /** Optional SessionStore for input-log mirroring; see RunnerOptions. */
-  public readonly sessionStore: import('@mcp/code-agent/sessions/store.js').SessionStore | undefined;
+  public readonly sessionStore:
+    | import('@mcp/code-agent/sessions/fs-store/index.js').FsSessionStore
+    | undefined;
   /**
    * Resolved per-block tool-result cap for this run. Computed once in the
    * constructor from `opts.toolOutputCapLevel`, `opts.pushTimeCap`, and
@@ -783,22 +780,21 @@ export class CoderRunner extends EventEmitter {
 
   /**
    * Best-effort mirror of a runtime system-reminder injection into
-   * `coder_session_inputs` so the dashboard's Input tab shows what was
+   * the session bundle's input records so the dashboard's Input tab shows what was
    * pushed under the hood. No-op when sessionStore/sessionId are absent
    * (subagents, tests). Dedup is handled by SessionStore.recordSessionInput.
    */
   private logSystemReminder(tag: string, content: string): void {
     if (!this.sessionStore || this.sessionId == null) return;
-    try {
-      this.sessionStore.recordSessionInput({
+    void this.sessionStore.recordSessionInput({
         session_id: this.sessionId,
         kind: 'system_reminder',
         source_label: `reminder:${tag}`,
         content,
+      })
+      .catch(() => {
+        // best-effort
       });
-    } catch {
-      // best-effort
-    }
   }
   constructor(opts: RunnerOptions) {
     super();
@@ -968,9 +964,9 @@ export class CoderRunner extends EventEmitter {
    * picked ID was unknown (handled silently — the user already got UI
    * feedback at pick time).
    *
-   * Logs one `skill_usage_log` row per applied skill with
-   * `invoked_by='user'` so the admin telemetry tab can attribute manual
-   * picks. Best-effort: a logging failure does not block the request.
+   * Appends one `skill.usage` bundle event per applied skill with
+   * `invoked_by='user'` so telemetry can attribute manual picks.
+   * Best-effort: a logging failure does not block the request.
    */
   private buildActiveSkillsBlockForLastUser(history: AgentMessage[]): string | null {
     const store = this.opts.skillStore;
@@ -1004,17 +1000,16 @@ export class CoderRunner extends EventEmitter {
       if (!skill) continue;
       const body = interpolateSkillVars(skill.prompt_body, ctx);
       blocks.push(`## ${skill.id} — ${skill.name}\n\n${body}`);
-      if (this.sessionId != null) {
-        try {
-          store.logSkillUsage({
-            session_id: this.sessionId,
+      if (this.sessionId != null && this.sessionStore) {
+        void this.sessionStore
+          .appendSessionEvent(this.sessionId, 'skill.usage', {
             skill_id: id,
             invoked_by: 'user',
             input_text: userInput,
+          })
+          .catch(() => {
+            /* telemetry is best-effort; do not block the turn */
           });
-        } catch {
-          /* telemetry is best-effort; do not block the turn */
-        }
       }
     }
 
@@ -1116,13 +1111,16 @@ export class CoderRunner extends EventEmitter {
     };
     this.messages.push(msg);
     if (this.opts.sessionStore && this.opts.sessionId !== undefined) {
-      try {
-        this.opts.sessionStore.appendMessage(this.opts.sessionId, msg);
-      } catch (e) {
-        console.warn(
-          `[coder] appendSystemReminder mirror failed: ${e instanceof Error ? e.message : String(e)}`,
-        );
-      }
+      void this.opts.sessionStore
+        .appendMessage({
+          session_id: this.opts.sessionId,
+          message: msg,
+        })
+        .catch((e: unknown) => {
+          console.warn(
+            `[coder] appendSystemReminder mirror failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        });
     }
   }
 
@@ -1181,7 +1179,7 @@ export class CoderRunner extends EventEmitter {
    * call) instead of relying on a notification user-message arriving in
    * time.
    */
-  interruptWait(info?: { kind?: 'plan' | 'question' | 'tasks' | 'subordinate_event'; agentRunId?: number; role?: string }): boolean {
+  interruptWait(info?: { kind?: 'plan' | 'question' | 'tasks' | 'subordinate_event'; agentRunId?: string | null; role?: string }): boolean {
     if (this.pendingResolves.size === 0) return false;
     const payload = JSON.stringify({ interrupted: true, ...(info ?? {}) });
     const resolvers = Array.from(this.pendingResolves.values());
@@ -1455,7 +1453,7 @@ export class CoderRunner extends EventEmitter {
     if (parsed.aborted || parsed.interrupted) return null;
     if ((parsed.answer ?? raw) !== 'switch_agent') return null;
 
-    this.opts.toolContext.setSessionAgent(g.recommendedAgent);
+    await this.opts.toolContext.setSessionAgent(g.recommendedAgent);
     this.appendSystemReminder(
       `Agent switched to ${g.recommendedAgent} after user approval. Reason: ${reason}. ` +
       `Restart or continue this session so the next run is built with the new agent prompt/tool profile.`,
@@ -1697,7 +1695,18 @@ export class CoderRunner extends EventEmitter {
             pushNotice: (text) => this.pushUserMessage(text),
             persistNotice: (text) => {
               if (this.opts.sessionStore && this.sessionId != null) {
-                try { this.opts.sessionStore.appendMessage(this.sessionId, { role: 'user', content: [{ type: 'text', text }], isMeta: true }); } catch { /* best-effort */ }
+                void this.opts.sessionStore
+                  .appendMessage({
+                    session_id: this.sessionId,
+                    message: {
+                      role: 'user',
+                      content: [{ type: 'text', text }],
+                      isMeta: true,
+                    },
+                  })
+                  .catch(() => {
+                    /* best-effort */
+                  });
               }
             },
           }),
@@ -1768,10 +1777,9 @@ export class CoderRunner extends EventEmitter {
     responseMeta: ChatProviderResponseMeta | null;
     compactionTriggered: boolean;
     summarizerRan: boolean;
-  }): number | null | Promise<number | null> {
+  }): string | null | Promise<string | null> {
     const persisted = persistTurnTelemetryPure({
-      store: this.opts.turnTelemetryStore ?? this.sessionStore,
-      asyncStore: this.opts.turnTelemetryAsync,
+      store: this.opts.turnTelemetryStore,
       sessionId: this.sessionId ?? null,
       runId: this.runId,
       isSubagent: this.isSubagent,
@@ -1798,10 +1806,8 @@ export class CoderRunner extends EventEmitter {
       agentDecisionTelemetry: this.opts.agentDecisionTelemetry,
       actualAgent: this.opts.agentId ?? null,
     });
-    // Sync path: id is final. Async path (dbWriter): stash the promise so
-    // `flushPendingTurn` can await the FK before stamping tool_calls; the
-    // mirror field updates as soon as the round-trip settles (never rejects
-    // — persistTurnTelemetryPure catches).
+    // The filesystem writer is asynchronous. Stash the promise so
+    // `flushPendingTurn` can stamp tool metadata with the immutable record id.
     if (persisted && typeof persisted === 'object') {
       this.lastTurnTelemetryId = null;
       this.lastTurnTelemetryIdPromise = persisted.then((resolved) => {
@@ -1828,7 +1834,11 @@ export class CoderRunner extends EventEmitter {
       }
       const observer = getGlobalToolSelectionOutcomeObserver();
       if (observer && input.toolUseBlocks.length > 0 && lastUserText) {
-        observer(lastUserText, input.toolUseBlocks.map((b) => b.name));
+        observer(
+          lastUserText,
+          input.toolUseBlocks.map((b) => b.name),
+          this.sessionId,
+        );
       }
     } catch {
       // Observer failures must never break telemetry.

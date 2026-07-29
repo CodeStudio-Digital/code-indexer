@@ -13,13 +13,15 @@ import {
 } from '@mcp/code-agent/skills/agent-skills-installer.js';
 import { installFromLocalFolder } from '@mcp/code-agent/skills/local-skills-installer.js';
 import { installFromUrl } from '@mcp/code-agent/skills/url-skills-installer.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { readFilesystemSkillUsageStats } from './skill-usage-filesystem.js';
 
 function getStore() {
   const config = loadConfig();
   return new SkillStore(config.dbPath);
 }
 
-export function skillsRouter(): Hono {
+export function skillsRouter(sessionStore: FsSessionStore): Hono {
   const app = new Hono();
 
   // ─── List all skills ─────────────────────────────────────────
@@ -306,28 +308,24 @@ export function skillsRouter(): Hono {
   });
 
   // ─── Usage stats ─────────────────────────────────────────────
-  app.get('/skills/:id/usage', (c) => {
-    const store = getStore();
-    try {
-      const stats = store.getSkillUsageStats(c.req.param('id'));
-      return c.json(stats);
-    } finally {
-      store.close();
-    }
+  app.get('/skills/:id/usage', async (c) => {
+    const stats = await readFilesystemSkillUsageStats(
+      sessionStore,
+      c.req.param('id'),
+    );
+    return c.json(stats);
   });
 
   // ─── Health (alias for usage) ─────────────────────────────────
   // Identical payload to /usage but a more obvious URL for the dashboard
   // "skill health" panel. Returns total_invocations + last_used (legacy)
   // plus success_rate and top_error_codes (added by migration 056).
-  app.get('/skills/:id/health', (c) => {
-    const store = getStore();
-    try {
-      const stats = store.getSkillUsageStats(c.req.param('id'));
-      return c.json(stats);
-    } finally {
-      store.close();
-    }
+  app.get('/skills/:id/health', async (c) => {
+    const stats = await readFilesystemSkillUsageStats(
+      sessionStore,
+      c.req.param('id'),
+    );
+    return c.json(stats);
   });
 
   return app;

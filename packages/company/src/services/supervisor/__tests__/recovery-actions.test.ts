@@ -22,11 +22,17 @@ import {
 } from '../recovery-actions.js';
 import type { AgentSupervisionRecord, StuckAgent } from '../heartbeat-tracker.js';
 import type { SupervisionState } from '../state-machine.js';
+import { agentRunId, companySessionId } from './uuid-fixtures.js';
+
+const SESSION_ID = companySessionId(100);
+const AGENT_1 = agentRunId(1);
+const AGENT_5 = agentRunId(5);
+const AGENT_9 = agentRunId(9);
 
 function makeRecord(over: Partial<AgentSupervisionRecord> = {}): AgentSupervisionRecord {
   return {
-    agentRunId: 1,
-    companySessionId: 100,
+    agentRunId: AGENT_1,
+    companySessionId: SESSION_ID,
     role: 'frontend',
     state: 'RUNNING_TURN',
     enteredAt: 0,
@@ -82,7 +88,7 @@ describe('abortStuckTool', () => {
     const inject = vi.fn().mockReturnValue(true);
     const ctx: RecoveryContext = {
       runners: new Map([
-        [1, { injectToolResultError: inject, abort: vi.fn() }],
+        [AGENT_1, { injectToolResultError: inject, abort: vi.fn() }],
       ]),
     };
     const stuck = makeStuck('STUCK_TOOL', 'AWAITING_TOOL', {
@@ -99,7 +105,7 @@ describe('abortStuckTool', () => {
     const inject = vi.fn().mockReturnValue(false);
     const abort = vi.fn();
     const ctx: RecoveryContext = {
-      runners: new Map([[1, { injectToolResultError: inject, abort }]]),
+      runners: new Map([[AGENT_1, { injectToolResultError: inject, abort }]]),
     };
     const stuck = makeStuck('STUCK_TOOL', 'AWAITING_TOOL', {
       currentToolUseId: 'tu-1',
@@ -114,7 +120,7 @@ describe('abortStuckTool', () => {
   it('falls back to runner.abort() when injectToolResultError missing', async () => {
     const abort = vi.fn();
     const ctx: RecoveryContext = {
-      runners: new Map([[1, { abort }]]),
+      runners: new Map([[AGENT_1, { abort }]]),
     };
     const stuck = makeStuck('STUCK_TOOL', 'AWAITING_TOOL', {
       currentToolUseId: 'tu-1',
@@ -129,7 +135,7 @@ describe('abortStuckTool', () => {
   it('returns failed when injection throws', async () => {
     const ctx: RecoveryContext = {
       runners: new Map([
-        [1, {
+        [AGENT_1, {
           injectToolResultError: () => { throw new Error('boom'); },
           abort: vi.fn(),
         }],
@@ -185,7 +191,7 @@ describe('forceResumeSubordinate', () => {
     const stuck = makeStuck('STUCK_AWAITING_MASTER', 'AWAITING_MASTER_APPROVAL');
     const out = await forceResumeSubordinate(stuck, ctx);
     expect(out.ok).toBe(true);
-    expect(resume).toHaveBeenCalledWith(1, expect.stringContaining('[SYSTEM]'));
+    expect(resume).toHaveBeenCalledWith(AGENT_1, expect.stringContaining('[SYSTEM]'));
   });
 
   it('resumes when no master handle provided (treats as dead)', async () => {
@@ -263,7 +269,7 @@ describe('dispatchRecovery', () => {
   it('STUCK_TOOL → abortStuckTool', async () => {
     const inject = vi.fn();
     const ctx: RecoveryContext = {
-      runners: new Map([[1, { injectToolResultError: inject, abort: vi.fn() }]]),
+      runners: new Map([[AGENT_1, { injectToolResultError: inject, abort: vi.fn() }]]),
     };
     const stuck = makeStuck('STUCK_TOOL', 'AWAITING_TOOL', {
       currentToolUseId: 'tu-1',
@@ -316,7 +322,10 @@ describe('listRegisteredActions', () => {
 describe('abortStuckTurn', () => {
   it('aborts a subordinate runner on STUCK_PROVIDER', async () => {
     const abort = vi.fn();
-    const stuck = makeStuck('STUCK_PROVIDER', 'AWAITING_PROVIDER', { agentRunId: 5, role: 'backend' });
+    const stuck = makeStuck('STUCK_PROVIDER', 'AWAITING_PROVIDER', {
+      agentRunId: AGENT_5,
+      role: 'backend',
+    });
     const out = await abortStuckTurn(stuck, { runners: { get: () => ({ abort }) } });
     expect(out.ok).toBe(true);
     expect(abort).toHaveBeenCalledTimes(1);
@@ -341,10 +350,13 @@ describe('abortStuckTurn', () => {
 
   it('falls back to subordinates.abort when no runner ref', async () => {
     const abort = vi.fn(async () => undefined);
-    const stuck = makeStuck('STUCK_PROVIDER', 'AWAITING_PROVIDER', { agentRunId: 9, role: 'backend' });
+    const stuck = makeStuck('STUCK_PROVIDER', 'AWAITING_PROVIDER', {
+      agentRunId: AGENT_9,
+      role: 'backend',
+    });
     const out = await abortStuckTurn(stuck, { subordinates: { resume: vi.fn(), abort } });
     expect(out.ok).toBe(true);
-    expect(abort).toHaveBeenCalledWith(9, expect.stringContaining('supervisor'));
+    expect(abort).toHaveBeenCalledWith(AGENT_9, expect.stringContaining('supervisor'));
   });
 
   it('returns no_match for an unrelated state', async () => {

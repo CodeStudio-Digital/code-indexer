@@ -11,20 +11,20 @@ import { useCallback } from 'react';
  * resumed; delete aborts it (if running) and removes the agent_run row.
  */
 export function useAgentControls(
-  companySessionId: number | null,
-  streamSetError: (sessionId: number, error: string | null) => void,
-  streamRemoveSubordinate: (sessionId: number, agentRunId: number) => void,
+  companySessionId: string | null,
+  streamSetError: (sessionId: string, error: string | null) => void,
+  streamRemoveSubordinate: (sessionId: string, agentRunId: string) => void,
   /** null disables raw Company controls (App cards own their lifecycle). */
   controlsBasePath?: string | null,
 ) {
-  const route = useCallback((agentRunId: number, suffix = '') => {
+  const route = useCallback((agentRunId: string, suffix = '') => {
     if (controlsBasePath === null || companySessionId == null) return null;
     const base = controlsBasePath ?? `/api/company/sessions/${companySessionId}/agents`;
     return `${base}/${agentRunId}${suffix}`;
   }, [companySessionId, controlsBasePath]);
 
   const pauseAgent = useCallback(
-    async (agentRunId: number) => {
+    async (agentRunId: string) => {
       if (companySessionId == null) return;
       const url = route(agentRunId, '/pause');
       if (!url) {
@@ -47,7 +47,7 @@ export function useAgentControls(
   );
 
   const resumeAgent = useCallback(
-    async (agentRunId: number, opts?: { message?: string; thinking?: boolean }) => {
+    async (agentRunId: string, opts?: { message?: string; thinking?: boolean }) => {
       if (companySessionId == null) return;
       const url = route(agentRunId, '/resume');
       if (!url) {
@@ -72,7 +72,7 @@ export function useAgentControls(
   );
 
   const deleteAgent = useCallback(
-    async (agentRunId: number) => {
+    async (agentRunId: string) => {
       if (companySessionId == null) return;
       const url = route(agentRunId);
       if (!url) {

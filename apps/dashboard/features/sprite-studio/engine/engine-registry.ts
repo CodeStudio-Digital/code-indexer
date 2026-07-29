@@ -18,8 +18,8 @@ const registry = new Map<string, EditorEngine>();
  *  frames of the same asset are independent documents with independent undo. */
 export function engineKey(
   projectId: number | string,
-  assetId: number | string,
-  versionId?: number | null,
+  assetId: string,
+  versionId?: string | null,
 ): string {
   return `${projectId}:${assetId}:${versionId ?? 'new'}`;
 }

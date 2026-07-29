@@ -1,55 +1,63 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
-import { coderOrchestrationCheckpoints259 } from '@mcp/store/migrations/259_coder_orchestration_checkpoints.js';
-import * as checkpoints from '../../sessions/store/orchestration-checkpoints.js';
+import { FsSessionStore } from '../../sessions/fs-store/fs-session-store.js';
+import type { SessionId } from '@mcp/session-storage';
 import {
   clearSession,
   getGroup,
   retainGroup,
   type ResumableGroup,
-  type ResumeCheckpointStore,
 } from '../subagent-resume-registry.js';
 
-const SESSION_ID = 91;
-let db: Database.Database;
-let store: ResumeCheckpointStore;
+let temporaryRoot: string;
+let projectRoot: string;
+let dataDir: string;
+let sessionId: SessionId;
+let store: FsSessionStore;
 
-beforeEach(() => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  db.exec(`
-    CREATE TABLE coder_sessions (id INTEGER PRIMARY KEY);
-    INSERT INTO coder_sessions (id) VALUES (${SESSION_ID});
-  `);
-  coderOrchestrationCheckpoints259.up(db);
-  store = {
-    saveOrchestrationCheckpoint: (input) => checkpoints.save(db, input),
-    loadOrchestrationCheckpoint: (sessionId, kind, scopeId) =>
-      checkpoints.load(db, sessionId, kind, scopeId),
-    listOrchestrationCheckpoints: (sessionId, kind, limit) =>
-      checkpoints.list(db, sessionId, kind, limit),
-    removeOrchestrationCheckpoint: (sessionId, kind, scopeId, token) =>
-      checkpoints.remove(db, sessionId, kind, scopeId, token),
-    tryAcquireOrchestrationCheckpoint: (sessionId, kind, scopeId, leaseMs) =>
-      checkpoints.tryAcquire(db, sessionId, kind, scopeId, leaseMs),
-    releaseOrchestrationCheckpoint: (sessionId, kind, scopeId, token) =>
-      checkpoints.release(db, sessionId, kind, scopeId, token),
-    renewOrchestrationCheckpoint: (sessionId, kind, scopeId, token, leaseMs) =>
-      checkpoints.renew(db, sessionId, kind, scopeId, token, leaseMs),
-  };
+function openStore(): FsSessionStore {
+  return FsSessionStore.fromRoots({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) =>
+        projectId === 91 ? projectRoot : null,
+      listProjectRoots: () => [
+        { project_id: 91, root_path: projectRoot },
+      ],
+    },
+  });
+}
+
+beforeEach(async () => {
+  temporaryRoot = await mkdtemp(join(tmpdir(), 'resume-checkpoint-'));
+  projectRoot = join(temporaryRoot, 'project');
+  dataDir = join(temporaryRoot, 'data');
+  await Promise.all([mkdir(projectRoot), mkdir(dataDir)]);
+  store = openStore();
+  sessionId = (
+    await store.createSession({
+      project_id: 91,
+      title: 'resume checkpoint',
+      provider: 'fake',
+      model: 'fake-model',
+    })
+  ).id;
 });
 
-afterEach(() => {
-  clearSession(SESSION_ID);
-  db.close();
+afterEach(async () => {
+  await clearSession(sessionId);
+  await store.close();
+  await rm(temporaryRoot, { recursive: true, force: true });
 });
 
-describe('subagent resume checkpoint', () => {
-  it('restores a redacted failed transcript after memory/executor recreation', () => {
+describe('subagent resume filesystem checkpoint', () => {
+  it('restores a redacted failed transcript after memory/store recreation', async () => {
     const now = Date.now();
     const group: ResumableGroup = {
       spawnId: 'spawn-restart',
-      sessionId: SESSION_ID,
+      sessionId,
       provider: 'fake',
       model: 'fake-model',
       createdAt: now,
@@ -65,8 +73,14 @@ describe('subagent resume checkpoint', () => {
         maxTurns: 10,
         limits: { maxToolCalls: 20 },
         transcript: [
-          { role: 'user', content: [{ type: 'text', text: 'Bearer TOP_SECRET_VALUE' }] },
-          { role: 'assistant', content: [{ type: 'thinking', text: 'private reasoning' }] },
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'Bearer TOP_SECRET_VALUE' }],
+          },
+          {
+            role: 'assistant',
+            content: [{ type: 'thinking', text: 'private reasoning' }],
+          },
         ],
         reason: 'error',
         failureNote: 'password=TOP_SECRET_VALUE',
@@ -78,20 +92,29 @@ describe('subagent resume checkpoint', () => {
       }],
     };
 
-    retainGroup(SESSION_ID, group, store);
-    const payload = db.prepare(`
-      SELECT payload_json FROM coder_orchestration_checkpoints
-      WHERE session_id=? AND checkpoint_kind='subagent_resume'
-    `).get(SESSION_ID) as { payload_json: string };
-    expect(payload.payload_json).not.toContain('TOP_SECRET_VALUE');
-    expect(payload.payload_json).not.toContain('private reasoning');
-    expect(payload.payload_json).not.toContain('AKIA1234567890ABCDEF');
-    expect(payload.payload_json).not.toContain('xoxb-1234567890-ABCDEFGHIJ');
-    expect(payload.payload_json).not.toContain('database-super-secret');
-    expect(payload.payload_json).not.toContain('Qm9ndXNPcGFxdWVTZWNyZXQxMjM0NTY3ODkw');
+    await retainGroup(sessionId, group, store);
+    const [checkpoint] = await store.listOrchestrationCheckpoints(
+      sessionId,
+      'subagent_resume',
+    );
+    expect(checkpoint.scope_id).toBe('spawn-restart');
+    expect(checkpoint.payload_json).not.toContain('TOP_SECRET_VALUE');
+    expect(checkpoint.payload_json).not.toContain('private reasoning');
+    expect(checkpoint.payload_json).not.toContain('AKIA1234567890ABCDEF');
+    expect(checkpoint.payload_json).not.toContain('xoxb-1234567890-ABCDEFGHIJ');
+    expect(checkpoint.payload_json).not.toContain('database-super-secret');
+    expect(checkpoint.payload_json).not.toContain(
+      'Qm9ndXNPcGFxdWVTZWNyZXQxMjM0NTY3ODkw',
+    );
 
-    clearSession(SESSION_ID);
-    const restored = getGroup(SESSION_ID, 'spawn-restart', store);
+    await clearSession(sessionId);
+    await store.close();
+    store = openStore();
+    const restored = await getGroup(
+      sessionId,
+      'spawn-restart',
+      store,
+    );
     expect(restored?.agents[0].reason).toBe('error');
     expect(restored?.agents[0].transcript?.length).toBeGreaterThan(0);
     expect(JSON.stringify(restored)).not.toContain('TOP_SECRET_VALUE');

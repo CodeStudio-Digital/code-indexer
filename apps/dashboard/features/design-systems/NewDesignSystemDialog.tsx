@@ -17,7 +17,7 @@ import { createDsStudio, type DsStudioMode } from './studio/studio-api.js';
 
 interface Props {
   onClose: () => void;
-  onCreated: (dsSessionId: number, coderSessionId: number) => void;
+  onCreated: (dsSessionId: string, coderSessionId: string) => void;
 }
 
 const STACKS: Array<{ value: DsStack; label: string; helpKey: string; badgeKey?: string }> = [

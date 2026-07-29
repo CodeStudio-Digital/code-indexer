@@ -1,0 +1,265 @@
+syntax = "proto3";
+
+package codestudio.agent.v1;
+
+// This IDL is the only cross-language authority for the Rust session store.
+// Filesystem paths and credentials are deliberately absent. A native
+// in-process bridge resolves root_id and owns the authenticated capability.
+
+enum StorageGeneration {
+  STORAGE_GENERATION_UNSPECIFIED = 0;
+  STORAGE_GENERATION_TYPESCRIPT_FS_V1 = 1;
+  STORAGE_GENERATION_RUST_FS_V1 = 2;
+}
+
+enum SessionRecordKind {
+  SESSION_RECORD_KIND_UNSPECIFIED = 0;
+  SESSION_RECORD_KIND_CONVERSATION = 1;
+  SESSION_RECORD_KIND_LIFECYCLE_EVENT = 2;
+  SESSION_RECORD_KIND_METRIC_ROLLUP = 3;
+  SESSION_RECORD_KIND_TOOL_OUTPUT = 4;
+  SESSION_RECORD_KIND_CHECKPOINT = 5;
+  SESSION_RECORD_KIND_PLAN = 6;
+  SESSION_RECORD_KIND_TASK = 7;
+  SESSION_RECORD_KIND_INPUT = 8;
+  SESSION_RECORD_KIND_MEMORY = 9;
+  SESSION_RECORD_KIND_SUBAGENT = 10;
+  SESSION_RECORD_KIND_ARCHIVE = 11;
+}
+
+enum SessionDurabilityClass {
+  SESSION_DURABILITY_CLASS_UNSPECIFIED = 0;
+  SESSION_DURABILITY_CLASS_AUTHORITATIVE = 1;
+  SESSION_DURABILITY_CLASS_DURABLE = 2;
+  SESSION_DURABILITY_CLASS_COALESCED = 3;
+}
+
+enum SessionStoreFailureCode {
+  SESSION_STORE_FAILURE_CODE_UNSPECIFIED = 0;
+  SESSION_STORE_FAILURE_CODE_INVALID_REQUEST = 1;
+  SESSION_STORE_FAILURE_CODE_UNAUTHENTICATED = 2;
+  SESSION_STORE_FAILURE_CODE_STALE_AUTHORITY = 3;
+  SESSION_STORE_FAILURE_CODE_WRITER_ACTIVE = 4;
+  SESSION_STORE_FAILURE_CODE_WRITER_NOT_FOUND = 5;
+  SESSION_STORE_FAILURE_CODE_DIVERGENT_REPLAY = 6;
+  SESSION_STORE_FAILURE_CODE_LIMIT_EXCEEDED = 7;
+  SESSION_STORE_FAILURE_CODE_CORRUPT_BUNDLE = 8;
+  SESSION_STORE_FAILURE_CODE_UNSAFE_STORAGE = 9;
+  SESSION_STORE_FAILURE_CODE_CONCURRENT_MUTATION = 10;
+  SESSION_STORE_FAILURE_CODE_UNSUPPORTED_OPERATION = 11;
+  SESSION_STORE_FAILURE_CODE_INTERNAL = 12;
+}
+
+message SessionStoreAuthority {
+  StorageGeneration storage_generation = 1;
+  uint64 lease_epoch = 2;
+  string writer_id = 3;
+}
+
+message SessionStoreLimits {
+  uint64 max_records = 1;
+  uint64 max_payload_bytes = 2;
+  uint64 max_authority_transitions = 3;
+}
+
+// request_payload_sha256 is
+// SHA-256("codestudio.agent.session-store-request.v1\0" || encoded_request).
+// Authentication is the opaque native bridge owner, never a serialized token.
+message SessionStoreRequestHeader {
+  uint32 protocol_version = 1;
+  string bridge_instance_id = 2;
+  string request_id = 3;
+  uint64 stream_seq = 4;
+  int64 sent_at_unix_ms = 5;
+  int64 deadline_at_unix_ms = 6;
+  bytes request_payload_sha256 = 7;
+}
+
+message SessionStoreRequestFrame {
+  SessionStoreRequestHeader header = 1;
+  bytes encoded_request = 2;
+}
+
+message SessionStoreRequest {
+  oneof body {
+    OpenSessionWriter open_session_writer = 10;
+    CommitSessionRecord commit_session_record = 11;
+    PublishSessionProjection publish_session_projection = 12;
+    QuerySessionState query_session_state = 13;
+    TransferSessionStorageGeneration transfer_session_storage_generation = 14;
+    ArchiveSession archive_session = 15;
+    CloseSessionWriter close_session_writer = 16;
+    ReadCommittedSessionPayload read_committed_session_payload = 17;
+  }
+}
+
+message OpenSessionWriter {
+  string root_id = 1;
+  string session_id = 2;
+  SessionStoreAuthority authority = 3;
+  SessionStoreLimits limits = 4;
+  string idempotency_key = 5;
+}
+
+message CommitSessionRecord {
+  string writer_handle = 1;
+  SessionStoreAuthority authority = 2;
+  string operation_id = 3;
+  SessionRecordKind kind = 4;
+  SessionDurabilityClass durability = 5;
+  bytes encoded_payload = 6;
+  bytes expected_payload_sha256 = 7;
+}
+
+message PublishSessionProjection {
+  string writer_handle = 1;
+  SessionStoreAuthority authority = 2;
+  string operation_id = 3;
+  string projection_kind = 4;
+  uint64 projection_version = 5;
+  bytes expected_commit_sha256 = 6;
+  bytes encoded_projection = 7;
+}
+
+message QuerySessionState {
+  string writer_handle = 1;
+  SessionStoreAuthority authority = 2;
+}
+
+// Reads bytes only when the exact operation, kind, hash and length were
+// committed by the currently fenced writer. A content hash alone is never a
+// read capability.
+message ReadCommittedSessionPayload {
+  string writer_handle = 1;
+  SessionStoreAuthority authority = 2;
+  string operation_id = 3;
+  SessionRecordKind kind = 4;
+  bytes expected_payload_sha256 = 5;
+  uint64 expected_payload_bytes = 6;
+}
+
+message TransferSessionStorageGeneration {
+  string root_id = 1;
+  string session_id = 2;
+  StorageGeneration source_generation = 3;
+  StorageGeneration target_generation = 4;
+  uint64 expected_source_lease_epoch = 5;
+  SessionStoreAuthority next_authority = 6;
+  bytes verified_manifest_sha256 = 7;
+  string idempotency_key = 8;
+}
+
+message ArchiveSession {
+  string writer_handle = 1;
+  SessionStoreAuthority authority = 2;
+  string operation_id = 3;
+  bytes expected_previous_commit_sha256 = 4;
+}
+
+message CloseSessionWriter {
+  string writer_handle = 1;
+  SessionStoreAuthority authority = 2;
+}
+
+// response_payload_sha256 is
+// SHA-256("codestudio.agent.session-store-response.v1\0" || encoded_response).
+message SessionStoreResponseHeader {
+  uint32 protocol_version = 1;
+  string bridge_instance_id = 2;
+  string request_id = 3;
+  uint64 stream_seq = 4;
+  int64 completed_at_unix_ms = 5;
+  bytes response_payload_sha256 = 6;
+}
+
+message SessionStoreResponseFrame {
+  SessionStoreResponseHeader header = 1;
+  bytes encoded_response = 2;
+}
+
+message SessionStoreResponse {
+  oneof body {
+    SessionWriterOpened session_writer_opened = 10;
+    CommitSessionRecordReceipt commit_session_record_receipt = 11;
+    SessionProjectionPublished session_projection_published = 12;
+    SessionState session_state = 13;
+    SessionStorageTransferred session_storage_transferred = 14;
+    SessionArchived session_archived = 15;
+    SessionWriterClosed session_writer_closed = 16;
+    SessionStoreFailure failure = 17;
+    CommittedSessionPayload committed_session_payload = 18;
+  }
+}
+
+message SessionWriterOpened {
+  string writer_handle = 1;
+  string session_id = 2;
+  SessionStoreAuthority authority = 3;
+  uint64 committed_records = 4;
+  bytes last_commit_sha256 = 5;
+  bool archived = 6;
+  bool replay = 7;
+}
+
+message CommitSessionRecordReceipt {
+  string session_id = 1;
+  string operation_id = 2;
+  SessionStoreAuthority authority = 3;
+  uint64 global_sequence = 4;
+  SessionRecordKind kind = 5;
+  SessionDurabilityClass durability = 6;
+  bytes previous_commit_sha256 = 7;
+  bytes payload_sha256 = 8;
+  bytes commit_sha256 = 9;
+  uint64 payload_bytes = 10;
+  bool replay = 11;
+}
+
+message SessionProjectionPublished {
+  string session_id = 1;
+  string operation_id = 2;
+  SessionStoreAuthority authority = 3;
+  string projection_kind = 4;
+  uint64 projection_version = 5;
+  bytes commit_sha256 = 6;
+  bytes projection_sha256 = 7;
+  bool replay = 8;
+}
+
+message SessionState {
+  string session_id = 1;
+  SessionStoreAuthority authority = 2;
+  uint64 committed_records = 3;
+  bytes last_commit_sha256 = 4;
+  bool archived = 5;
+}
+
+message CommittedSessionPayload {
+  CommitSessionRecordReceipt commit_receipt = 1;
+  bytes encoded_payload = 2;
+}
+
+message SessionStorageTransferred {
+  string session_id = 1;
+  StorageGeneration source_generation = 2;
+  SessionStoreAuthority activated_authority = 3;
+  bytes verified_manifest_sha256 = 4;
+  bytes activation_receipt_sha256 = 5;
+  bool replay = 6;
+}
+
+message SessionArchived {
+  CommitSessionRecordReceipt archive_receipt = 1;
+}
+
+message SessionWriterClosed {
+  string session_id = 1;
+  SessionStoreAuthority authority = 2;
+}
+
+message SessionStoreFailure {
+  SessionStoreFailureCode code = 1;
+  string reason_code = 2;
+  optional string redacted_detail = 3;
+  bool retryable = 4;
+}

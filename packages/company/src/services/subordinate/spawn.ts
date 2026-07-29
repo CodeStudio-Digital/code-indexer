@@ -17,12 +17,12 @@
  * in one file and the orchestration is documented in one place. The
  * deps bag enumerates every collaborator the original method touched.
  */
-import { runCoder, type RunCoderOptions } from '@mcp/code-agent/index.js';
+import {
+  runCoder,
+  type RunCoderOptions,
+} from '@mcp/code-agent/index.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { createBus } from '@apps/http-api/coder-bus.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { SkillStore } from '@mcp/store/skill-store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
 import { buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
 import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
 import {
@@ -69,6 +69,7 @@ import {
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
 import { buildAppStudioSubordinateRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';
+import { createCompanyCoderSession } from '@mcp/company/services/company-coder-sessions.js';
 
 export interface SpawnSubordinateDeps {
   ctx: SessionContext;
@@ -81,8 +82,8 @@ export interface SpawnSubordinateDeps {
   attention: MasterAttention;
   orchestratorRef: unknown;
   concurrencyPolicy: ConcurrencyPolicy;
-  subordinates: Map<number, SubordinateHandle>;
-  runningIds: Set<number>;
+  subordinates: Map<string, SubordinateHandle>;
+  runningIds: Set<string>;
   /** Synchronous spawn-reservation counter (closes the cap TOCTOU). See
    *  SubordinateLifecycle.pendingSpawns. */
   pendingSpawns: { count: number };
@@ -95,7 +96,7 @@ export interface SpawnSubordinateDeps {
   /** Deps bag forwarded to `attachSubordinateCompletionHandler`. */
   completionDeps: SubordinateCompletionDeps;
   /** Helper to compose the `running` list in concurrency-error messages. */
-  listRunning: () => Array<{ agentRunId: number; role: string }>;
+  listRunning: () => Array<{ agentRunId: string; role: string }>;
   /**
    * C2 — per-session autonomy config; source of the global-budget cap
    * (`maxSubordinates`, default 8). Optional: callers/tests without it
@@ -105,8 +106,8 @@ export interface SpawnSubordinateDeps {
 }
 
 interface SpawnResult {
-  agentRunId: number;
-  coderSessionId: number;
+  agentRunId: string;
+  coderSessionId: string;
   status: AgentRunStatus;
 }
 
@@ -121,11 +122,8 @@ export async function spawnSubordinate(
 ): Promise<SpawnResult> {
   const ctx = deps.ctx;
 
-  const companySession = ctx.companyStore.getCompanySession(ctx.companySessionId);
-  const rowRuntimeKind = (companySession as { runtime_kind?: unknown } | null)?.runtime_kind;
-  const runtimeKind: CompanyRuntimeKind = rowRuntimeKind === 'app_studio'
-    ? 'app_studio'
-    : 'company';
+  const companySession = ctx.companyFiles.getSession();
+  const runtimeKind: CompanyRuntimeKind = companySession.runtime_kind;
   const runtimePolicy = readRoleRuntimePolicy(
     companySession?.config_json,
     spec.role,
@@ -170,8 +168,9 @@ export async function spawnSubordinate(
 
   // Global spawn budget (Phase 5 homeostasis; C2 — default ON, cap 8). Coarse
   // cross-session backstop so N sessions don't collectively exhaust the
-  // machine / trip provider rate limits. The COUNT is global (shared SQLite —
-  // every worker reads the same file) but the CAP comes from THIS session's
+  // machine / trip provider rate limits. The COUNT scans the in-memory session
+  // catalog and each bundle's independent agent-run files. The CAP comes from
+  // THIS session's
   // autonomy config: each spawn checks the global count against its OWN
   // session's cap (session `maxSubordinates` > env > default 8; env '0' =
   // uncapped — see global-budget.ts for the full semantics).
@@ -180,7 +179,7 @@ export async function spawnSubordinate(
     : resolveAutonomy(null, process.env);
   const budget = checkGlobalSubordinateBudget({
     cap: autonomyCfg.maxSubordinates,
-    countActive: () => ctx.companyStore.countActiveSubordinatesGlobal(),
+    countActive: () => ctx.companyFiles.countActiveSubordinatesAcrossCatalog(),
   });
   if (!budget.ok) throw new Error(budget.message);
 
@@ -215,8 +214,8 @@ export async function spawnSubordinate(
   // caller-supplied model and never consults the global subagent override.
   let masterRuntime: { provider: string; model: string } | null = null;
   try {
-    const masterRun = ctx.companyStore
-      .listAgentRuns(ctx.companySessionId)
+    const masterRun = ctx.companyFiles
+      .listAgentRunsSync()
       .filter((run) => run.role === 'master')
       .pop();
     if (masterRun) masterRuntime = { provider: masterRun.provider, model: masterRun.model };
@@ -237,8 +236,7 @@ export async function spawnSubordinate(
   });
   const { provider, model } = roleRuntime;
 
-  const config = loadConfig();
-  const store = new SessionStore(config.dbPath);
+  const fsSessionStore = ctx.companyFiles.sessionStore;
 
   const project = ctx.db.getProject(spec.projectId);
   const projectName = project?.name ?? `project-${spec.projectId}`;
@@ -250,11 +248,14 @@ export async function spawnSubordinate(
     `Spawned @${spec.role} agent (project: ${projectName}, ${provider}/${model})`,
   );
 
-  const subSession = store.createSession({
-    project_id: spec.projectId,
+  const subSession = await createCompanyCoderSession({
+    ctx,
+    sessionStore: fsSessionStore,
     title: `[Company ${spec.role}] ${ctx.companySessionId}`,
     provider,
     model,
+    role: spec.role,
+    projectId: spec.projectId,
   });
 
   // Inherit master's disabled tool config so subordinates respect the
@@ -262,7 +263,10 @@ export async function spawnSubordinate(
   const masterHandle = deps.master.handle;
   if (masterHandle) {
     try {
-      store.copyToolConfig(masterHandle.session.id, subSession.id);
+      await fsSessionStore.copyToolConfig(
+        masterHandle.session.id,
+        subSession.id,
+      );
     } catch (e) {
       console.warn(
         `[company] Failed to copy tool config to ${spec.role}: ${e instanceof Error ? e.message : String(e)}`,
@@ -283,27 +287,18 @@ export async function spawnSubordinate(
   // template branches like `{ when: "session.stack === 'react-ts'", skill: 'ds-components-react' }`
   // pick the right primary; chain entries are appended verbatim.
   const resolvedSkills = resolveRoleSkills(roleRuntime.skills, { stack: subordinateStack });
-  if (resolvedSkills.length > 0) {
-    try {
-      const skillStore = new SkillStore(config.dbPath);
-      const allSkills = skillStore.resolveActiveSkills(subSession.id, spec.projectId);
-      for (const skill of allSkills) {
-        skillStore.setSessionSkillEnabled(
-          subSession.id,
-          skill.id,
-          resolvedSkills.includes(skill.id),
-        );
-      }
-      skillStore.close();
-    } catch (e) {
-      console.warn(
-        `[company] Failed to configure skills for ${spec.role}: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+  try {
+    await fsSessionStore.setSessionActiveSkills(
+      subSession.id,
+      resolvedSkills,
+    );
+  } catch (e) {
+    console.warn(
+      `[company] Failed to configure skills for ${spec.role}: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 
-  const agentRun = ctx.companyStore.createAgentRun({
-    company_session_id: ctx.companySessionId,
+  const agentRun = await ctx.companyFiles.createAgentRun({
     role: spec.role,
     coder_session_id: subSession.id,
     project_ids: [spec.projectId],
@@ -379,7 +374,7 @@ export async function spawnSubordinate(
     // Session-level operational rules, injected verbatim into every spawn so
     // policy survives reactivation/compaction (system prompt, not turn history).
     operationalRules: readOperationalRules(
-      ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
+      companySession.config_json,
     ),
     runtimeKind: ctx.capabilities.promptProfile,
   });
@@ -486,8 +481,6 @@ export async function spawnSubordinate(
   handle.done.finally(() => {
     try { supervisorUnsubscribe(); } catch { /* best-effort */ }
   });
-
-  store.close();
 
   if (spec.wait) await handle.done;
 

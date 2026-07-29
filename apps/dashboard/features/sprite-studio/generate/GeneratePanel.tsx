@@ -27,8 +27,8 @@ import type { SpriteAsset, StudioSettings } from '../types.js';
 
 /** External "iterate from this" request (version list / variant card). */
 export type IterateRef =
-  | { kind: 'version'; versionId: number; label: string }
-  | { kind: 'candidate'; jobId: number; index: number };
+  | { kind: 'version'; versionId: string; label: string }
+  | { kind: 'candidate'; jobId: string; index: number };
 
 /** Backend job lifecycle names (see @mcp/store SpriteJobStatus). */
 const ACTIVE_STATUSES = new Set(['queued', 'prompting', 'generating', 'postprocess', 'saving']);
@@ -44,7 +44,7 @@ export function GeneratePanel({
   projectId: number;
   settings: StudioSettings | null;
   activeAsset: SpriteAsset | null;
-  onSaved: (assetId: number, versionId: number) => void;
+  onSaved: (assetId: string, versionId: string) => void;
   /** "Iterate from this" request injected by the orchestrator (version list). */
   iterateRef?: IterateRef | null;
   onIterateConsumed?: () => void;
@@ -58,7 +58,7 @@ export function GeneratePanel({
   const [useCurrentAsRef, setUseCurrentAsRef] = useState(true);
   const hasAutoRef = useCurrentAsRef && activeAsset?.currentVersionId != null;
 
-  const [currentJobId, setCurrentJobId] = useState<number | null>(null);
+  const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   // Params of the current job, kept for Re-roll (re-run with same settings).
   const [lastParams, setLastParams] = useState<GenerateInput | null>(null);
   const [discarded, setDiscarded] = useState<Set<number>>(new Set());
@@ -90,13 +90,13 @@ export function GeneratePanel({
   // "Iterate from this" — the conversational-refinement pattern of the web
   // UIs: the chosen image becomes a reference for the next run. A scratch
   // candidate has no version row, so its PNG rides as an upload ref.
-  const addVersionRef = useCallback((versionId: number, label: string) => {
+  const addVersionRef = useCallback((versionId: string, label: string) => {
     setRefs((prev) => prev.length >= MAX_REFS || prev.some((r) => r.kind === 'version' && r.versionId === versionId)
       ? prev
       : [...prev, { kind: 'version', versionId, label }]);
   }, []);
 
-  const addCandidateRef = useCallback(async (jobId: number, index: number) => {
+  const addCandidateRef = useCallback(async (jobId: string, index: number) => {
     const res = await fetch(candidateThumbUrl(jobId, index));
     if (!res.ok) return;
     const blob = await res.blob();
@@ -140,7 +140,7 @@ export function GeneratePanel({
       assetId: activeAsset?.id,
       size: settings ? { width: settings.canvas.width, height: settings.canvas.height } : undefined,
       useCurrentAsRef: hasAutoRef,
-      referenceIds: refs.filter((r) => r.kind === 'version').map((r) => (r as { versionId: number }).versionId),
+      referenceIds: refs.filter((r) => r.kind === 'version').map((r) => (r as { versionId: string }).versionId),
       uploadRefs: refs
         .filter((r): r is Extract<GenRef, { kind: 'upload' }> => r.kind === 'upload')
         .map((r) => ({ base64: r.base64, mediaType: r.mediaType })),
@@ -162,7 +162,7 @@ export function GeneratePanel({
     setDiscarded((prev) => new Set(prev).add(index));
   }, []);
 
-  const handleSaved = useCallback((assetId: number, versionId: number) => {
+  const handleSaved = useCallback((assetId: string, versionId: string) => {
     setSaveCandidate(null);
     onSaved(assetId, versionId);
   }, [onSaved]);
@@ -229,7 +229,7 @@ export function GeneratePanel({
         open={saveCandidate != null}
         onOpenChange={(v) => { if (!v) setSaveCandidate(null); }}
         projectId={projectId}
-        jobId={currentJobId ?? -1}
+        jobId={currentJobId ?? ''}
         candidate={saveCandidate}
         prompt={promptForSave}
         settings={settings}

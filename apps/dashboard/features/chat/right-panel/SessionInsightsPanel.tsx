@@ -10,21 +10,16 @@ import {
 } from '../SessionDetailsModal.js';
 import { SessionMetricsView } from '../SessionMetricsModal.js';
 import { ToolStatsView } from '../ToolStatsModal.js';
-
-export type SessionInsightsTab = 'overview' | 'usage' | 'tools' | 'inputs';
-
-export const SESSION_INSIGHTS_TAB_STORAGE_KEY = 'chatSessionInsightsTab';
-export const SESSION_INSIGHTS_TAB_EVENT = 'coder:session-insights-tab';
-const VALID_TABS = new Set<SessionInsightsTab>(['overview', 'usage', 'tools', 'inputs']);
-
-function readInitialTab(): SessionInsightsTab {
-  if (typeof window === 'undefined') return 'overview';
-  const saved = window.localStorage.getItem(SESSION_INSIGHTS_TAB_STORAGE_KEY) as SessionInsightsTab | null;
-  return saved && VALID_TABS.has(saved) ? saved : 'overview';
-}
+import {
+  SESSION_INSIGHTS_TAB_EVENT,
+  SESSION_INSIGHTS_TABS as VALID_TABS,
+  readInitialSessionInsightsTab as readInitialTab,
+  SESSION_INSIGHTS_TAB_STORAGE_KEY,
+  type SessionInsightsTab,
+} from './session-insights-tabs.js';
 
 interface SessionInsightsPanelProps {
-  sessionId: number;
+  sessionId: string;
   session: SessionLike | null;
   stats: SessionStatsLike | null;
 }

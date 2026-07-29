@@ -16,9 +16,19 @@ interface HunkSpec {
   decision?: 'pending' | 'kept' | 'reverted';
 }
 
-function makeDiff(filePath: string, content: string | null, hunks: HunkSpec[]): FileDiff {
+function makeDiff(
+  filePath: string,
+  content: string | null,
+  hunks: HunkSpec[],
+): FileDiff<string> {
   return {
-    baseline: { id: 1, filePath, existedBefore: true, oversized: false, status: 'active' },
+    baseline: {
+      id: '00000000-0000-4000-8000-000000000001',
+      filePath,
+      existedBefore: true,
+      oversized: false,
+      status: 'active',
+    },
     diffDisabled: false,
     currentContent: content,
     hunks: hunks.map((h, i) => ({

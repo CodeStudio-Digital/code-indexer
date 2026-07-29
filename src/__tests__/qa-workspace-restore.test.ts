@@ -67,14 +67,16 @@ export default defineConfig({
   },
 });
 `;
+const SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const RUN_ID = '00000000-0000-4000-8000-000000000042';
 
 // ─── renderRunConfigFile ────────────────────────────────────────────
 
 describe('renderRunConfigFile (shared)', () => {
   it('produces parseable JSON with runId/endpoint/startedAt', () => {
-    const out = renderRunConfigFile(7, 'http://x/api');
+    const out = renderRunConfigFile(RUN_ID, 'http://x/api');
     const parsed = JSON.parse(out);
-    expect(parsed.runId).toBe('7');
+    expect(parsed.runId).toBe(RUN_ID);
     expect(parsed.endpoint).toBe('http://x/api');
     expect(typeof parsed.startedAt).toBe('string');
   });
@@ -85,7 +87,7 @@ describe('renderRunConfigFile (shared)', () => {
 describe('restoreQaWorkspace', () => {
   it('writes reporter + global-setup; skips run-config when not asked', async () => {
     const m = new FakeManager();
-    const r = await restoreQaWorkspace(m, { sessionId: 1 });
+    const r = await restoreQaWorkspace(m, { sessionId: SESSION_ID });
     expect(r.reporterRestored).toBe(true);
     expect(r.globalSetupRestored).toBe(true);
     expect(r.runConfigWritten).toBe(false);
@@ -97,20 +99,20 @@ describe('restoreQaWorkspace', () => {
   it('writes run config when caller passes one (qa_start_run path)', async () => {
     const m = new FakeManager();
     const r = await restoreQaWorkspace(m, {
-      sessionId: 1,
-      runConfig: { runId: 42, endpoint: 'http://x/api' },
+      sessionId: SESSION_ID,
+      runConfig: { runId: RUN_ID, endpoint: 'http://x/api' },
     });
     expect(r.runConfigWritten).toBe(true);
     const written = m.files.get('tests/e2e/.mcp-qa-run.json')!;
     const parsed = JSON.parse(written);
-    expect(parsed.runId).toBe('42');
+    expect(parsed.runId).toBe(RUN_ID);
     expect(parsed.endpoint).toBe('http://x/api');
   });
 
   it('reports configMissing=[] for a pristine config', async () => {
     const m = new FakeManager();
     m.files.set('playwright.config.ts', PRISTINE_CONFIG);
-    const r = await restoreQaWorkspace(m, { sessionId: 1 });
+    const r = await restoreQaWorkspace(m, { sessionId: SESSION_ID });
     expect(r.configMissing).toEqual([]);
     expect(r.configRecommendedWritten).toBe(false);
     expect(m.files.has('playwright.config.recommended.ts')).toBe(false);
@@ -119,7 +121,7 @@ describe('restoreQaWorkspace', () => {
   it('writes .recommended sibling when config has drifted', async () => {
     const m = new FakeManager();
     m.files.set('playwright.config.ts', BROKEN_CONFIG);
-    const r = await restoreQaWorkspace(m, { sessionId: 1 });
+    const r = await restoreQaWorkspace(m, { sessionId: SESSION_ID });
     expect(r.configMissing.length).toBeGreaterThan(0);
     expect(r.configRecommendedWritten).toBe(true);
     expect(m.files.has('playwright.config.recommended.ts')).toBe(true);
@@ -128,7 +130,7 @@ describe('restoreQaWorkspace', () => {
   it('does NOT write .recommended when config is absent', async () => {
     const m = new FakeManager();
     m.readBehavior = 'absent';
-    const r = await restoreQaWorkspace(m, { sessionId: 1 });
+    const r = await restoreQaWorkspace(m, { sessionId: SESSION_ID });
     expect(r.configMissing).toEqual([]);
     expect(r.configRecommendedWritten).toBe(false);
   });
@@ -136,7 +138,7 @@ describe('restoreQaWorkspace', () => {
   it('collects warnings on read errors but still completes', async () => {
     const m = new FakeManager();
     m.readBehavior = 'no-sandbox';
-    const r = await restoreQaWorkspace(m, { sessionId: 1 });
+    const r = await restoreQaWorkspace(m, { sessionId: SESSION_ID });
     expect(r.warnings.length).toBeGreaterThan(0);
     expect(r.warnings[0]).toMatch(/playwright\.config\.ts/);
     // The reporter / global-setup writes still went through.
@@ -147,7 +149,7 @@ describe('restoreQaWorkspace', () => {
   it('emits per-file warning on a write failure', async () => {
     const m = new FakeManager();
     m.writeFails.add('tests/e2e/reporter.ts');
-    const r = await restoreQaWorkspace(m, { sessionId: 1 });
+    const r = await restoreQaWorkspace(m, { sessionId: SESSION_ID });
     expect(r.reporterRestored).toBe(false);
     expect(r.globalSetupRestored).toBe(true);
     expect(r.warnings.some((w) => w.includes('tests/e2e/reporter.ts'))).toBe(true);

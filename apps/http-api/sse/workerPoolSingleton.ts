@@ -18,9 +18,13 @@
  * file can't be resolved (no silent degradation).
  */
 import { loadConfig } from '@mcp/shared/utils/config.js';
-import { WorkerOrchestratorPool } from './WorkerOrchestratorPool.js';
+import {
+  WorkerOrchestratorPool,
+  type CompanySessionRuntimeContext,
+} from './WorkerOrchestratorPool.js';
 import type { CoderWorkerDocDeps } from './CoderWorkerPool.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 let cachedPool: WorkerOrchestratorPool | null = null;
 /**
@@ -31,6 +35,13 @@ let cachedPool: WorkerOrchestratorPool | null = null;
  * `coderWorkerPoolSingleton.ts` for the company path.
  */
 const docDeps: CoderWorkerDocDeps = {};
+const sessionRuntimeBox: {
+  resolve:
+    | ((
+        sessionId: CompanySessionId,
+      ) => Promise<CompanySessionRuntimeContext>)
+    | null;
+} = { resolve: null };
 
 function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'company-worker');
@@ -83,6 +94,15 @@ export function getWorkerOrchestratorPool(): WorkerOrchestratorPool {
     workerExecArgv: resolved.execArgv,
     workerDevTsEntry: resolved.devTsEntry,
     dbPath,
+    resolveCompanySessionRuntimeContext: async (sessionId) => {
+      const resolve = sessionRuntimeBox.resolve;
+      if (!resolve) {
+        throw new Error(
+          '[orchestrator-pool] filesystem Company session resolver is not configured',
+        );
+      }
+      return resolve(sessionId);
+    },
     ttlMs: Number(process.env.CODER_COMPANY_ORCHESTRATOR_TTL_MS) || undefined,
     log: (level, msg) => {
       if (level === 'error') console.error(msg);
@@ -137,6 +157,16 @@ export function setCompanyWorkerDocDeps(
   if (deps.runEndMemory !== undefined) docDeps.runEndMemory = deps.runEndMemory;
   if (deps.projectMemory !== undefined) docDeps.projectMemory = deps.projectMemory;
   if (deps.investigationSemantic !== undefined) docDeps.investigationSemantic = deps.investigationSemantic;
+}
+
+export function setCompanyWorkerSessionRuntimeResolver(
+  resolve:
+    | ((
+        sessionId: CompanySessionId,
+      ) => Promise<CompanySessionRuntimeContext>)
+    | null,
+): void {
+  sessionRuntimeBox.resolve = resolve;
 }
 
 /** Force-shutdown the pool — called from process shutdown hooks. */

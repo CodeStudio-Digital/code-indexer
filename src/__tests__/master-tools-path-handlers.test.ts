@@ -4,13 +4,17 @@ import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 
 const ctx: ToolContext = { cwd: '/tmp', projectName: 'test' };
+const ID_3 = '00000003-0000-4000-8000-000000000003';
+const ID_7 = '00000007-0000-4000-8000-000000000007';
+const ID_11 = '00000011-0000-4000-8000-000000000011';
+const ID_42 = '00000042-0000-4000-8000-000000000042';
 
 interface FakeOrchOpts {
-  pendingPlan?: number[];
-  pendingQuestion?: number[];
-  pendingTasks?: number[];
-  abortable?: number[];
-  forwardable?: Map<number, { role: string; running: boolean }>;
+  pendingPlan?: string[];
+  pendingQuestion?: string[];
+  pendingTasks?: string[];
+  abortable?: string[];
+  forwardable?: Map<string, { role: string; running: boolean }>;
 }
 
 function makeFakeOrch(opts: FakeOrchOpts = {}) {
@@ -21,24 +25,24 @@ function makeFakeOrch(opts: FakeOrchOpts = {}) {
   const forwardable = opts.forwardable ?? new Map();
 
   return {
-    hasPendingPlan: vi.fn((id: number) => pendingPlan.has(id)),
-    hasPendingQuestion: vi.fn((id: number) => pendingQuestion.has(id)),
-    hasPendingTasks: vi.fn((id: number) => pendingTasks.has(id)),
+    hasPendingPlan: vi.fn((id: string) => pendingPlan.has(id)),
+    hasPendingQuestion: vi.fn((id: string) => pendingQuestion.has(id)),
+    hasPendingTasks: vi.fn((id: string) => pendingTasks.has(id)),
     resolveSubordinatePlan: vi.fn(() => true),
     resolveSubordinateQuestion: vi.fn(() => true),
     resolveSubordinateTasks: vi.fn(() => true),
-    abortSubordinate: vi.fn((id: number) => abortable.has(id)),
+    abortSubordinate: vi.fn((id: string) => abortable.has(id)),
     listSubordinates: vi.fn(() => []),
     listProjects: vi.fn(() => []),
     getMasterLastUserAttachments: vi.fn(() => []),
     postToBoard: vi.fn(),
-    getSubordinate: vi.fn((id: number) => {
+    getSubordinate: vi.fn((id: string) => {
       const f = forwardable.get(id);
       if (!f) return undefined;
       return { role: f.role, runner: { pushUserMessage: vi.fn(), pushUserContent: vi.fn() } };
     }),
     getSubordinateStatus: vi.fn(),
-    isSubordinateRunning: vi.fn((id: number) => forwardable.get(id)?.running ?? false),
+    isSubordinateRunning: vi.fn((id: string) => forwardable.get(id)?.running ?? false),
     reactivateSubordinate: vi.fn(async () => true),
   } as unknown as CompanyOrchestrator;
 }
@@ -51,17 +55,17 @@ function findTool(tools: CoderTool[], name: string): CoderTool {
 
 describe('master tools — path | agent_run_id parity', () => {
   it('approve_subordinate_plan accepts agent_run_id', async () => {
-    const orch = makeFakeOrch({ pendingPlan: [7] });
+    const orch = makeFakeOrch({ pendingPlan: [ID_7] });
     const tool = findTool(buildMasterTools(orch), 'approve_subordinate_plan');
-    const r = await tool.handler({ agent_run_id: 7, approved: true }, ctx);
+    const r = await tool.handler({ agent_run_id: ID_7, approved: true }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('approved');
   });
 
   it('approve_subordinate_plan accepts path', async () => {
-    const orch = makeFakeOrch({ pendingPlan: [7] });
+    const orch = makeFakeOrch({ pendingPlan: [ID_7] });
     const tool = findTool(buildMasterTools(orch), 'approve_subordinate_plan');
-    const r = await tool.handler({ path: '/root/master/qa-7', approved: false, feedback: 'redo' }, ctx);
+    const r = await tool.handler({ path: `/root/master/qa-${ID_7}`, approved: false, feedback: 'redo' }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('rejected');
     expect(r.content).toContain('redo');
@@ -77,34 +81,34 @@ describe('master tools — path | agent_run_id parity', () => {
   });
 
   it('answer_subordinate_question accepts path', async () => {
-    const orch = makeFakeOrch({ pendingQuestion: [11] });
+    const orch = makeFakeOrch({ pendingQuestion: [ID_11] });
     const tool = findTool(buildMasterTools(orch), 'answer_subordinate_question');
-    const r = await tool.handler({ path: '/root/master/frontend-11', answer: 'use the new API' }, ctx);
+    const r = await tool.handler({ path: `/root/master/frontend-${ID_11}`, answer: 'use the new API' }, ctx);
     expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('Question answered for agent 11');
+    expect(r.content).toContain(`Question answered for agent ${ID_11}`);
   });
 
   it('approve_subordinate_tasks accepts path', async () => {
-    const orch = makeFakeOrch({ pendingTasks: [3] });
+    const orch = makeFakeOrch({ pendingTasks: [ID_3] });
     const tool = findTool(buildMasterTools(orch), 'approve_subordinate_tasks');
-    const r = await tool.handler({ path: '/root/master/be-3', approved: true }, ctx);
+    const r = await tool.handler({ path: `/root/master/be-${ID_3}`, approved: true }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('approved');
   });
 
   it('abort_subordinate_agent accepts path', async () => {
-    const orch = makeFakeOrch({ abortable: [42] });
+    const orch = makeFakeOrch({ abortable: [ID_42] });
     const tool = findTool(buildMasterTools(orch), 'abort_subordinate_agent');
-    const r = await tool.handler({ path: '/root/master/qa-42' }, ctx);
+    const r = await tool.handler({ path: `/root/master/qa-${ID_42}` }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('aborted');
   });
 
   it('forward_to_agent accepts path', async () => {
-    const forwardable = new Map([[7, { role: 'qa', running: true }]]);
+    const forwardable = new Map([[ID_7, { role: 'qa', running: true }]]);
     const orch = makeFakeOrch({ forwardable });
     const tool = findTool(buildMasterTools(orch), 'forward_to_agent');
-    const r = await tool.handler({ path: '/root/master/qa-7', message: 'rerun the tests' }, ctx);
+    const r = await tool.handler({ path: `/root/master/qa-${ID_7}`, message: 'rerun the tests' }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('forwarded');
   });

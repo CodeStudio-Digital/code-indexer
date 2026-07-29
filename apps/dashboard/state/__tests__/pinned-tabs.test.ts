@@ -20,7 +20,14 @@ function installStorage(): void {
   };
 }
 
-const projectView = (projectId: number, sessionId: number | null = null): ActiveView => ({
+const PROJECT_SESSION_ID = '11111111-1111-4111-8111-111111111111';
+const GLOBAL_SESSION_ID = '22222222-2222-4222-8222-222222222222';
+const COMPANY_SESSION_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+
+const projectView = (
+  projectId: number,
+  sessionId: string | null = null,
+): ActiveView => ({
   page: 'project',
   projectId,
   sessionId,
@@ -40,14 +47,22 @@ describe('pin builders', () => {
   });
 
   it('session pins encode scope in id + href', () => {
-    expect(buildSessionPin({ scope: 'project', sessionId: 5, projectId: 42, title: 'x' })).toMatchObject({
-      id: 'session:project:5',
-      href: '/projects/42?session=5',
+    expect(buildSessionPin({
+      scope: 'project',
+      sessionId: PROJECT_SESSION_ID,
+      projectId: 42,
+      title: 'x',
+    })).toMatchObject({
+      id: `session:project:${PROJECT_SESSION_ID}`,
+      href: `/projects/42?session=${PROJECT_SESSION_ID}`,
     });
-    expect(buildSessionPin({ scope: 'global', sessionId: 9 })).toMatchObject({
-      id: 'session:global:9',
-      href: '/global?session=9',
-      label: 'Session 9',
+    expect(buildSessionPin({
+      scope: 'global',
+      sessionId: GLOBAL_SESSION_ID,
+    })).toMatchObject({
+      id: `session:global:${GLOBAL_SESSION_ID}`,
+      href: `/global?session=${GLOBAL_SESSION_ID}`,
+      label: `Session ${GLOBAL_SESSION_ID}`,
     });
   });
 });
@@ -87,21 +102,39 @@ describe('describeCurrentPin', () => {
   });
 
   it('project + ?session → session pin', () => {
-    const p = describeCurrentPin({ ...base, pathname: '/projects/42', search: '?session=5', view: projectView(42, 5) });
-    expect(p).toMatchObject({ kind: 'session', scope: 'project', href: '/projects/42?session=5' });
+    const p = describeCurrentPin({
+      ...base,
+      pathname: '/projects/42',
+      search: `?session=${PROJECT_SESSION_ID}`,
+      view: projectView(42, PROJECT_SESSION_ID),
+    });
+    expect(p).toMatchObject({
+      kind: 'session',
+      scope: 'project',
+      href: `/projects/42?session=${PROJECT_SESSION_ID}`,
+    });
   });
 
   it('company path → company session pin keeping the full href', () => {
-    const path = '/company/sessions/12/main/work/board';
+    const path = `/company/sessions/${COMPANY_SESSION_ID}/main/work/board`;
     const p = describeCurrentPin({ ...base, pathname: path, view: { page: 'agents', projectId: null, sessionId: null } });
-    expect(p).toMatchObject({ kind: 'session', scope: 'company', id: 'session:company:12', href: path });
+    expect(p).toMatchObject({
+      kind: 'session',
+      scope: 'company',
+      id: `session:company:${COMPANY_SESSION_ID}`,
+      href: path,
+    });
   });
 });
 
 describe('computeActiveId', () => {
   const project = buildProjectPin({ projectId: 42, name: 'poa' });
   const rail = buildRailPin({ projectId: 42, tabId: 'databases' });
-  const session = buildSessionPin({ scope: 'project', sessionId: 5, projectId: 42 });
+  const session = buildSessionPin({
+    scope: 'project',
+    sessionId: PROJECT_SESSION_ID,
+    projectId: 42,
+  });
   const pins = [project, rail, session];
 
   it('highlights the project pin on a bare project view', () => {
@@ -123,8 +156,13 @@ describe('computeActiveId', () => {
 
   it('highlights the session pin when ?session matches', () => {
     expect(
-      computeActiveId(pins, { view: projectView(42, 5), pathname: '/projects/42', search: '?session=5', activeProjectTab: null }),
-    ).toBe('session:project:5');
+      computeActiveId(pins, {
+        view: projectView(42, PROJECT_SESSION_ID),
+        pathname: '/projects/42',
+        search: `?session=${PROJECT_SESSION_ID}`,
+        activeProjectTab: null,
+      }),
+    ).toBe(`session:project:${PROJECT_SESSION_ID}`);
   });
 
   it('no match on an unrelated page', () => {

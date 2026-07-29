@@ -2,6 +2,7 @@ import { MessageChannel } from 'node:worker_threads';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MessageBridge } from '../../../../packages/orchestrator-host/src/MessageBridge.js';
 import type { DocsResearchResult } from '../../../../packages/docs-agent/src/types.js';
+import { asSessionId } from '@mcp/session-storage';
 import {
   registerDocsResearchRpcHandlers,
   requestDocsResearchOverBridge,
@@ -9,7 +10,7 @@ import {
 
 function result(markdown = 'ok'): DocsResearchResult {
   return {
-    sessionId: 1,
+    sessionId: asSessionId('00000000-0000-4000-8000-000000000001'),
     markdown,
     chunks_cited: [],
     confidence: 'low',

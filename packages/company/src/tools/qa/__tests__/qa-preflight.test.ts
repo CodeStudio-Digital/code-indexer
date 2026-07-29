@@ -12,6 +12,10 @@ import {
   type ProbeOutcome,
 } from '../qa-preflight.js';
 
+function sessionId(value: number): string {
+  return `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+}
+
 beforeEach(() => resetAllBreakers());
 
 // ─── planRetry (pure) ────────────────────────────────────────────
@@ -53,17 +57,17 @@ describe('planRetry', () => {
 
 describe('circuit breaker', () => {
   it('opens on trip and closes after the 60s window', () => {
-    tripBreaker(7, 1_000);
-    expect(isBreakerOpen(7, 1_000)).toBe(true);
-    expect(isBreakerOpen(7, 1_000 + BREAKER_WINDOW_MS - 1)).toBe(true);
-    expect(isBreakerOpen(7, 1_000 + BREAKER_WINDOW_MS)).toBe(false);
+    tripBreaker(sessionId(7), 1_000);
+    expect(isBreakerOpen(sessionId(7), 1_000)).toBe(true);
+    expect(isBreakerOpen(sessionId(7), 1_000 + BREAKER_WINDOW_MS - 1)).toBe(true);
+    expect(isBreakerOpen(sessionId(7), 1_000 + BREAKER_WINDOW_MS)).toBe(false);
   });
 
   it('is per-session and clearable', () => {
-    tripBreaker(7, 0);
-    expect(isBreakerOpen(8, 0)).toBe(false);
-    clearBreaker(7);
-    expect(isBreakerOpen(7, 0)).toBe(false);
+    tripBreaker(sessionId(7), 0);
+    expect(isBreakerOpen(sessionId(8), 0)).toBe(false);
+    clearBreaker(sessionId(7));
+    expect(isBreakerOpen(sessionId(7), 0)).toBe(false);
   });
 });
 
@@ -114,7 +118,7 @@ describe('preflightBrowser — chrome_service source (main process)', () => {
     const clock = makeClock();
     const urls: string[] = [];
     const result = await preflightBrowser({
-      sessionId: 1,
+      sessionId: sessionId(1),
       getChromeService: () => fakeChromeService('running'),
       fetchImpl: (async (url: string) => { urls.push(url); return okResponse; }) as unknown as typeof fetch,
       sleep: clock.sleep,
@@ -131,7 +135,7 @@ describe('preflightBrowser — chrome_service source (main process)', () => {
     const clock = makeClock();
     let calls = 0;
     const result = await preflightBrowser({
-      sessionId: 2,
+      sessionId: sessionId(2),
       getChromeService: () => fakeChromeService('running'),
       fetchImpl: (async () => { calls++; throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch,
       sleep: clock.sleep,
@@ -143,14 +147,14 @@ describe('preflightBrowser — chrome_service source (main process)', () => {
     expect(calls).toBe(4);
     expect(clock.sleeps).toEqual([1_000, 3_000, 9_000]);
     expect(result.message).toContain('Admin');
-    expect(isBreakerOpen(2, clock.now())).toBe(true);
+    expect(isBreakerOpen(sessionId(2), clock.now())).toBe(true);
   });
 
   it('short-circuits without re-probing while the breaker is open', async () => {
-    tripBreaker(3, 0);
+    tripBreaker(sessionId(3), 0);
     let calls = 0;
     const result = await preflightBrowser({
-      sessionId: 3,
+      sessionId: sessionId(3),
       getChromeService: () => fakeChromeService('running'),
       fetchImpl: (async () => { calls++; return okResponse; }) as unknown as typeof fetch,
       now: () => 1_000,
@@ -163,7 +167,7 @@ describe('preflightBrowser — chrome_service source (main process)', () => {
   it('fails fast (no probes) when the service is stopped', async () => {
     let calls = 0;
     const result = await preflightBrowser({
-      sessionId: 4,
+      sessionId: sessionId(4),
       getChromeService: () => fakeChromeService('stopped'),
       fetchImpl: (async () => { calls++; return okResponse; }) as unknown as typeof fetch,
       now: () => 0,
@@ -177,7 +181,7 @@ describe('preflightBrowser — chrome_service source (main process)', () => {
 
 describe('preflightBrowser — env_probe source (worker: ChromeService null)', () => {
   const envStore = {
-    list: (_sessionId: number) => [
+    list: (_sessionId: string) => [
       { key: 'PLAYWRIGHT_WS_ENDPOINT', value: 'ws://host.containers.internal:9223/' },
     ],
   } as never;
@@ -185,7 +189,7 @@ describe('preflightBrowser — env_probe source (worker: ChromeService null)', (
   it('falls back to the session env PLAYWRIGHT_WS_ENDPOINT and probes loopback', async () => {
     const urls: string[] = [];
     const result = await preflightBrowser({
-      sessionId: 5,
+      sessionId: sessionId(5),
       getChromeService: () => null,
       envStore,
       fetchImpl: (async (url: string) => { urls.push(url); return okResponse; }) as unknown as typeof fetch,
@@ -199,7 +203,7 @@ describe('preflightBrowser — env_probe source (worker: ChromeService null)', (
 
   it('fails typed when the env var was never wired', async () => {
     const result = await preflightBrowser({
-      sessionId: 6,
+      sessionId: sessionId(6),
       getChromeService: () => null,
       envStore: { list: () => [] } as never,
       now: () => 0,

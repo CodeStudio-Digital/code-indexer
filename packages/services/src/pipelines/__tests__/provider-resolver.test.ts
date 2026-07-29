@@ -3,7 +3,7 @@
  * unit test with fake stores (no better-sqlite3 ABI dependency): verifies
  * the chain returns EVERY enabled binding at the first populated scope, in
  * priority order, with the general default appended, and that scopes never
- * merge (a session override shadows global entirely).
+ * merge (a reusable template override shadows global entirely).
  */
 import { describe, expect, it } from 'vitest';
 import type {
@@ -79,13 +79,36 @@ describe('resolveChain', () => {
     expect(chain.map((c) => c.provider.id)).toEqual(['pFb']);
   });
 
-  it('a session override shadows global entirely — no cross-scope merge', async () => {
+  it('a template override shadows global entirely — no cross-scope merge', async () => {
     const r = makeResolver({
-      'session:7': [row({ id: 9, provider_id: 'p2', scope_type: 'session', scope_id: 7 })],
+      'template:7': [row({ id: 9, provider_id: 'p2', scope_type: 'template', scope_id: 7 })],
       'global:null': [row({ id: 1, provider_id: 'p1' })],
     });
-    const chain = await r.resolveChain('doc_ingest', 'classifier', { sessionId: 7 });
+    const chain = await r.resolveChain('doc_ingest', 'classifier', { templateId: 7 });
     expect(chain.map((c) => c.provider.id)).toEqual(['p2']);
+  });
+
+  it('never probes a SQLite session scope when UUID session context is present', async () => {
+    const queried: string[] = [];
+    const providerStore = {
+      getProvider: (id: string) => PROVIDERS[id] ?? null,
+      listProviders: () => Object.values(PROVIDERS).filter((p) => p.enabled),
+    } as unknown as ProviderStore;
+    const bindingsStore = {
+      findAllActiveAtScope: (o: { scopeType: string; scopeId: number | null }) => {
+        queried.push(`${o.scopeType}:${o.scopeId}`);
+        return o.scopeType === 'global' ? [row({ provider_id: 'p1' })] : [];
+      },
+    } as unknown as PipelineProviderBindingsStore;
+    const r = new PipelineProviderResolver(bindingsStore, providerStore);
+
+    const chain = await r.resolveChain('doc_ingest', 'classifier', {
+      sessionId: '11111111-1111-4111-8111-111111111111',
+      companySessionId: '22222222-2222-4222-8222-222222222222',
+    });
+
+    expect(chain.map((c) => c.provider.id)).toEqual(['p1']);
+    expect(queried).toEqual(['global:null']);
   });
 
   it('a disabled top-priority provider no longer hides a healthy sibling', async () => {

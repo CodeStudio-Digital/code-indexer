@@ -4,7 +4,7 @@
  * use REAL timers: fake timers do not cooperate with worker events.
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { createPool, type Pool } from '../pool.js';
+import { createPool, resolveWorkerSpec, type Pool } from '../pool.js';
 
 const fixtureUrl = new URL('./fixtures/test-worker.cjs', import.meta.url);
 
@@ -33,6 +33,11 @@ afterEach(async () => {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 describe('worker pool', () => {
+  it('recognizes a tsx source URL with a cache-busting query', () => {
+    const spec = resolveWorkerSpec('file:///D:/repo/indexJob/client.ts?tsx=1', './worker');
+    expect(spec.bootstrapData?.tsEntry.replace(/\\/g, '/')).toBe('D:/repo/indexJob/worker.ts');
+  });
+
   it('spawns lazily and round-trips requests', async () => {
     const pool = makePool({ size: 2 });
     expect(pool.size()).toBe(0); // nothing spawned before first dispatch

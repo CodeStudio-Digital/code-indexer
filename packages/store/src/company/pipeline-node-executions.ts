@@ -1,125 +1,280 @@
-import type { Database as DB } from 'better-sqlite3';
+import {
+  CompanySessionRepository,
+  assertUuid,
+  type CompanyPipelineNodeExecutionData,
+  type EntityRecord,
+} from '@mcp/session-storage';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 import type {
   PipelineNodeExecution,
   PipelineNodeStatus,
 } from '@mcp/company/types.js';
-
-interface NodeExecutionRow {
-  id: number;
-  execution_id: number;
-  node_id: string;
-  node_label: string;
-  role: string;
-  status: string;
-  agent_run_id: number | null;
-  kanban_card_id: number | null;
-  coder_session_id: number | null;
-  input_text: string;
-  output_text: string | null;
-  outcome_branch: string | null;
-  attempt: number;
-  started_at: string | null;
-  finished_at: string | null;
-  error_message: string | null;
-  usage_json: string | null;
-  created_at: string;
-}
-
-function mapNodeExecutionRow(row: NodeExecutionRow): PipelineNodeExecution {
-  return {
-    id: row.id,
-    execution_id: row.execution_id,
-    node_id: row.node_id,
-    node_label: row.node_label,
-    role: row.role,
-    status: row.status as PipelineNodeStatus,
-    agent_run_id: row.agent_run_id,
-    kanban_card_id: row.kanban_card_id,
-    coder_session_id: row.coder_session_id,
-    input_text: row.input_text,
-    output_text: row.output_text,
-    outcome_branch: row.outcome_branch,
-    attempt: row.attempt,
-    started_at: row.started_at,
-    finished_at: row.finished_at,
-    error_message: row.error_message,
-    usage_json: row.usage_json,
-  };
-}
+import { locate as locateExecution } from './pipeline-executions.js';
 
 export interface CreateNodeExecutionInput {
-  executionId: number;
+  executionId: string;
   nodeId: string;
   nodeLabel: string;
   role: string;
   inputText: string;
   attempt?: number;
-  agentRunId?: number | null;
-  kanbanCardId?: number | null;
-  coderSessionId?: number | null;
+  agentRunId?: string | null;
+  kanbanCardId?: string | null;
+  coderSessionId?: string | null;
 }
 
-export function create(db: DB, input: CreateNodeExecutionInput): PipelineNodeExecution {
-  const stmt = db.prepare(`
-    INSERT INTO pipeline_node_executions
-      (execution_id, node_id, node_label, role, status, agent_run_id, kanban_card_id,
-       coder_session_id, input_text, attempt, started_at)
-    VALUES (?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, datetime('now'))
-  `);
-  const r = stmt.run(
-    input.executionId,
-    input.nodeId,
-    input.nodeLabel,
-    input.role,
-    input.agentRunId ?? null,
-    input.kanbanCardId ?? null,
-    input.coderSessionId ?? null,
-    input.inputText,
-    input.attempt ?? 1,
+export interface UpdateNodeExecutionPatch {
+  status?: PipelineNodeStatus;
+  agentRunId?: string | null;
+  kanbanCardId?: string | null;
+  coderSessionId?: string | null;
+  outputText?: string | null;
+  outcomeBranch?: string | null;
+  finishedAt?: string | null;
+  errorMessage?: string | null;
+  usageJson?: string | null;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function nodeStatus(value: unknown): PipelineNodeStatus {
+  return value === 'pending' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'skipped' ||
+    value === 'aborted'
+    ? value
+    : 'running';
+}
+
+function hydrate(
+  record: EntityRecord<CompanyPipelineNodeExecutionData>,
+): PipelineNodeExecution {
+  const data = record.data;
+  return {
+    id: assertUuid(record.id, 'pipeline node execution id'),
+    seq: record.seq,
+    execution_id: assertUuid(
+      String(data.execution_id),
+      'pipeline execution id',
+    ),
+    node_id: typeof data.node_id === 'string' ? data.node_id : '',
+    node_label:
+      typeof data.node_label === 'string' ? data.node_label : '',
+    role: typeof data.role === 'string' ? data.role : '',
+    status: nodeStatus(data.status),
+    agent_run_id: nullableString(data.agent_run_id),
+    kanban_card_id: nullableString(data.kanban_card_id),
+    coder_session_id: nullableString(data.coder_session_id),
+    input_text:
+      typeof data.input_text === 'string' ? data.input_text : '',
+    output_text: nullableString(data.output_text),
+    outcome_branch: nullableString(data.outcome_branch),
+    attempt:
+      typeof data.attempt === 'number' ? data.attempt : 1,
+    started_at: nullableString(data.started_at),
+    finished_at: nullableString(data.finished_at),
+    error_message: nullableString(data.error_message),
+    usage_json: nullableString(data.usage_json),
+  };
+}
+
+export async function create(
+  store: FsSessionStore,
+  input: CreateNodeExecutionInput,
+): Promise<PipelineNodeExecution> {
+  const execution = await locateExecution(store, input.executionId);
+  if (!execution) {
+    throw new Error(`Unknown pipeline execution ${input.executionId}`);
+  }
+  const now = new Date().toISOString();
+  const record = await store.runSessionMutation(
+    execution.entry.session.id,
+    () =>
+      execution.repository.createPipelineNodeExecution({
+        relations: {
+          execution_id: assertUuid(
+            input.executionId,
+            'pipeline execution id',
+          ),
+          ...(input.agentRunId
+            ? {
+                agent_run_id: assertUuid(
+                  input.agentRunId,
+                  'pipeline agent run id',
+                ),
+              }
+            : {}),
+          ...(input.kanbanCardId
+            ? {
+                kanban_card_id: assertUuid(
+                  input.kanbanCardId,
+                  'pipeline Kanban card id',
+                ),
+              }
+            : {}),
+          ...(input.coderSessionId
+            ? {
+                coder_session_id: assertUuid(
+                  input.coderSessionId,
+                  'pipeline coder session id',
+                ),
+              }
+            : {}),
+        },
+        data: {
+          execution_id: input.executionId,
+          node_id: input.nodeId,
+          node_label: input.nodeLabel,
+          role: input.role,
+          status: 'running',
+          agent_run_id: input.agentRunId ?? null,
+          kanban_card_id: input.kanbanCardId ?? null,
+          coder_session_id: input.coderSessionId ?? null,
+          input_text: input.inputText,
+          output_text: null,
+          outcome_branch: null,
+          attempt: input.attempt ?? 1,
+          started_at: now,
+          finished_at: null,
+          error_message: null,
+          usage_json: null,
+        },
+      }),
   );
-  return get(db, Number(r.lastInsertRowid))!;
+  return hydrate(record);
 }
 
-export function get(db: DB, id: number): PipelineNodeExecution | null {
-  const row = db.prepare('SELECT * FROM pipeline_node_executions WHERE id = ?').get(id) as NodeExecutionRow | undefined;
-  return row ? mapNodeExecutionRow(row) : null;
+export async function get(
+  store: FsSessionStore,
+  id: string,
+): Promise<PipelineNodeExecution | null> {
+  const normalized = assertUuid(id, 'pipeline node execution id');
+  for (const entry of store.catalog.list()) {
+    const repository = new CompanySessionRepository({
+      sessionRoot: entry.location.bundle_path,
+    });
+    const record = await repository.get(
+      'pipelineNodeExecution',
+      normalized,
+    );
+    if (record) return hydrate(record);
+  }
+  return null;
 }
 
-export function list(db: DB, executionId: number): PipelineNodeExecution[] {
-  const rows = db
-    .prepare('SELECT * FROM pipeline_node_executions WHERE execution_id = ? ORDER BY created_at ASC, id ASC')
-    .all(executionId) as NodeExecutionRow[];
-  return rows.map(mapNodeExecutionRow);
+export async function list(
+  store: FsSessionStore,
+  executionId: string,
+): Promise<PipelineNodeExecution[]> {
+  const execution = await locateExecution(store, executionId);
+  if (!execution) return [];
+  const records: EntityRecord<CompanyPipelineNodeExecutionData>[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await execution.repository.listByRelation(
+      'pipelineNodeExecution',
+      'execution_id',
+      assertUuid(executionId, 'pipeline execution id'),
+      { cursor, limit: 1_000, order: 'asc' },
+    );
+    records.push(...page.items);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return records.map(hydrate);
 }
 
-export function update(
-  db: DB,
-  id: number,
-  patch: {
-    status?: PipelineNodeStatus;
-    agentRunId?: number | null;
-    kanbanCardId?: number | null;
-    coderSessionId?: number | null;
-    outputText?: string | null;
-    outcomeBranch?: string | null;
-    finishedAt?: string | null;
-    errorMessage?: string | null;
-    usageJson?: string | null;
-  },
-): PipelineNodeExecution | null {
-  const sets: string[] = [];
-  const params: unknown[] = [];
-  if (patch.status !== undefined) { sets.push('status = ?'); params.push(patch.status); }
-  if (patch.agentRunId !== undefined) { sets.push('agent_run_id = ?'); params.push(patch.agentRunId); }
-  if (patch.kanbanCardId !== undefined) { sets.push('kanban_card_id = ?'); params.push(patch.kanbanCardId); }
-  if (patch.coderSessionId !== undefined) { sets.push('coder_session_id = ?'); params.push(patch.coderSessionId); }
-  if (patch.outputText !== undefined) { sets.push('output_text = ?'); params.push(patch.outputText); }
-  if (patch.outcomeBranch !== undefined) { sets.push('outcome_branch = ?'); params.push(patch.outcomeBranch); }
-  if (patch.finishedAt !== undefined) { sets.push('finished_at = ?'); params.push(patch.finishedAt); }
-  if (patch.errorMessage !== undefined) { sets.push('error_message = ?'); params.push(patch.errorMessage); }
-  if (patch.usageJson !== undefined) { sets.push('usage_json = ?'); params.push(patch.usageJson); }
-  if (sets.length === 0) return get(db, id);
-  params.push(id);
-  db.prepare(`UPDATE pipeline_node_executions SET ${sets.join(', ')} WHERE id = ?`).run(...params);
-  return get(db, id);
+export async function update(
+  store: FsSessionStore,
+  id: string,
+  patch: UpdateNodeExecutionPatch,
+): Promise<PipelineNodeExecution | null> {
+  const normalized = assertUuid(id, 'pipeline node execution id');
+  for (const entry of store.catalog.list()) {
+    const repository = new CompanySessionRepository({
+      sessionRoot: entry.location.bundle_path,
+    });
+    const current = await repository.get(
+      'pipelineNodeExecution',
+      normalized,
+    );
+    if (!current) continue;
+    const updated = await store.runSessionMutation(
+      entry.session.id,
+      async () => {
+        const latest = await repository.get(
+          'pipelineNodeExecution',
+          normalized,
+        );
+        if (!latest) return null;
+        const agentRunId =
+          patch.agentRunId === undefined
+            ? nullableString(latest.data.agent_run_id)
+            : patch.agentRunId;
+        const kanbanCardId =
+          patch.kanbanCardId === undefined
+            ? nullableString(latest.data.kanban_card_id)
+            : patch.kanbanCardId;
+        const coderSessionId =
+          patch.coderSessionId === undefined
+            ? nullableString(latest.data.coder_session_id)
+            : patch.coderSessionId;
+        return repository.update(
+          'pipelineNodeExecution',
+          normalized,
+          {
+            relations: {
+              execution_id: assertUuid(
+                String(latest.data.execution_id),
+                'pipeline execution id',
+              ),
+              ...(agentRunId
+                ? { agent_run_id: assertUuid(agentRunId) }
+                : {}),
+              ...(kanbanCardId
+                ? { kanban_card_id: assertUuid(kanbanCardId) }
+                : {}),
+              ...(coderSessionId
+                ? { coder_session_id: assertUuid(coderSessionId) }
+                : {}),
+            },
+            data: {
+              ...latest.data,
+              ...(patch.status !== undefined
+                ? { status: patch.status }
+                : {}),
+              ...(patch.agentRunId !== undefined
+                ? { agent_run_id: patch.agentRunId }
+                : {}),
+              ...(patch.kanbanCardId !== undefined
+                ? { kanban_card_id: patch.kanbanCardId }
+                : {}),
+              ...(patch.coderSessionId !== undefined
+                ? { coder_session_id: patch.coderSessionId }
+                : {}),
+              ...(patch.outputText !== undefined
+                ? { output_text: patch.outputText }
+                : {}),
+              ...(patch.outcomeBranch !== undefined
+                ? { outcome_branch: patch.outcomeBranch }
+                : {}),
+              ...(patch.finishedAt !== undefined
+                ? { finished_at: patch.finishedAt }
+                : {}),
+              ...(patch.errorMessage !== undefined
+                ? { error_message: patch.errorMessage }
+                : {}),
+              ...(patch.usageJson !== undefined
+                ? { usage_json: patch.usageJson }
+                : {}),
+            },
+          },
+        );
+      },
+    );
+    return updated ? hydrate(updated) : null;
+  }
+  return null;
 }

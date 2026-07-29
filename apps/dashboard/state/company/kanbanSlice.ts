@@ -21,28 +21,28 @@ import type {
 import { INITIAL_KANBAN_STATE, type KanbanState } from './types.js';
 
 export interface KanbanSlice {
-  kanban: Map<number, KanbanState>;
+  kanban: Map<string, KanbanState>;
 
-  kanbanEnsure: (sessionId: number) => void;
-  kanbanSetLoading: (sessionId: number, loading: boolean) => void;
-  kanbanSetError: (sessionId: number, error: string | null) => void;
+  kanbanEnsure: (sessionId: string) => void;
+  kanbanSetLoading: (sessionId: string, loading: boolean) => void;
+  kanbanSetError: (sessionId: string, error: string | null) => void;
   /** Replace all cards (initial REST load). */
-  kanbanHydrate: (sessionId: number, cards: KanbanCardFull[]) => void;
+  kanbanHydrate: (sessionId: string, cards: KanbanCardFull[]) => void;
   /** Apply a single SSE event from the server. */
-  kanbanApplyEvent: (sessionId: number, eventType: string, data: unknown) => void;
+  kanbanApplyEvent: (sessionId: string, eventType: string, data: unknown) => void;
   /** Upsert one card (after REST refreshCard). */
-  kanbanUpsertCard: (sessionId: number, card: KanbanCardFull) => void;
+  kanbanUpsertCard: (sessionId: string, card: KanbanCardFull) => void;
   /** Remove one card. */
-  kanbanRemoveCard: (sessionId: number, cardId: number) => void;
+  kanbanRemoveCard: (sessionId: string, cardId: string) => void;
   /** Drop the slot entirely. */
-  kanbanReset: (sessionId: number) => void;
+  kanbanReset: (sessionId: string) => void;
 }
 
 function withSlot(
-  prev: Map<number, KanbanState>,
-  sessionId: number,
+  prev: Map<string, KanbanState>,
+  sessionId: string,
   patch: (slot: KanbanState) => KanbanState,
-): Map<number, KanbanState> {
+): Map<string, KanbanState> {
   const next = new Map(prev);
   const current = next.get(sessionId) ?? INITIAL_KANBAN_STATE;
   next.set(sessionId, patch(current));
@@ -50,10 +50,10 @@ function withSlot(
 }
 
 function withCards(
-  prev: Map<number, KanbanState>,
-  sessionId: number,
-  patch: (cards: Map<number, KanbanCardFull>) => Map<number, KanbanCardFull>,
-): Map<number, KanbanState> {
+  prev: Map<string, KanbanState>,
+  sessionId: string,
+  patch: (cards: Map<string, KanbanCardFull>) => Map<string, KanbanCardFull>,
+): Map<string, KanbanState> {
   return withSlot(prev, sessionId, (slot) => ({ ...slot, cards: patch(slot.cards) }));
 }
 
@@ -125,10 +125,10 @@ export const createKanbanSlice: StateCreator<KanbanSlice, [], [], KanbanSlice> =
 // ─── Pure event reducer ───────────────────────────────────────
 
 function reduceKanbanEvent(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   eventType: string,
   data: unknown,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   switch (eventType) {
     case 'kanban_card_created':
       return upsertCard(cards, data as KanbanCardFull);
@@ -140,7 +140,7 @@ function reduceKanbanEvent(
       return updateCard(cards, data as KanbanUpdatedEvent);
 
     case 'kanban_card_deleted':
-      return deleteCard(cards, (data as { cardId: number }).cardId);
+      return deleteCard(cards, (data as { cardId: string }).cardId);
 
     case 'kanban_comment_added':
       return appendComment(cards, data as KanbanCommentAddedEvent);
@@ -171,56 +171,56 @@ function reduceKanbanEvent(
 // ─── Event payload shapes (server-current names) ──────────────
 
 interface KanbanMovedEvent {
-  cardId: number;
+  cardId: string;
   fromColumn: string;
   toColumn: string;
   position: number;
 }
 interface KanbanUpdatedEvent {
-  cardId: number;
+  cardId: string;
   patch: Partial<KanbanCardFull>;
 }
 interface KanbanCommentAddedEvent {
-  cardId: number;
+  cardId: string;
   comment: KanbanComment;
 }
 interface KanbanChecklistUpdatedEvent {
-  cardId: number;
+  cardId: string;
   items: KanbanChecklistItem[];
 }
 interface KanbanChecklistRemovedEvent {
-  cardId: number;
-  itemId: number;
+  cardId: string;
+  itemId: string;
 }
 interface KanbanDependencyEvent {
-  cardId: number;
-  dependsOnId: number;
+  cardId: string;
+  dependsOnId: string;
 }
 interface KanbanAgentAssignedEvent {
-  cardId: number;
-  agentRunId: number;
+  cardId: string;
+  agentRunId: string;
   role: string;
 }
 interface KanbanAgentUnassignedEvent {
-  cardId: number;
-  agentRunId: number;
+  cardId: string;
+  agentRunId: string;
 }
 
 // ─── Individual reducers ──────────────────────────────────────
 
 function upsertCard(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   card: KanbanCardFull,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const next = new Map(cards);
   next.set(card.id, card);
   return next;
 }
 
 function moveCard(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanMovedEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   const next = new Map(cards);
@@ -233,9 +233,9 @@ function moveCard(
 }
 
 function updateCard(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanUpdatedEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   const next = new Map(cards);
@@ -244,9 +244,9 @@ function updateCard(
 }
 
 function deleteCard(
-  cards: Map<number, KanbanCardFull>,
-  cardId: number,
-): Map<number, KanbanCardFull> {
+  cards: Map<string, KanbanCardFull>,
+  cardId: string,
+): Map<string, KanbanCardFull> {
   if (!cards.has(cardId)) return cards;
   const next = new Map(cards);
   next.delete(cardId);
@@ -254,9 +254,9 @@ function deleteCard(
 }
 
 function appendComment(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanCommentAddedEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   // Dedup by comment id so SSE replay is idempotent.
@@ -270,9 +270,9 @@ function appendComment(
 }
 
 function mergeChecklist(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanChecklistUpdatedEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   const merged = [...existing.checklist];
@@ -287,9 +287,9 @@ function mergeChecklist(
 }
 
 function removeChecklistItem(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanChecklistRemovedEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   const filtered = existing.checklist.filter((i) => i.id !== ev.itemId);
@@ -300,9 +300,9 @@ function removeChecklistItem(
 }
 
 function addDependency(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanDependencyEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   if (existing.dependencies.some((d) => d.depends_on_id === ev.dependsOnId)) return cards;
@@ -319,7 +319,7 @@ function addDependency(
     dependencies: [
       ...existing.dependencies,
       {
-        id: 0,
+        id: `pending:${ev.cardId}:${ev.dependsOnId}`,
         card_id: ev.cardId,
         depends_on_id: ev.dependsOnId,
         created_at: new Date().toISOString(),
@@ -331,9 +331,9 @@ function addDependency(
 }
 
 function removeDependency(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanDependencyEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   const next = new Map(cards);
@@ -346,9 +346,9 @@ function removeDependency(
 }
 
 function assignAgent(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanAgentAssignedEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   const already = existing.agents.some(
@@ -361,7 +361,7 @@ function assignAgent(
     agents: [
       ...existing.agents,
       {
-        id: 0,
+        id: `pending:${ev.cardId}:${ev.agentRunId}`,
         card_id: ev.cardId,
         agent_run_id: ev.agentRunId,
         role: ev.role,
@@ -374,9 +374,9 @@ function assignAgent(
 }
 
 function unassignAgent(
-  cards: Map<number, KanbanCardFull>,
+  cards: Map<string, KanbanCardFull>,
   ev: KanbanAgentUnassignedEvent,
-): Map<number, KanbanCardFull> {
+): Map<string, KanbanCardFull> {
   const existing = cards.get(ev.cardId);
   if (!existing) return cards;
   const next = new Map(cards);

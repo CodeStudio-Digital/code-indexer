@@ -30,15 +30,15 @@ export function VersionsPanel({
 }: {
   versions: AssetVersion[];
   /** The asset's `currentVersionId` — badged in the list. */
-  currentVersionId: number | null;
-  activeVersionId: number | null;
-  onSelect: (versionId: number) => void;
+  currentVersionId: string | null;
+  activeVersionId: string | null;
+  onSelect: (versionId: string) => void;
   /** Absent → the delete affordance is hidden (read-only contexts). */
-  onDelete?: (versionId: number) => void | Promise<void>;
+  onDelete?: (versionId: string) => void | Promise<void>;
   /** "Iterate from this version": attach it as a generation reference. */
-  onIterate?: (versionId: number, label: string) => void;
+  onIterate?: (versionId: string, label: string) => void;
   /** Pencil: edit this version IN PLACE (focused session, no new version). */
-  onEditInPlace?: (versionId: number) => void;
+  onEditInPlace?: (versionId: string) => void;
   /** IDE project id — absent hides thumbnails + the pinned preview pane. */
   projectId?: number;
 }) {

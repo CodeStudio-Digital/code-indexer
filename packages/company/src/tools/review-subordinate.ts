@@ -11,12 +11,9 @@
  * session. The heavy lifting lives in `reviewSessionSnapshots` (shared with the
  * code-agent `self_review` tool); this file is just orchestration glue.
  */
-import type DatabaseConstructor from 'better-sqlite3';
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
-import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
-import { SessionFileReviewStore } from '@mcp/store/session-file-review-store.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { SessionSnapshotService } from '@mcp/services/services/session-snapshots.js';
@@ -24,14 +21,17 @@ import { SnapshotReviewPipeline } from '@mcp/services/services/snapshot-review-p
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
 import { reviewSessionSnapshots } from '@mcp/services/services/review-session-snapshots.js';
 import { formatFindingsForAgent } from '@mcp/services/services/snapshot-review-format.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
-
-type DB = InstanceType<typeof DatabaseConstructor>;
+import { asSessionId, isUuid } from '@mcp/session-storage';
 
 export interface MasterReviewDeps {
-  /** Shared better-sqlite3 handle (store.getDb()) — never closed here. */
-  dbHandle: DB;
+  /** Essential provider/pipeline settings DB; contains no session state. */
+  settingsDbHandle: ConstructorParameters<
+    typeof PipelineProviderBindingsStore
+  >[0];
+  /** Filesystem authority for subordinate snapshots and review records. */
+  sessionStore: FsSessionStore;
   /** Resolve a project's absolute root path by id (db.getProject(id).root_path). */
   getProjectRoot: (projectId: number) => string | null;
 }
@@ -51,8 +51,8 @@ export function buildReviewSubordinateTool(
     type: 'object',
     properties: {
       agent_run_id: {
-        type: 'number',
-        description: 'ID of the subordinate agent whose work you want reviewed (see list_subordinates).',
+        type: 'string',
+        description: 'UUID of the subordinate agent whose work you want reviewed (see list_subordinates).',
       },
     },
     required: ['agent_run_id'],
@@ -70,8 +70,9 @@ export function buildReviewSubordinateTool(
     parameters,
     source: 'native',
     handler: async (args): Promise<ToolResult> => {
-      const agentRunId = typeof args.agent_run_id === 'number' ? args.agent_run_id : NaN;
-      if (!Number.isFinite(agentRunId)) {
+      const agentRunId =
+        typeof args.agent_run_id === 'string' ? args.agent_run_id : '';
+      if (!agentRunId) {
         return err('review_subordinate_work: agent_run_id is required.');
       }
 
@@ -80,7 +81,11 @@ export function buildReviewSubordinateTool(
         return err(`review_subordinate_work: no subordinate with agent_run_id=${agentRunId}.`);
       }
 
-      const coderSessionId = sub.coderSessionId;
+      const coderSessionIdRaw = String(sub.coderSessionId);
+      if (!isUuid(coderSessionIdRaw)) {
+        return err('review_subordinate_work: subordinate has no filesystem session UUID.');
+      }
+      const coderSessionId = asSessionId(coderSessionIdRaw);
       const projectId = sub.projectIds[0];
       const projectRoot = projectId != null ? deps.getProjectRoot(projectId) : null;
       if (!projectRoot) {
@@ -89,14 +94,14 @@ export function buildReviewSubordinateTool(
         );
       }
 
-      const snapshotStore = new SessionFileSnapshotStore(deps.dbHandle);
-      const reviewStore = new SessionFileReviewStore(deps.dbHandle);
+      const snapshotStore = deps.sessionStore;
+      const reviewStore = deps.sessionStore;
       const snapshotService = new SessionSnapshotService(snapshotStore, (kind, sid) =>
         kind === 'coder' && sid === coderSessionId ? projectRoot : null,
       );
       const resolver = new PipelineProviderResolver(
-        new PipelineProviderBindingsStore(deps.dbHandle),
-        new ProviderStore(deps.dbHandle),
+        new PipelineProviderBindingsStore(deps.settingsDbHandle),
+        new ProviderStore(deps.settingsDbHandle),
       );
       const pipeline = new SnapshotReviewPipeline(resolver);
 
@@ -104,7 +109,7 @@ export function buildReviewSubordinateTool(
       // to it — that plus its task list gives the reviewer the change's intent.
       let intent: string | null = null;
       try {
-        intent = buildSessionIntent(new SessionStore(deps.dbHandle), coderSessionId);
+        intent = await buildSessionIntent(deps.sessionStore, coderSessionId);
       } catch {
         /* review runs without intent */
       }

@@ -3,6 +3,10 @@ import type { Migration } from './index.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
+function tableExists(db: DB, table: string): boolean {
+  return !!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table);
+}
+
 /**
  * Policy Engine + Capability Catalog persistence (Fase 2, shadow-only).
  *
@@ -21,6 +25,10 @@ export const policyEngine255: Migration = {
   version: 255,
   name: 'policy_engine',
   up(db: DB): void {
+    // Policy tables are CENTRAL-only (∈ CENTRAL_DROP_TABLES) — decisions hang off
+    // `coder_sessions`, which a per-project DB trims away. Mirrors migration 258.
+    if (!tableExists(db, 'coder_sessions')) return;
+
     db.exec(`
       CREATE TABLE IF NOT EXISTS policy_decisions (
         decision_id TEXT PRIMARY KEY,

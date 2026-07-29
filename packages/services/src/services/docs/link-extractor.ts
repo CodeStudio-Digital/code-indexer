@@ -27,7 +27,7 @@ import { pickChatFn } from '../../quality/chat-dispatcher.js';
 
 export interface LinkExtractorOptions {
   resolver: PipelineProviderResolver;
-  resolveContext?: { sessionId?: number; companySessionId?: number; templateId?: number };
+  resolveContext?: { sessionId?: string; companySessionId?: string; templateId?: number };
   /**
    * Cap on input HTML size sent to the LLM. Default 30000 chars
    * (~7500 tokens) — fits most pages comfortably below model context

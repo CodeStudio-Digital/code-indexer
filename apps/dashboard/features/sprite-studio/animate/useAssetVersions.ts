@@ -12,8 +12,8 @@ import { listVersions } from '../api.js';
 import type { AssetVersion } from '../types.js';
 import { listGenerations, type GenerationGroup } from './api-anim-bulk.js';
 
-export function useAssetVersions(projectId: number, assetId: number): {
-  versionById: Map<number, AssetVersion>;
+export function useAssetVersions(projectId: number, assetId: string): {
+  versionById: Map<string, AssetVersion>;
   versions: AssetVersion[];
   generations: GenerationGroup[];
   refresh: () => void;
@@ -21,7 +21,7 @@ export function useAssetVersions(projectId: number, assetId: number): {
   const [versions, setVersions] = useState<AssetVersion[]>([]);
   const [generations, setGenerations] = useState<GenerationGroup[]>([]);
   const [tick, setTick] = useState(0);
-  const valid = projectId > 0 && assetId > 0;
+  const valid = projectId > 0 && assetId.length > 0;
 
   useEffect(() => {
     if (!valid) { setVersions([]); setGenerations([]); return; }

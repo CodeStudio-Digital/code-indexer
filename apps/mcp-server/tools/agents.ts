@@ -76,8 +76,8 @@ const list_agent_runs = defineTool({
     type: 'object',
     properties: { limit: { type: 'number' } },
   },
-  handler: (args, ctx, authCtx) => {
-    const runs = getMcpAgentRunManager(ctx).list(authCtx, Number(args.limit ?? 50));
+  handler: async (args, ctx, authCtx) => {
+    const runs = await getMcpAgentRunManager(ctx).list(authCtx, Number(args.limit ?? 50));
     return output({ runs });
   },
 });
@@ -92,8 +92,8 @@ const get_agent_run = defineTool({
     properties: { run_id: { type: 'string' } },
     required: ['run_id'],
   },
-  handler: (args, ctx, authCtx) => output(
-    getMcpAgentRunManager(ctx).get(String(args.run_id ?? ''), authCtx),
+  handler: async (args, ctx, authCtx) => output(
+    await getMcpAgentRunManager(ctx).get(String(args.run_id ?? ''), authCtx),
   ),
 });
 
@@ -107,8 +107,8 @@ const get_agent_result = defineTool({
     properties: { run_id: { type: 'string' } },
     required: ['run_id'],
   },
-  handler: (args, ctx, authCtx) => {
-    const run = getMcpAgentRunManager(ctx).get(String(args.run_id ?? ''), authCtx);
+  handler: async (args, ctx, authCtx) => {
+    const run = await getMcpAgentRunManager(ctx).get(String(args.run_id ?? ''), authCtx);
     return output({
       run_id: run.id,
       status: run.status,

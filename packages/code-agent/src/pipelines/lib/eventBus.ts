@@ -9,6 +9,8 @@
  * shape mirrors `PipelineExecutor`'s `IMetaBusPublisher.publish`.
  */
 
+import type { SessionId } from '@mcp/session-storage';
+
 export type ChatPipelineEventName =
   | 'pipeline_started'
   | 'pipeline_node_started'
@@ -22,10 +24,10 @@ export type ChatPipelineEventName =
 
 export interface ChatPipelineEvent {
   name: ChatPipelineEventName;
-  /** Owner chat session — used as the SSE bus key in PR-3. */
-  coderSessionId: number;
-  /** `pipeline_executions.id`. */
-  executionId: number;
+  /** Owner bundle — used as the SSE bus key. */
+  coderSessionId: SessionId;
+  /** UUID of the file-backed pipeline execution entity. */
+  executionId: string;
   /** `pipelines.id`. */
   pipelineId: number;
   /** Optional payload — node id, outcome, error message, etc. */

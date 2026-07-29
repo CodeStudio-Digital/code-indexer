@@ -1,21 +1,21 @@
 /**
  * Frontend shapes for the Session Drive aggregate
  * (`GET /api/coder/sessions/:id/drive`). Mirrors the backend
- * `DriveAggregate` in code-agent's `sessions/store/session-drive.ts`.
+ * `FsDriveAggregate` in code-agent's filesystem session repository.
  * Kept local to the chat feature — these are view models, not shared
  * contracts.
  */
 export interface DriveMemory {
-  id: number;
+  id: string;
   kind: string;
   title: string;
   body: string;
-  pinned: number;
+  pinned: boolean;
   updated_at: string;
 }
 
 export interface DriveInvestigation {
-  id: number;
+  id: string;
   topic: string;
   summary: string;
   body: string;
@@ -26,7 +26,7 @@ export interface DriveInvestigation {
 }
 
 export interface DrivePlan {
-  id: number;
+  id: string;
   plan_text: string;
   status: string;
   created_at: string;

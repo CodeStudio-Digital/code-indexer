@@ -5,6 +5,7 @@
  */
 
 import { apiCall, apiStream, apiBaseUrl } from '../../lib/api-client.js';
+import { encryptSecret, decryptSecret } from '@mcp/secret-box';
 import type {
   SshAuth,
   SshConnectSpec,
@@ -16,6 +17,7 @@ import type {
   SshConfigHost,
   SshExecResult,
   SftpEntry,
+  SftpIdNames,
   SftpProgress,
 } from '@mcp/api-bus';
 import type { SshHost, SshIdentity, SshSnippet, SshSecret, SshAuthMethod, SshHostStorageScope } from './types.js';
@@ -70,6 +72,15 @@ export const execCommand = (
 ) => apiCall<SshExecResult>('ssh.execCommand', { spec, command, ...opts });
 
 /** Open the connection's SFTP root (resolves `.` to the user's home), TOFU-aware. */
+export const sftpChmod = (spec: SshConnectSpec, path: string, mode: number, recursive = false) =>
+  apiCall<void>('ssh.sftpChmod', { spec, path, mode, recursive });
+
+export const sftpChown = (spec: SshConnectSpec, path: string, uid: number, gid: number, recursive = false) =>
+  apiCall<void>('ssh.sftpChown', { spec, path, uid, gid, recursive });
+
+/** uid/gid → name maps for a host (cached in main; empty when unresolvable). */
+export const sftpIdNames = (spec: SshConnectSpec) => apiCall<SftpIdNames>('ssh.sftpIdNames', { spec });
+
 export const sftpListWithTrust = (spec: SshConnectSpec, path: string, onNeedTrust: NeedTrust) =>
   withHostKeyTrust(() => sftpList(spec, path), onNeedTrust);
 
@@ -250,28 +261,14 @@ export async function resolveSnippetCommand(projectId: number, command: string):
 
 // ─── Secret shim (OS keychain via the Electron preload) ──────────────────
 
-function sshSecretBridge():
-  | { encryptSecret(p: string): Promise<string>; decryptSecret(b: string): Promise<string> }
-  | null {
-  return (
-    (globalThis as { electronAPI?: { ssh?: { encryptSecret(p: string): Promise<string>; decryptSecret(b: string): Promise<string> } } })
-      .electronAPI?.ssh ?? null
-  );
-}
-
-/** Encrypt a secret with the OS keychain before persisting. Browser-dev fallback: passthrough. */
-export async function encryptSecret(plain: string): Promise<string> {
-  if (!plain) return '';
-  const bridge = sshSecretBridge();
-  return bridge ? bridge.encryptSecret(plain) : plain;
-}
-
-/** Decrypt a stored secret just before connecting. */
-export async function decryptSecret(blob: string | null): Promise<string> {
-  if (!blob) return '';
-  const bridge = sshSecretBridge();
-  return bridge ? bridge.decryptSecret(blob) : blob;
-}
+// Delegated to @mcp/secret-box, the shared device-bound primitive the DB client
+// already uses. This file used to carry its own copy that read ONLY the legacy
+// `electronAPI.ssh` bridge and silently passed plaintext through when it was
+// absent — so running the dashboard under `vite dev` wrote raw passwords and
+// private keys into `ssh_hosts.enc_password`, a column whose whole contract is
+// "ciphertext". secret-box reads both bridges and now refuses to store an
+// unencrypted credential. Re-exported here so callers keep one import site.
+export { encryptSecret, decryptSecret, isDevPlainSecret } from '@mcp/secret-box';
 
 // ─── Build a live connect spec from a saved host ─────────────────────────
 

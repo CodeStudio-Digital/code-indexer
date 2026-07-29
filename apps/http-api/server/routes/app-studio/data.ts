@@ -23,7 +23,11 @@ import { readDbStatus } from '@mcp/app-studio/status-files.js';
 import { hasMultipleStatements, isReadStatement } from '@mcp/db-drivers/sql/read-guard.js';
 import { ensureAppStudioDbConnection } from '@mcp/company/tools/app-studio/db-client-bridge.js';
 import { getDatabaseProvisioner } from '@mcp/services/app-studio/index.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseSessionIdParam,
+  parseJsonBody,
+  notFound,
+} from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 
 const require = createRequire(import.meta.url);
@@ -92,7 +96,12 @@ function currentProvisionState(workspaceDir: string, dbFile: string | null): App
 export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
   const { appStudioStore, db } = deps;
 
-  function syncNativeDbConnection(session: NonNullable<ReturnType<typeof appStudioStore.getSession>>, dbFile: string) {
+  function syncNativeDbConnection(
+    session: NonNullable<
+      Awaited<ReturnType<typeof appStudioStore.getSession>>
+    >,
+    dbFile: string,
+  ) {
     return ensureAppStudioDbConnection({
       listConnections: (projectId) => deps.dbClientFor(projectId).listConnections(projectId),
       createConnection: (input) => deps.dbClientFor(input.project_id).createConnection(input),
@@ -100,9 +109,9 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
     }, session, dbFile);
   }
 
-  app.get('/api/app-studio/apps/:id/data', (c) => {
-    const id = parseIdParam(c);
-    const session = appStudioStore.getSession(id);
+  app.get('/api/app-studio/apps/:id/data', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await appStudioStore.getSession(id);
     if (!session) return notFound(c);
     const project = db.getProject(session.project_id);
     if (!project?.root_path) return c.json({ error: 'Workspace project missing.' }, 500);
@@ -112,7 +121,8 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
     if (!dbFile) return c.json({ tables: null, reason: 'not-provisioned', provision });
     syncNativeDbConnection(session, dbFile);
 
-    const plan = parseAppPlan(appStudioStore.getLatestPlanRevision(id)?.plan_json ?? null);
+    const revision = await appStudioStore.getLatestPlanRevision(id);
+    const plan = parseAppPlan(revision?.plan_json ?? null);
     const entityByName = new Map(plan?.data.entities.map((entity) => [entity.name, entity]) ?? []);
 
     let sqlite: InstanceType<typeof Database> | null = null;
@@ -207,8 +217,8 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/app-studio/apps/:id/data/provision', async (c) => {
-    const id = parseIdParam(c);
-    const session = appStudioStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    const session = await appStudioStore.getSession(id);
     if (!session) return notFound(c);
     const project = db.getProject(session.project_id);
     if (!project?.root_path) return c.json({ error: 'Workspace project missing.' }, 500);
@@ -239,8 +249,8 @@ export function mountAppStudioDataRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/app-studio/apps/:id/data/query', async (c) => {
-    const id = parseIdParam(c);
-    const session = appStudioStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    const session = await appStudioStore.getSession(id);
     if (!session) return notFound(c);
     const project = db.getProject(session.project_id);
     if (!project?.root_path) return c.json({ error: 'Workspace project missing.' }, 500);

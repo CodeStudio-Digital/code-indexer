@@ -16,7 +16,7 @@ import type { ContribToolWindow } from '../../../state/contribution-registry.js'
 import type { SidePanel } from './SidebarRail.js';
 
 interface SidebarPanelsProps {
-  sessionId: number;
+  sessionId: string;
   active: SidePanel;
   /**
    * Pre-built `<AgentsSidebar />` element passed down from

@@ -80,7 +80,7 @@ export class MetaBusWirer implements IMetaBusWirer {
 
   constructor(private readonly publisher: IMetaBusPublisher) {}
 
-  wire(handle: RunCoderHandle, role: string, agentRunId: number): void {
+  wire(handle: RunCoderHandle, role: string, agentRunId: string): void {
     const emitter = handle.runner as unknown as EventEmitter;
     const runnerKey = handle.runner as unknown as object;
     const wiring = this.wiredRunners.get(runnerKey) ?? {

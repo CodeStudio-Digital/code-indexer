@@ -1,14 +1,17 @@
 import type { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { isAbsolute, relative, resolve } from 'node:path';
-import { ensureGlobalWorkspaceLinks } from './global-workspace.js';
 import { assignWorkspaceSlugs, workspaceSlug } from '@mcp/shared/utils/workspace-slug.js';
 import type { CoderAttachment, PreflightSeed } from '@mcp/code-agent/index.js';
+import {
+  resolveSessionProjectAuthority,
+  type FsCoderSession,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
 import type { IdeContext } from '@mcp/code-agent/core/ide-context.js';
-import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import {
   classifyCoderTerminalOutcome,
   normalizeCoderTerminalSignal,
+  type SessionId,
 } from '@mcp/agent-runtime-contracts';
 import { hashControlPlanePayload } from '@mcp/store/control-plane/index.js';
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
@@ -24,7 +27,7 @@ import type { CoderRuntime } from './state.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
 import { getGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseSessionIdParam, notFound } from '../_helpers.js';
 import {
   normalizeDedupeKey,
   syntheticDoneSSE,
@@ -170,6 +173,19 @@ export function mountCoderStreamRoutes(
   const controlPlaneStore = deps.controlPlaneStore ?? null;
   const semanticBusLeases = new WeakMap<CoderRunBus, () => void>();
 
+  function currentProjectAuthority(session: FsCoderSession) {
+    return resolveSessionProjectAuthority(session, (projectId) => {
+      const project = deps.db.getProject(projectId);
+      return project && !project.is_synthetic
+        ? {
+            project_id: project.id,
+            name: project.name,
+            root_path: project.root_path,
+          }
+        : null;
+    });
+  }
+
   type EarlyCommandClaim =
     | {
         kind: 'owner';
@@ -205,11 +221,11 @@ export function mountCoderStreamRoutes(
   /**
    * Claim the durable command before attachment extraction, index gates,
    * preflight, append, push or worker spawn. The in-memory pending settlement
-   * handles same-process races; ControlPlaneStore is the restart-safe
+   * handles same-process races; the filesystem control plane is the restart-safe
    * authority whenever it is available.
    */
-  function claimCoderCommand(input: {
-    sessionId: number;
+  async function claimCoderCommand(input: {
+    sessionId: SessionId;
     kind: 'start' | 'send_message' | 'resume';
     dedupeKey?: string;
     fingerprint: Record<string, unknown>;
@@ -223,7 +239,7 @@ export function mountCoderStreamRoutes(
     requestedPreset?: string;
     requestedCapabilityProfile: string;
     lastEventId: number;
-  }): EarlyCommandClaim {
+  }): Promise<EarlyCommandClaim> {
     const fingerprintHash = hashControlPlanePayload(input.fingerprint);
     const memoryClaim = input.dedupeKey
       ? recentMessageKeys.claim(input.sessionId, input.dedupeKey, fingerprintHash)
@@ -265,9 +281,9 @@ export function mountCoderStreamRoutes(
       return { kind: 'pending', settled: memoryClaim.settled };
     }
 
-    const acceptance = acceptLocalCoderCommand({
+    const acceptance = await acceptLocalCoderCommand({
       store: controlPlaneStore,
-      legacySessionId: input.sessionId,
+      sessionId: input.sessionId,
       kind: input.kind,
       idempotencyKey: input.dedupeKey,
       fingerprint: input.fingerprint,
@@ -381,7 +397,7 @@ export function mountCoderStreamRoutes(
       // An accepted/running command without its executor bus cannot safely be
       // replayed. Persist interruption and return a terminal; never attempt the
       // append/provider side effects again after a process restart.
-      terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+      await terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
         status: 'failed',
         reason: 'executor-bus-unavailable',
         errorRef: 'error:executor-bus-unavailable',
@@ -416,7 +432,7 @@ export function mountCoderStreamRoutes(
    * the provider/tools are still running.
    */
   function bindFreshCommandCompletion(
-    sessionId: number,
+    sessionId: SessionId,
     dedupeKey: string | undefined,
     acceptance: LocalCoderShadowAcceptance | null,
     bus: CoderRunBus,
@@ -427,7 +443,7 @@ export function mountCoderStreamRoutes(
     // shadow projection is disabled.
     if (!acceptance?.commandContext || acceptance.runContext) return;
     let settled = false;
-    const settle = (): void => {
+    const settle = async (): Promise<void> => {
       if (settled || !bus.ended) return;
       if (
         acceptance.commandStatus === 'succeeded'
@@ -458,7 +474,7 @@ export function mountCoderStreamRoutes(
         : terminal.classification === 'cancelled'
           ? 'cancelled'
           : 'failed';
-      terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+      await terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
         status,
         reason: terminal.reason,
       });
@@ -474,12 +490,12 @@ export function mountCoderStreamRoutes(
         }, -1, claimGuard);
       }
     };
-    if (bus.ended) settle();
-    else bus.endListeners.add(settle);
+    if (bus.ended) void settle();
+    else bus.endListeners.add(() => void settle());
   }
 
-  function materializePendingAgentTransition(sessionId: number): void {
-    const transition = sessionStore.consumePendingAgentTransition?.(sessionId) ?? null;
+  async function materializePendingAgentTransition(sessionId: SessionId): Promise<void> {
+    const transition = await sessionStore.consumePendingAgentTransition?.(sessionId) ?? null;
     if (!transition) return;
 
     const from = transition.fromAgent ?? 'session-default';
@@ -489,12 +505,15 @@ export function mountCoderStreamRoutes(
       `The active agent is now ${to}. Follow the current system prompt, behavior, ` +
       `tool rules, and mutation policy for this new agent. Earlier assistant claims ` +
       `about the active agent or mode are stale.</system-reminder>`;
-    sessionStore.appendMessage(sessionId, {
-      role: 'user',
-      content: [{ type: 'text', text: reminder }],
-      isMeta: true,
+    await sessionStore.appendMessage({
+      session_id: sessionId,
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: reminder }],
+        isMeta: true,
+      },
     });
-    sessionStore.recordSessionInput({
+    await sessionStore.recordSessionInput({
       session_id: sessionId,
       kind: 'system_reminder',
       source_label: 'reminder:agent-transition',
@@ -512,39 +531,54 @@ export function mountCoderStreamRoutes(
    * reference inside the active project/worktree needs no extra grant; an
    * external reference authorizes that exact file (never its parent folder).
    */
-  function authorizeAttachmentReferences(
-    sessionId: number,
+  async function authorizeAttachmentReferences(
+    sessionId: SessionId,
     paths: readonly string[],
     enteringWorktree: boolean,
-  ): string | null {
+  ): Promise<string | null> {
     if (paths.length === 0) return null;
-    const session = sessionStore.getSession(sessionId);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return 'session not found';
-    const projectRoot = enteringWorktree
-      ? null
-      : session.worktree_path ?? deps.db.getProject(session.project_id)?.root_path ?? null;
-    const existing = sessionStore.listSessionFilesystemRoots(sessionId);
+    const authority = currentProjectAuthority(session);
+    const projectRoots = enteringWorktree
+      ? []
+      : [
+          ...(authority
+            && session.project_id === authority.primary.project_id
+            ? [session.worktree_path]
+            : []),
+          ...(authority?.projects.map((project) => project.root_path) ?? []),
+        ].filter((root): root is string => typeof root === 'string' && root.length > 0);
+    const existing = await sessionStore.listSessionFilesystemRoots(sessionId);
 
     for (const path of new Set(paths)) {
-      if (projectRoot && contains(projectRoot, path)) continue;
+      if (projectRoots.some((root) => contains(root, path))) continue;
       if (existing.some((root) => contains(root.root_path, path))) continue;
       if (existing.length >= 16) {
         return 'session filesystem reference limit reached (16); remove an old filesystem grant first';
       }
-      const row = sessionStore.upsertSessionFilesystemRoot(sessionId, path, 'read');
+      const row = await sessionStore.upsertSessionFilesystemRoot(sessionId, path, 'read');
       existing.push(row);
     }
     return null;
   }
 
-  function keepSemanticProjectAlive(sessionId: number, bus: CoderRunBus): void {
+  async function keepSemanticProjectAlive(sessionId: SessionId, bus: CoderRunBus): Promise<void> {
     if (bus.ended || semanticBusLeases.has(bus)) return;
-    const projectId = sessionStore.getSession(sessionId)?.project_id;
-    if (projectId == null) return;
-    const release = deps.semanticCoordinator.acquireCodeProjectLease(
-      projectId,
-      `coder:${sessionId}:${bus.busId}`,
-    );
+    const session = await sessionStore.getSession(sessionId);
+    if (!session) return;
+    const projectIds = currentProjectAuthority(session)?.projects.map(
+      (project) => project.project_id,
+    ) ?? [];
+    if (projectIds.length === 0) return;
+    const releases = projectIds.map((projectId) =>
+      deps.semanticCoordinator.acquireCodeProjectLease(
+        projectId,
+        `coder:${sessionId}:${bus.busId}`,
+      ));
+    const release = (): void => {
+      for (const releaseProject of releases.splice(0)) releaseProject();
+    };
     semanticBusLeases.set(bus, release);
     bus.endListeners.add(() => {
       semanticBusLeases.delete(bus);
@@ -560,8 +594,8 @@ export function mountCoderStreamRoutes(
    * silently disabled the vision fallback → blind-model hallucination). Drives
    * the vision-fallback auto path in runCoder.
    */
-  function resolveModelSupportsVision(id: number): boolean | undefined {
-    const session = sessionStore.getSession(id);
+  async function resolveModelSupportsVision(id: SessionId): Promise<boolean | undefined> {
+    const session = await sessionStore.getSession(id);
     if (!session?.provider || !session?.model) return undefined;
     const providerKind = providerStore.getProvider(session.provider)?.kind;
     const row = providerStore
@@ -574,8 +608,11 @@ export function mountCoderStreamRoutes(
     });
   }
 
-  function resolveRunAgent(id: number, requested: unknown): ResolvedAgentSelection | null {
-    const session = sessionStore.getSession(id);
+  async function resolveRunAgent(
+    id: SessionId,
+    requested: unknown,
+  ): Promise<ResolvedAgentSelection | null> {
+    const session = await sessionStore.getSession(id);
     const persisted = resolveAgentSelection(providerStore, session?.agent);
     if (persisted?.baseAgentId === 'app_orchestrator') {
       return persisted;
@@ -591,16 +628,11 @@ export function mountCoderStreamRoutes(
     return null;
   }
 
-  /** Resolved provider `kind` for the session (drives PDF-native gating). */
-  function resolveProviderKind(id: number): string | undefined {
-    const session = sessionStore.getSession(id);
-    if (!session?.provider) return undefined;
-    return providerStore.getProvider(session.provider)?.kind;
-  }
-
-  function resolveFileHandling(id: number) {
-    const session = sessionStore.getSession(id);
-    const providerKind = resolveProviderKind(id);
+  async function resolveFileHandling(id: SessionId) {
+    const session = await sessionStore.getSession(id);
+    const providerKind = session?.provider
+      ? providerStore.getProvider(session.provider)?.kind
+      : undefined;
     const row = session?.provider && session.model
       ? providerStore.listModels(session.provider).find((m) => m.model_id === session.model)
       : undefined;
@@ -617,10 +649,12 @@ export function mountCoderStreamRoutes(
    * actually installed the Preview DevTools backend. This avoids advertising
    * browser tools in headless/API runs where every call would fail.
    */
-  function resolvePreviewAvailable(id: number): boolean | undefined {
-    const session = sessionStore.getSession(id);
+  async function resolvePreviewAvailable(id: SessionId): Promise<boolean | undefined> {
+    const session = await sessionStore.getSession(id);
     if (!session) return undefined;
-    return session.project_id != null && getGlobalPreviewDevtools() ? true : undefined;
+    return currentProjectAuthority(session) && getGlobalPreviewDevtools()
+      ? true
+      : undefined;
   }
 
   function resolveBrowserAvailable(): boolean | undefined {
@@ -632,21 +666,26 @@ export function mountCoderStreamRoutes(
     }
   }
 
-  function applyGeneratedSessionTitle(id: number, title: string | undefined): boolean {
+  async function applyGeneratedSessionTitle(
+    id: SessionId,
+    title: string | undefined,
+  ): Promise<boolean> {
     if (!title) return false;
-    const current = sessionStore.getSession(id);
+    const current = await sessionStore.getSession(id);
     if (!current || !isAutomaticSessionTitle(current.title)) return false;
-    sessionStore.setSessionTitle(id, title);
+    await sessionStore.setSessionTitle(id, title);
     return true;
   }
 
-  const sessionTitleJobs = new Map<number, Promise<void>>();
+  const sessionTitleJobs = new Map<SessionId, Promise<void>>();
 
-  function scheduleGeneratedSessionTitle(id: number, userMessage: string): void {
+  function scheduleGeneratedSessionTitle(id: SessionId, userMessage: string): void {
     if (sessionTitleJobs.has(id)) return;
     const job = deps.taskPreflight.generateSessionTitle({ userMessage })
-      .then((result) => {
-        if (result.status === 'ok') applyGeneratedSessionTitle(id, result.title);
+      .then(async (result) => {
+        if (result.status === 'ok') {
+          await applyGeneratedSessionTitle(id, result.title);
+        }
         else if (result.status !== 'unconfigured') {
           console.warn(`[session-title] session=${id}: ${result.error ?? result.status}`);
         }
@@ -671,7 +710,7 @@ export function mountCoderStreamRoutes(
    * returns undefined and the session starts exactly as before.
    */
   async function maybeRunPreflight(
-    id: number,
+    id: SessionId,
     body: SendMessageBody,
   ): Promise<PreflightSeed | undefined> {
     try {
@@ -684,25 +723,36 @@ export function mountCoderStreamRoutes(
       // suppress preflight on every chat — that's the bug this removes.
       if (body.resume) return undefined;
       if (!body.content?.trim()) return undefined;
-      const session = sessionStore.getSession(id);
+      const session = await sessionStore.getSession(id);
       if (!session) return undefined;
       // Fresh = zero messages AND no durable compaction summary (mirrors
       // runCoder's own hasHistory check) AND no live bus (attach path).
       if (session.compaction_summary) return undefined;
-      if (sessionStore.getMessageCount(id) > 0) return undefined;
+      if ((await sessionStore.getMessageCount(id)) > 0) return undefined;
       const liveBus = workerPool.getBus(id);
       if (liveBus && !liveBus.ended) return undefined;
 
+      const authority = currentProjectAuthority(session);
       const workspaceProjects = session.is_global
-        ? assignWorkspaceSlugs(deps.db.listUnionProjectIds(session.project_id)).map((p) => ({
-            projectId: p.project_id,
-            name: p.name,
-            slug: p.slug,
-            rootPath: p.root_path,
-            isPrimary: p.is_primary,
+        ? assignWorkspaceSlugs(
+            (authority?.projects ?? []).map((project) => ({
+              project_id: project.project_id,
+              name: project.name,
+              root_path: project.root_path,
+              is_primary: project.is_primary,
+            })),
+          ).map((project) => ({
+            projectId: project.project_id,
+            name: project.name,
+            slug: project.slug,
+            rootPath: project.root_path,
+            isPrimary: project.is_primary,
           }))
         : (() => {
-            const project = deps.db.getProject(session.project_id);
+            const primary = authority?.primary;
+            const project = primary
+              ? deps.db.getProject(primary.project_id)
+              : null;
             return project
               ? [{
                   projectId: project.id,
@@ -715,10 +765,17 @@ export function mountCoderStreamRoutes(
           })();
       const preflightInput = {
         sessionId: id,
-        projectId: session.project_id,
+        projectId: authority?.primary.project_id ?? null,
         userMessage: body.content,
         isGlobalWorkspace: session.is_global,
         workspaceProjects,
+        activeSkillIds: Array.isArray(
+          session.state?.tools?.active_skills,
+        )
+          ? session.state.tools.active_skills.filter(
+              (skill): skill is string => typeof skill === 'string',
+            )
+          : undefined,
       };
       const capabilityFingerprint = deps.taskPreflight.getCapabilityFingerprint?.(preflightInput) ?? '';
       const cacheHash = hashPreflightContent(`${body.content}\0${capabilityFingerprint}`);
@@ -745,26 +802,30 @@ export function mountCoderStreamRoutes(
               cached.seed.taskKind,
             );
             if (markedCache !== session.preflight_seed_json) {
-              try { sessionStore.setSessionPreflightSeed(id, markedCache); } catch { /* best-effort */ }
+              try {
+                await sessionStore.setSessionPreflightSeed(id, markedCache);
+              } catch { /* best-effort */ }
             }
-            applyGeneratedSessionTitle(id, cached.seed.sessionTitle);
+            await applyGeneratedSessionTitle(id, cached.seed.sessionTitle);
             return cached.seed;
           }
         } catch { /* fall through to clear + recompute */ }
-        try { sessionStore.setSessionPreflightSeed(id, null); } catch { /* best-effort */ }
+        try {
+          await sessionStore.setSessionPreflightSeed(id, null);
+        } catch { /* best-effort */ }
       }
 
       const result = await deps.taskPreflight.run(preflightInput);
       if (result.status === 'unconfigured') return undefined;
 
       if (result.status === 'ok') {
-        applyGeneratedSessionTitle(id, result.seed?.sessionTitle);
+        await applyGeneratedSessionTitle(id, result.seed?.sessionTitle);
       }
 
       // Input-tab trail (kind 'preflight') — hint body on success, short
       // diagnostic on failure; meta feeds the effectiveness funnel.
       try {
-        sessionStore.recordSessionInput({
+        await sessionStore.recordSessionInput({
           session_id: id,
           kind: 'preflight',
           source_label: 'turn-start',
@@ -795,7 +856,7 @@ export function mountCoderStreamRoutes(
       // a failed cache write just means the next POST recomputes.
       if (result.status === 'ok' && result.seed) {
         try {
-          sessionStore.setSessionPreflightSeed(
+          await sessionStore.setSessionPreflightSeed(
             id,
             markGoalLifecycleIntentCache(
               JSON.stringify({ h: cacheHash, seed: result.seed }),
@@ -817,7 +878,7 @@ export function mountCoderStreamRoutes(
    * or the client disconnects.
    */
   app.get('/api/coder/sessions/:id/attach', (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const bus = activeRuns.get(id);
     if (!bus) return c.json({ error: 'no active run' }, 404);
 
@@ -838,13 +899,13 @@ export function mountCoderStreamRoutes(
    * dominating 31% of the run). Cap `recent` via query string for
    * heavier debug sessions.
    */
-  app.get('/api/coder/sessions/:id/tool-stats', (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+  app.get('/api/coder/sessions/:id/tool-stats', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return c.json({ error: 'session not found' }, 404);
     const recentRaw = c.req.query('recent');
     const recent = recentRaw ? Number(recentRaw) : 30;
-    const stats = sessionStore.getToolCallStats(
+    const stats = await sessionStore.getToolCallStats(
       id,
       Number.isFinite(recent) && recent > 0 ? recent : 30,
     );
@@ -868,9 +929,9 @@ export function mountCoderStreamRoutes(
    * dashboard hooks share the same handling pattern. Returns 404 only
    * when the session row itself doesn't exist.
    */
-  app.get('/api/coder/sessions/:id/state', (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+  app.get('/api/coder/sessions/:id/state', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return c.json({ error: 'session not found' }, 404);
     const alive = activeRuns.has(id);
     return c.json({
@@ -881,9 +942,14 @@ export function mountCoderStreamRoutes(
     });
   });
 
-  app.get('/api/coder/sessions/:id/events.jsonl', (c) => {
-    const id = parseIdParam(c);
-    const events = getRuntimeEventLog('coder', id);
+  app.get('/api/coder/sessions/:id/events.jsonl', async (c) => {
+    const id = parseSessionIdParam(c);
+    const context = await getCoderWorkerPool().resolveRuntimeContext(id);
+    const events = await getRuntimeEventLog(
+      'coder',
+      id,
+      { bundlePath: context.bundlePath },
+    );
     return new Response(runtimeEventsToJsonl(events), {
       headers: {
         'content-type': 'application/x-ndjson; charset=utf-8',
@@ -892,13 +958,18 @@ export function mountCoderStreamRoutes(
     });
   });
 
-  app.get('/api/coder/sessions/:id/events-summary', (c) => {
-    const id = parseIdParam(c);
-    return c.json(summarizeRuntimeEvents(getRuntimeEventLog('coder', id)));
+  app.get('/api/coder/sessions/:id/events-summary', async (c) => {
+    const id = parseSessionIdParam(c);
+    const context = await getCoderWorkerPool().resolveRuntimeContext(id);
+    return c.json(summarizeRuntimeEvents(await getRuntimeEventLog(
+      'coder',
+      id,
+      { bundlePath: context.bundlePath },
+    )));
   });
 
   app.post('/api/coder/sessions/:id/messages', attachmentBodyLimit, async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<SendMessageBody>();
     const attachmentsCheck = validateAttachments(body.attachments, { allowFileReferences: true });
     if (!attachmentsCheck.ok) {
@@ -919,14 +990,16 @@ export function mountCoderStreamRoutes(
     // /answer-via-worker fallback, where the tool_result is already in
     // history and there's no new user message to attach.
     if (!body.resume && !body.content?.trim()) return c.json({ error: 'content required' }, 400);
-    const resolvedAgent = resolveRunAgent(id, body.agent);
+    const resolvedAgent = await resolveRunAgent(id, body.agent);
     const runAgent = resolvedAgent?.baseAgentId;
     const agentSelectionId = resolvedAgent?.selectionId;
     const customAgent = resolvedAgent?.custom;
     // The request keeps precedence for explicit callers. When omitted (for
     // example during a remount race), fall back to the conversation's sticky
     // toggle so the next run cannot silently lose the user's last choice.
-    const thinking = body.thinking ?? sessionStore.getSession(id)?.thinking_enabled ?? false;
+    const claimSession = await sessionStore.getSession(id);
+    if (!claimSession) return notFound(c);
+    const thinking = body.thinking ?? claimSession.thinking_enabled ?? false;
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Log the route hit. The bus may not exist yet (fresh session) —
     // emitWorkerLog no-ops in that case, but if a worker is still alive
@@ -949,14 +1022,13 @@ export function mountCoderStreamRoutes(
     // do NOT inline the bodies into `body.content` anymore — that used to
     // bloat the persisted user message with thousands of tokens of skill
     // instructions on every turn. The picks are persisted alongside the
-    // message in `coder_messages.selected_skill_ids_json` (migration 095).
+    // message in the filesystem conversation record.
     const selectedSkillIds = (() => {
       const combined = [...(customAgent?.skillIds ?? []), ...(body.selected_skill_ids ?? [])];
       const unique = [...new Set(combined.map((id) => id.trim()).filter(Boolean))];
       return unique.length > 0 ? unique : undefined;
     })();
 
-    const claimSession = sessionStore.getSession(id);
     const liveAtClaim = workerPool.getBus(id);
     // Command identity cannot depend on mutable transcript state: after the
     // first append, a retry must still resolve the same durable row. Historical
@@ -1043,14 +1115,14 @@ export function mountCoderStreamRoutes(
     const claimAcceptance = earlyClaim.acceptance;
     const claimGuard = earlyClaim.claimGuard;
     let commandSettled = false;
-    const settleClaimFailure = (
+    const settleClaimFailure = async (
       reason: string,
       error?: unknown,
       status: 'failed' | 'cancelled' = 'failed',
-    ): void => {
+    ): Promise<void> => {
       if (commandSettled) return;
       commandSettled = true;
-      terminalizeLocalCoderCommand(controlPlaneStore, claimAcceptance, {
+      await terminalizeLocalCoderCommand(controlPlaneStore, claimAcceptance, {
         status,
         reason,
         ...(error
@@ -1076,8 +1148,8 @@ export function mountCoderStreamRoutes(
     // attachments are first-message-only, so this runs at most once.
     if (body.attachments && body.attachments.length > 0) {
       const extractImages =
-        resolveModelSupportsVision(id) === true || body.describe_images === true;
-      const fileHandling = resolveFileHandling(id);
+        await resolveModelSupportsVision(id) === true || body.describe_images === true;
+      const fileHandling = await resolveFileHandling(id);
       const extractPdfText = !pdfHandledNatively(fileHandling);
       body.attachments = await normalizeAttachmentsForModel(body.attachments, {
         extractImages,
@@ -1092,33 +1164,38 @@ export function mountCoderStreamRoutes(
     // while an existing integral index is returned immediately even if its
     // stat-first reopen reconciliation is still running in the background.
     {
-      const session = sessionStore.getSession(id);
-      if (session?.project_id != null) {
-        // Global session: rebuild the synthetic union's junctions if missing,
-        // then index the union itself (session.project_id IS the synthetic
-        // project whose root spans every linked project via junctions).
-        if (session.is_global) ensureGlobalWorkspaceLinks(deps, session);
+      const session = await sessionStore.getSession(id);
+      if (session) {
+        const projectIds = currentProjectAuthority(session)?.projects.map(
+          (project) => project.project_id,
+        ) ?? [];
         const freshSession = !body.resume
           && !session.compaction_summary
-          && sessionStore.getMessageCount(id) === 0;
-        if (freshSession) {
-          deps.projectIndexService.ensureFresh(session.project_id, 'session');
-          const readiness = await deps.projectIndexService.ensureStructuralReady(
-            session.project_id,
-            structuralIndexGateTimeoutMs(),
-            c.req.raw.signal,
-          );
-          if (readiness.status === 'aborted') {
-            settleClaimFailure('index-wait-aborted', undefined, 'cancelled');
+          && (await sessionStore.getMessageCount(id)) === 0;
+        if (freshSession && projectIds.length > 0) {
+          for (const projectId of projectIds) {
+            deps.projectIndexService.ensureFresh(projectId, 'session');
+          }
+          const readinessByProject = await Promise.all(projectIds.map(async (projectId) => ({
+            projectId,
+            readiness: await deps.projectIndexService.ensureStructuralReady(
+              projectId,
+              structuralIndexGateTimeoutMs(),
+              c.req.raw.signal,
+            ),
+          })));
+          if (readinessByProject.some(({ readiness }) => readiness.status === 'aborted')) {
+            await settleClaimFailure('index-wait-aborted', undefined, 'cancelled');
             return c.json({ code: 'INDEX_WAIT_ABORTED', message: 'Envio cancelado durante a indexação.' }, 408);
           }
-          if (readiness.status !== 'ready') {
+          for (const { projectId, readiness } of readinessByProject) {
+            if (readiness.status === 'ready') continue;
             // Timeout, disabled indexing or a terminal scan error starts dumb
             // mode instead of rejecting the user's message. Tools remain in
             // the registry and observe the live DB on later calls, so this
             // same session recovers when the baseline eventually completes.
             console.warn(
-              `[coder] structural index gate bypassed for session ${id}: ${readiness.status}` +
+              `[coder] structural index gate bypassed for session ${id}, project ${projectId}: ${readiness.status}` +
               `${readiness.error ? ` (${readiness.error})` : ''}`,
             );
           }
@@ -1136,7 +1213,7 @@ export function mountCoderStreamRoutes(
     // the SAME pipeline binding. Re-check-before-write protects manual renames.
     if (!preflight?.sessionTitle) {
       const titleSeed = cleanSessionTitleSeed(body.content ?? '');
-      const current = sessionStore.getSession(id);
+      const current = await sessionStore.getSession(id);
       if (titleSeed && current && isAutomaticSessionTitle(current.title)) {
         scheduleGeneratedSessionTitle(id, titleSeed);
       }
@@ -1162,9 +1239,9 @@ export function mountCoderStreamRoutes(
       if (existingBus && !existingBus.ended) {
         if (
           claimAcceptance?.commandContext
-          && !bindLocalCommandBus(controlPlaneStore, claimAcceptance, existingBus.busId)
+          && !(await bindLocalCommandBus(controlPlaneStore, claimAcceptance, existingBus.busId))
         ) {
-          settleClaimFailure('command-bus-binding-failed');
+          await settleClaimFailure('command-bus-binding-failed');
           throw new Error('failed to bind command to the live coder bus');
         }
         if (body.attachments && body.attachments.length > 0) {
@@ -1192,27 +1269,31 @@ export function mountCoderStreamRoutes(
           await pool.interruptWait(id).catch(() => undefined);
         }
         try {
-          const userMsg: AgentMessage = {
-            role: 'user',
-            content: [{ type: 'text', text: body.content }],
-            ...(selectedSkillIds ? { selectedSkillIds } : {}),
-          };
-          const roundMessageId = sessionStore.appendMessage(id, userMsg);
-          await pool.pushUserMessage(id, body.content, selectedSkillIds, roundMessageId);
-          terminalizeLocalCoderCommand(controlPlaneStore, claimAcceptance, {
+          const messageOperationId = claimAcceptance?.commandContext
+            ? `message-command:${claimAcceptance.commandContext.commandId}`
+            : dedupeKey
+              ? `message-client:${dedupeKey}`
+              : undefined;
+          await pool.pushUserMessage(
+            id,
+            body.content,
+            selectedSkillIds,
+            messageOperationId,
+          );
+          await terminalizeLocalCoderCommand(controlPlaneStore, claimAcceptance, {
             status: 'succeeded',
             reason: 'message-enqueued',
           });
           commandSettled = true;
           return { kind: 'attach', bus: existingBus, tailFrom: existingBus.nextSeq - 1 };
         } catch (error) {
-          settleClaimFailure('message-enqueue-failed', error);
+          await settleClaimFailure('message-enqueue-failed', error);
           throw error;
         }
       }
       // `runFresh` spawns the worker if needed and returns the main-side
       // mirrored bus. All model-facing options are forwarded unchanged.
-      const referenceError = authorizeAttachmentReferences(
+      const referenceError = await authorizeAttachmentReferences(
         id,
         attachmentReferencePaths,
         body.worktree != null,
@@ -1224,7 +1305,7 @@ export function mountCoderStreamRoutes(
           body: { error: referenceError, code: 'ATTACHMENT_REFERENCE_NOT_AUTHORIZED' },
         };
       }
-      materializePendingAgentTransition(id);
+      await materializePendingAgentTransition(id);
       const freshBus = await pool.runFresh(id, {
         userMessage: body.content,
         attachments: body.attachments,
@@ -1237,9 +1318,9 @@ export function mountCoderStreamRoutes(
         profile: body.profile,
         worktree: body.worktree,
         thinking,
-        modelSupportsVision: resolveModelSupportsVision(id),
+        modelSupportsVision: await resolveModelSupportsVision(id),
         describeImages: body.describe_images,
-        previewAvailable: resolvePreviewAvailable(id),
+        previewAvailable: await resolvePreviewAvailable(id),
         browserAvailable: resolveBrowserAvailable(),
         selectedSkillIds,
         ideContext: body.ide_context,
@@ -1253,10 +1334,10 @@ export function mountCoderStreamRoutes(
       });
       if (
         claimAcceptance?.commandContext
-        && !bindLocalCommandBus(controlPlaneStore, claimAcceptance, freshBus.busId)
+        && !(await bindLocalCommandBus(controlPlaneStore, claimAcceptance, freshBus.busId))
       ) {
         freshBus.ctrl.abort(new Error('command-bus-binding-failed'));
-        settleClaimFailure('command-bus-binding-failed');
+        await settleClaimFailure('command-bus-binding-failed');
         throw new Error('failed to bind command to the fresh coder bus');
       }
       bindFreshCommandCompletion(id, dedupeKey, claimAcceptance, freshBus, claimGuard);
@@ -1282,7 +1363,7 @@ export function mountCoderStreamRoutes(
     });
 
     if (decision.kind === 'reject') {
-      settleClaimFailure(decision.body.code.toLowerCase());
+      await settleClaimFailure(decision.body.code.toLowerCase());
       return c.json(decision.body, decision.status);
     }
     if (decision.kind === 'attach') {
@@ -1293,13 +1374,13 @@ export function mountCoderStreamRoutes(
       });
     }
 
-    keepSemanticProjectAlive(id, decision.bus);
+    await keepSemanticProjectAlive(id, decision.bus);
 
     // `runFresh()` already started `runCoder()` inside the worker. The route
     // only mirrors its bus to SSE; there is deliberately no in-process path.
     return pumpBusToSSE(c, decision.bus);
     } catch (error) {
-      settleClaimFailure('request-setup-failed', error);
+      await settleClaimFailure('request-setup-failed', error);
       throw error;
     }
   });
@@ -1312,7 +1393,7 @@ export function mountCoderStreamRoutes(
    * with the just-appended tool_result) and runs the next turn.
    */
   app.post('/api/coder/sessions/:id/continue', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     let body: ContinueBody = {};
     try {
       body = await c.req.json();
@@ -1320,13 +1401,13 @@ export function mountCoderStreamRoutes(
       /* empty body is fine */
     }
 
-    const data = sessionStore.loadSessionWithMessages(id);
+    const data = await sessionStore.loadSessionWithMessages(id);
     if (!data) return notFound(c);
     const last = data.messages[data.messages.length - 1];
     if (!last || last.role !== 'tool') {
       return c.json({ error: 'session not in resumable state' }, 409);
     }
-    const resolvedAgent = resolveRunAgent(id, body.agent);
+    const resolvedAgent = await resolveRunAgent(id, body.agent);
     const runAgent = resolvedAgent?.baseAgentId;
     const agentSelectionId = resolvedAgent?.selectionId;
     const customAgent = resolvedAgent?.custom;
@@ -1335,7 +1416,7 @@ export function mountCoderStreamRoutes(
     // here because no bus exists yet — but the route-entry hit will
     // appear via the fresh bus's `run_started` event seq=0.
 
-    const continueSession = sessionStore.getSession(id);
+    const continueSession = await sessionStore.getSession(id);
     const liveAtContinueClaim = workerPool.getBus(id);
     const continueEarlyClaim = await withSessionLock(id, async () => claimCoderCommand({
       sessionId: id,
@@ -1409,10 +1490,13 @@ export function mountCoderStreamRoutes(
     const continueAcceptance = continueEarlyClaim.acceptance;
     const continueClaimGuard = continueEarlyClaim.claimGuard;
     let continueSettled = false;
-    const settleContinueFailure = (reason: string, error?: unknown): void => {
+    const settleContinueFailure = async (
+      reason: string,
+      error?: unknown,
+    ): Promise<void> => {
       if (continueSettled) return;
       continueSettled = true;
-      terminalizeLocalCoderCommand(controlPlaneStore, continueAcceptance, {
+      await terminalizeLocalCoderCommand(controlPlaneStore, continueAcceptance, {
         status: 'failed',
         reason,
         ...(error
@@ -1442,12 +1526,12 @@ export function mountCoderStreamRoutes(
           const tailFrom = live.nextSeq - 1;
           if (
             continueAcceptance?.commandContext
-            && !bindLocalCommandBus(controlPlaneStore, continueAcceptance, live.busId)
+            && !(await bindLocalCommandBus(controlPlaneStore, continueAcceptance, live.busId))
           ) {
-            settleContinueFailure('command-bus-binding-failed');
+            await settleContinueFailure('command-bus-binding-failed');
             throw new Error('failed to bind continue command to the live coder bus');
           }
-          terminalizeLocalCoderCommand(controlPlaneStore, continueAcceptance, {
+          await terminalizeLocalCoderCommand(controlPlaneStore, continueAcceptance, {
             status: 'succeeded',
             reason: 'attached-to-live-run',
           });
@@ -1458,7 +1542,7 @@ export function mountCoderStreamRoutes(
           return { kind: 'attach' as const, bus: live, tailFrom };
         }
 
-        materializePendingAgentTransition(id);
+        await materializePendingAgentTransition(id);
         const newBus = await workerPool.runFresh(id, {
           userMessage: '',
           maxTurns: body.max_turns,
@@ -1469,19 +1553,19 @@ export function mountCoderStreamRoutes(
           allowedToolNames: customAgent?.toolNames ?? undefined,
           profile: body.profile,
           resume: true,
-          modelSupportsVision: resolveModelSupportsVision(id),
+          modelSupportsVision: await resolveModelSupportsVision(id),
           describeImages: body.describe_images,
-          previewAvailable: resolvePreviewAvailable(id),
+          previewAvailable: await resolvePreviewAvailable(id),
           browserAvailable: resolveBrowserAvailable(),
           ...deps.buildAgentDecisionRuntimeOptions(),
           controlPlaneRunContext: continueAcceptance?.runContext,
         });
         if (
           continueAcceptance?.commandContext
-          && !bindLocalCommandBus(controlPlaneStore, continueAcceptance, newBus.busId)
+          && !(await bindLocalCommandBus(controlPlaneStore, continueAcceptance, newBus.busId))
         ) {
           newBus.ctrl.abort(new Error('command-bus-binding-failed'));
-          settleContinueFailure('command-bus-binding-failed');
+          await settleContinueFailure('command-bus-binding-failed');
           throw new Error('failed to bind continue command to the fresh coder bus');
         }
         bindFreshCommandCompletion(
@@ -1498,7 +1582,7 @@ export function mountCoderStreamRoutes(
         return { kind: 'fresh' as const, bus: newBus };
       });
     } catch (error) {
-      settleContinueFailure('continue-setup-failed', error);
+      await settleContinueFailure('continue-setup-failed', error);
       throw error;
     }
 
@@ -1506,12 +1590,12 @@ export function mountCoderStreamRoutes(
       emitWorkerLog(decision.bus, 'warn', 'route', 'POST /continue attached to live run', {
         client_msg_id: dedupeKey ?? null,
       });
-      keepSemanticProjectAlive(id, decision.bus);
+      await keepSemanticProjectAlive(id, decision.bus);
       return pumpBusToSSE(c, decision.bus, { since: decision.tailFrom, trimReplay: true });
     }
 
     const bus = decision.bus;
-    keepSemanticProjectAlive(id, bus);
+    await keepSemanticProjectAlive(id, bus);
     // Log the route hit on the fresh bus — the dashboard will see the
     // POST /continue entry seq=0 with the resume context.
     emitWorkerLog(bus, 'info', 'route', 'POST /continue', {

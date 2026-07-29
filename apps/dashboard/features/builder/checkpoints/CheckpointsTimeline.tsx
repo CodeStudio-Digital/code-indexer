@@ -16,7 +16,7 @@ interface CheckpointsTimelineProps {
 export function CheckpointsTimeline({ projectId }: CheckpointsTimelineProps) {
   const { checkpoints, restore, viewDiff, busyId, error } = useCheckpoints(projectId);
   const [collapsed, setCollapsed] = useState(false);
-  const [confirmId, setConfirmId] = useState<number | null>(null);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
 
   if (checkpoints.length === 0) return null;
 

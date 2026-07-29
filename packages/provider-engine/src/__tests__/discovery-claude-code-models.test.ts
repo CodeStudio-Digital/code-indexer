@@ -55,6 +55,7 @@ describe('sdk:claude-code discovery', () => {
     // others — pinning both sides of the `liveNote` ternary.
     const liveList = [
       { id: 'claude-sonnet-5' },
+      { id: 'claude-opus-5' },
       { id: 'claude-opus-4-8' },
       { id: 'claude-fable-5' },
     ];
@@ -65,12 +66,13 @@ describe('sdk:claude-code discovery', () => {
 
     expect(b.map((model) => model.model_id)).toEqual([
       'fable',
-      'sonnet',
-      'sonnet-4-6',
-      'haiku',
       'opus',
+      'sonnet',
+      'haiku',
+      'opus-4-8',
       'opus-4-7',
       'opus-4-6',
+      'sonnet-4-6',
     ]);
     expect(b.find((model) => model.model_id === 'fable')?.name).toBe('Fable 5');
     expect(b.some((model) => model.model_id === 'default')).toBe(false);
@@ -84,7 +86,7 @@ describe('sdk:claude-code discovery', () => {
     mockFetchModels.mockRejectedValue(new Error('network down'));
     const b = await discoverClaudeCodeModels(claudeCodeSpec, CFG, STORE);
 
-    expect(b).toHaveLength(7);
+    expect(b).toHaveLength(8);
     expect(b.some((m) => (m.description ?? '').includes('Not returned by live'))).toBe(false);
   });
 });

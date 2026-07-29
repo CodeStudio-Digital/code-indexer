@@ -9,9 +9,9 @@ import { apiBaseUrl } from '../../../lib/api-client.js';
 export type AnimLoopMode = 'loop' | 'once' | 'pingpong';
 
 export interface AnimFrame {
-  id: number;
+  id: string;
   frameIndex: number;
-  versionId: number;
+  versionId: string;
   /** Per-frame override; null = 1000/fps. Only track 0 carries durations. */
   durationMs: number | null;
   /** Animation layer (0 = Base); cells compose bottom-up by ascending track. */
@@ -26,8 +26,8 @@ export interface TrackMeta {
 }
 
 export interface SpriteAnimation {
-  id: number;
-  assetId: number;
+  id: string;
+  assetId: string;
   name: string;
   fps: number;
   loopMode: AnimLoopMode;
@@ -38,9 +38,9 @@ export interface SpriteAnimation {
   /** Animation layers, id-ascending (bottom-up compositing order). */
   tracks: TrackMeta[];
   /** Version that anchored the last generation; null = asset's current. */
-  anchorVersionId: number | null;
+  anchorVersionId: string | null;
   /** Job whose candidates were last adopted as frames; null = never. */
-  lastGenJobId: number | null;
+  lastGenJobId: string | null;
   /** Playback loop range (frame indices); null = whole clip. */
   loopStart: number | null;
   loopEnd: number | null;
@@ -86,16 +86,16 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const j = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) });
-const assetBase = (p: number, assetId: number) =>
+const assetBase = (p: number, assetId: string) =>
   `/api/sprite-studio/projects/${p}/assets/${assetId}/animations`;
-const animBase = (animId: number) => `/api/sprite-studio/animations/${animId}`;
+const animBase = (animId: string) => `/api/sprite-studio/animations/${animId}`;
 
-export const listAnimations = (p: number, assetId: number): Promise<SpriteAnimation[]> =>
+export const listAnimations = (p: number, assetId: string): Promise<SpriteAnimation[]> =>
   req<{ animations: SpriteAnimation[] }>(assetBase(p, assetId)).then((r) => r.animations);
 
 export const createAnimation = (
   p: number,
-  assetId: number,
+  assetId: string,
   input: {
     name: string; fps?: number; frames?: number; loopMode?: AnimLoopMode;
     actionKey?: string; direction?: string; exportName?: string;
@@ -103,7 +103,7 @@ export const createAnimation = (
 ): Promise<SpriteAnimation> => req<SpriteAnimation>(assetBase(p, assetId), j(input));
 
 export const patchAnimation = (
-  animId: number,
+  animId: string,
   patch: {
     fps?: number; loopMode?: AnimLoopMode; frameCount?: number;
     loopStart?: number | null; loopEnd?: number | null;
@@ -112,7 +112,7 @@ export const patchAnimation = (
 ): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(animBase(animId), { method: 'PATCH', body: JSON.stringify(patch) });
 
-export const deleteAnimation = (animId: number): Promise<void> =>
+export const deleteAnimation = (animId: string): Promise<void> =>
   req<{ ok: true }>(animBase(animId), { method: 'DELETE' }).then(() => undefined);
 
 /**
@@ -121,13 +121,13 @@ export const deleteAnimation = (animId: number): Promise<void> =>
  * (must belong to the animation's asset); omitted = the asset's current.
  */
 export const generateFrames = (
-  animId: number,
-  input: { intent?: string; direction?: string; anchorVersionId?: number; frameCount?: number } = {},
-): Promise<{ jobId: number; n: number }> =>
-  req<{ jobId: number; n: number }>(`${animBase(animId)}/frames/generate`, j(input));
+  animId: string,
+  input: { intent?: string; direction?: string; anchorVersionId?: string; frameCount?: number } = {},
+): Promise<{ jobId: string; n: number }> =>
+  req<{ jobId: string; n: number }>(`${animBase(animId)}/frames/generate`, j(input));
 
 /** Promote ALL staged candidates of a done job into versions + frame rows. */
-export const adoptFrames = (animId: number, jobId: number): Promise<SpriteAnimation> =>
+export const adoptFrames = (animId: string, jobId: string): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(`${animBase(animId)}/frames/adopt`, j({ jobId }));
 
 export type AnchorX = 'left' | 'center' | 'right';
@@ -140,7 +140,7 @@ export type AlignScope = 'all' | 'current';
  * current pointer stays put). Omitting frameIndexes aligns every base frame.
  */
 export const alignFrames = (
-  animId: number,
+  animId: string,
   input: { anchorX: AnchorX; anchorY: AnchorY; frameIndexes?: number[] },
 ): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(`${animBase(animId)}/frames/align`, j(input));
@@ -148,7 +148,7 @@ export const alignFrames = (
 /** Manual registration: move one frame's subject inside its existing canvas and
  * bake the result as a new version, then repoint that timeline cell. */
 export const repositionFrame = (
-  animId: number,
+  animId: string,
   input: { frameIndex: number; dx: number; dy: number; track?: number },
 ): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(`${animBase(animId)}/frames/reposition`, j(input));
@@ -156,8 +156,8 @@ export const repositionFrame = (
 /** Replace ONE track's cells (auto-committed by the timeline, debounced).
  *  Track 0 = dense reorder (indices rewritten); overlays = sparse explicit. */
 export const saveFrames = (
-  animId: number,
-  frames: Array<{ frameIndex: number; versionId: number; durationMs?: number | null }>,
+  animId: string,
+  frames: Array<{ frameIndex: number; versionId: string; durationMs?: number | null }>,
   track = 0,
 ): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(`${animBase(animId)}/frames`, {
@@ -166,12 +166,12 @@ export const saveFrames = (
 
 /** Save a frame edit as a child version and repoint only this timeline cell. */
 export const saveFrameVersion = async (
-  animId: number,
+  animId: string,
   track: number,
   frameIndex: number,
-  expectedVersionId: number,
+  expectedVersionId: string,
   blob: Blob,
-): Promise<{ animation: SpriteAnimation; versionId: number }> => {
+): Promise<{ animation: SpriteAnimation; versionId: string }> => {
   const form = new FormData();
   form.append('file', blob, 'edited-frame.png');
   form.append('expectedVersionId', String(expectedVersionId));
@@ -183,15 +183,15 @@ export const saveFrameVersion = async (
     try { message = (await res.json()).error ?? message; } catch { /* keep status */ }
     throw new Error(message);
   }
-  return (await res.json()) as { animation: SpriteAnimation; versionId: number };
+  return (await res.json()) as { animation: SpriteAnimation; versionId: string };
 };
 
 // ── Animation layers (tracks) ────────────────────────────────────────────
-export const addTrack = (animId: number, name?: string): Promise<SpriteAnimation> =>
+export const addTrack = (animId: string, name?: string): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(`${animBase(animId)}/tracks`, j({ name }));
 
 export const patchTrack = (
-  animId: number,
+  animId: string,
   trackId: number,
   patch: { name?: string; visible?: boolean },
 ): Promise<SpriteAnimation> =>
@@ -199,8 +199,8 @@ export const patchTrack = (
     method: 'PATCH', body: JSON.stringify(patch),
   });
 
-export const deleteTrack = (animId: number, trackId: number): Promise<SpriteAnimation> =>
+export const deleteTrack = (animId: string, trackId: number): Promise<SpriteAnimation> =>
   req<SpriteAnimation>(`${animBase(animId)}/tracks/${trackId}`, { method: 'DELETE' });
 
 /** GIF preview/export URL (served with content-disposition inline). */
-export const gifUrl = (animId: number): string => `${apiBaseUrl()}${animBase(animId)}/gif`;
+export const gifUrl = (animId: string): string => `${apiBaseUrl()}${animBase(animId)}/gif`;

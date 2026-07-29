@@ -14,21 +14,21 @@ import type { SubagentDeps } from '@mcp/code-agent/tools/subagent.js';
 import type { MicroAgentCapability } from '@mcp/code-agent/tools/micro-agent-profiles.js';
 import { getInvestigationSemanticIndex } from '@mcp/code-agent/tools/investigation-embedder.js';
 
-export function captureInvestigation(
+export async function captureInvestigation(
   deps: SubagentDeps,
   ctx: ToolContext,
   agent: { task: string; label: string; type: MicroAgentCapability },
   finalText: string,
   trail: string,
   tokens: number,
-): void {
+): Promise<void> {
   if (ctx.companyContext) return;
   const sessionId = ctx.runner?.sessionId;
   if (!deps.sessionStore || sessionId == null || !finalText.trim()) return;
   try {
     const topic = agent.task.slice(0, 300);
     const summary = finalText.slice(0, 1000);
-    const row = deps.sessionStore.recordInvestigation({
+    const row = await deps.sessionStore.recordInvestigation({
       session_id: sessionId,
       topic,
       summary,
@@ -39,9 +39,8 @@ export function captureInvestigation(
     });
     // Live-update the Drive panel.
     ctx.runner?.emit('session_drive_changed', { kind: 'investigation' });
-    // SessionStore fenced the relational insert before it happened. This is
-    // only a low-latency wake-up; worker/no-host runs rely on the coordinator's
-    // durable external-job poll and remain lexical until catch-up completes.
+    // The bundle writer fenced the durable entity before this low-latency
+    // semantic-index wake-up.
     try { getInvestigationSemanticIndex()?.wakeUpsert(row); }
     catch { /* the durable fence/job remains authoritative */ }
   } catch (e) {

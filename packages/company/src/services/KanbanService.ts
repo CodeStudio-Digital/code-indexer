@@ -1,5 +1,5 @@
 /**
- * KanbanService — CRUD over kanban_cards with automatic meta-bus event
+ * KanbanService — CRUD over independent kanban-card files with meta-bus event
  * publishing. The orchestrator exposes these through thin wrappers
  * (kanbanCreateCard, kanbanMoveCard, …) so tools and HTTP routes don't
  * need to know about the service layer.
@@ -31,13 +31,14 @@ export class KanbanService implements IKanbanNotifier {
     created_by?: string;
     checklist?: string[];
   }): KanbanCardFull {
-    const card = this.ctx.companyStore.createKanbanCard(this.ctx.effectiveSessionId, input);
-    if (input.checklist) {
-      for (let i = 0; i < input.checklist.length; i++) {
-        this.ctx.companyStore.addChecklistItem(card.id, input.checklist[i], i);
-      }
-    }
-    const full = this.ctx.companyStore.getKanbanCardFull(card.id)!;
+    const full = this.ctx.effectiveCompanyFiles.createKanbanCardSync({
+      title: input.title,
+      description: input.description,
+      column: input.column,
+      tag: input.tag,
+      createdBy: input.created_by,
+      checklist: input.checklist,
+    });
     this.bus.publish('kanban_card_created', full);
     return full;
   }
@@ -61,18 +62,18 @@ export class KanbanService implements IKanbanNotifier {
    * Never throws.
    */
   private evaluateDependencyGate(
-    cardId: number,
+    cardId: string,
     targetColumn: KanbanColumn,
     fromColumn: KanbanColumn | undefined,
-  ): { blocked: false } | { blocked: true; blockers: Array<{ id: number; title: string; column: string }> } {
+  ): { blocked: false } | { blocked: true; blockers: Array<{ id: string; title: string; column: string }> } {
     const ACTIVE: KanbanColumn[] = ['in_progress', 'review', 'done'];
     if (!ACTIVE.includes(targetColumn)) return { blocked: false };
     if (fromColumn === targetColumn) return { blocked: false }; // reorder, not an advance
     try {
-      const full = this.ctx.companyStore.getKanbanCardFull(cardId);
+      const full = this.ctx.effectiveCompanyFiles.getKanbanCardFullSync(cardId);
       if (!full || full.blocked_by.length === 0) return { blocked: false };
       const blockers = full.blocked_by.map((id) => {
-        const c = this.ctx.companyStore.getKanbanCard(id);
+        const c = this.ctx.effectiveCompanyFiles.getKanbanCardFullSync(id);
         return { id, title: c?.title ?? '?', column: c?.column ?? 'unknown' };
       });
       return { blocked: true, blockers };
@@ -84,7 +85,7 @@ export class KanbanService implements IKanbanNotifier {
   /** Markdown comment explaining a dependency-gate redirect. */
   private buildDependencyComment(
     targetColumn: KanbanColumn,
-    blockers: ReadonlyArray<{ id: number; title: string; column: string }>,
+    blockers: ReadonlyArray<{ id: string; title: string; column: string }>,
   ): string {
     const lines: string[] = [
       `Move to \`${targetColumn}\` refused by the dependency gate — open blockers must reach \`done\` first.`,
@@ -99,15 +100,20 @@ export class KanbanService implements IKanbanNotifier {
     return lines.join('\n');
   }
 
-  moveCard(cardId: number, column: KanbanColumn, position?: number): KanbanCard {
-    const before = this.ctx.companyStore.getKanbanCard(cardId);
+  moveCard(cardId: string, column: KanbanColumn, position?: number): KanbanCard {
+    const before = this.ctx.effectiveCompanyFiles.getKanbanCardFullSync(cardId);
 
     // A blocked card isn't advancing: snap back to the current column and
     // explain why.
     const depBlock = this.evaluateDependencyGate(cardId, column, before?.column);
     if (depBlock.blocked) {
       const stayColumn = before?.column ?? 'todo';
-      const card = this.ctx.companyStore.moveKanbanCard(cardId, stayColumn, position);
+      const card = this.ctx.effectiveCompanyFiles.moveKanbanCardSync(
+        cardId,
+        stayColumn,
+        position,
+      );
+      if (!card) throw new Error(`Unknown Company kanban card ${cardId}`);
       this.bus.publish('kanban_card_moved', {
         cardId,
         fromColumn: before?.column,
@@ -118,7 +124,7 @@ export class KanbanService implements IKanbanNotifier {
         blockingCardIds: depBlock.blockers.map((b) => b.id),
       });
       try {
-        const comment = this.ctx.companyStore.addKanbanComment(
+        const comment = this.ctx.effectiveCompanyFiles.addKanbanCommentSync(
           cardId,
           'dependency-gate',
           null,
@@ -131,7 +137,12 @@ export class KanbanService implements IKanbanNotifier {
       return card;
     }
 
-    const card = this.ctx.companyStore.moveKanbanCard(cardId, column, position);
+    const card = this.ctx.effectiveCompanyFiles.moveKanbanCardSync(
+      cardId,
+      column,
+      position,
+    );
+    if (!card) throw new Error(`Unknown Company kanban card ${cardId}`);
     this.bus.publish('kanban_card_moved', {
       cardId,
       fromColumn: before?.column,
@@ -142,94 +153,111 @@ export class KanbanService implements IKanbanNotifier {
   }
 
   updateCard(
-    cardId: number,
+    cardId: string,
     patch: { title?: string; description?: string; tag?: KanbanTag | null },
   ): KanbanCard | null {
-    const card = this.ctx.companyStore.updateKanbanCard(cardId, patch);
+    const card = this.ctx.effectiveCompanyFiles.updateKanbanCardSync(cardId, patch);
     if (card) this.bus.publish('kanban_card_updated', { cardId, patch });
     return card;
   }
 
-  deleteCard(cardId: number): boolean {
-    const ok = this.ctx.companyStore.deleteKanbanCard(cardId);
+  deleteCard(cardId: string): boolean {
+    const ok = this.ctx.effectiveCompanyFiles.deleteKanbanCardSync(cardId);
     if (ok) this.bus.publish('kanban_card_deleted', { cardId });
     return ok;
   }
 
   addComment(
-    cardId: number,
+    cardId: string,
     authorRole: string,
-    agentRunId: number | null,
+    agentRunId: string | null,
     content: string,
   ): KanbanComment {
-    const comment = this.ctx.companyStore.addKanbanComment(cardId, authorRole, agentRunId, content);
+    const comment = this.ctx.effectiveCompanyFiles.addKanbanCommentSync(
+      cardId,
+      authorRole,
+      agentRunId,
+      content,
+    );
     this.bus.publish('kanban_comment_added', { cardId, comment });
     return comment;
   }
 
   updateChecklist(
-    cardId: number,
-    items: Array<{ id?: number; text: string; checked: boolean }>,
+    cardId: string,
+    items: Array<{ id?: string; text: string; checked: boolean }>,
   ): KanbanChecklistItem[] {
-    const result: KanbanChecklistItem[] = [];
-    for (const item of items) {
-      if (item.id) {
-        const updated = this.ctx.companyStore.updateChecklistItem(item.id, {
-          text: item.text,
-          checked: item.checked,
-        });
-        if (updated) result.push(updated);
-      } else {
-        result.push(this.ctx.companyStore.addChecklistItem(cardId, item.text));
-        if (item.checked) {
-          const last = result[result.length - 1];
-          this.ctx.companyStore.updateChecklistItem(last.id, { checked: true });
-          last.checked = true;
-        }
-      }
-    }
+    const result = this.ctx.effectiveCompanyFiles.updateKanbanChecklistSync(
+      cardId,
+      items,
+    );
     this.bus.publish('kanban_checklist_updated', { cardId, items: result });
     return result;
   }
 
-  addDependency(cardId: number, dependsOnId: number): KanbanCardDependency {
-    const dep = this.ctx.companyStore.addCardDependency(cardId, dependsOnId);
-    this.bus.publish('kanban_dependency_added', { cardId, dependsOnId });
+  addDependency(cardId: string, dependsOnId: string): KanbanCardDependency {
+    const dep = this.ctx.effectiveCompanyFiles.addKanbanDependencySync(
+      cardId,
+      dependsOnId,
+    );
+    this.bus.publish('kanban_dependency_added', { cardId, dependency: dep });
     return dep;
   }
 
-  removeDependency(cardId: number, dependsOnId: number): boolean {
-    const ok = this.ctx.companyStore.removeCardDependency(cardId, dependsOnId);
-    if (ok) this.bus.publish('kanban_dependency_removed', { cardId, dependsOnId });
-    return ok;
+  removeDependency(cardId: string, dependsOnId: string): boolean {
+    const dependency = this.ctx.effectiveCompanyFiles.removeKanbanDependencySync(
+      cardId,
+      dependsOnId,
+    );
+    if (dependency) {
+      this.bus.publish('kanban_dependency_removed', {
+        cardId,
+        dependencyId: dependency.id,
+        dependsOnId,
+      });
+    }
+    return dependency != null;
   }
 
-  assignAgent(cardId: number, agentRunId: number, role: string): KanbanCardAgent {
-    const assignment = this.ctx.companyStore.assignAgentToCard(cardId, agentRunId, role);
-    this.bus.publish('kanban_agent_assigned', { cardId, agentRunId, role });
+  assignAgent(cardId: string, agentRunId: string, role: string): KanbanCardAgent {
+    const assignment = this.ctx.effectiveCompanyFiles.assignKanbanAgentSync(
+      cardId,
+      agentRunId,
+      role,
+    );
+    this.bus.publish('kanban_agent_assigned', { cardId, assignment });
     return assignment;
   }
 
-  unassignAgent(cardId: number, agentRunId: number): void {
-    this.ctx.companyStore.unassignAgentFromCard(cardId, agentRunId);
-    this.bus.publish('kanban_agent_unassigned', { cardId, agentRunId });
+  unassignAgent(cardId: string, agentRunId: string): void {
+    const assignment = this.ctx.effectiveCompanyFiles.unassignKanbanAgentSync(
+      cardId,
+      agentRunId,
+    );
+    if (assignment) {
+      this.bus.publish('kanban_agent_unassigned', {
+        cardId,
+        assignmentId: assignment.id,
+        agentRunId,
+      });
+    }
   }
 
   listCards(opts?: { column?: KanbanColumn }): KanbanCard[] {
-    return this.ctx.companyStore.listKanbanCards(this.ctx.effectiveSessionId, opts);
+    return this.ctx.effectiveCompanyFiles.listKanbanCardsSync(opts);
   }
 
-  getCard(cardId: number): KanbanCardFull | null {
-    return this.ctx.companyStore.getKanbanCardFull(cardId);
+  getCard(cardId: string): KanbanCardFull | null {
+    return this.ctx.effectiveCompanyFiles.getKanbanCardFullSync(cardId);
   }
 
   listCardsFull(): KanbanCardFull[] {
-    return this.ctx.companyStore.listKanbanCardsFull(this.ctx.effectiveSessionId);
+    return this.ctx.effectiveCompanyFiles.listKanbanCardsFullSync();
   }
 
   /** Find the kanban card currently assigned to the given agent run. */
-  findCardForAgent(agentRunId: number): number | null {
-    const cards = this.ctx.companyStore.listKanbanCardsFull(this.ctx.effectiveSessionId);
+  findCardForAgent(agentRunId: string): string | null {
+    const cards = this.ctx.effectiveCompanyFiles.listKanbanCardsFullSync();
     const myCard = cards.find(
       (c) => c.agents.some((a) => a.agent_run_id === agentRunId && !a.unassigned_at),
     );
@@ -237,8 +265,8 @@ export class KanbanService implements IKanbanNotifier {
   }
 
   /** Build a markdown context block describing the card for subordinate injection. */
-  getCardContextForSubordinate(cardId: number): string {
-    const card = this.ctx.companyStore.getKanbanCardFull(cardId);
+  getCardContextForSubordinate(cardId: string): string {
+    const card = this.ctx.effectiveCompanyFiles.getKanbanCardFullSync(cardId);
     if (!card) return '';
     const lines: string[] = [];
     lines.push(`# Kanban Card: ${card.title}`);
@@ -253,7 +281,9 @@ export class KanbanService implements IKanbanNotifier {
     if (card.dependencies.length > 0) {
       lines.push('\n## Dependencies');
       for (const dep of card.dependencies) {
-        const depCard = this.ctx.companyStore.getKanbanCard(dep.depends_on_id);
+        const depCard = this.ctx.effectiveCompanyFiles.getKanbanCardFullSync(
+          dep.depends_on_id,
+        );
         const status = depCard
           ? (depCard.column === 'done' ? 'DONE' : `IN ${depCard.column.toUpperCase()}`)
           : 'unknown';

@@ -10,6 +10,7 @@
  */
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { MicroAgentProfileId } from '@mcp/code-agent/tools/micro-agent-profiles.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export const WORKFLOW_MAX_STEPS = 12;
 const STEP_ID_RE = /^[a-zA-Z0-9_-]{1,40}$/;
@@ -57,7 +58,7 @@ export interface WorkflowStepState {
 export interface WorkflowRecord {
   id: string;
   name: string;
-  sessionId?: number;
+  sessionId?: SessionId;
   status: WorkflowStatus;
   steps: WorkflowStepState[];
   totalUsage: ChatUsage;

@@ -27,7 +27,7 @@ export const EMPTY_AUTONOMY_STATE: AutonomyState = INITIAL_AUTONOMY_STATE;
 /** Stream state for `sessionId`, or the stable empty state if absent. */
 export function selectStream(
   state: CompanyStore,
-  sessionId: number | null,
+  sessionId: string | null,
 ): StreamState {
   if (sessionId == null) return EMPTY_STREAM_STATE;
   return state.streams.get(sessionId) ?? EMPTY_STREAM_STATE;
@@ -36,7 +36,7 @@ export function selectStream(
 /** Sibling state for `rootId`, or the stable empty state if absent. */
 export function selectSiblings(
   state: CompanyStore,
-  rootId: number | null,
+  rootId: string | null,
 ): SiblingState {
   if (rootId == null) return EMPTY_SIBLING_STATE;
   return state.siblings.get(rootId) ?? EMPTY_SIBLING_STATE;
@@ -45,7 +45,7 @@ export function selectSiblings(
 /** Kanban state for `sessionId`, or the stable empty state if absent. */
 export function selectKanban(
   state: CompanyStore,
-  sessionId: number | null,
+  sessionId: string | null,
 ): KanbanState {
   if (sessionId == null) return EMPTY_KANBAN_STATE;
   return state.kanban.get(sessionId) ?? EMPTY_KANBAN_STATE;
@@ -54,7 +54,7 @@ export function selectKanban(
 /** Sandbox state for `sessionId`, or the stable empty state if absent. */
 export function selectSandbox(
   state: CompanyStore,
-  sessionId: number | null,
+  sessionId: string | null,
 ): SandboxState {
   if (sessionId == null) return EMPTY_SANDBOX_STATE;
   return state.sandbox.get(sessionId) ?? EMPTY_SANDBOX_STATE;
@@ -63,7 +63,7 @@ export function selectSandbox(
 /** Drive state for `sessionId`, or the stable empty state if absent. */
 export function selectDrive(
   state: CompanyStore,
-  sessionId: number | null,
+  sessionId: string | null,
 ): DriveState {
   if (sessionId == null) return EMPTY_DRIVE_STATE;
   return state.drive.get(sessionId) ?? EMPTY_DRIVE_STATE;
@@ -72,7 +72,7 @@ export function selectDrive(
 /** Inbox state for `sessionId`, or the stable empty state if absent. */
 export function selectInbox(
   state: CompanyStore,
-  sessionId: number | null,
+  sessionId: string | null,
 ): InboxState {
   if (sessionId == null) return EMPTY_INBOX_STATE;
   return state.inbox.get(sessionId) ?? EMPTY_INBOX_STATE;
@@ -81,7 +81,7 @@ export function selectInbox(
 /** Autonomy (C1 visibility) state for `sessionId`, or the stable empty state. */
 export function selectAutonomy(
   state: CompanyStore,
-  sessionId: number | null,
+  sessionId: string | null,
 ): AutonomyState {
   if (sessionId == null) return EMPTY_AUTONOMY_STATE;
   return state.autonomy.get(sessionId) ?? EMPTY_AUTONOMY_STATE;

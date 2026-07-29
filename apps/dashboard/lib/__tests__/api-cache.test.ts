@@ -125,3 +125,54 @@ describe('writeThrough', () => {
     expect(getCached('ghost')).toBeUndefined();
   });
 });
+
+describe('expired-entry sweep', () => {
+  /**
+   * `writeThrough` is the probe for residency: it refreshes a key only when the
+   * entry is still PRESENT in the map, regardless of age. So a key that a sweep
+   * removed can no longer be revived by it, while a key still resident can —
+   * which distinguishes "evicted" from merely "expired" through the public API.
+   */
+  const fill = async (count: number, prefix: string) => {
+    for (let i = 0; i < count; i++) {
+      await dedupe(`${prefix}${i}`, () => Promise.resolve(i));
+    }
+  };
+
+  it('evicts entries whose TTL lapsed once the cache grows past the sweep size', async () => {
+    await fill(64, 'old');
+    // Still resident at this point: writeThrough can refresh them.
+    writeThrough('old0', 'refreshed');
+    expect(getCached('old0')).toBe('refreshed');
+
+    now = BASE + 5_000; // every 'old*' entry is now past its TTL
+    await dedupe('trigger', () => Promise.resolve('x')); // pushes size over the threshold
+
+    writeThrough('old0', 'resurrected');
+    expect(getCached('old0')).toBeUndefined();
+    writeThrough('old63', 'resurrected');
+    expect(getCached('old63')).toBeUndefined();
+  });
+
+  it('keeps still-fresh entries when the sweep runs', async () => {
+    await fill(64, 'stale');
+    now = BASE + 5_000;
+    await dedupe('fresh', () => Promise.resolve('kept'));
+    // 'fresh' was written at the same instant as the sweep — it must survive.
+    expect(getCached('fresh')).toBe('kept');
+    writeThrough('fresh', 'still-there');
+    expect(getCached('fresh')).toBe('still-there');
+  });
+
+  it('leaves a small cache alone (no sweep below the threshold)', async () => {
+    await dedupe('lonely', () => Promise.resolve(1));
+    now = BASE + 5_000;
+    await dedupe('other', () => Promise.resolve(2)); // size 2 — under the threshold
+
+    // Expired but NOT evicted, so the entry is still resident and writeThrough
+    // can refresh it. This is what pins the threshold gate: with an
+    // unconditional sweep the key would be gone and this would read undefined.
+    writeThrough('lonely', 'refreshed');
+    expect(getCached('lonely')).toBe('refreshed');
+  });
+});

@@ -12,6 +12,7 @@
     "@mcp/store": "workspace:*",
     "@mcp/services": "workspace:*",
     "@mcp/code-agent": "workspace:*",
+    "@mcp/session-storage": "workspace:*",
     "@mcp/candidate-pipeline": "workspace:*"
   }
 }

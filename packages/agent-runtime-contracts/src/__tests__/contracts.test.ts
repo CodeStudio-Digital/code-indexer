@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   CONTROL_PLANE_EVENT_TYPES,
+  asAgentRunAttemptId,
   asAgentRunId,
+  asCorrelationId,
+  asRuntimeEventId,
   asSessionCommandId,
   asSessionId,
   isResolvedAgentRun,
@@ -9,6 +12,32 @@ import {
   type AgentRun,
   type RuntimeEventClass,
 } from '../index.js';
+
+describe('operational UUID identifiers', () => {
+  const factories = [
+    asSessionId,
+    asSessionCommandId,
+    asAgentRunId,
+    asAgentRunAttemptId,
+    asRuntimeEventId,
+    asCorrelationId,
+  ];
+
+  it('accepts canonical UUID strings and normalizes casing', () => {
+    for (const factory of factories) {
+      expect(factory('AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA')).toBe(
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      );
+    }
+  });
+
+  it('rejects prefixed and numeric legacy identities', () => {
+    for (const factory of factories) {
+      expect(() => factory('session:1')).toThrow(/canonical UUID/);
+      expect(() => factory('42')).toThrow(/canonical UUID/);
+    }
+  });
+});
 
 describe('runtimeEventClass', () => {
   it('classifies command/control events as class A', () => {
@@ -58,10 +87,10 @@ describe('runtimeEventClass', () => {
 
 describe('isResolvedAgentRun', () => {
   const baseRun: AgentRun = {
-    agentRunId: asAgentRunId('agent-run:1'),
+    agentRunId: asAgentRunId('22222222-2222-4222-8222-222222222222'),
     specVersion: 1,
-    sessionId: asSessionId('session:1'),
-    commandId: asSessionCommandId('command:1'),
+    sessionId: asSessionId('11111111-1111-4111-8111-111111111111'),
+    commandId: asSessionCommandId('33333333-3333-4333-8333-333333333333'),
     spawnDepth: 0,
     role: 'build',
     status: 'running',

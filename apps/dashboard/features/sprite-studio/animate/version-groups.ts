@@ -12,9 +12,9 @@ import type { GenerationGroup } from './api-anim-bulk.js';
 export interface FrameGroupView {
   /** Stable across refetch — the collapse-state key. */
   key: string;
-  jobId: number | null;
+  jobId: string | null;
   kind: string;
-  animationId: number | null;
+  animationId: string | null;
   animationName: string | null;
   prompt: string | null;
   createdAt: string;
@@ -40,11 +40,11 @@ export function defaultGridFor(group: FrameGroupView): { cols: number; rows: num
   return group.animationId != null ? { cols: group.count, rows: 1 } : gridFor(group.count);
 }
 
-export const frameGroupKey = (jobId: number | null): string => (jobId == null ? 'manual' : `job:${jobId}`);
+export const frameGroupKey = (jobId: string | null): string => (jobId == null ? 'manual' : `job:${jobId}`);
 
 export function buildFrameGroups(
   generations: GenerationGroup[],
-  versionById: Map<number, AssetVersion>,
+  versionById: Map<string, AssetVersion>,
 ): FrameGroupView[] {
   return generations.map((g) => ({
     key: frameGroupKey(g.jobId),

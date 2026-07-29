@@ -151,10 +151,8 @@ export interface RunContext {
    */
   planNudges: number;
   /**
-   * Runtime goal-lifecycle gate state. `ledgerStartSeq` scopes substantive
-   * work detection to this run even when the ToolContext/ledger is reused.
-   * Missing and in-progress phases have independent bounded nudge budgets so
-   * creating a late goal still leaves one chance to close it correctly.
+   * Legacy goal-lifecycle observation state retained for telemetry and
+   * compatibility. Goal state no longer authorizes tools or clean finishes.
    */
   goalLifecycle: {
     ledgerStartSeq: number;
@@ -173,20 +171,16 @@ export interface RunContext {
     preDispatchPending: Map<string, number>;
   };
   /**
-   * Completion-evidence gate state. Shares the run-start ledger boundary with
-   * goal lifecycle, but owns an independent one-shot nudge budget.
+   * Completion-evidence observation state. The ledger boundary scopes
+   * advisory health classification to this run.
    */
   verification: {
     ledgerStartSeq: number;
     nudges: number;
   };
   /**
-   * A1 — independent goal-completion verifier attempts this run. Completing an
-   * active goal is gated by a read-only verifier subagent
-   * (`bridge.verifyGoalCompletion`), including substantive no-diff goals.
-   * A 'not met' verdict re-enters the turn with the gaps as a `<system-reminder>`;
-   * bounded by `CODER_GOAL_VERIFY_MAX_ATTEMPTS` (default 2) so a stubborn verdict
-   * can't loop the run forever. Incremented only when a nudge is actually issued.
+   * Legacy counters retained for serialized run-context compatibility.
+   * Independent completion review is now asynchronous advisory telemetry.
    */
   goalVerifyAttempts: number;
   /** Evidence revision associated with goalVerifyAttempts; progress resets the cap. */
@@ -244,14 +238,13 @@ export interface RunContext {
    */
   bridge?: BridgeCallbacks;
   /**
-   * Telemetry — id of the most recent `coder_turn_telemetry` row this
+   * Telemetry — UUID of the most recent immutable turn metric this
    * run inserted, or null when persistence is unavailable / hasn't yet
    * fired this run. `ExecutingNode` updates this AFTER each successful
    * turn so the host's `flushPendingTurn` (in `index.ts`) can stamp the
-   * pending tool calls with the same id (FK across `tool_calls` ↔
-   * `coder_turn_telemetry`).
+   * pending tool calls with the same artifact reference.
    */
-  lastTurnTelemetryId: number | null;
+  lastTurnTelemetryId: string | null;
   /**
    * PR 5 — per-tool consecutive-failure counters. Closes the gap that
    * let 13 `write_stdin` failures escape every other guard in session
@@ -531,13 +524,9 @@ export interface BridgeCallbacks {
    */
   awaitTurnPersistence?: () => Promise<void>;
   /**
-   * A1 — independent goal-completion verifier (host-implemented). Before
-   * update_goal(complete), the Executing node calls this for an in-progress
-   * goal. The host resolves the `goal_verification` pipeline binding to a
-   * (cross-model) provider, spawns a READ-ONLY verifier subagent that never sees
-   * the executor transcript, and returns its verdict. Returns null when
-   * disabled, not applicable, or on any error (fail-open). Unset on company
-   * subordinates / tests.
+   * Independent goal-completion reviewer (host-implemented). The Executing
+   * node schedules it only after completion persists. The read-only reviewer
+   * never sees the executor transcript, and its verdict is audit-only.
    */
   verifyGoalCompletion?: (
     evidence?: import('../nodes/executing-verification-gate.js').VerificationReadiness,
@@ -607,10 +596,10 @@ export interface BridgeCallbacks {
    * Session-scoped conversation chapter index. Only recent titles are injected;
    * full summaries/source remain available through recall_conversation.
    */
-  getConversationChapterIndex?: () => {
+  getConversationChapterIndex?: () => Promise<{
     total: number;
-    entries: ReadonlyArray<{ id: number; ordinal: number; title: string; source?: string }>;
-  } | null;
+    entries: ReadonlyArray<{ id: string; ordinal: number; title: string; source?: string }>;
+  } | null>;
   getRelevantConversationChapters?: (
     taskText: string,
     turn: number,
@@ -653,7 +642,7 @@ export interface BridgeCallbacks {
   /**
    * Per-turn telemetry persistence — wraps the pure
    * `core/runner/telemetry/persist-turn.ts` helper with the tool-selection
-   * feedback observer. Returns the inserted `coder_turn_telemetry.id` so the
+   * feedback observer. Returns the written turn metric UUID so the
    * Executing node can update `ctx.lastTurnTelemetryId` for the host's
    * `flushPendingTurn` to consume.
    *
@@ -679,9 +668,9 @@ export interface BridgeCallbacks {
     responseMeta: import('@mcp/code-agent/core/messages.js').ChatProviderResponseMeta | null;
     compactionTriggered: boolean;
     summarizerRan: boolean;
-    // Perf W1 — a promise return means the async writer (dbWriter) took the
-    // insert; the id lands on ctx.lastTurnTelemetryId when it settles.
-  }) => number | null | Promise<number | null>;
+    // The filesystem metric UUID lands on ctx.lastTurnTelemetryId when the
+    // per-session writer settles.
+  }) => string | null | Promise<string | null>;
   /**
    * Background (fire-and-forget) subagent liveness. Present only when the
    * host wired the job manager (single sessions with subagent capability);

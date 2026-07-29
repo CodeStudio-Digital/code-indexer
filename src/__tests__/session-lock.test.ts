@@ -4,6 +4,11 @@ import {
   _resetSessionLocksForTests,
 } from '@apps/http-api/server/routes/coder/sessionLock.js';
 
+const SESSION_A = '00000000-0000-4000-8000-000000000001';
+const SESSION_B = '00000000-0000-4000-8000-000000000002';
+const SESSION_FAILING = '00000000-0000-4000-8000-000000000007';
+const SESSION_CONTENDED = '00000000-0000-4000-8000-000000000099';
+
 describe('withSessionLock', () => {
   beforeEach(() => {
     _resetSessionLocksForTests();
@@ -11,13 +16,13 @@ describe('withSessionLock', () => {
 
   it('serializes concurrent acquires for the same id', async () => {
     const order: string[] = [];
-    const a = withSessionLock(1, async () => {
+    const a = withSessionLock(SESSION_A, async () => {
       order.push('a:start');
       await new Promise((r) => setTimeout(r, 20));
       order.push('a:end');
       return 'A';
     });
-    const b = withSessionLock(1, async () => {
+    const b = withSessionLock(SESSION_A, async () => {
       order.push('b:start');
       await new Promise((r) => setTimeout(r, 5));
       order.push('b:end');
@@ -30,13 +35,13 @@ describe('withSessionLock', () => {
 
   it('runs different ids concurrently', async () => {
     const order: string[] = [];
-    const a = withSessionLock(1, async () => {
+    const a = withSessionLock(SESSION_A, async () => {
       order.push('a:start');
       await new Promise((r) => setTimeout(r, 30));
       order.push('a:end');
       return 'A';
     });
-    const b = withSessionLock(2, async () => {
+    const b = withSessionLock(SESSION_B, async () => {
       order.push('b:start');
       await new Promise((r) => setTimeout(r, 5));
       order.push('b:end');
@@ -50,10 +55,10 @@ describe('withSessionLock', () => {
   });
 
   it('does not poison the chain when one acquirer throws', async () => {
-    const failing = withSessionLock(7, async () => {
+    const failing = withSessionLock(SESSION_FAILING, async () => {
       throw new Error('boom');
     }).catch((e) => `caught:${(e as Error).message}`);
-    const after = withSessionLock(7, async () => 'ok');
+    const after = withSessionLock(SESSION_FAILING, async () => 'ok');
     const [first, second] = await Promise.all([failing, after]);
     expect(first).toBe('caught:boom');
     expect(second).toBe('ok');
@@ -62,11 +67,14 @@ describe('withSessionLock', () => {
   it('does not leak lock entries forever under contention', async () => {
     // Run many sequential lock acquires; the internal map should drain.
     for (let i = 0; i < 50; i++) {
-      await withSessionLock(99, async () => i);
+      await withSessionLock(SESSION_CONTENDED, async () => i);
     }
     // After draining, a new acquire should still work and run promptly.
     const start = Date.now();
-    const result = await withSessionLock(99, async () => 'fast');
+    const result = await withSessionLock(
+      SESSION_CONTENDED,
+      async () => 'fast',
+    );
     expect(result).toBe('fast');
     expect(Date.now() - start).toBeLessThan(50);
   });

@@ -7,7 +7,7 @@
  * system prompt + provider role binding. Zero edits to @mcp/code-agent.
  *
  * Lifecycle of `runDocsAgent`:
- *   1. Insert a `docs_research_sessions` row (status='running').
+ *   1. Create a `kind=docs` filesystem session bundle.
  *   2. Resolve the `docs_research/scorer_llm` binding → ChatProvider.
  *   3. Build a narrow ToolRegistry (docs_search, docs_read_chunk,
  *      docs_list_sources, docs_synthesize, docs_finish).
@@ -15,13 +15,13 @@
  *   5. Run the CoderRunner loop. When `docs_finish` lands, the tool
  *      handler writes to a shared slot and calls runner.abort() — the
  *      loop exits cleanly.
- *   6. Read the slot. Update the session row to 'completed' (slot
+ *   6. Read the slot. Update state.json to 'completed' (slot
  *      filled) or 'failed' (slot empty — maxTurns hit or runtime error).
  *   7. Return DocsResearchResult.
  */
 import os from 'node:os';
-import type DatabaseConstructor from 'better-sqlite3';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
@@ -48,8 +48,6 @@ import type {
   ResearchConfidence,
 } from './types.js';
 
-type DB = InstanceType<typeof DatabaseConstructor>;
-
 // Hard behavioral budget: evidence tools enforce four searches/eight reads;
 // six runner rounds are enough to plan, retrieve, synthesize and finish.
 const DEFAULT_MAX_TURNS = 6;
@@ -57,8 +55,8 @@ const DEFAULT_MAX_TURNS = 6;
 const MAX_MAX_TURNS = 6;
 
 export interface RunDocsAgentDeps {
-  /** SQLite handle — used to persist research sessions + reranker cache. */
-  db: DB;
+  /** Filesystem session authority for docs bundles. */
+  sessionStore: FsSessionStore;
   /** Doc-corpus CRUD. */
   docStore: DocStore;
   /** Hybrid search backend (constructed in http-api/deps.ts). */
@@ -79,8 +77,8 @@ export async function runDocsAgent(
   opts: RunDocsAgentOptions,
   deps: RunDocsAgentDeps,
 ): Promise<RunDocsAgentHandle> {
-  const sessionsStore = new DocsResearchSessionsStore(deps.db);
-  const sessionId = sessionsStore.create({
+  const sessionsStore = new DocsResearchSessionsStore(deps.sessionStore);
+  const sessionId = await sessionsStore.create({
     triggered_by: opts.triggeredBy,
     parent_coder_session_id: opts.parentCoderSessionId ?? null,
     query: opts.query,
@@ -223,7 +221,7 @@ export async function runDocsAgent(
           ),
         };
         // Persist as completed.
-        sessionsStore.complete(sessionId, {
+        await sessionsStore.complete(sessionId, {
           status: 'completed',
           num_turns: turns,
           num_searches: counters.searches,
@@ -339,9 +337,9 @@ function buildTelemetry(
   };
 }
 
-function finalizeFailed(
+async function finalizeFailed(
   sessionsStore: DocsResearchSessionsStore,
-  sessionId: number,
+  sessionId: import('@mcp/session-storage').SessionId,
   startedAt: number,
   counters: DocsToolsetCounters,
   status: DocsResearchStatus,
@@ -349,7 +347,7 @@ function finalizeFailed(
   turns: number = 0,
   runnerInputTokens: number = 0,
   runnerOutputTokens: number = 0,
-): DocsResearchResult {
+): Promise<DocsResearchResult> {
   const telemetry = buildTelemetry(
     turns,
     counters,
@@ -365,7 +363,7 @@ function finalizeFailed(
     errorMessage,
     telemetry,
   };
-  sessionsStore.complete(sessionId, {
+  await sessionsStore.complete(sessionId, {
     status,
     num_turns: turns,
     num_searches: counters.searches,

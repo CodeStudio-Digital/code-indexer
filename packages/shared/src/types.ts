@@ -289,6 +289,8 @@ export interface IndexRun {
   indexed_files: number;
   skipped_files: number;
   error_count: number;
+  phase_timings_json?: string | null;
+  peak_rss_mb?: number | null;
 }
 
 // ─── Cost Tracking ────────────────────────────────────────────────

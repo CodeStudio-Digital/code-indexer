@@ -6,16 +6,16 @@
  * type change ripples through TypeScript on both sides immediately —
  * the dashboard cannot drift from the schema and vice versa.
  *
- * Pure type-only module — nothing executable, no dependencies on either
- * `better-sqlite3` or React, so it's free to import from any layer.
+ * Pure type-only module — nothing executable and no persistence/runtime
+ * dependencies, so it's free to import from any layer.
  */
 
 // ─── Run status ─────────────────────────────────────────────────
 
-/** Lifecycle of a single Playwright run, persisted in `qa_test_runs.status`. */
+/** Lifecycle of a single Playwright run persisted in its bundle entity. */
 export type QaRunStatus = 'running' | 'completed' | 'aborted' | 'error';
 
-/** Per-test verdict, persisted in `qa_test_results.status`. Mirrors Playwright's reporter. */
+/** Per-test verdict persisted in a QA-result entity. Mirrors Playwright's reporter. */
 export type QaTestStatus =
   | 'passed'
   | 'failed'
@@ -27,8 +27,8 @@ export type QaTestStatus =
 export type QaRunTrigger = 'agent' | 'human' | 'watcher';
 
 /**
- * Machine-readable failure class persisted in `qa_test_runs.error_class`
- * (migration 189). The column is free TEXT — this union documents the
+ * Machine-readable failure class persisted in the QA-run entity. The JSON
+ * field is open-ended — this union documents the
  * vocabulary today's writers use; readers must tolerate unknown values.
  */
 export type QaErrorClass =
@@ -40,7 +40,7 @@ export type QaErrorClass =
   | 'aborted';
 
 /**
- * How a run cleared the plan gate (migration 189, `qa_test_runs.plan_gate`):
+ * How a run cleared the plan gate (`QaRun.plan_gate`):
  *   - `approved`: the master/human approved the QA's plan.
  *   - `auto`: the plan was fast-path auto-approved (autonomy layer).
  *   - `skipped`: the gate was disabled (`MCP_QA_REQUIRE_PLAN=0`).
@@ -55,9 +55,11 @@ export type QaPlanGate = 'approved' | 'auto' | 'skipped';
  * the QA agent runs. Transitions: `running → completed | aborted | error`.
  */
 export interface QaRun {
-  id: number;
-  company_session_id: number;
-  agent_run_id: number | null;
+  id: string;
+  /** Monotonic order within the owning Company bundle. */
+  seq: number;
+  company_session_id: string;
+  agent_run_id: string | null;
   /** Suite identifier — typically the spec file or feature name. */
   suite: string;
   /**
@@ -91,7 +93,7 @@ export interface QaRun {
    * The kanban-bridge auto-moves this card between `in_progress` (on
    * red runs) and `done` (on green runs) based on the run's outcome.
    */
-  kanban_feature_card_id: number | null;
+  kanban_feature_card_id: string | null;
   /**
    * When the run terminates without a clean `completed`, the reason
    * lands here. Today's only writer is the watchdog (`runWatchdogTick`),
@@ -108,9 +110,9 @@ export interface QaRun {
    */
   error_class: string | null;
   /**
-   * B7 — timestamp (SQLite `datetime('now')`, UTC) of the last reporter
+   * B7 — ISO-8601 UTC timestamp of the last reporter
    * event received for this run. Lets the watchdog tell "slow suite"
-   * from "reporter went silent" without scanning `qa_test_results`.
+   * from "reporter went silent" without scanning QA-result entities.
    * NULL until the first event arrives.
    */
   last_event_at: string | null;
@@ -128,8 +130,10 @@ export interface QaRun {
  * suite to finish.
  */
 export interface QaTestResult {
-  id: number;
-  run_id: number;
+  id: string;
+  /** Monotonic order within the owning Company bundle. */
+  seq: number;
+  run_id: string;
   spec_file: string;
   test_name: string;
   status: QaTestStatus;
@@ -165,7 +169,7 @@ export interface QaTestResult {
    * Null for passing/skipped tests. Idempotent — recurring failures of
    * the same `<suite>:<test>` reuse the existing card.
    */
-  kanban_card_id: number | null;
+  kanban_card_id: string | null;
   created_at: string;
 }
 
@@ -173,8 +177,8 @@ export interface QaTestResult {
 
 /** Input to `QaTestRunStore.startRun` — caller supplies what it knows. */
 export interface QaRunInsert {
-  company_session_id: number;
-  agent_run_id: number | null;
+  company_session_id: string;
+  agent_run_id: string | null;
   suite: string;
   trigger: QaRunTrigger;
   /** Defaults to `'main'` when omitted. */
@@ -185,7 +189,7 @@ export interface QaRunInsert {
    * transition it (`in_progress` on red, `done` on green) without an
    * extra round-trip.
    */
-  kanban_feature_card_id?: number | null;
+  kanban_feature_card_id?: string | null;
   /**
    * B7 — how the run cleared the plan gate (`approved` | `auto` |
    * `skipped`). Omitted/null for callers the gate doesn't apply to.
@@ -205,7 +209,7 @@ export interface QaRunCompletion {
   skipped: number;
   duration_ms: number | null;
   /**
-   * Optional message stamped into `qa_test_runs.last_error`. Set by the
+   * Optional message stamped into the QA-run entity's `last_error`. Set by the
    * watchdog so the diagnostics endpoint can detect "no events received
    * from reporter" and surface an actionable banner. Reporter-driven
    * `completed` events leave this null.
@@ -213,7 +217,7 @@ export interface QaRunCompletion {
   last_error?: string | null;
   /**
    * B7 — machine-readable failure class stamped into
-   * `qa_test_runs.error_class`. Writers: watchdog (`orphan`), the
+   * QA-run entity's `error_class`. Writers: watchdog (`orphan`), the
    * test-event route's early-completion (`sidecar_down`), and the
    * ChromeService lifecycle hook (`sidecar_down`). Null/omitted on
    * clean completions.
@@ -223,7 +227,7 @@ export interface QaRunCompletion {
 
 /** Input to `QaTestResultStore.recordResult` — emitted on each `onTestEnd`. */
 export interface QaTestResultInsert {
-  run_id: number;
+  run_id: string;
   spec_file: string;
   test_name: string;
   status: QaTestStatus;

@@ -123,13 +123,13 @@ describe('FeedbackCollector', () => {
     const n = collector.observe('role_pipeline', {
       queryHash: 'q_role',
       roleSpawned: 'frontend',
-      agentRunId: 42,
+      agentRunId: '50000000-0000-4000-8000-000000000042',
     });
     expect(n).toBe(1);
     const row = h.store.list({ pipelineName: 'role_pipeline' })[0];
     expect(JSON.parse(row.true_outcome_json!)).toEqual({
       roleSpawned: 'frontend',
-      agentRunId: 42,
+      agentRunId: '50000000-0000-4000-8000-000000000042',
     });
     expect(row.outcome_confidence).toBe(1);
   });

@@ -214,7 +214,10 @@ export function DataGridTab({
   const editable = (mode === 'preview' || customEditability.editable) && pkCols.length > 0 && result != null && !error;
   const relatedRowsEnabled = !!tableInfo && (mode === 'preview' || customEditability.completeRow);
   const canAddRow = editable && (mode === 'preview' || customEditability.completeRow);
-  const atLastPage = mode === 'preview' && result != null && result.rows.length < pageSize;
+  // `tableRows` fetches pageSize+1 internally, so `truncated` is the authoritative
+  // "there is more" signal. Comparing rows.length to pageSize left Next enabled
+  // on an exactly-full last page, which then rendered an empty grid.
+  const atLastPage = mode === 'preview' && result != null && !result.truncated;
 
   return (
     <div className="flex h-full flex-col">

@@ -25,7 +25,11 @@ function ctx(access: 'read' | 'write'): ToolContext {
   return {
     cwd: projectRoot,
     projectName: 'external-root-test',
-    externalRoots: [{ id: 7, rootPath: externalRoot, access }],
+    externalRoots: [{
+      id: '70000000-0000-4000-8000-000000000001',
+      rootPath: externalRoot,
+      access,
+    }],
   } as ToolContext;
 }
 
@@ -71,7 +75,11 @@ describe('authorized external filesystem roots', () => {
     writeFileSync(sibling, 'must stay private');
     const exactFileCtx = {
       ...ctx('read'),
-      externalRoots: [{ id: 8, rootPath: grantedFile, access: 'read' as const }],
+      externalRoots: [{
+        id: '80000000-0000-4000-8000-000000000001',
+        rootPath: grantedFile,
+        access: 'read' as const,
+      }],
     } as ToolContext;
 
     const allowed = await readFile.handler({ path: grantedFile }, exactFileCtx);

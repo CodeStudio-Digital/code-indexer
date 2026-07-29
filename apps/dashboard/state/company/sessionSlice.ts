@@ -1,9 +1,9 @@
 /**
  * Sibling/front-tab state per root session id.
  *
- * Mirrors `company_sessions.parent_session_id` (migration 067): the root
- * session owns one row, each front is a child, and `children` reflects
- * the live list of active sub-sessions ordered by id.
+ * The root session owns one bundle, each front is a child, and `children`
+ * reflects the live list ordered by creation time with UUID as a stable
+ * tie-breaker.
  *
  * Reducers in this slice are pure — they accept loaded data and update
  * the map. REST calls live in `useCompanySiblings`, which dispatches
@@ -14,34 +14,39 @@ import type { CompanySession } from '@mcp/company-contracts';
 import { INITIAL_SIBLING_STATE, type SiblingState } from './types.js';
 
 export interface SessionSlice {
-  /** Keyed by ROOT session id (the parent in migration 067). */
-  siblings: Map<number, SiblingState>;
+  /** Keyed by the root session UUID. */
+  siblings: Map<string, SiblingState>;
 
   /** Ensure a slot exists for `rootId`; idempotent. */
-  sessionEnsure: (rootId: number) => void;
+  sessionEnsure: (rootId: string) => void;
   /** Replace parent + children after a `/children` REST call. */
-  sessionLoaded: (rootId: number, parent: CompanySession, children: CompanySession[]) => void;
+  sessionLoaded: (rootId: string, parent: CompanySession, children: CompanySession[]) => void;
   /** Flip the loading flag (entry/exit of a refresh). */
-  sessionSetLoading: (rootId: number, loading: boolean) => void;
+  sessionSetLoading: (rootId: string, loading: boolean) => void;
   /** Set the active tab. Phase 1 will drive this from the URL. */
-  sessionSetActive: (rootId: number, sessionId: number | null) => void;
+  sessionSetActive: (rootId: string, sessionId: string | null) => void;
   /** Upsert a child (after createChild or renameChild). */
-  sessionUpsertChild: (rootId: number, child: CompanySession) => void;
+  sessionUpsertChild: (rootId: string, child: CompanySession) => void;
   /** Remove a child (after archiveChild). */
-  sessionRemoveChild: (rootId: number, childId: number) => void;
+  sessionRemoveChild: (rootId: string, childId: string) => void;
   /** Drop the slot entirely (e.g. session archived). */
-  sessionReset: (rootId: number) => void;
+  sessionReset: (rootId: string) => void;
 }
 
 function withSlot(
-  prev: Map<number, SiblingState>,
-  rootId: number,
+  prev: Map<string, SiblingState>,
+  rootId: string,
   patch: (slot: SiblingState) => SiblingState,
-): Map<number, SiblingState> {
+): Map<string, SiblingState> {
   const next = new Map(prev);
   const current = next.get(rootId) ?? INITIAL_SIBLING_STATE;
   next.set(rootId, patch(current));
   return next;
+}
+
+function compareSessions(a: CompanySession, b: CompanySession): number {
+  const byCreatedAt = a.created_at.localeCompare(b.created_at);
+  return byCreatedAt !== 0 ? byCreatedAt : a.id.localeCompare(b.id);
 }
 
 export const createSessionSlice: StateCreator<SessionSlice, [], [], SessionSlice> = (set) => ({
@@ -58,12 +63,12 @@ export const createSessionSlice: StateCreator<SessionSlice, [], [], SessionSlice
   sessionLoaded: (rootId, parent, children) =>
     set((state) => ({
       siblings: withSlot(state.siblings, rootId, (slot) => {
-        const validIds = new Set<number>([parent.id, ...children.map((c) => c.id)]);
+        const validIds = new Set<string>([parent.id, ...children.map((c) => c.id)]);
         const keepActive =
           slot.activeSessionId != null && validIds.has(slot.activeSessionId);
         return {
           parent,
-          children: [...children].sort((a, b) => a.id - b.id),
+          children: [...children].sort(compareSessions),
           loading: false,
           activeSessionId: keepActive ? slot.activeSessionId : parent.id,
         };
@@ -89,7 +94,7 @@ export const createSessionSlice: StateCreator<SessionSlice, [], [], SessionSlice
         const withoutChild = slot.children.filter((c) => c.id !== child.id);
         return {
           ...slot,
-          children: [...withoutChild, child].sort((a, b) => a.id - b.id),
+          children: [...withoutChild, child].sort(compareSessions),
         };
       }),
     })),

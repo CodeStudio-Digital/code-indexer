@@ -31,7 +31,7 @@ import { useShellPicker } from '../../shared/terminal/use-shell-picker.js';
 import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 
 interface CompanyTerminalPanelProps {
-  companySessionId: number;
+  companySessionId: string;
   /**
    * Project links from `getCompanySessionFull(id).projects`. Each entry
    * with a known `project_name` becomes a spawn-target option. Missing

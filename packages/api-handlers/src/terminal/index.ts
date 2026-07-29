@@ -55,7 +55,18 @@ export function createTerminalHandlers(deps: HandlerDeps): TerminalApi {
         target.kind === 'project'
           ? resolveProjectRuntimeEnv(db, target.projectId, ensureDataDir(), { target: runtimeTarget })
           : { pathPrepend: [], extraEnv: {}, posixPathPrepend: [], posixExtraEnv: {} };
-      const { id } = manager.spawn({ shell, shellArgs, cwd, cols, rows, env, pathPrepend, extraEnv, posixPathPrepend, posixExtraEnv });
+      const { id } = manager.spawn({
+        shell, shellArgs, cwd, cols, rows, env, pathPrepend, extraEnv, posixPathPrepend, posixExtraEnv,
+        // Labels the pid in the task manager; the host shell is called out
+        // explicitly because its cwd is the app's, not a project's.
+        meta: {
+          label: target.kind === 'host'
+            ? 'Terminal: host'
+            : `Terminal: ${cwd.split(/[\\/]/).filter(Boolean).pop() ?? cwd}`,
+          cwd,
+          kind: 'terminal',
+        },
+      });
       const entry = manager.get(id);
       return {
         terminalId: id,

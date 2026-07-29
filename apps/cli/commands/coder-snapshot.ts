@@ -5,10 +5,10 @@
  * revert the cumulative diff captured during an agent session.
  */
 import type { Command } from 'commander';
-import { loadConfig } from '@mcp/shared/utils/config.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
+import { asSessionId, isUuid } from '@mcp/session-storage';
 import {
   SessionSnapshotService,
   type FileSummary,
@@ -16,13 +16,34 @@ import {
 
 function makeService() {
   const config = loadConfig();
-  const sessionStore = new SessionStore(config.dbPath);
   const db = new CodeIndexDB(config.dbPath);
-  const snapshotStore = new SessionFileSnapshotStore(sessionStore.getDb());
-  const service = new SessionSnapshotService(snapshotStore, (kind, sessionId) => {
+  const sessionStore = FsSessionStore.fromRoots({
+    dataDir: mcpDataDir(),
+    projectRootResolver: {
+      resolveProjectRoot: (id) => db.getProject(id)?.root_path,
+      listProjectRoots: () =>
+        db.listProjects().map((project) => ({
+          project_id: project.id,
+          root_path: project.root_path,
+        })),
+    },
+    projectInfoResolver: (id) => {
+      const project = db.getProject(id);
+      return project
+        ? {
+            project_id: project.id,
+            name: project.name,
+            root_path: project.root_path,
+          }
+        : null;
+    },
+  });
+  const snapshotStore = sessionStore;
+  const service = new SessionSnapshotService(snapshotStore, async (kind, sessionId) => {
     if (kind !== 'coder') return null;
-    const s = sessionStore.getSession(sessionId);
+    const s = await sessionStore.getSession(sessionId);
     if (!s) return null;
+    if (s.project_id == null) return null;
     const p = db.getProject(s.project_id);
     return p?.root_path ?? null;
   });
@@ -37,7 +58,17 @@ function summaryLine(f: FileSummary): string {
         ? 'kept'
         : 'reverted';
   const kind = !f.existedBefore ? 'A' : f.removedLines && !f.addedLines ? 'D' : 'M';
-  return `  #${f.baselineId.toString().padStart(4)} [${kind}] ${f.filePath} — ${status}`;
+  return `  ${String(f.baselineId).slice(0, 8)} [${kind}] ${f.filePath} — ${status}`;
+}
+
+function sessionId(value: string) {
+  if (!isUuid(value)) throw new Error('session-id must be a canonical UUID');
+  return asSessionId(value.toLowerCase());
+}
+
+function recordId(value: string): string {
+  if (!isUuid(value)) throw new Error('snapshot record id must be a canonical UUID');
+  return value.toLowerCase();
 }
 
 export function register(program: Command): void {
@@ -48,13 +79,11 @@ export function register(program: Command): void {
     .description('List files altered in this session (active by default; --all includes closed).')
     .option('--all', 'Include closed (kept/reverted) baselines')
     .action(async (id: string, opts: { all?: boolean }) => {
-      const sessionId = parseInt(id, 10);
-      if (!Number.isFinite(sessionId)) {
-        console.error('Invalid session id');
-        process.exit(1);
-      }
+      const idValue = sessionId(id);
       const { service } = makeService();
-      const files = await service.listFiles('coder', sessionId, { includeClosed: !!opts.all });
+      const files = await service.listFiles('coder', idValue, {
+        includeClosed: !!opts.all,
+      });
       if (files.length === 0) {
         console.log('  (no snapshots)');
         return;
@@ -66,7 +95,7 @@ export function register(program: Command): void {
     .command('diff <baseline-id>')
     .description('Print the diff for a single file baseline (unified, hunk-by-hunk).')
     .action(async (id: string) => {
-      const baselineId = parseInt(id, 10);
+      const baselineId = recordId(id);
       const { service } = makeService();
       const diff = await service.getDiff(baselineId);
       if (!diff) {
@@ -94,16 +123,16 @@ export function register(program: Command): void {
     .option('--file <baseline-id>', 'Keep a single baseline only')
     .option('--hunk <fingerprint>', 'When combined with --file, keep a single hunk only')
     .action(async (id: string, opts: { file?: string; hunk?: string }) => {
-      const sessionId = parseInt(id, 10);
+      const idValue = sessionId(id);
       const { service } = makeService();
       if (opts.file && opts.hunk) {
-        const r = await service.acceptHunk(parseInt(opts.file, 10), opts.hunk);
+        const r = await service.acceptHunk(recordId(opts.file), opts.hunk);
         console.log(JSON.stringify(r));
       } else if (opts.file) {
-        const r = await service.acceptFile(parseInt(opts.file, 10));
+        const r = await service.acceptFile(recordId(opts.file));
         console.log(JSON.stringify(r));
       } else {
-        const r = await service.acceptAll('coder', sessionId);
+        const r = await service.acceptAll('coder', idValue);
         console.log(`Closed ${r.closed} baseline(s) as kept.`);
       }
     });
@@ -114,16 +143,16 @@ export function register(program: Command): void {
     .option('--file <baseline-id>', 'Revert a single baseline only')
     .option('--hunk <fingerprint>', 'When combined with --file, revert a single hunk only')
     .action(async (id: string, opts: { file?: string; hunk?: string }) => {
-      const sessionId = parseInt(id, 10);
+      const idValue = sessionId(id);
       const { service } = makeService();
       if (opts.file && opts.hunk) {
-        const r = await service.revertHunk(parseInt(opts.file, 10), opts.hunk);
+        const r = await service.revertHunk(recordId(opts.file), opts.hunk);
         console.log(JSON.stringify(r));
       } else if (opts.file) {
-        const r = await service.revertFile(parseInt(opts.file, 10));
+        const r = await service.revertFile(recordId(opts.file));
         console.log(JSON.stringify(r));
       } else {
-        const r = await service.revertAll('coder', sessionId);
+        const r = await service.revertAll('coder', idValue);
         console.log(`Reverted ${r.closed} baseline(s).`);
       }
     });

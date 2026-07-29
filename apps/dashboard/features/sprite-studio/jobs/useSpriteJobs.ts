@@ -28,7 +28,7 @@ export interface JobState {
   pct: number;
   note?: string;
   candidates: JobCandidate[];
-  versionId?: number;
+  versionId?: string;
   error?: string;
 }
 
@@ -60,24 +60,24 @@ export function mergeRestoredJobState(existing: JobState | undefined, restored: 
 
 export interface UseSpriteJobs {
   /** Snapshot map of jobId → live state (recomputed each version bump). */
-  jobs: Map<number, JobState>;
+  jobs: Map<string, JobState>;
   /** Enqueue a job; registers a pending slot and returns its jobId. */
-  start: (params: SpriteJobParams) => Promise<number>;
+  start: (params: SpriteJobParams) => Promise<string>;
   /** Best-effort cancel (server + local terminal mark). */
-  cancel: (jobId: number) => Promise<void>;
+  cancel: (jobId: string) => Promise<void>;
   /** Read one job's current state (from the live ref, not the snapshot). */
-  get: (jobId: number) => JobState | undefined;
+  get: (jobId: string) => JobState | undefined;
   /**
    * Rehydrate a job from the backend (row + candidates surviving on disk) —
    * remounting the panel must never lose an in-flight/unpicked generation.
    * Returns the restored state, or null when the job no longer exists.
    */
-  restore: (jobId: number) => Promise<JobState | null>;
+  restore: (jobId: string) => Promise<JobState | null>;
 }
 
 export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
   // The live source of truth: a Map that mutates in place on every event.
-  const ref = useRef<Map<number, JobState>>(new Map());
+  const ref = useRef<Map<string, JobState>>(new Map());
   const [version, setVersion] = useState(0);
 
   // rAF-coalesced re-render: many events per frame collapse to one bump.
@@ -90,7 +90,7 @@ export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
     });
   }, []);
 
-  const upsert = useCallback((jobId: number, patch: Partial<JobState>) => {
+  const upsert = useCallback((jobId: string, patch: Partial<JobState>) => {
     const prev = ref.current.get(jobId) ?? PENDING;
     ref.current.set(jobId, { ...prev, ...patch });
     bump();
@@ -166,7 +166,7 @@ export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
     };
   }, [projectId, upsert, bump]);
 
-  const start = useCallback(async (params: SpriteJobParams): Promise<number> => {
+  const start = useCallback(async (params: SpriteJobParams): Promise<string> => {
     if (projectId == null) throw new Error('no project');
     const { jobId } = await api.startJob(projectId, params);
     ref.current.set(jobId, { ...PENDING });
@@ -174,7 +174,7 @@ export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
     return jobId;
   }, [projectId, bump]);
 
-  const cancel = useCallback(async (jobId: number): Promise<void> => {
+  const cancel = useCallback(async (jobId: string): Promise<void> => {
     try {
       await api.cancelJob(jobId);
       upsert(jobId, { status: 'cancelled', error: undefined });
@@ -187,9 +187,9 @@ export function useSpriteJobs(projectId: number | null): UseSpriteJobs {
     }
   }, [upsert]);
 
-  const get = useCallback((jobId: number) => ref.current.get(jobId), []);
+  const get = useCallback((jobId: string) => ref.current.get(jobId), []);
 
-  const restore = useCallback(async (jobId: number): Promise<JobState | null> => {
+  const restore = useCallback(async (jobId: string): Promise<JobState | null> => {
     let data: Awaited<ReturnType<typeof api.getJob>>;
     try {
       data = await api.getJob(jobId);

@@ -13,6 +13,7 @@
  */
 import type { CompactionSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 import { renderSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
+import type { SessionId } from '@mcp/session-storage';
 
 /** Structural mirror of `RunCoderOptions.runEndMemory` (host callback). */
 export interface HarvestRunEndMemory {
@@ -32,19 +33,30 @@ export interface HarvestInput {
   toolTrail?: string[];
   succeeded?: boolean;
   trigger?: string;
-  sessionId?: number;
+  sessionId?: SessionId;
   sessionNotes?: Array<{ title: string; body: string; kind: string; pinned: boolean }>;
 }
 
 /** Structural slice of SessionStore used by the harvest. */
 export interface HarvestSessionStore {
-  getCommandTrail(sessionId: number, limit?: number): Array<{ command: string; isError: boolean }>;
-  didRunSucceed(sessionId: number): boolean;
+  getCommandTrail(
+    sessionId: SessionId,
+    limit?: number,
+  ): Promise<Array<{ command: string; isError: boolean }>>;
+  didRunSucceed(sessionId: SessionId): Promise<boolean>;
   listSessionMemory(
-    sessionId: number,
+    sessionId: SessionId,
     opts?: { kind?: string },
-  ): Array<{ title: string; body: string; kind: string; pinned: number }>;
-  setMemoryDistilledBoundary(sessionId: number, messageId: number): void;
+  ): Promise<Array<{
+    title: string;
+    body: string;
+    kind: string;
+    pinned: boolean;
+  }>>;
+  setMemoryDistilledBoundary(
+    sessionId: SessionId,
+    messageSeq: number,
+  ): Promise<void>;
 }
 
 /** Session-note kinds worth promoting even when not pinned. */
@@ -60,15 +72,20 @@ export function buildHarvestInput(args: {
   summary: CompactionSummaryV2;
   trail: Array<{ command: string; isError: boolean }>;
   succeeded: boolean;
-  notes: Array<{ title: string; body: string; kind: string; pinned: number }>;
+  notes: Array<{ title: string; body: string; kind: string; pinned: boolean }>;
   trigger: string;
-  sessionId: number;
+  sessionId: SessionId;
 }): HarvestInput {
   const { summary, trail, succeeded, notes, trigger, sessionId } = args;
   const sessionNotes = notes
-    .filter((n) => n.pinned === 1 || PROMOTABLE_KINDS.has(n.kind))
+    .filter((n) => n.pinned || PROMOTABLE_KINDS.has(n.kind))
     .slice(0, MAX_PROMOTED_NOTES)
-    .map((n) => ({ title: n.title, body: n.body, kind: n.kind, pinned: n.pinned === 1 }));
+    .map((n) => ({
+      title: n.title,
+      body: n.body,
+      kind: n.kind,
+      pinned: n.pinned,
+    }));
   return {
     primaryRequest: summary.primary_request || undefined,
     summary: renderSummaryV2(summary),
@@ -95,7 +112,7 @@ export async function harvestCompactionMemory(args: {
   getMemoryEnabled: () => boolean;
   projectId: number;
   projectName: string;
-  sessionId: number;
+  sessionId: SessionId;
   summary: CompactionSummaryV2;
   boundaryId: number;
   trigger: 'compaction' | 'manual_clear';
@@ -105,11 +122,16 @@ export async function harvestCompactionMemory(args: {
     if (!args.getMemoryEnabled()) return;
     if (!(await runEndMemory.isConfigured())) return;
 
+    const [trail, succeeded, notes] = await Promise.all([
+      store.getCommandTrail(sessionId),
+      store.didRunSucceed(sessionId),
+      store.listSessionMemory(sessionId),
+    ]);
     const input = buildHarvestInput({
       summary: args.summary,
-      trail: store.getCommandTrail(sessionId),
-      succeeded: store.didRunSucceed(sessionId),
-      notes: store.listSessionMemory(sessionId),
+      trail,
+      succeeded,
+      notes,
       trigger: args.trigger,
       sessionId,
     });
@@ -126,7 +148,7 @@ export async function harvestCompactionMemory(args: {
     // real LLM failure: the span stays for the idle sweeper to retry, which
     // caps attempts so a poison span still can't wedge the pipeline.
     if (!(result && result.hadError === true)) {
-      store.setMemoryDistilledBoundary(sessionId, args.boundaryId);
+      await store.setMemoryDistilledBoundary(sessionId, args.boundaryId);
     }
   } catch (e) {
     console.warn(

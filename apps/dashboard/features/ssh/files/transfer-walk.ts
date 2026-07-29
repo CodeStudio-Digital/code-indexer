@@ -6,7 +6,16 @@
  * runaway trees. Kept side-effect-free so it's unit-testable with a fake adapter.
  */
 
+import { mapLimit } from '@mcp/shared/utils/map-limit.js';
 import type { FsAdapter, FsItem } from './fs-adapter.js';
+
+/**
+ * Concurrent directory listings during the walk. Each remote listing rides the
+ * shared SFTP browse session, so this is bounded by politeness rather than by
+ * OpenSSH's per-connection channel limit (that constrains TRANSFERS — see
+ * TRANSFER_CONCURRENCY in transfer-controller.ts).
+ */
+const WALK_CONCURRENCY = 6;
 
 export interface PlannedFile {
   /** Source path (adapter-native). */
@@ -40,21 +49,32 @@ export async function planTransfer(items: FsItem[], src: FsAdapter): Promise<Tra
     // symlink/other are skipped — not safe to blindly copy.
   }
 
+  // BFS a LEVEL at a time, listing siblings concurrently. Each remote `list` is
+  // a full SFTP round-trip, and doing them one at a time meant a 100-directory
+  // tree spent 100 sequential round-trips before a single byte moved. Levels
+  // stay ordered (parents before children) so `dirs` remains parent-first,
+  // which the destination's non-recursive mkdir depends on.
   let count = 0;
-  while (queue.length) {
-    const cur = queue.shift()!;
-    if (cur.depth >= MAX_DEPTH) continue;
-    const entries = await src.list(cur.path);
-    for (const e of entries) {
-      if (++count > MAX_ENTRIES) throw new Error('too_many_files');
-      const rel = `${cur.rel}/${e.name}`;
-      if (e.type === 'dir') {
-        dirs.push(rel);
-        queue.push({ path: e.path, rel, depth: cur.depth + 1 });
-      } else if (e.type === 'file') {
-        files.push({ srcPath: e.path, relPath: rel, size: e.size });
+  let level = queue.splice(0, queue.length);
+  while (level.length > 0) {
+    const listings = await mapLimit(level, WALK_CONCURRENCY, (cur) =>
+      cur.depth >= MAX_DEPTH ? Promise.resolve([]) : src.list(cur.path),
+    );
+    const nextLevel: typeof level = [];
+    for (let i = 0; i < level.length; i += 1) {
+      const cur = level[i];
+      for (const e of listings[i]) {
+        if (++count > MAX_ENTRIES) throw new Error('too_many_files');
+        const rel = `${cur.rel}/${e.name}`;
+        if (e.type === 'dir') {
+          dirs.push(rel);
+          nextLevel.push({ path: e.path, rel, depth: cur.depth + 1 });
+        } else if (e.type === 'file') {
+          files.push({ srcPath: e.path, relPath: rel, size: e.size });
+        }
       }
     }
+    level = nextLevel;
   }
   return { dirs, files };
 }

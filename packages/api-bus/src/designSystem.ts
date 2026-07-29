@@ -23,9 +23,9 @@ export interface DesignSystemPackage {
 }
 
 export interface DesignSystemSession {
-  id: number;
+  id: string;
   package_id: string;
-  company_session_id: number | null;
+  company_session_id: string | null;
   status: string;
   created_at: string;
 }
@@ -45,13 +45,13 @@ export interface DesignSystemApi {
 
   sessions: {
     list(input: { packageId?: string }, ctx: ApiContext): Promise<DesignSystemSession[]>;
-    create(input: { packageId: string; companySessionId?: number }, ctx: ApiContext): Promise<DesignSystemSession>;
-    get(input: { id: number }, ctx: ApiContext): Promise<DesignSystemSession>;
-    delete(input: { id: number }, ctx: ApiContext): Promise<void>;
+    create(input: { packageId: string; companySessionId?: string }, ctx: ApiContext): Promise<DesignSystemSession>;
+    get(input: { id: string }, ctx: ApiContext): Promise<DesignSystemSession>;
+    delete(input: { id: string }, ctx: ApiContext): Promise<void>;
   };
 
   round: {
     /** Submit a feedback round on the current DS session. */
-    submit(input: { sessionId: number; feedback: string }, ctx: ApiContext): Promise<unknown>;
+    submit(input: { sessionId: string; feedback: string }, ctx: ApiContext): Promise<unknown>;
   };
 }

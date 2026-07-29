@@ -39,7 +39,7 @@ export interface ReviewBundleLedger {
 }
 
 export interface ReviewBundle {
-  scope: { sessionKind: 'coder' | 'company'; sessionId: number };
+  scope: { sessionKind: 'coder' | 'company'; sessionId: string };
   ledger: ReviewBundleLedger;
   obligations: IntentObligation[] | null;
   absences: AbsenceEntry[];
@@ -51,8 +51,8 @@ export interface ReviewBundle {
 
 export interface BuildReviewBundleInput {
   sessionKind: 'coder' | 'company';
-  sessionId: number;
-  diffs: FileDiff[];
+  sessionId: string;
+  diffs: FileDiff<string>[];
   focus?: string | null;
   intent?: string | null;
   evidence?: string | null;
@@ -62,7 +62,7 @@ export interface BuildReviewBundleInput {
   obligations?: IntentObligation[] | null;
 }
 
-function buildLedger(diffs: FileDiff[]): ReviewBundleLedger {
+function buildLedger(diffs: FileDiff<string>[]): ReviewBundleLedger {
   const shapeCounts: Partial<Record<HunkShape, number>> = {};
   let pendingHunks = 0;
   for (const diff of diffs) {

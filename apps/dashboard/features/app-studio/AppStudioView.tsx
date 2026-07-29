@@ -7,7 +7,7 @@ import { confirm } from '../../components/ui/prompt-dialog.js';
 import { StatusBarShell } from '../../components/chrome/index.js';
 import { WorkbenchResizeHandle, WorkbenchShell, WorkbenchSurface } from '../../components/workbench/index.js';
 import { useAppStudioSession } from './useAppStudioSession.js';
-import { runAppAction, type AppStage } from './app-studio-api.js';
+import { isAppStudioUuid, runAppAction, type AppStage } from './app-studio-api.js';
 import { AppStudioRail, AppStudioTabContent, type AppStudioTab } from './AppStudioRail.js';
 import { AppPreviewPanel } from './preview/AppPreviewPanel.js';
 import { AppStudioSurfaceFind } from './AppStudioSurfaceFind.js';
@@ -27,10 +27,10 @@ function initialTab(): AppStudioTab {
   } catch { return 'plan'; }
 }
 
-function readSingleSession(appSessionId: number): number | null {
+function readSingleSession(appSessionId: string): string | null {
   try {
-    const value = Number(window.localStorage.getItem(`${SINGLE_SESSION_KEY}.${appSessionId}`));
-    return Number.isInteger(value) && value > 0 ? value : null;
+    const value = window.localStorage.getItem(`${SINGLE_SESSION_KEY}.${appSessionId}`);
+    return isAppStudioUuid(value) ? value : null;
   } catch { return null; }
 }
 
@@ -40,8 +40,8 @@ export function AppStudioView({
   initialIdeaPrompt,
   onBack,
 }: {
-  sessionId: number;
-  initialMasterSessionId?: number;
+  sessionId: string;
+  initialMasterSessionId?: string;
   initialIdeaPrompt?: string | null;
   onBack: () => void;
 }) {
@@ -51,12 +51,12 @@ export function AppStudioView({
   const companyStream = useCompanyStream(companySessionId, undefined, { kind: 'app_studio', appSessionId: sessionId });
   const [tab, setTabState] = useState<AppStudioTab>(initialTab);
   const [sidePanel, setSidePanel] = useState<AppStudioSidePanel | null>(() => !window.matchMedia('(max-width: 767px)').matches || !!initialIdeaPrompt?.trim() ? 'chat' : null);
-  const [singleSessionId, setSingleSessionIdState] = useState<number | null>(() => readSingleSession(sessionId));
+  const [singleSessionId, setSingleSessionIdState] = useState<string | null>(() => readSingleSession(sessionId));
   const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 767px)').matches);
   const [action, setAction] = useState<'pause' | 'resume' | 'cancel' | null>(null);
   const panelRef = useRef<ImperativePanelHandle>(null);
   const setTab = (next: AppStudioTab) => { setTabState(next); try { window.localStorage.setItem(TAB_KEY, next); } catch { /* ignore */ } };
-  const setSingleSessionId = useCallback((next: number | null) => {
+  const setSingleSessionId = useCallback((next: string | null) => {
     setSingleSessionIdState(next);
     try {
       const key = `${SINGLE_SESSION_KEY}.${sessionId}`;

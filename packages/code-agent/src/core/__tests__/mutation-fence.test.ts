@@ -23,7 +23,11 @@ import {
   SnapshotRecorder,
   SnapshotRecordingFilesystemPort,
 } from '../../ports/snapshot-recording-filesystem-port.js';
-import type { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
+import type { SessionSnapshotStorePort } from '@mcp/services/services/session-snapshot-port.js';
+import {
+  asSessionId,
+  type SessionId,
+} from '@mcp/session-storage';
 import { gitTools } from '../../tools/git.js';
 import { managePathTool } from '../../tools/manage-path.js';
 import { diagramExportTool } from '../../tools/diagram/query.js';
@@ -54,7 +58,7 @@ function authority(options: {
       workspaceLeaseId: 'workspace-lease:test',
       workspaceLeaseVersion: options.epoch?.() ?? 1,
       workspaceFencingEpoch: options.epoch?.() ?? 1,
-      ownerAgentRunId: 'agent-run:test',
+      ownerAgentRunId: '11111111-1111-4111-8111-111111111111',
     }),
   });
 }
@@ -273,21 +277,30 @@ describe('physical mutation fencing', () => {
     let epoch = 1;
     const inner = new SnapshotInnerFilesystem();
     const store = {
-      recordBaselineAndEdit: vi.fn(() => {
+      recordBaselineAndEdit: vi.fn(async () => {
         // Deterministic barrier: ownership swaps after the outer port check
         // and baseline capture, but before SnapshotRecordingFilesystemPort
         // dispatches its inner write.
         owned = false;
         epoch = 2;
-        return { baseline: { id: 1 }, created: true };
+        return {
+          baseline: {
+            id: '00000000-0000-4000-8000-000000000001',
+          },
+          created: true,
+        };
       }),
-      recordRoundSnapshotMutation: vi.fn(() => ({ id: 1 })),
-    } as unknown as SessionFileSnapshotStore;
+      recordRoundSnapshotMutation: vi.fn(async () => ({
+        id: '00000000-0000-4000-8000-000000000002',
+      })),
+    } as unknown as SessionSnapshotStorePort<SessionId, string>;
     const snapshot = new SnapshotRecordingFilesystemPort(
       inner,
       new SnapshotRecorder({
         sessionKind: 'coder',
-        sessionId: 1,
+        sessionId: asSessionId(
+          '00000000-0000-4000-8000-000000000001',
+        ),
         projectRoot: root,
         store,
       }),
@@ -350,6 +363,27 @@ describe('physical mutation fencing', () => {
       resolve(linkedRoot, 'b.ts'),
       resolve(root, 'a.ts'),
     ].sort());
+  });
+
+  it('binds a slug-prefixed path to the linked real root', () => {
+    const root = resolve(process.cwd(), 'mutation-fence-primary');
+    const linkedRoot = resolve(process.cwd(), 'mutation-fence-linked');
+    const bound = authority({ root, linkedRoot }).bindInvocation({
+      toolName: 'write_file',
+      toolUseId: 'write-linked-prefix',
+      effectiveInput: {
+        path: 'linked/src/file.ts',
+        content: 'export const linked = true;',
+      },
+      boundary: 'filesystem',
+      requiresEffectBoundary: true,
+    });
+
+    expect(() => bound.assertMutation({
+      kind: 'filesystem',
+      operation: 'writeFile',
+      resource: resolve(linkedRoot, 'src', 'file.ts'),
+    })).not.toThrow();
   });
 
   it('allows only the bound target parent mkdir before a file write', async () => {

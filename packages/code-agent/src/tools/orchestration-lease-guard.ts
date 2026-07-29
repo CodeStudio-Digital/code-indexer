@@ -1,12 +1,13 @@
 /**
- * Process-local keepalive around a durable SQLite lease token.
+ * Process-local keepalive around a durable session-bundle lease token.
  *
- * The database CAS remains the authority. This guard only renews while the
- * owning executor is alive and remembers ownership loss permanently so a
- * transient later success can never resurrect a fenced executor.
+ * The session-bundle checkpoint lease remains the authority. This guard
+ * renews while the owning executor is alive and remembers ownership loss
+ * permanently so a transient later success cannot resurrect a fenced
+ * executor.
  */
 export interface OrchestrationLeaseGuard {
-  assertOwned(): void;
+  assertOwned(): Promise<void>;
   start(onLost?: (error: Error) => void): () => void;
   stop(): void;
   isLost(): boolean;
@@ -16,7 +17,7 @@ export interface OrchestrationLeaseGuard {
 export interface CreateOrchestrationLeaseGuardInput {
   label: string;
   leaseMs: number;
-  renew: () => boolean;
+  renew: () => boolean | Promise<boolean>;
 }
 
 function intervalMs(leaseMs: number): number {
@@ -32,6 +33,7 @@ export function createOrchestrationLeaseGuard(
   let lost: Error | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
   let onLost: ((error: Error) => void) | undefined;
+  let renewing: Promise<void> = Promise.resolve();
 
   const stop = (): void => {
     if (timer) clearInterval(timer);
@@ -51,25 +53,30 @@ export function createOrchestrationLeaseGuard(
     return lost;
   };
 
-  const renewOrLose = (): void => {
+  const renewOrLose = async (): Promise<void> => {
     if (lost) throw lost;
     try {
-      if (!input.renew()) throw lose();
+      if (!(await input.renew())) throw lose();
     } catch (error) {
       throw lose(error);
     }
   };
 
+  const queueRenewal = (): Promise<void> => {
+    renewing = renewing.then(renewOrLose, renewOrLose);
+    return renewing;
+  };
+
   return {
-    assertOwned(): void {
-      renewOrLose();
+    assertOwned(): Promise<void> {
+      return queueRenewal();
     },
     start(callback): () => void {
       if (lost) throw lost;
       onLost = callback;
       if (!timer) {
-        timer = setInterval(() => {
-          try { renewOrLose(); } catch { /* sticky loss is observed at next boundary */ }
+        timer = setInterval(async () => {
+          await queueRenewal().catch(() => undefined);
         }, intervalMs(input.leaseMs));
         timer.unref?.();
       }

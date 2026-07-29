@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
 import { SubagentJobManager, type BackgroundAgentSlot } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { renderCompletionNotice, parkForBackgroundWork } from '@mcp/code-agent/tools/subagent-jobs-lifecycle.js';
+import { newSessionId, type SessionId } from '@mcp/session-storage';
 
 const usage: ChatUsage = { input_tokens: 1, output_tokens: 1 };
 
@@ -20,8 +21,11 @@ function slots(): BackgroundAgentSlot[] {
 }
 
 let mgr: SubagentJobManager;
-let SID = 0;
-beforeEach(() => { mgr = new SubagentJobManager(); SID += 1; });
+let SID: SessionId;
+beforeEach(() => {
+  mgr = new SubagentJobManager();
+  SID = newSessionId();
+});
 
 function runningJob() {
   const j = mgr.create({ sessionId: SID, jobId: 'job-1', groupId: 'g1', provider: 'p', model: 'm', agents: slots() });

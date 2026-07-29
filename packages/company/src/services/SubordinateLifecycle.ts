@@ -19,21 +19,12 @@
  *   - IIdleController → fire on subordinate count changes
  */
 
-import { runCoder, type CoderAttachment, type RunCoderOptions, type RunCoderHandle } from '@mcp/code-agent/index.js';
-import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
-import { createBus } from '@apps/http-api/coder-bus.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { SkillStore } from '@mcp/store/skill-store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
-import { buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
+import type { CoderAttachment, RunCoderHandle } from '@mcp/code-agent/index.js';
 import { RetryPolicy } from '@mcp/company/RetryPolicy.js';
 import { ConcurrencyPolicy } from '@mcp/company/ConcurrencyPolicy.js';
 import {
-  resolveRoleSkills,
-  type CompanyContext,
   type SubordinateHandle,
   type AgentRunStatus,
-  type RoleSkills,
 } from '@mcp/company/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
@@ -55,11 +46,9 @@ import {
   type SubordinateAbortDeps,
 } from '@mcp/company/services/subordinate/abort.js';
 import {
-  readFinalAssistantText,
   wireSubordinateInterceptions,
   wireSubordinateInterceptionsForRunner,
 } from '@mcp/company/services/subordinate/runner-wiring.js';
-import { logSkillOutcome } from '@mcp/company/services/subordinate/skill-telemetry.js';
 import {
   applySubordinateModelFallback,
   attachSubordinateCompletionHandler,
@@ -113,7 +102,7 @@ export interface SubordinateLifecycleDeps {
    * as the next prompt. Set late (after the queue is constructed)
    * via `setOnSubordinateIdle`.
    */
-  onSubordinateIdle?: (agentRunId: number, role: string) => void;
+  onSubordinateIdle?: (agentRunId: string, role: string) => void;
   /**
    * C2 — per-session autonomy config provider, forwarded to `spawnSubordinate`
    * as the source of the global-budget cap (`maxSubordinates`, default 8).
@@ -123,8 +112,8 @@ export interface SubordinateLifecycleDeps {
 }
 
 export class SubordinateLifecycle implements ISubordinateQuery {
-  private readonly subordinates = new Map<number, SubordinateHandle>();
-  private readonly runningIds = new Set<number>();
+  private readonly subordinates = new Map<string, SubordinateHandle>();
+  private readonly runningIds = new Set<string>();
   /**
    * Synchronous spawn reservations. A spawn passes the concurrency check and
    * then awaits `runCoder` for a beat before `runningIds` gains its id — so
@@ -151,7 +140,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
    * `InboxQueue.drainOnIdle` after both services have been constructed
    * (the queue depends on `SubordinateLifecycle.reactivate`).
    */
-  setOnSubordinateIdle(cb: (agentRunId: number, role: string) => void): void {
+  setOnSubordinateIdle(cb: (agentRunId: string, role: string) => void): void {
     this.deps.onSubordinateIdle = cb;
   }
 
@@ -160,26 +149,26 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   get runningCount(): number { return this.runningIds.size; }
   /** Includes synchronous spawn reservations that have not created a run yet. */
   get concurrencyOccupancy(): number { return this.runningIds.size + this.pendingSpawns.count; }
-  isRunning(agentRunId: number): boolean { return this.runningIds.has(agentRunId); }
+  isRunning(agentRunId: string): boolean { return this.runningIds.has(agentRunId); }
 
   // ─── Queries ────────────────────────────────────────────────────
 
-  get(agentRunId: number): SubordinateHandle | undefined {
+  get(agentRunId: string): SubordinateHandle | undefined {
     return this.subordinates.get(agentRunId);
   }
 
   list(): Array<{
-    agentRunId: number;
+    agentRunId: string;
     role: string;
     status: AgentRunStatus;
     statusMessage: string;
     projectIds: number[];
     provider: string;
     model: string;
-    coderSessionId: number;
+    coderSessionId: string;
     isAlive: boolean;
   }> {
-    const runs = this.deps.ctx.companyStore.listAgentRuns(this.deps.ctx.companySessionId);
+    const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
     return runs
       .filter((r) => r.role !== 'master')
       .map((r) => ({
@@ -195,8 +184,8 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       }));
   }
 
-  statusOf(agentRunId: number): AgentRunStatus | null {
-    const run = this.deps.ctx.companyStore.getAgentRun(agentRunId);
+  statusOf(agentRunId: string): AgentRunStatus | null {
+    const run = this.deps.ctx.companyFiles.getAgentRunSync(agentRunId);
     return run ? (run.status as AgentRunStatus) : null;
   }
 
@@ -234,8 +223,8 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   // ─── Spawn ──────────────────────────────────────────────────────
 
   async spawn(spec: SpawnSubordinateSpec): Promise<{
-    agentRunId: number;
-    coderSessionId: number;
+    agentRunId: string;
+    coderSessionId: string;
     status: AgentRunStatus;
   }> {
     return spawnSubordinate(spec, this.buildSpawnDeps());
@@ -244,14 +233,14 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   // ─── Resume ─────────────────────────────────────────────────────
 
   async resume(
-    agentRunId: number,
+    agentRunId: string,
     message?: string,
     roleOverride?: string,
     attachments?: CoderAttachment[],
     thinking?: boolean,
   ): Promise<{
-    agentRunId: number;
-    coderSessionId: number;
+    agentRunId: string;
+    coderSessionId: string;
     status: AgentRunStatus;
   }> {
     return resumeSubordinate(
@@ -316,8 +305,8 @@ export class SubordinateLifecycle implements ISubordinateQuery {
    * Reactivate a waiting/completed/errored/aborted subordinate. Returns
    * false if the agent run doesn't exist or isn't in a resumable state.
    */
-  async reactivate(agentRunId: number, message: string, attachments?: CoderAttachment[], thinking?: boolean): Promise<boolean> {
-    const agentRun = this.deps.ctx.companyStore.getAgentRun(agentRunId);
+  async reactivate(agentRunId: string, message: string, attachments?: CoderAttachment[], thinking?: boolean): Promise<boolean> {
+    const agentRun = this.deps.ctx.companyFiles.getAgentRunSync(agentRunId);
     if (!agentRun) return false;
     const resumableStatuses = ['error', 'aborted', 'paused', 'waiting', 'completed', 'interrupted'];
     if (!resumableStatuses.includes(agentRun.status)) {
@@ -335,12 +324,12 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   // ─── Shutdown paths ─────────────────────────────────────────────
 
-  abort(agentRunId: number): boolean {
+  abort(agentRunId: string): boolean {
     return abortSubordinate(agentRunId, this.abortDeps);
   }
 
   /** Pause a running subordinate (resumable). See `pauseSubordinate`. */
-  pause(agentRunId: number): boolean {
+  pause(agentRunId: string): boolean {
     return pauseSubordinate(agentRunId, this.abortDeps);
   }
 
@@ -388,37 +377,24 @@ export class SubordinateLifecycle implements ISubordinateQuery {
   }
 
   private applyModelFallback(
-    agentRunId: number,
+    agentRunId: string,
     role: string,
-  ): { from: { provider: string; model: string }; to: { provider: string; model: string } } | null {
+  ): Promise<{ from: { provider: string; model: string }; to: { provider: string; model: string } } | null> {
     return applySubordinateModelFallback(agentRunId, role, this.completionDeps);
   }
 
   private handleFailure(
-    agentRunId: number,
+    agentRunId: string,
     role: string,
     summary: string,
     errorDetail: string | null,
-  ): void {
-    handleSubordinateFailure(agentRunId, role, summary, errorDetail, this.completionDeps);
+  ): Promise<void> {
+    return handleSubordinateFailure(agentRunId, role, summary, errorDetail, this.completionDeps);
   }
 
   // ─── Internal: wiring helpers ───────────────────────────────────
 
-  private readFinalAssistantText(sessionId: number): string | null {
-    return readFinalAssistantText(sessionId);
-  }
-
-  private logSkillOutcome(
-    sessionId: number,
-    agentRunId: number,
-    outcome: 'success' | 'failed' | 'aborted',
-    errorMessage?: string,
-  ): void {
-    logSkillOutcome(sessionId, agentRunId, outcome, errorMessage);
-  }
-
-  private wireInterceptions(handle: RunCoderHandle, agentRunId: number, role: string): void {
+  private wireInterceptions(handle: RunCoderHandle, agentRunId: string, role: string): void {
     wireSubordinateInterceptions(handle, agentRunId, role, {
       humanInLoop: this.deps.humanInLoop,
       wirer: this.deps.wirer,
@@ -427,7 +403,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   private wireInterceptionsForRunner(
     runner: import('@mcp/code-agent/core/runner.js').CoderRunner,
-    agentRunId: number,
+    agentRunId: string,
     role: string,
   ): void {
     wireSubordinateInterceptionsForRunner(runner, agentRunId, role, {
@@ -438,7 +414,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   private attachCompletionHandler(
     handle: RunCoderHandle,
-    agentRunId: number,
+    agentRunId: string,
     role: string,
     isResumed: boolean,
   ): void {

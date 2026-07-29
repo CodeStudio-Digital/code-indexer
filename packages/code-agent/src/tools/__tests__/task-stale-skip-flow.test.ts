@@ -2,7 +2,7 @@
  * PR-D end-to-end skip-stale flow through execute_tasks.
  *
  * Each test sets up a fake "previous successful run" by mocking
- * `findLastCompletedTaskItem` on the SessionStore, then invokes
+ * `findLastCompletedTaskItem` on the filesystem session store, then invokes
  * execute_tasks and asserts:
  *   - skip path: runSubagent never called, task_finished status='skipped',
  *     skip_reason='inputs_unchanged' persisted.
@@ -15,6 +15,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { newSessionId } from '@mcp/session-storage';
 import { computeTaskFingerprint } from '../execute-tasks/task-stale-check.js';
 import { SYSTEM_PROMPT_VERSION } from '@mcp/code-agent/core/runner/assembly/system-prompt.js';
 
@@ -29,6 +31,7 @@ vi.mock('../implement-subagent.js', async (importOriginal) => {
 
 const { buildExecuteTasksTool } = await import('../execute-tasks.js');
 const { runSubagent } = await import('../implement-subagent.js');
+const SESSION_ID = newSessionId();
 
 function task(overrides: Partial<CoderTask> = {}): CoderTask {
   return {
@@ -50,7 +53,7 @@ function makeMockStore(staleHit: string | null = null) {
     listTaskRunItems: vi.fn(),
     getTaskRunWithItems: vi.fn(),
     recoverRunningTaskRuns: vi.fn(),
-    findLastCompletedTaskItem: vi.fn(() =>
+    findLastCompletedTaskItem: vi.fn(async () =>
       staleHit ? { task_id: 'tsk_one', status: 'done', inputs_fingerprint: staleHit } : null,
     ),
   };
@@ -71,7 +74,11 @@ afterEach(() => {
 });
 
 function setupCtx(t: CoderTask, store: ReturnType<typeof makeMockStore>) {
-  const runner = { emit: vi.fn(), sessionId: 99, agentLoopV2: false };
+  const runner = {
+    emit: vi.fn(),
+    sessionId: SESSION_ID,
+    agentLoopV2: false,
+  };
   const state: TasksState = {
     summary: '', tasks: [t], execution_mode: 'all-subagent',
     approved: true, current_task_id: null,
@@ -85,7 +92,7 @@ function setupCtx(t: CoderTask, store: ReturnType<typeof makeMockStore>) {
   const tool = buildExecuteTasksTool({
     provider: {} as never,
     parentTools: [],
-    sessionStore: store as unknown as import('@mcp/code-agent/sessions/store.js').SessionStore,
+    sessionStore: store as unknown as FsSessionStore,
   });
   return { tool, ctx, runner };
 }

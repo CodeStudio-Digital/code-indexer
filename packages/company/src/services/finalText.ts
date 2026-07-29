@@ -9,31 +9,28 @@
  * back to a generic message rather than failing.
  */
 
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 
-export function readFinalAssistantText(sessionId: number, tail = 3): string | null {
+export async function readFinalAssistantText(
+  sessionStore: FsSessionStore,
+  sessionId: string,
+  tail = 3,
+): Promise<string | null> {
   try {
-    const config = loadConfig();
-    const store = new SessionStore(config.dbPath);
-    try {
-      const loaded = store.loadSessionMessagesTail(sessionId, tail);
-      if (!loaded) return null;
-      for (let i = loaded.messages.length - 1; i >= 0; i--) {
-        const msg = loaded.messages[i];
-        if (msg.role !== 'assistant') continue;
-        const text = msg.content
-          .filter((b): b is { type: 'text'; text: string } =>
-            (b as { type?: string }).type === 'text')
-          .map((b) => b.text)
-          .join('\n')
-          .trim();
-        if (text) return text;
-      }
-      return null;
-    } finally {
-      store.close();
+    const loaded = await sessionStore.loadSessionMessagesTail(sessionId, tail);
+    if (!loaded) return null;
+    for (let i = loaded.messages.length - 1; i >= 0; i--) {
+      const msg = loaded.messages[i];
+      if (msg.role !== 'assistant') continue;
+      const text = msg.content
+        .filter((b): b is { type: 'text'; text: string } =>
+          (b as { type?: string }).type === 'text')
+        .map((b) => b.text)
+        .join('\n')
+        .trim();
+      if (text) return text;
     }
+    return null;
   } catch {
     return null;
   }

@@ -20,18 +20,24 @@
 
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, notFound, resolveRootSessionId } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  notFound,
+  resolveRootSessionId,
+} from '../_helpers.js';
 import { getLocalProcessManager } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 
 export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, companyLocalProjectStore } = deps;
+  const { sessionStore, companyLocalProjectStore } = deps;
 
   // GET status — used by the UI to render the "host" row in the sidebar.
-  app.get('/api/company/sessions/:id/local-project', (c) => {
-    const id = resolveRootSessionId(companyStore, parseIdParam(c));
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
-    const live = getLocalProcessManager().get(String(id));
+  app.get('/api/company/sessions/:id/local-project', async (c) => {
+    const id = await resolveRootSessionId(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!id) return notFound(c);
+    const live = getLocalProcessManager().get(id);
     if (live) {
       return c.json({
         session_id: id,
@@ -72,7 +78,7 @@ export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): voi
 
   // POST — start (or restart after stop) a local-process run.
   app.post('/api/company/sessions/:id/local-project', async (c) => {
-    parseIdParam(c);
+    parseCompanySessionIdParam(c);
     return c.json(
       {
         error:
@@ -92,10 +98,12 @@ export function mountCompanyLocalProjectRoutes(app: Hono, deps: ServerDeps): voi
   //      'orphaned'. A user-initiated DELETE is the only path that
   //      hard-deletes — otherwise the row could never be cleared.
   app.delete('/api/company/sessions/:id/local-project', async (c) => {
-    const id = resolveRootSessionId(companyStore, parseIdParam(c));
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
-    await getLocalProcessManager().stop(String(id), 'user-stopped');
+    const id = await resolveRootSessionId(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!id) return notFound(c);
+    await getLocalProcessManager().stop(id, 'user-stopped');
     companyLocalProjectStore.delete(id);
     return c.json({ ok: true });
   });

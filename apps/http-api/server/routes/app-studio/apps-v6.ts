@@ -7,13 +7,18 @@ import type { AppStudioWorkItem, UpsertAppStudioWorkItemInput } from '@mcp/store
 import { getAppTeamSession } from '@mcp/api-handlers/app-studio/app-team-session.js';
 import { dispatchReadyAppWork } from '@mcp/company/tools/app-studio/company-dispatch.js';
 import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
+import { isUuid, type SessionId } from '@mcp/session-storage';
 import {
   evictCompanyOrchestrator,
   getOrSpawnCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import { abortCompanyRuntime } from '../company/runtime-lifecycle.js';
 import { stopCompanySessionRuntime } from '../company/session-delete.js';
-import { notFound, parseIdParam, parseJsonBody } from '../_helpers.js';
+import {
+  notFound,
+  parseJsonBody,
+  parseSessionIdParam,
+} from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 import { mountAppStudioTeamConfigRoutes } from './team-routes.js';
 
@@ -51,48 +56,70 @@ function deriveStage(args: {
   return 'building';
 }
 
-function recentEventViews(deps: ServerDeps, id: number, limit = 50) {
-  const recent: ReturnType<ServerDeps['appStudioStore']['listEvents']> = [];
+async function recentEventViews(
+  deps: ServerDeps,
+  id: SessionId,
+  limit = 50,
+) {
+  const recent: Awaited<
+    ReturnType<ServerDeps['appStudioStore']['listEvents']>
+  > = [];
   let cursor = 0;
   for (;;) {
-    const batch = deps.appStudioStore.listEvents(id, cursor);
+    const batch = await deps.appStudioStore.listEvents(id, cursor);
     if (batch.length === 0) break;
     recent.push(...batch);
     if (recent.length > limit) recent.splice(0, recent.length - limit);
-    const nextCursor = batch[batch.length - 1]!.id;
+    const nextCursor = batch[batch.length - 1]!.seq;
     if (nextCursor <= cursor || batch.length < 250) break;
     cursor = nextCursor;
   }
   return recent.map((event) => ({
     id: event.id,
+    seq: event.seq,
     event_type: event.kind,
     payload: json<unknown>(event.payload_json, {}),
     created_at: event.created_at,
   }));
 }
 
-function appState(deps: ServerDeps, id: number, options: { includeRecentEvents?: boolean } = {}) {
-  const session = deps.appStudioStore.getSession(id);
+async function appState(
+  deps: ServerDeps,
+  id: SessionId,
+  options: { includeRecentEvents?: boolean } = {},
+) {
+  const session = await deps.appStudioStore.getSession(id);
   if (!session) return null;
   const project = deps.db.getProject(session.project_id);
   const builder = json<{ port?: number }>(project?.builder_json, {});
-  const revision = deps.appStudioStore.getLatestPlanRevision(id);
+  const [
+    revision,
+    work,
+    workRuns,
+    decisions,
+    deployment,
+    planHistory,
+    team,
+  ] = await Promise.all([
+    deps.appStudioStore.getLatestPlanRevision(id),
+    deps.appStudioStore.listWorkItems(id),
+    deps.appStudioStore.listWorkItemRuns(id, { limit: 250 }),
+    deps.appStudioStore.listDecisions(id),
+    deps.appStudioStore.getLatestDeployment(id),
+    deps.appStudioStore.listPlanRevisions(id),
+    getAppTeamSession(deps, id),
+  ]);
   const plan = parseAppPlan(revision?.plan_json ?? null);
   const fitness = json<AppFitnessReport | null>(revision?.fitness_json, null);
-  const work = deps.appStudioStore.listWorkItems(id);
   const currentWork = work.filter((item) => (
     item.plan_revision_id === revision?.id && !['cancelled', 'stale'].includes(item.status)
   ));
-  const workRuns = deps.appStudioStore.listWorkItemRuns(id, { limit: 250 });
   const workRunsByItem = new Map<string, typeof workRuns>();
   for (const run of workRuns) {
     const attempts = workRunsByItem.get(run.work_item_id) ?? [];
     if (attempts.length < 3) attempts.push(run);
     workRunsByItem.set(run.work_item_id, attempts);
   }
-  const decisions = deps.appStudioStore.listDecisions(id);
-  const deployment = deps.appStudioStore.getLatestDeployment(id);
-  const team = getAppTeamSession(deps, id);
   const evidenceCurrent = (() => {
     if (!project?.root_path || !fitness || currentWork.length === 0 || !currentWork.every((item) => item.status === 'done')) return false;
     const workspace = appWorkspaceFingerprint(project.root_path);
@@ -118,7 +145,7 @@ function appState(deps: ServerDeps, id: number, options: { includeRecentEvents?:
       plan_json: undefined,
       fitness_json: undefined,
     } : null,
-    plan_history: deps.appStudioStore.listPlanRevisions(id).map((item) => ({
+    plan_history: planHistory.map((item) => ({
       id: item.id,
       revision_number: item.revision_number,
       status: item.status,
@@ -146,11 +173,17 @@ function appState(deps: ServerDeps, id: number, options: { includeRecentEvents?:
     evidence_current: evidenceCurrent,
     team,
     master_session_id: team?.master_session_id ?? null,
-    ...(options.includeRecentEvents ? { recent_events: recentEventViews(deps, id) } : {}),
+    ...(options.includeRecentEvents
+      ? { recent_events: await recentEventViews(deps, id) }
+      : {}),
   };
 }
 
-function workFromPlan(appSessionId: number, revisionId: number, plan: AppPlanV1): UpsertAppStudioWorkItemInput[] {
+function workFromPlan(
+  appSessionId: SessionId,
+  revisionId: string,
+  plan: AppPlanV1,
+): UpsertAppStudioWorkItemInput[] {
   const items: UpsertAppStudioWorkItemInput[] = [];
   for (const [index, slice] of plan.delivery.slices.entries()) {
     const tests = plan.delivery.tests.filter((test) => slice.test_ids.includes(test.id));
@@ -193,46 +226,60 @@ function workFromPlan(appSessionId: number, revisionId: number, plan: AppPlanV1)
 
 export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
   mountAppStudioTeamConfigRoutes(app, deps);
-  app.get('/api/app-studio/apps', (c) => c.json({
-    apps: deps.appStudioStore.listSessions().map((session) => appState(deps, session.id)),
-  }));
+  app.get('/api/app-studio/apps', async (c) => {
+    const sessions = await deps.appStudioStore.listSessions();
+    return c.json({
+      apps: await Promise.all(
+        sessions.map((session) => appState(deps, session.id)),
+      ),
+    });
+  });
 
-  app.get('/api/app-studio/apps/:id', (c) => {
-    const state = appState(deps, parseIdParam(c), { includeRecentEvents: true });
+  app.get('/api/app-studio/apps/:id', async (c) => {
+    const state = await appState(deps, parseSessionIdParam(c), {
+      includeRecentEvents: true,
+    });
     return state ? c.json(state) : notFound(c, 'App not found');
   });
 
   app.delete('/api/app-studio/apps/:id', async (c) => {
-    const id = parseIdParam(c);
-    const session = deps.appStudioStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    const session = await deps.appStudioStore.getSession(id);
     if (!session) return notFound(c, 'App not found');
     const companySessionId = session.company_session_id;
     if (companySessionId) await stopCompanySessionRuntime(companySessionId);
-    deps.appStudioStore.deleteSession(id);
-    if (companySessionId) deps.companyStore.deleteCompanySession(companySessionId);
+    await deps.appStudioStore.deleteSession(id);
+    if (companySessionId) {
+      await deps.operationalSessionFiles.deleteCompanySession(companySessionId);
+    }
     try { deps.db.updateProject(session.project_id, { builder_json: null }); } catch { /* project may be gone */ }
     return c.json({ ok: true, project_preserved: true });
   });
 
-  app.get('/api/app-studio/apps/:id/plan', (c) => {
-    const id = parseIdParam(c);
-    if (!deps.appStudioStore.getSession(id)) return notFound(c, 'App not found');
-    const state = appState(deps, id)!;
-    return c.json({ revision: state.plan_revision, history: deps.appStudioStore.listPlanRevisions(id).map((item) => ({
+  app.get('/api/app-studio/apps/:id/plan', async (c) => {
+    const id = parseSessionIdParam(c);
+    if (!(await deps.appStudioStore.getSession(id))) {
+      return notFound(c, 'App not found');
+    }
+    const state = (await appState(deps, id))!;
+    const history = await deps.appStudioStore.listPlanRevisions(id);
+    return c.json({ revision: state.plan_revision, history: history.map((item) => ({
       id: item.id, revision_number: item.revision_number, status: item.status,
       created_by: item.created_by, created_at: item.created_at, approved_at: item.approved_at,
     })) });
   });
 
   app.put('/api/app-studio/apps/:id/plan', async (c) => {
-    const id = parseIdParam(c);
-    if (!deps.appStudioStore.getSession(id)) return notFound(c, 'App not found');
+    const id = parseSessionIdParam(c);
+    if (!(await deps.appStudioStore.getSession(id))) {
+      return notFound(c, 'App not found');
+    }
     const body = await parseJsonBody<{ plan: unknown; expected_revision_number: number; created_by: string }>(c);
     const plan = parseAppPlan(body.plan);
     if (!plan) return c.json({ error: 'A valid AppPlanV1 is required.' }, 400);
     const fitness = auditAppPlan(plan);
     try {
-      const revision = deps.appStudioStore.savePlanRevision({
+      const revision = await deps.appStudioStore.savePlanRevision({
         app_session_id: id,
         plan,
         fitness,
@@ -246,24 +293,30 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/app-studio/apps/:id/actions', async (c) => {
-    const id = parseIdParam(c);
-    const session = deps.appStudioStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    const session = await deps.appStudioStore.getSession(id);
     if (!session) return notFound(c, 'App not found');
-    const body = await parseJsonBody<{ action: string; decision_id: number; answer: string }>(c);
+    const body = await parseJsonBody<{
+      action: string;
+      decision_id: string;
+      answer: string;
+    }>(c);
     if (body.action === 'approve_plan_and_build') {
-      const revision = deps.appStudioStore.getLatestPlanRevision(id);
+      const revision = await deps.appStudioStore.getLatestPlanRevision(id);
       const plan = parseAppPlan(revision?.plan_json ?? null);
       if (!revision || !plan) return c.json({ error: 'The App has no valid plan.' }, 409);
       const fitness = auditAppPlan(plan);
       if (fitness.status !== 'ready') return c.json({ error: 'The plan is not ready.', fitness }, 409);
       try {
-        const approved = deps.appStudioStore.approvePlanRevision(id, revision.id);
-        const currentRevisionWork = deps.appStudioStore.listWorkItems(id)
+        const approved = await deps.appStudioStore.approvePlanRevision(id, revision.id);
+        const currentRevisionWork = (await deps.appStudioStore.listWorkItems(id))
           .filter((item) => item.plan_revision_id === approved.id);
         if (currentRevisionWork.length === 0) {
-          deps.appStudioStore.upsertWorkItems(workFromPlan(id, approved.id, plan));
+          await deps.appStudioStore.upsertWorkItems(
+            workFromPlan(id, approved.id, plan),
+          );
         }
-        deps.appStudioStore.refreshReadyWorkItems(id);
+        await deps.appStudioStore.refreshReadyWorkItems(id);
         const schedulerWarning = 'Plan approved, but the App scheduler could not be resumed.';
         let schedulerResumed = false;
         let warning: string | undefined;
@@ -274,7 +327,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
           } catch (error) {
             warning = schedulerWarning;
             try {
-              deps.appStudioStore.appendEvent(
+              await deps.appStudioStore.appendEvent(
                 id,
                 'build.scheduler_resume_failed',
                 'app',
@@ -286,7 +339,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
         } else {
           warning = schedulerWarning;
           try {
-            deps.appStudioStore.appendEvent(
+            await deps.appStudioStore.appendEvent(
               id,
               'build.scheduler_resume_failed',
               'app',
@@ -296,7 +349,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
           } catch { /* Approval remains authoritative. */ }
         }
         return c.json({
-          ...appState(deps, id, { includeRecentEvents: true }),
+          ...(await appState(deps, id, { includeRecentEvents: true })),
           scheduler_resumed: schedulerResumed,
           ...(warning ? { warning } : {}),
         });
@@ -318,7 +371,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
         if (dispatchResults.some((result) => result.code === 'OUTCOME_UNKNOWN')) {
           await evictCompanyOrchestrator(session.company_session_id);
           return c.json({
-            ...appState(deps, id, { includeRecentEvents: true }),
+            ...(await appState(deps, id, { includeRecentEvents: true })),
             dispatch_results: dispatchResults,
             error:
               'One or more specialist dispatches have an unknown outcome. ' +
@@ -327,7 +380,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
           }, 500);
         }
         return c.json({
-          ...appState(deps, id, { includeRecentEvents: true }),
+          ...(await appState(deps, id, { includeRecentEvents: true })),
           dispatch_results: dispatchResults,
         });
       } catch (error) {
@@ -335,14 +388,23 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
       }
     }
     if (body.action === 'answer_decision') {
-      if (typeof body.decision_id !== 'number' || typeof body.answer !== 'string' || !body.answer.trim()) {
+      if (
+        typeof body.decision_id !== 'string' ||
+        !isUuid(body.decision_id) ||
+        typeof body.answer !== 'string' ||
+        !body.answer.trim()
+      ) {
         return c.json({ error: 'decision_id and answer are required.' }, 400);
       }
-      const decision = deps.appStudioStore.resolveDecision(id, body.decision_id, body.answer.trim());
+      const decision = await deps.appStudioStore.resolveDecision(
+        id,
+        body.decision_id,
+        body.answer.trim(),
+      );
       const coordinationWarning = 'Decision saved, but App coordination could not be resumed.';
       if (!session.company_session_id) {
         try {
-          deps.appStudioStore.appendEvent(
+          await deps.appStudioStore.appendEvent(
             id,
             'decision.coordination_failed',
             'decision',
@@ -367,7 +429,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
             ? 'INTERACTION_PENDING'
             : 'MASTER_MESSAGE_NOT_ACCEPTED';
           try {
-            deps.appStudioStore.appendEvent(
+            await deps.appStudioStore.appendEvent(
               id,
               'decision.coordination_failed',
               'decision',
@@ -392,7 +454,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
           await evictCompanyOrchestrator(session.company_session_id);
         }
         try {
-          deps.appStudioStore.appendEvent(
+          await deps.appStudioStore.appendEvent(
             id,
             'decision.coordination_failed',
             'decision',
@@ -414,7 +476,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
       }
     }
     if (body.action === 'run_checks') {
-      const revision = deps.appStudioStore.getLatestPlanRevision(id);
+      const revision = await deps.appStudioStore.getLatestPlanRevision(id);
       const plan = parseAppPlan(revision?.plan_json ?? null);
       return plan ? c.json({ fitness: auditAppPlan(plan) }) : c.json({ error: 'The App has no valid plan.' }, 409);
     }
@@ -427,15 +489,20 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
             code: abortResult.code,
           }, 500);
         }
-        deps.companyStore.updateCompanySessionStatus(session.company_session_id, 'paused');
+        await deps.operationalSessionFiles.updateCompanySessionStatus(
+          session.company_session_id,
+          'paused',
+        );
       }
-      deps.appStudioStore.appendEvent(id, 'build.paused', 'app', String(id));
+      await deps.appStudioStore.appendEvent(id, 'build.paused', 'app', String(id));
       return c.json({ ok: true });
     }
     if (body.action === 'resume') {
       if (!session.company_session_id) return c.json({ error: 'The App team is unavailable.' }, 409);
-      const revision = deps.appStudioStore.getLatestPlanRevision(id);
-      const hasOpenDecision = deps.appStudioStore.listDecisions(id).some((decision) => decision.status === 'open');
+      const revision = await deps.appStudioStore.getLatestPlanRevision(id);
+      const hasOpenDecision = (
+        await deps.appStudioStore.listDecisions(id)
+      ).some((decision) => decision.status === 'open');
       const needsMasterCoordination = revision?.status !== 'approved' || hasOpenDecision;
       try {
         const { orchestrator } = await getOrSpawnCompanyOrchestrator(session.company_session_id);
@@ -465,7 +532,7 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
           code: outcomeUnknown ? 'OUTCOME_UNKNOWN' : 'MASTER_COORDINATION_FAILED',
         }, outcomeUnknown ? 500 : 502);
       }
-      deps.appStudioStore.appendEvent(
+      await deps.appStudioStore.appendEvent(
         id,
         'build.resumed',
         'app',
@@ -484,25 +551,42 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
           }, 500);
         }
       }
-      for (const item of deps.appStudioStore.listWorkItems(id)) {
-        if (!['done', 'cancelled'].includes(item.status)) deps.appStudioStore.setWorkItemStatus(id, item.id, 'cancelled');
+      for (const item of await deps.appStudioStore.listWorkItems(id)) {
+        if (!['done', 'cancelled'].includes(item.status)) {
+          await deps.appStudioStore.setWorkItemStatus(
+            id,
+            item.id,
+            'cancelled',
+          );
+        }
       }
-      deps.appStudioStore.appendEvent(id, 'build.cancelled', 'app', String(id));
+      await deps.appStudioStore.appendEvent(
+        id,
+        'build.cancelled',
+        'app',
+        String(id),
+      );
       return c.json({ ok: true });
     }
     return c.json({ error: 'Unknown App action.' }, 400);
   });
 
-  app.get('/api/app-studio/apps/:id/events', (c) => {
-    const id = parseIdParam(c);
-    if (!deps.appStudioStore.getSession(id)) return notFound(c, 'App not found');
+  app.get('/api/app-studio/apps/:id/events', async (c) => {
+    const id = parseSessionIdParam(c);
+    if (!(await deps.appStudioStore.getSession(id))) {
+      return notFound(c, 'App not found');
+    }
     let cursor = Number(c.req.query('after') ?? c.req.header('last-event-id') ?? 0) || 0;
     return streamSSE(c, async (stream) => {
       while (!stream.closed && !c.req.raw.signal.aborted) {
-        const events = deps.appStudioStore.listEvents(id, cursor);
+        const events = await deps.appStudioStore.listEvents(id, cursor);
         for (const event of events) {
-          cursor = event.id;
-          await stream.writeSSE({ id: String(event.id), event: event.kind, data: event.payload_json });
+          cursor = event.seq;
+          await stream.writeSSE({
+            id: String(event.seq),
+            event: event.kind,
+            data: event.payload_json,
+          });
         }
         if (events.length === 0) await stream.writeSSE({ event: 'heartbeat', data: JSON.stringify({ cursor }) });
         await stream.sleep(1_500);
@@ -510,9 +594,9 @@ export function mountAppStudioV6AppRoutes(app: Hono, deps: ServerDeps): void {
     });
   });
 
-  app.get('/api/app-studio/apps/:id/team', (c) => {
-    const id = parseIdParam(c);
-    const team = getAppTeamSession(deps, id);
+  app.get('/api/app-studio/apps/:id/team', async (c) => {
+    const id = parseSessionIdParam(c);
+    const team = await getAppTeamSession(deps, id);
     return team ? c.json({ team, agents_url: `/agents/${team.company_session_id}` }) : notFound(c, 'App team not found');
   });
 

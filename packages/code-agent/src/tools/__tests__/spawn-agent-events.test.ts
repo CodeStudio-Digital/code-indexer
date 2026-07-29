@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
@@ -31,7 +32,7 @@ function setup() {
   const emit = vi.fn();
   const ctx = {
     cwd: 'D:/MCP',
-    runner: { sessionId: 42, agentLoopV2: false, emit },
+    runner: { sessionId: newSessionId(), agentLoopV2: false, emit },
   } as unknown as ToolContext;
   const tool = buildSpawnAgentTool(
     { provider: { name: 'openai', model: 'gpt-test' }, parentTools: [] } as never,

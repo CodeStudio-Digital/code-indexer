@@ -533,7 +533,16 @@ export interface ProjectGitApi {
 
   branchList(input: GitScope, ctx: ApiContext): Promise<{ current: string | null; all: string[] }>;
   branchCheckout(
-    input: GitScope & { name: string; create?: boolean },
+    input: GitScope & {
+      name: string;
+      create?: boolean;
+      /**
+       * Starting ref for a newly materialized tracking branch. When the local
+       * branch already exists, checkout is retried against that local branch
+       * instead of failing with "already exists".
+       */
+      from?: string;
+    },
     ctx: ApiContext,
   ): Promise<{ ok: true }>;
 

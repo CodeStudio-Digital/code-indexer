@@ -1,28 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CoderRunBus } from '../../coder-bus.js';
 import {
-  CONTROL_PLANE_SCHEMA_VERSION,
   asAgentRunAttemptId,
   asAgentRunId,
   asCorrelationId,
   asSessionCommandId,
-  asSessionId,
 } from '@mcp/agent-runtime-contracts';
-import { controlPlaneFoundation251 } from '@mcp/store/migrations/251_control_plane_foundation.js';
-import { controlPlaneAlignment252 } from '@mcp/store/migrations/252_control_plane_alignment.js';
 import {
-  ControlPlaneDivergenceStore,
-  ControlPlaneStore,
-  hashControlPlanePayload,
+  asSessionId,
+  type SessionId,
+} from '@mcp/session-storage';
+import {
   type ControlPlaneRunContext,
 } from '@mcp/store/control-plane/index.js';
+import type { ControlPlaneAuthority } from '../../file-control-plane-store.js';
 import {
   coderControlPlaneShadowEnabled,
   drainLocalCoderShadowWrites,
   resetCoderControlPlaneShadowMetricsForTests,
   snapshotCoderControlPlaneShadowMetrics,
 } from '../../control-plane-shadow.js';
+import {
+  __flushRuntimeEventLogsForTests,
+  __resetRuntimeEventLogsForTests,
+} from '../runtime-event-log.js';
 
 const mockWorker = vi.hoisted(() => {
   type Listener = (payload: unknown) => void;
@@ -38,7 +49,13 @@ const mockWorker = vi.hoisted(() => {
 
     async request(type: string, payload: unknown, opts?: { timeoutMs?: number }): Promise<unknown> {
       this.requests.push({ type, payload, opts });
+      if (type === 'releaseSessionWriter') {
+        if (state.releaseWriterImpl) return state.releaseWriterImpl(type, payload, opts);
+        return { ok: true };
+      }
+      if (type === 'acquireSessionWriter') return { ok: true };
       if (state.requestImpl) return state.requestImpl(type, payload, opts);
+      if (type === 'pushUserMessage') return { ok: true, roundMessageId: 42 };
       return { ok: true };
     }
 
@@ -72,6 +89,7 @@ const mockWorker = vi.hoisted(() => {
 
     async start(): Promise<void> {
       this.startCalls += 1;
+      if (state.startImpl) await state.startImpl(this);
       this.state = 'running';
     }
 
@@ -81,6 +99,7 @@ const mockWorker = vi.hoisted(() => {
 
     async evict(): Promise<void> {
       this.evictCalls += 1;
+      if (state.evictImpl) await state.evictImpl(this);
       this.state = 'idle';
     }
   }
@@ -88,9 +107,15 @@ const mockWorker = vi.hoisted(() => {
   const state: {
     hosts: MockWorkerHost[];
     requestImpl: RequestImpl | null;
+    releaseWriterImpl: RequestImpl | null;
+    startImpl: ((host: MockWorkerHost) => Promise<void>) | null;
+    evictImpl: ((host: MockWorkerHost) => Promise<void>) | null;
   } = {
     hosts: [],
     requestImpl: null,
+    releaseWriterImpl: null,
+    startImpl: null,
+    evictImpl: null,
   };
 
   return { MockWorkerHost, state };
@@ -115,24 +140,52 @@ function getRunId(bus: CoderRunBus): number {
   return payload.runId as number;
 }
 
+function sid(value: number): SessionId {
+  return asSessionId(
+    `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`,
+  );
+}
+
 describe('CoderWorkerPool', () => {
   let pool: CoderWorkerPool | null = null;
+  let bundleRoot: string;
 
   beforeEach(() => {
     mockWorker.state.hosts.length = 0;
     mockWorker.state.requestImpl = null;
+    mockWorker.state.releaseWriterImpl = null;
+    mockWorker.state.startImpl = null;
+    mockWorker.state.evictImpl = null;
+    bundleRoot = mkdtempSync(join(tmpdir(), 'mcp-coder-worker-pool-'));
   });
 
   afterEach(async () => {
     await pool?.dispose();
     await drainLocalCoderShadowWrites();
+    await __flushRuntimeEventLogsForTests();
+    __resetRuntimeEventLogsForTests();
     pool = null;
+    rmSync(bundleRoot, { recursive: true, force: true });
   });
 
-  function createPool(controlPlaneStore: ControlPlaneStore | null = null): CoderWorkerPool {
+  async function resolveTestSessionRuntimeContext(sessionId: SessionId) {
+    const bundlePath = join(bundleRoot, String(sessionId));
+    mkdirSync(bundlePath, { recursive: true });
+    return {
+      sessionId,
+      projectId: 1,
+      projectRoot: bundleRoot,
+      bundlePath,
+    };
+  }
+
+  function createPool(
+    controlPlaneStore: ControlPlaneAuthority | null = null,
+  ): CoderWorkerPool {
     pool = new CoderWorkerPool({
       workerFile: 'mock-worker.js',
       dbPath: ':memory:',
+      resolveSessionRuntimeContext: resolveTestSessionRuntimeContext,
       postRunLingerMs: 60_000,
       log: () => undefined,
       getControlPlaneStore: () => controlPlaneStore,
@@ -140,18 +193,221 @@ describe('CoderWorkerPool', () => {
     return pool;
   }
 
-  function makeRunContext(sessionId: number, tag: string): ControlPlaneRunContext {
+  it('waits for the main writer handoff before spawning the session worker', async () => {
+    let releaseHandoff!: () => void;
+    let handoffStarted!: () => void;
+    const handoffGate = new Promise<void>((resolve) => {
+      releaseHandoff = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      handoffStarted = resolve;
+    });
+    const handoffSessionWriter = vi.fn(async () => {
+      handoffStarted();
+      await handoffGate;
+    });
+    pool = new CoderWorkerPool({
+      workerFile: 'mock-worker.js',
+      dbPath: ':memory:',
+      resolveSessionRuntimeContext: resolveTestSessionRuntimeContext,
+      handoffSessionWriter,
+      postRunLingerMs: 60_000,
+      log: () => undefined,
+    });
+
+    const running = pool.runFresh(sid(99), { userMessage: 'first' });
+    await started;
+
+    expect(handoffSessionWriter).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: sid(99) }),
+    );
+    expect(mockWorker.state.hosts).toHaveLength(0);
+
+    releaseHandoff();
+    await running;
+    expect(mockWorker.state.hosts).toHaveLength(1);
+    expect(mockWorker.state.hosts[0].startCalls).toBe(1);
+    expect(handoffSessionWriter).toHaveBeenCalledTimes(2);
+    expect(mockWorker.state.hosts[0].bridge.requests[0]).toMatchObject({
+      type: 'acquireSessionWriter',
+      payload: {},
+      opts: { timeoutMs: 15_000 },
+    });
+  });
+
+  it('routes provider persistence through the worker that owns the session', async () => {
+    const p = createPool();
+    await expect(
+      p.swapProvider(sid(93), 'openai-chatgpt', 'gpt-5.6-sol'),
+    ).resolves.toBe(false);
+
+    await p.runFresh(sid(93), { userMessage: 'first' });
+    await expect(
+      p.swapProvider(sid(93), 'openai-chatgpt', 'gpt-5.6-sol'),
+    ).resolves.toBe(true);
+    expect(mockWorker.state.hosts[0].bridge.requests.at(-1)).toMatchObject({
+      type: 'swapProvider',
+      payload: {
+        provider: 'openai-chatgpt',
+        model: 'gpt-5.6-sol',
+      },
+    });
+  });
+
+  it('deduplicates concurrent startup so one session never gets two worker writers', async () => {
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    mockWorker.state.startImpl = async () => startGate;
+    const p = createPool();
+
+    const first = p.runFresh(sid(98), { userMessage: 'first' });
+    const second = p.runFresh(sid(98), { userMessage: 'second' });
+    await vi.waitFor(() => expect(mockWorker.state.hosts).toHaveLength(1));
+
+    releaseStart();
+    const results = await Promise.allSettled([first, second]);
+
+    expect(mockWorker.state.hosts).toHaveLength(1);
+    expect(mockWorker.state.hosts[0].startCalls).toBe(1);
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+  });
+
+  it('waits for writer release and full eviction before spawning a replacement', async () => {
+    const p = createPool();
+    await p.runFresh(sid(97), { userMessage: 'first' });
+    const firstHost = mockWorker.state.hosts[0];
+    let releaseEvict!: () => void;
+    let evictStarted!: () => void;
+    const evictGate = new Promise<void>((resolve) => {
+      releaseEvict = resolve;
+    });
+    const evictEntered = new Promise<void>((resolve) => {
+      evictStarted = resolve;
+    });
+    mockWorker.state.evictImpl = async (host) => {
+      if (host === firstHost) {
+        evictStarted();
+        await evictGate;
+      }
+    };
+
+    const eviction = p.evict(sid(97));
+    await evictEntered;
+    const replacement = p.runFresh(sid(97), { userMessage: 'second' });
+    await Promise.resolve();
+
+    expect(
+      firstHost.bridge.requests.find((request) => request.type === 'releaseSessionWriter'),
+    ).toMatchObject({ opts: { timeoutMs: 15_000 } });
+    expect(mockWorker.state.hosts).toHaveLength(1);
+
+    releaseEvict();
+    await eviction;
+    await replacement;
+
+    expect(mockWorker.state.hosts).toHaveLength(2);
+    expect(mockWorker.state.hosts[1].startCalls).toBe(1);
+  });
+
+  it('fails closed when the worker cannot acknowledge writer release', async () => {
+    const p = createPool();
+    await p.runFresh(sid(96), { userMessage: 'first' });
+    const host = mockWorker.state.hosts[0];
+    mockWorker.state.releaseWriterImpl = async () => {
+      throw new Error('writer drain timed out');
+    };
+
+    await expect(p.evict(sid(96))).rejects.toThrow('writer drain timed out');
+
+    expect(p.has(sid(96))).toBe(true);
+    expect(host.evictCalls).toBe(0);
+
+    mockWorker.state.releaseWriterImpl = null;
+    await p.evict(sid(96));
+    expect(p.has(sid(96))).toBe(false);
+    expect(host.evictCalls).toBe(1);
+  });
+
+  it('routes host session diagnostics through the active worker writer', async () => {
+    const p = createPool();
+    expect(
+      await p.appendSessionEvent(sid(94), 'memory_distill', { created: 1 }),
+    ).toBe(false);
+
+    await p.runFresh(sid(94), { userMessage: 'first' });
+    const host = mockWorker.state.hosts[0];
+    await expect(
+      p.appendSessionEvent(sid(94), 'memory_distill', { created: 1 }),
+    ).resolves.toBe(true);
+
+    expect(host.bridge.requests.at(-1)).toMatchObject({
+      type: 'appendSessionEvent',
+      payload: {
+        event: 'memory_distill',
+        payload: { created: 1 },
+      },
+      opts: { timeoutMs: 15_000 },
+    });
+  });
+
+  it('reclaims the exact crashed isolate lease before allowing a replacement', async () => {
+    const p = createPool();
+    await p.runFresh(sid(95), { userMessage: 'first' });
+    const host = mockWorker.state.hosts[0];
+    const hostOpts = host.opts as {
+      workerData: {
+        sessionContext: {
+          bundlePath: string;
+          writerOwnerId: string;
+        };
+      };
+      maxRestarts: number;
+      onExit?: (code: number, planned: boolean) => void;
+      onCrash?: (error: Error) => void;
+    };
+    const { bundlePath, writerOwnerId } = hostOpts.workerData.sessionContext;
+    const eventsPath = join(bundlePath, 'events');
+    const leasePath = join(eventsPath, 'writer.lease');
+    mkdirSync(eventsPath, { recursive: true });
+    writeFileSync(
+      leasePath,
+      `${JSON.stringify({
+        schema_version: 1,
+        token: randomUUID(),
+        fence: 1,
+        pid: process.pid,
+        owner_id: writerOwnerId,
+        owner_host: 'test',
+        acquired_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 30_000).toISOString(),
+      })}\n`,
+    );
+
+    expect(hostOpts.maxRestarts).toBe(0);
+    hostOpts.onExit?.(1, false);
+    hostOpts.onCrash?.(new Error('worker crashed'));
+    const replacement = p.runFresh(sid(95), { userMessage: 'second' });
+
+    await replacement;
+    expect(existsSync(leasePath)).toBe(false);
+    expect(mockWorker.state.hosts).toHaveLength(2);
+  });
+
+  function makeRunContext(value: number, tag: string): ControlPlaneRunContext {
+    const sessionId = sid(value);
     return {
-      sessionId: `session:coder:${sessionId}`,
-      legacySessionId: sessionId,
-      commandId: `command:coder:${sessionId}:${tag}`,
-      correlationId: `correlation:coder:${sessionId}:${tag}`,
+      sessionId,
+      commandId: asSessionCommandId(randomUUID()),
+      correlationId: asCorrelationId(randomUUID()),
       actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
-      agentRunId: `agent-run:coder:${sessionId}:${tag}`,
-      attemptId: `agent-run-attempt:coder:${sessionId}:${tag}:1`,
+      agentRunId: asAgentRunId(randomUUID()),
+      attemptId: asAgentRunAttemptId(randomUUID()),
       executorOwnerId: `coder-worker:${sessionId}:${tag}`,
       fencingEpoch: 1,
-    } as unknown as ControlPlaneRunContext;
+    };
   }
 
   it('enables the root projection when child AgentRun shadow or enforcement is selected', () => {
@@ -183,7 +439,7 @@ describe('CoderWorkerPool', () => {
   it('reuses the same worker but creates a fresh mirrored bus after run end', async () => {
     const p = createPool();
 
-    const bus1 = await p.runFresh(7, { userMessage: 'first' });
+    const bus1 = await p.runFresh(sid(7), { userMessage: 'first' });
     const host = mockWorker.state.hosts[0];
     const runId1 = getRunId(bus1);
 
@@ -201,7 +457,7 @@ describe('CoderWorkerPool', () => {
     expect(bus1.ended).toBe(true);
     expect(bus1.buffer.some((ev) => ev.event === 'text')).toBe(true);
 
-    const bus2 = await p.runFresh(7, { userMessage: 'second' });
+    const bus2 = await p.runFresh(sid(7), { userMessage: 'second' });
     const runId2 = getRunId(bus2);
 
     expect(bus2).not.toBe(bus1);
@@ -216,11 +472,11 @@ describe('CoderWorkerPool', () => {
     const storeSpies = {
       terminalizeRun,
       interruptRun: vi.fn(),
-      runs: { renewAttemptLease: vi.fn() },
+      renewAttemptLease: vi.fn(),
     };
     const context = makeRunContext(71, 'failure-terminal');
-    const p = createPool(storeSpies as unknown as ControlPlaneStore);
-    const bus = await p.runFresh(71, {
+    const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
+    const bus = await p.runFresh(sid(71), {
       userMessage: 'fail after persistence',
       controlPlaneRunContext: context,
     });
@@ -260,7 +516,7 @@ describe('CoderWorkerPool', () => {
 
   it('bounds each coder isolate to the memory-safe default heap ceiling', async () => {
     const p = createPool();
-    await p.runFresh(70, { userMessage: 'first' });
+    await p.runFresh(sid(70), { userMessage: 'first' });
 
     const opts = mockWorker.state.hosts[0].opts as {
       resourceLimits?: { maxOldGenerationSizeMb?: number };
@@ -271,7 +527,7 @@ describe('CoderWorkerPool', () => {
   it('ignores late events and terminal signals from an old runId', async () => {
     const p = createPool();
 
-    const bus1 = await p.runFresh(8, { userMessage: 'first' });
+    const bus1 = await p.runFresh(sid(8), { userMessage: 'first' });
     const host = mockWorker.state.hosts[0];
     const runId1 = getRunId(bus1);
     host.bridge.emitToPool('bus.end', {
@@ -280,7 +536,7 @@ describe('CoderWorkerPool', () => {
       data: { reason: 'completed' },
     });
 
-    const bus2 = await p.runFresh(8, { userMessage: 'second' });
+    const bus2 = await p.runFresh(sid(8), { userMessage: 'second' });
     const runId2 = getRunId(bus2);
 
     host.bridge.emitToPool('bus.event', {
@@ -312,12 +568,12 @@ describe('CoderWorkerPool', () => {
       throw new Error('run setup failed');
     };
 
-    await expect(p.runFresh(9, { userMessage: 'first' })).rejects.toThrow('run setup failed');
-    const failedBus = p.getBus(9);
+    await expect(p.runFresh(sid(9), { userMessage: 'first' })).rejects.toThrow('run setup failed');
+    const failedBus = p.getBus(sid(9));
     expect(failedBus?.ended).toBe(true);
 
     mockWorker.state.requestImpl = null;
-    const bus2 = await p.runFresh(9, { userMessage: 'second' });
+    const bus2 = await p.runFresh(sid(9), { userMessage: 'second' });
 
     expect(bus2).not.toBe(failedBus);
     expect(bus2.ended).toBe(false);
@@ -329,13 +585,13 @@ describe('CoderWorkerPool', () => {
     try {
       const renewAttemptLease = vi.fn();
       const storeSpies = {
-        runs: { renewAttemptLease },
+        renewAttemptLease,
         terminalizeRun: vi.fn(),
         interruptRun: vi.fn(),
       };
       const context = makeRunContext(18, 'silent');
-      const p = createPool(storeSpies as unknown as ControlPlaneStore);
-      const bus = await p.runFresh(18, {
+      const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
+      const bus = await p.runFresh(sid(18), {
         userMessage: 'long silent provider call',
         controlPlaneRunContext: context,
       });
@@ -343,7 +599,7 @@ describe('CoderWorkerPool', () => {
       await vi.advanceTimersByTimeAsync(11 * 60_000);
 
       expect(bus.ended).toBe(false);
-      expect(p.getControlPlaneRunContext(18)).toEqual(context);
+      expect(p.getControlPlaneRunContext(sid(18))).toEqual(context);
       expect(renewAttemptLease).toHaveBeenCalledTimes(11);
       expect(renewAttemptLease.mock.calls.every((call) => call[0] === context)).toBe(true);
       const lastRenewal = renewAttemptLease.mock.calls.at(-1);
@@ -361,7 +617,7 @@ describe('CoderWorkerPool', () => {
     try {
       const renewAttemptLease = vi.fn();
       const storeSpies = {
-        runs: { renewAttemptLease },
+        renewAttemptLease,
         terminalizeRun: vi.fn(),
         interruptRun: vi.fn(),
       };
@@ -370,11 +626,11 @@ describe('CoderWorkerPool', () => {
         ...makeRunContext(19, 'replacement'),
         fencingEpoch: 2,
       } as ControlPlaneRunContext;
-      const p = createPool(storeSpies as unknown as ControlPlaneStore);
+      const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
 
-      await p.runFresh(19, { userMessage: 'old', controlPlaneRunContext: oldContext });
-      await p.evict(19);
-      await p.runFresh(19, {
+      await p.runFresh(sid(19), { userMessage: 'old', controlPlaneRunContext: oldContext });
+      await p.evict(sid(19));
+      await p.runFresh(sid(19), {
         userMessage: 'replacement',
         controlPlaneRunContext: replacementContext,
       });
@@ -406,17 +662,15 @@ describe('CoderWorkerPool', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const storeSpies = {
-        runs: {
-          renewAttemptLease: vi.fn(() => {
-            throw new Error('attempt was fenced');
-          }),
-        },
+        renewAttemptLease: vi.fn(() => {
+          throw new Error('attempt was fenced');
+        }),
         terminalizeRun: vi.fn(),
         interruptRun: vi.fn(),
       };
       const context = makeRunContext(20, 'authority-loss');
-      const p = createPool(storeSpies as unknown as ControlPlaneStore);
-      const bus = await p.runFresh(20, {
+      const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
+      const bus = await p.runFresh(sid(20), {
         userMessage: 'must stop on lost authority',
         controlPlaneRunContext: context,
       });
@@ -446,7 +700,7 @@ describe('CoderWorkerPool', () => {
         payload: { reason: 'control-plane-authority-lost' },
       }));
       expect(host.evictCalls).toBe(1);
-      expect(p.has(20)).toBe(false);
+      expect(p.has(sid(20))).toBe(false);
 
       // Even if a terminal from the fenced worker was already queued, its
       // detached listener/context cannot rewrite authority as success.
@@ -473,29 +727,15 @@ describe('CoderWorkerPool', () => {
       terminalizeRun: vi.fn(),
       interruptRun: vi.fn(),
     };
-    const activeContext = {
-      sessionId: 'session:coder:14',
-      legacySessionId: 14,
-      commandId: 'command:coder:14:active',
-      correlationId: 'correlation:coder:14:active',
-      actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
-      agentRunId: 'agent-run:coder:14:active',
-      attemptId: 'agent-run-attempt:coder:14:active:1',
-      executorOwnerId: 'coder-worker:14:active',
-      fencingEpoch: 1,
-    } as unknown as ControlPlaneRunContext;
+    const activeContext = makeRunContext(14, 'active');
     const rejectedContext = {
-      ...activeContext,
-      commandId: 'command:coder:14:rejected',
-      correlationId: 'correlation:coder:14:rejected',
-      agentRunId: 'agent-run:coder:14:rejected',
-      attemptId: 'agent-run-attempt:coder:14:rejected:1',
-      executorOwnerId: 'coder-worker:14:rejected',
-    } as unknown as ControlPlaneRunContext;
-    const p = createPool(storeSpies as unknown as ControlPlaneStore);
-    await p.runFresh(14, { userMessage: 'first', controlPlaneRunContext: activeContext });
+      ...makeRunContext(14, 'rejected'),
+      fencingEpoch: activeContext.fencingEpoch,
+    };
+    const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
+    await p.runFresh(sid(14), { userMessage: 'first', controlPlaneRunContext: activeContext });
 
-    await expect(p.runFresh(14, {
+    await expect(p.runFresh(sid(14), {
       userMessage: 'second',
       controlPlaneRunContext: rejectedContext,
     })).rejects.toThrow('run already in progress');
@@ -508,7 +748,7 @@ describe('CoderWorkerPool', () => {
       attemptLeaseStatus: 'fenced',
     }));
     expect(storeSpies.terminalizeRun).not.toHaveBeenCalled();
-    expect(p.getControlPlaneRunContext(14)).toEqual(activeContext);
+    expect(p.getControlPlaneRunContext(sid(14))).toEqual(activeContext);
     expect(mockWorker.state.hosts[0].bridge.requests.filter((request) => request.type === 'runFresh')).toHaveLength(1);
     } finally {
       if (previousControlPlane === undefined) delete process.env.CODER_CONTROL_PLANE_SHADOW;
@@ -524,23 +764,13 @@ describe('CoderWorkerPool', () => {
       terminalizeRun: vi.fn(),
       interruptRun: vi.fn(),
     };
-    const context = {
-      sessionId: 'session:coder:9',
-      legacySessionId: 9,
-      commandId: 'command:coder:9',
-      correlationId: 'correlation:coder:9',
-      actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
-      agentRunId: 'agent-run:coder:9',
-      attemptId: 'agent-run-attempt:coder:9:1',
-      executorOwnerId: 'coder-worker:9',
-      fencingEpoch: 1,
-    } as unknown as ControlPlaneRunContext;
-    const p = createPool(storeSpies as unknown as ControlPlaneStore);
+    const context = makeRunContext(9, 'dispatch-failed');
+    const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
     mockWorker.state.requestImpl = async () => {
       throw new Error('run setup failed');
     };
 
-    await expect(p.runFresh(9, {
+    await expect(p.runFresh(sid(9), {
       userMessage: 'first',
       controlPlaneRunContext: context,
     })).rejects.toThrow('run setup failed');
@@ -553,7 +783,7 @@ describe('CoderWorkerPool', () => {
       attemptLeaseStatus: 'fenced',
     }));
     expect(storeSpies.terminalizeRun).not.toHaveBeenCalled();
-    expect(p.getControlPlaneRunContext(9)).toBeNull();
+    expect(p.getControlPlaneRunContext(sid(9))).toBeNull();
     } finally {
       if (previousControlPlane === undefined) delete process.env.CODER_CONTROL_PLANE_SHADOW;
       else process.env.CODER_CONTROL_PLANE_SHADOW = previousControlPlane;
@@ -571,21 +801,11 @@ describe('CoderWorkerPool', () => {
         appendToolBoundary: vi.fn(),
         terminalizeRun: vi.fn(),
         interruptRun: vi.fn(),
-        runs: { renewAttemptLease: vi.fn() },
+        renewAttemptLease: vi.fn(),
       };
-      const context = {
-        sessionId: 'session:coder:13',
-        legacySessionId: 13,
-        commandId: 'command:coder:13',
-        correlationId: 'correlation:coder:13',
-        actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
-        agentRunId: 'agent-run:coder:13',
-        attemptId: 'agent-run-attempt:coder:13:1',
-        executorOwnerId: 'coder-worker:13',
-        fencingEpoch: 1,
-      } as unknown as ControlPlaneRunContext;
-      const p = createPool(storeSpies as unknown as ControlPlaneStore);
-      const bus = await p.runFresh(13, {
+      const context = makeRunContext(13, 'lifecycle');
+      const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
+      const bus = await p.runFresh(sid(13), {
         userMessage: 'first',
         controlPlaneRunContext: context,
       });
@@ -601,7 +821,7 @@ describe('CoderWorkerPool', () => {
       expect(runRequest?.payload).not.toHaveProperty('executorOwnerId');
       expect(runRequest?.payload).not.toHaveProperty('fencingEpoch');
       expect(runRequest?.payload).not.toHaveProperty('actor');
-      expect(p.getControlPlaneRunContext(13)).toEqual(context);
+      expect(p.getControlPlaneRunContext(sid(13))).toEqual(context);
 
       host.bridge.emitToPool('bus.event', {
         runId,
@@ -642,7 +862,7 @@ describe('CoderWorkerPool', () => {
         commandStatus: 'succeeded',
         reason: 'completed',
       }));
-      expect(p.getControlPlaneRunContext(13)).toBeNull();
+      expect(p.getControlPlaneRunContext(sid(13))).toBeNull();
     } finally {
       if (previousControlPlane === undefined) delete process.env.CODER_CONTROL_PLANE_SHADOW;
       else process.env.CODER_CONTROL_PLANE_SHADOW = previousControlPlane;
@@ -663,22 +883,12 @@ describe('CoderWorkerPool', () => {
         appendToolBoundary: vi.fn(),
         terminalizeRun: vi.fn(),
         interruptRun: vi.fn(),
-        runs: { renewAttemptLease: vi.fn() },
-        journal: { append: journalAppend },
+        renewAttemptLease: vi.fn(),
+        appendRuntimeEvent: journalAppend,
       };
-      const context = {
-        sessionId: 'session:coder:15',
-        legacySessionId: 15,
-        commandId: 'command:coder:15',
-        correlationId: 'correlation:coder:15',
-        actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
-        agentRunId: 'agent-run:coder:15',
-        attemptId: 'agent-run-attempt:coder:15:1',
-        executorOwnerId: 'coder-worker:15',
-        fencingEpoch: 1,
-      } as unknown as ControlPlaneRunContext;
-      const p = createPool(storeSpies as unknown as ControlPlaneStore);
-      const bus = await p.runFresh(15, { userMessage: 'first', controlPlaneRunContext: context });
+      const context = makeRunContext(15, 'extended-vocabulary');
+      const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
+      const bus = await p.runFresh(sid(15), { userMessage: 'first', controlPlaneRunContext: context });
       const host = mockWorker.state.hosts[0];
       const runId = getRunId(bus);
       const emit = (event: string, data: unknown) => host.bridge.emitToPool('bus.event', { runId, event, data });
@@ -740,22 +950,12 @@ describe('CoderWorkerPool', () => {
         appendToolBoundary: vi.fn(),
         terminalizeRun: vi.fn(),
         interruptRun: vi.fn(),
-        runs: { renewAttemptLease: vi.fn() },
-        journal: { append: journalAppend },
+        renewAttemptLease: vi.fn(),
+        appendRuntimeEvent: journalAppend,
       };
-      const context = {
-        sessionId: 'session:coder:16',
-        legacySessionId: 16,
-        commandId: 'command:coder:16',
-        correlationId: 'correlation:coder:16',
-        actor: { actorId: 'local-user', actorType: 'user', source: 'http' },
-        agentRunId: 'agent-run:coder:16',
-        attemptId: 'agent-run-attempt:coder:16:1',
-        executorOwnerId: 'coder-worker:16',
-        fencingEpoch: 1,
-      } as unknown as ControlPlaneRunContext;
-      const p = createPool(storeSpies as unknown as ControlPlaneStore);
-      const bus = await p.runFresh(16, { userMessage: 'first', controlPlaneRunContext: context });
+      const context = makeRunContext(16, 'flags-off');
+      const p = createPool(storeSpies as unknown as ControlPlaneAuthority);
+      const bus = await p.runFresh(sid(16), { userMessage: 'first', controlPlaneRunContext: context });
       const host = mockWorker.state.hosts[0];
       const runId = getRunId(bus);
 
@@ -784,85 +984,53 @@ describe('CoderWorkerPool', () => {
     process.env.CODER_CONTROL_PLANE_SHADOW = '1';
     process.env.CODER_RUNTIME_JOURNAL_SHADOW = '1';
     resetCoderControlPlaneShadowMetricsForTests();
-    let db: InstanceType<typeof Database> | null = null;
     try {
-      db = new Database(':memory:');
-      db.pragma('foreign_keys = ON');
-      db.exec('CREATE TABLE coder_sessions (id INTEGER PRIMARY KEY)');
-      controlPlaneFoundation251.up(db);
-      controlPlaneAlignment252.up(db);
-      db.prepare('INSERT INTO coder_sessions(id) VALUES (?)').run(17);
-      const store = new ControlPlaneStore(db, { journalEnabled: true });
-      const divergenceStore = new ControlPlaneDivergenceStore(db);
-      const payload = { content: 'diverge' };
-      const actor = { actorId: 'local-user', actorType: 'user' as const, source: 'http' as const };
-      const accepted = store.acceptCommand({
-        command: {
-          schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
-          commandId: asSessionCommandId('command:diverge:1'),
-          idempotencyKey: 'idem:diverge:1',
-          kind: 'start',
-          sessionId: asSessionId('session:coder:17'),
-          actor,
-          requestedAt: '2026-01-01T00:00:00.000Z',
-          correlationId: asCorrelationId('correlation:diverge:1'),
-          payload,
-        },
-        payloadHash: hashControlPlanePayload(payload),
-        legacySessionId: 17,
-        run: {
-          agentRunId: asAgentRunId('agent-run:diverge:1'),
-          attemptId: asAgentRunAttemptId('agent-run-attempt:diverge:1:1'),
-          role: 'build',
-          agentDefinitionId: 'build',
-          waitMode: 'foreground',
-          requestedCapabilityProfile: 'auto',
-          executorOwnerId: 'coder-worker:17',
-          executorExpiresAt: '2099-01-01T00:00:00.000Z',
-        },
-      });
-      expect(accepted.kind).toBe('accepted');
-      const runContext = {
-        sessionId: asSessionId('session:coder:17'),
-        legacySessionId: 17,
-        commandId: asSessionCommandId('command:diverge:1'),
-        correlationId: asCorrelationId('correlation:diverge:1'),
-        actor,
-        agentRunId: asAgentRunId('agent-run:diverge:1'),
-        attemptId: asAgentRunAttemptId('agent-run-attempt:diverge:1:1'),
-        executorOwnerId: 'coder-worker:17',
-        fencingEpoch: 1,
-      } as unknown as ControlPlaneRunContext;
-      // Forge a disagreement: the control plane already terminalized the run
-      // as interrupted/failed before the legacy bus reports a clean done.
-      store.interruptRun({
-        context: runContext,
-        status: 'interrupted',
-        commandStatus: 'failed',
-        reason: 'worker-crashed',
-      });
+      const runContext = makeRunContext(17, 'diverge');
+      const store = {
+        terminalizeRun: vi.fn(),
+        interruptRun: vi.fn(),
+        getCommand: vi.fn(() => ({
+          status: 'failed',
+          reasonCode: 'worker-crashed',
+          agentRunId: runContext.agentRunId,
+        })),
+        getRun: vi.fn(() => ({
+          status: 'interrupted',
+          terminalReason: 'worker-crashed',
+        })),
+        renewAttemptLease: vi.fn(),
+        recordDivergences: vi.fn(
+          (_context: unknown, divergences: readonly unknown[]) =>
+            divergences.length,
+        ),
+      };
 
       pool = new CoderWorkerPool({
         workerFile: 'mock-worker.js',
         dbPath: ':memory:',
+        resolveSessionRuntimeContext: resolveTestSessionRuntimeContext,
         postRunLingerMs: 60_000,
         log: () => undefined,
-        getControlPlaneStore: () => store,
-        getControlPlaneDivergenceStore: () => divergenceStore,
+        getControlPlaneStore: () =>
+          store as unknown as ControlPlaneAuthority,
       });
-      const bus = await pool.runFresh(17, { userMessage: 'first', controlPlaneRunContext: runContext });
+      const bus = await pool.runFresh(sid(17), { userMessage: 'first', controlPlaneRunContext: runContext });
       const host = mockWorker.state.hosts[0];
       const runId = getRunId(bus);
       host.bridge.emitToPool('bus.end', { runId, event: 'done', data: { reason: 'completed' } });
 
-      await vi.waitFor(() => expect(divergenceStore.count()).toBe(2));
-      expect(divergenceStore.list().map((row) => row.kind).sort()).toEqual([
+      await vi.waitFor(() =>
+        expect(store.recordDivergences).toHaveBeenCalledOnce(),
+      );
+      const divergences = store.recordDivergences.mock.calls[0]?.[1] as
+        | Array<{ kind: string }>
+        | undefined;
+      expect(divergences?.map((row) => row.kind).sort()).toEqual([
         'command_status_mismatch',
         'run_status_mismatch',
       ]);
       expect(snapshotCoderControlPlaneShadowMetrics().divergences).toBe(2);
     } finally {
-      db?.close();
       resetCoderControlPlaneShadowMetricsForTests();
       if (previousControlPlane === undefined) delete process.env.CODER_CONTROL_PLANE_SHADOW;
       else process.env.CODER_CONTROL_PLANE_SHADOW = previousControlPlane;
@@ -871,19 +1039,26 @@ describe('CoderWorkerPool', () => {
     }
   });
 
-  it('forwards the persisted round message id to an active worker follow-up', async () => {
+  it('asks the active worker to persist a follow-up before enqueueing it', async () => {
     const p = createPool();
-    await p.runFresh(10, { userMessage: 'first' });
+    await p.runFresh(sid(10), { userMessage: 'first' });
     const host = mockWorker.state.hosts[0];
 
-    await p.pushUserMessage(10, 'follow-up', ['skill-a'], 42);
+    await expect(
+      p.pushUserMessage(
+        sid(10),
+        'follow-up',
+        ['skill-a'],
+        'message:test-follow-up',
+      ),
+    ).resolves.toBe(42);
 
     expect(host.bridge.requests.at(-1)).toMatchObject({
       type: 'pushUserMessage',
       payload: {
         content: 'follow-up',
         selectedSkillIds: ['skill-a'],
-        roundMessageId: 42,
+        operationId: 'message:test-follow-up',
       },
     });
   });

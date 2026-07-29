@@ -73,7 +73,7 @@ export interface ChatRequest {
    */
   previousResponseMessageCount?: number;
   /** Stable local session id, used by providers that expose prompt/cache affinity knobs. */
-  sessionId?: string | number;
+  sessionId?: string;
   /**
    * Best-effort audit hook fired once for every physical upstream attempt.
    * Telemetry failures must never fail the model request.

@@ -14,9 +14,13 @@ import {
   type SubordinateCompletionEvent,
 } from '../completion-events.js';
 
+const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000001';
+const QA_RUN_ID = '00000000-0000-4000-8000-000000000042';
+const KANBAN_CARD_ID = '00000000-0000-4000-8000-000000000007';
+
 function makeEvent(overrides: Partial<SubordinateCompletionEvent> = {}): SubordinateCompletionEvent {
   return {
-    agentRunId: 1,
+    agentRunId: AGENT_RUN_ID,
     role: 'frontend',
     outcome: 'completed',
     emittedAtMs: Date.now(),
@@ -129,13 +133,13 @@ describe('SubordinateCompletionBus', () => {
     bus.on((e) => { received.push(e); });
 
     const event = makeEvent({
-      agentRunId: 42,
+      agentRunId: QA_RUN_ID,
       role: 'qa',
       outcome: 'failed',
       failureReason: 'timeout',
       durationMs: 5_000,
       tokensUsed: { input: 1000, output: 500 },
-      kanbanCardId: 7,
+      kanbanCardId: KANBAN_CARD_ID,
     });
     await bus.emitSync(event);
     expect(received).toHaveLength(1);

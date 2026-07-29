@@ -1,4 +1,5 @@
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import { asSessionId, isUuid } from '@mcp/session-storage';
 import { appStudioSessionBinding, type AppToolBinding } from './binding.js';
 import {
   appDispatchReadyWork,
@@ -22,7 +23,7 @@ export type { AppToolBinding } from './binding.js';
 export type AppStudioToolAudience = 'company-master' | 'company-subordinate';
 export interface BuildAppStudioToolsOptions {
   audience: AppStudioToolAudience;
-  appSessionId: number;
+  appSessionId: string;
   role?: string;
 }
 
@@ -74,10 +75,12 @@ function allTools(binding: AppToolBinding): CoderTool[] {
 }
 
 export function buildAppStudioTools(_projectId: number, options: BuildAppStudioToolsOptions): CoderTool[] {
-  if (!Number.isInteger(options.appSessionId) || options.appSessionId <= 0) {
-    throw new Error('Persistent App Company tools require a positive appSessionId.');
+  if (!isUuid(options.appSessionId)) {
+    throw new Error('Persistent App Company tools require a UUID appSessionId.');
   }
-  const tools = allTools(appStudioSessionBinding(options.appSessionId));
+  const tools = allTools(
+    appStudioSessionBinding(asSessionId(options.appSessionId)),
+  );
   const allowed = appStudioToolNamesForRole(options.audience, options.role);
   return tools.filter((tool) => allowed.has(tool.name));
 }

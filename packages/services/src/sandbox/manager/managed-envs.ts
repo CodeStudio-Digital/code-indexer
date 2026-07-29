@@ -42,7 +42,7 @@ export interface ManagedEnvsDeps {
   listServices: (sessionId: string) => Sandbox[];
   qaPreviewConfig: {
     httpApiPort: number;
-    hasQaPlaywrightSkill: (sessionId: number) => boolean;
+    hasQaPlaywrightSkill: (sessionId: string) => boolean;
   } | null;
   /** Driver runtime hint; null when `resolveDriver` hasn't picked one yet. */
   qaRuntime: 'docker' | 'podman' | 'e2b' | null;
@@ -53,12 +53,12 @@ export interface ManagedEnvsDeps {
  * `PLAYWRIGHT_BASE_URL_*` keys for the session's sandboxes and reconcile
  * them with the env store. Skipped silently when:
  *   - The env store isn't wired.
- *   - The session id is not numeric (tests).
  */
-export function syncManagedEnvs(sessionId: string, deps: ManagedEnvsDeps): void {
+export async function syncManagedEnvs(
+  sessionId: string,
+  deps: ManagedEnvsDeps,
+): Promise<void> {
   if (!deps.envStore) return;
-  const numericId = Number(sessionId);
-  if (!Number.isFinite(numericId)) return;
 
   const desired = new Map<string, string>();
   const desiredSecret = new Set<string>();
@@ -70,7 +70,7 @@ export function syncManagedEnvs(sessionId: string, deps: ManagedEnvsDeps): void 
   // the family so non-QA sessions don't pay the cost.
   const qaEnabled =
     deps.qaPreviewConfig != null &&
-    deps.qaPreviewConfig.hasQaPlaywrightSkill(numericId);
+    deps.qaPreviewConfig.hasQaPlaywrightSkill(sessionId);
 
   const addEntry = (idUpper: string, sb: Sandbox): void => {
     if (sb.previewUrl) {
@@ -116,13 +116,13 @@ export function syncManagedEnvs(sessionId: string, deps: ManagedEnvsDeps): void 
   if (qaEnabled) {
     try {
       const existing = deps.envStore
-        .list(numericId)
+        .list(sessionId)
         .find((r) => r.key === 'MCP_PREVIEW_COOKIE');
       const exp = parseTokenExpiry(existing?.value);
       const REFRESH_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
       const stale = !exp || exp - Date.now() < REFRESH_THRESHOLD_MS;
       const value = stale
-        ? mintPreviewToken(String(numericId), QA_PREVIEW_TTL_MS).value
+        ? mintPreviewToken(sessionId, QA_PREVIEW_TTL_MS).value
         : existing!.value;
       desired.set('MCP_PREVIEW_COOKIE', value);
       desiredSecret.add('MCP_PREVIEW_COOKIE');
@@ -136,9 +136,9 @@ export function syncManagedEnvs(sessionId: string, deps: ManagedEnvsDeps): void 
   try {
     for (const [key, value] of desired) {
       const isSecret = desiredSecret.has(key);
-      deps.envStore.upsert(numericId, key, value, isSecret, { source: 'auto' });
+      await deps.envStore.upsert(sessionId, key, value, isSecret, { source: 'auto' });
     }
-    for (const row of deps.envStore.list(numericId)) {
+    for (const row of deps.envStore.list(sessionId)) {
       const isManaged =
         row.key.startsWith('PREVIEW_URL_') ||
         row.key.startsWith('SERVICE_URL_') ||
@@ -146,7 +146,7 @@ export function syncManagedEnvs(sessionId: string, deps: ManagedEnvsDeps): void 
         row.key === 'PLAYWRIGHT_BASE_URL' ||
         row.key === 'MCP_PREVIEW_COOKIE';
       if (isManaged && !desired.has(row.key)) {
-        deps.envStore.delete(numericId, row.key);
+        deps.envStore.delete(sessionId, row.key);
       }
     }
   } catch (e) {

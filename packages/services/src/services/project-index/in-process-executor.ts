@@ -29,17 +29,19 @@ export function createInProcessStructuralExecutor(
         maxFiles: opts.maxFiles,
         allowEmptyWipe: opts.allowEmptyWipe,
         onProgress: opts.onProgress,
+        onChanges: opts.onChanges,
       });
       return {
         totalFiles: r.totalFiles, indexed: r.indexed, removed: r.removed,
         skipped: r.skipped, errorCount: r.errorCount, durationMs: r.durationMs,
-        aborted: r.aborted,
+        phaseTimings: r.phaseTimings, peakRssMb: r.peakRssMb, aborted: r.aborted,
       };
     },
     async indexFiles(projectId, relPaths) {
       return indexFilesStructural(db, projectId, relPaths, {
         ignorePatterns: config.ignorePatterns,
         maxFileSizeKB: config.maxFileSizeKB,
+        concurrency: config.concurrency,
       });
     },
     async removeFiles(projectId, relPaths) {

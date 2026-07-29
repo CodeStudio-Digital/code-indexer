@@ -101,6 +101,7 @@ export interface ProjectSemanticSearchDiagnostics {
   rerankerCandidates?: number;
   rerankerReturned?: number;
   rerankerError?: string;
+  telemetryRequestId?: string;
 }
 
 export interface ProjectSemanticSearchTestResult {
@@ -139,13 +140,38 @@ export interface ProjectSemanticStatus {
     embedding_target: { kind: string; model?: string; revision?: string; dtype?: string };
     dimension?: number;
   } | null;
+  search_telemetry?: {
+    period_days: number;
+    total_searches: number;
+    semantic_searches: number;
+    lexical_searches: number;
+    cache_hits: number;
+    fallbacks: number;
+    reranker_applied: number;
+    reranker_failed: number;
+    opened_results: number;
+    semantic_wins: number;
+    p50_ms: number | null;
+    p95_ms: number | null;
+    consumers: Partial<Record<
+      'agent' | 'search_everywhere' | 'monaco' | 'semantic_test' | 'api' | 'cli' | 'benchmark' | 'unknown',
+      number
+    >>;
+    effective_modes: Partial<Record<'fts' | 'vector' | 'hybrid', number>>;
+    last_search_at: string | null;
+  } | null;
   resolved_reranker?: {
+    configured?: boolean;
+    status?: 'disabled' | 'configured' | 'running' | 'active' | 'failed';
+    target_kind?: string;
     model?: string;
     dtype?: string;
     execution_provider?: string;
     estimated_memory_bytes?: number;
     downgrade_reason?: string | null;
     last_latency_ms?: number | null;
+    last_success_at?: string | null;
+    last_error?: string | null;
   } | null;
 }
 
@@ -207,12 +233,28 @@ export async function testProjectSemanticSearch(
     limit: String(input.limit),
     supersessionKey: `semantic-test:p${projectId}`,
     bypassCache: '1',
+    consumer: 'semantic_test',
   });
   const response = await expectOk(await fetch(
     `/api/projects/${encodeURIComponent(projectId)}/search?${query.toString()}`,
     { signal },
   ));
   return response.json() as Promise<ProjectSemanticSearchTestResult>;
+}
+
+export async function recordProjectSemanticOutcome(
+  projectId: number,
+  requestId: string,
+  semanticWin: boolean,
+): Promise<void> {
+  await expectOk(await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/search/outcome`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId, semanticWin }),
+    },
+  ));
 }
 
 export function codeNamespaceStatus(

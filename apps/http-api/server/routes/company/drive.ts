@@ -1,18 +1,22 @@
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  parseJsonBody,
+  resolveCompanySessionContext,
+  notFound,
+} from '../_helpers.js';
 import { CompanyDriveStore } from '@mcp/company/services/CompanyDriveStore.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 import { getWorkerOrchestratorPool } from '../../../sse/workerPoolSingleton.js';
 import { publish as busPublish } from '../../../coder-bus.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 /**
  * HTTP routes for the company shared drive.
  *
- * The drive is just a metadata table (`company_drive_files`) + an on-disk
- * file pool — fully coherent across processes via SQLite (WAL) + the
- * filesystem. So we ALWAYS operate it through a fresh in-process
- * `CompanyDriveStore`.
+ * The drive is fully bundle-local: one metadata entity and one payload per
+ * file. Routes always construct a fresh facade over the root Company bundle.
  *
  * Critically, we must NOT reuse the live orchestrator's `driveStore`: the
  * orchestrator now runs in a worker thread and `getCompanyOrchestrator`
@@ -30,7 +34,7 @@ import { publish as busPublish } from '../../../coder-bus.js';
  * /upload to attach documents the user wants the agents to see, GET
  * /file?path=… to inspect contents, and DELETE to remove stale files.
  */
-function getDriveStore(deps: ServerDeps, sessionId: number): CompanyDriveStore {
+function getDriveStore(deps: ServerDeps, sessionId: CompanySessionId): CompanyDriveStore {
   const entry = getWorkerOrchestratorPool().get(sessionId);
   const publisher: IMetaBusPublisher | undefined = entry
     ? {
@@ -44,16 +48,24 @@ function getDriveStore(deps: ServerDeps, sessionId: number): CompanyDriveStore {
       }
     : undefined;
   return new CompanyDriveStore({
-    db: deps.db,
-    companyStore: deps.companyStore,
+    sessionStore: deps.sessionStore,
     companySessionId: sessionId,
     publisher,
   });
 }
 
 export function mountCompanyDriveRoutes(app: Hono, deps: ServerDeps): void {
-  app.get('/api/company/sessions/:id/drive', (c) => {
-    const sessionId = parseIdParam(c);
+  const resolveRootId = async (c: Context) =>
+    (
+      await resolveCompanySessionContext(
+        deps.sessionStore,
+        parseCompanySessionIdParam(c),
+      )
+    )?.rootId ?? null;
+
+  app.get('/api/company/sessions/:id/drive', async (c) => {
+    const sessionId = await resolveRootId(c);
+    if (!sessionId) return notFound(c);
     const prefix = c.req.query('prefix') ?? undefined;
     const ownerRole = c.req.query('owner_role') ?? undefined;
     try {
@@ -66,8 +78,9 @@ export function mountCompanyDriveRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  app.get('/api/company/sessions/:id/drive/file', (c) => {
-    const sessionId = parseIdParam(c);
+  app.get('/api/company/sessions/:id/drive/file', async (c) => {
+    const sessionId = await resolveRootId(c);
+    if (!sessionId) return notFound(c);
     const path = c.req.query('path');
     if (!path) return c.json({ error: 'path query parameter is required' }, 400);
     const offsetRaw = c.req.query('offset');
@@ -88,7 +101,8 @@ export function mountCompanyDriveRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/drive', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = await resolveRootId(c);
+    if (!sessionId) return notFound(c);
     const body = await parseJsonBody<{ path: string; content: string; mode?: 'write' | 'append' }>(c);
     if (!body.path) return c.json({ error: 'path is required' }, 400);
     if (typeof body.content !== 'string') return c.json({ error: 'content (string) is required' }, 400);
@@ -106,8 +120,9 @@ export function mountCompanyDriveRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  app.delete('/api/company/sessions/:id/drive', (c) => {
-    const sessionId = parseIdParam(c);
+  app.delete('/api/company/sessions/:id/drive', async (c) => {
+    const sessionId = await resolveRootId(c);
+    if (!sessionId) return notFound(c);
     const path = c.req.query('path');
     if (!path) return c.json({ error: 'path query parameter is required' }, 400);
     try {

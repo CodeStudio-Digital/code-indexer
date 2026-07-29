@@ -15,6 +15,9 @@ import {
 } from '../agent-wait-loop.js';
 import type { AttentionEvent, AttentionListener } from '../../services/MasterAttention.js';
 
+const TARGET_RUN_ID = '00000000-0000-4000-8000-000000000007';
+const SYSTEM_RUN_ID = '00000000-0000-4000-8000-000000000000';
+
 function makeOrch(over: Partial<WaitLoopOrchestrator>): {
   orch: WaitLoopOrchestrator;
   fire: (ev: AttentionEvent) => void;
@@ -64,11 +67,14 @@ describe('runAgentWaitLoop — safety poll (the deadlock fix)', () => {
     const { orch } = makeOrch({
       listSubordinates: () => {
         calls++;
-        return [{ agentRunId: 7, status: calls <= 1 ? 'running' : 'completed' }];
+        return [{
+          agentRunId: TARGET_RUN_ID,
+          status: calls <= 1 ? 'running' : 'completed',
+        }];
       },
     });
     const p = runAgentWaitLoop(orch, {
-      targetIds: new Set([7]),
+      targetIds: new Set([TARGET_RUN_ID]),
       isMaster: true,
       deadlineMs: Date.now() + 60_000,
     });
@@ -92,18 +98,18 @@ describe('runAgentWaitLoop — safety poll (the deadlock fix)', () => {
 describe('runAgentWaitLoop — event-driven returns (master)', () => {
   it('returns attention when a target posts a plan', async () => {
     const { orch, fire } = makeOrch({
-      listSubordinates: () => [{ agentRunId: 7, status: 'running' }],
+      listSubordinates: () => [{ agentRunId: TARGET_RUN_ID, status: 'running' }],
     });
     const p = runAgentWaitLoop(orch, {
-      targetIds: new Set([7]),
+      targetIds: new Set([TARGET_RUN_ID]),
       isMaster: true,
       deadlineMs: Date.now() + 60_000,
     });
     await Promise.resolve(); // let the loop subscribe
-    fire({ kind: 'plan', agentRunId: 7, role: 'qa' });
+    fire({ kind: 'plan', agentRunId: TARGET_RUN_ID, role: 'qa' });
     await expect(p).resolves.toEqual({
       kind: 'attention',
-      event: { kind: 'plan', agentRunId: 7, role: 'qa' },
+      event: { kind: 'plan', agentRunId: TARGET_RUN_ID, role: 'qa' },
     });
   });
 
@@ -115,7 +121,7 @@ describe('runAgentWaitLoop — event-driven returns (master)', () => {
       deadlineMs: Date.now() + 60_000,
     });
     await Promise.resolve();
-    fire({ kind: 'notify', agentRunId: 0, role: 'system' });
+    fire({ kind: 'notify', agentRunId: SYSTEM_RUN_ID, role: 'system' });
     await expect(p).resolves.toEqual({ kind: 'message', via: 'notify' });
   });
 
@@ -139,17 +145,20 @@ describe('runAgentWaitLoop — subordinate gating (isMaster=false)', () => {
     vi.useFakeTimers();
     let terminal = false;
     const { orch, fire } = makeOrch({
-      listSubordinates: () => [{ agentRunId: 7, status: terminal ? 'completed' : 'running' }],
+      listSubordinates: () => [{
+        agentRunId: TARGET_RUN_ID,
+        status: terminal ? 'completed' : 'running',
+      }],
     });
     const p = runAgentWaitLoop(orch, {
-      targetIds: new Set([7]),
+      targetIds: new Set([TARGET_RUN_ID]),
       isMaster: false,
       deadlineMs: Date.now() + 60_000,
     });
     let settled = false;
     void p.then(() => { settled = true; });
     await Promise.resolve();
-    fire({ kind: 'question', agentRunId: 7, role: 'qa' }); // subordinate must NOT resolve on this
+    fire({ kind: 'question', agentRunId: TARGET_RUN_ID, role: 'qa' }); // subordinate must NOT resolve on this
     await vi.advanceTimersByTimeAsync(0);
     expect(settled).toBe(false); // still waiting
     terminal = true;

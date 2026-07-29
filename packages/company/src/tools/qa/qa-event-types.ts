@@ -28,7 +28,7 @@ export interface QaFailingTest {
 }
 
 export interface QaRunStartedPayload {
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   agent_role: string;
   suite: string;
   test_count?: number;
@@ -36,7 +36,7 @@ export interface QaRunStartedPayload {
 }
 
 export interface QaRunTestResultPayload {
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   agent_role: string;
   spec: string;
   test_name: string;
@@ -49,7 +49,7 @@ export interface QaRunTestResultPayload {
 }
 
 export interface QaRunCompletedPayload {
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   agent_role: string;
   suite: string;
   passed: number;
@@ -61,9 +61,9 @@ export interface QaRunCompletedPayload {
 }
 
 export interface QaBugFiledPayload {
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   agent_role: string;
-  card_id: number;
+  card_id: string;
   title: string;
 }
 

@@ -11,8 +11,8 @@ import type { ResolvedSkill, SkillTemplateContext } from '@mcp/code-agent/skills
 import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
 import { groupSkillsByNamespace } from '@mcp/code-agent/skills/namespace.js';
 import type { InstalledNamespaceSummary } from '@mcp/code-agent/skills/agent-skills-installer.js';
-import { SkillStore } from '@mcp/store/skill-store.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { SessionId } from '@mcp/session-storage';
 
 const SAMPLE_SKILL_IDS_PER_NAMESPACE = 5;
 
@@ -32,15 +32,15 @@ const SAMPLE_SKILL_IDS_PER_NAMESPACE = 5;
  * still returns the namespace list with counts and sample IDs.
  *
  * `sessionStore` + `sessionId` are optional; when provided, the body returned
- * by `get_skill_content` is mirrored into `coder_session_inputs` (kind
+ * by `get_skill_content` is mirrored into the session input files (kind
  * `skill_content`) so the Input tab in the session details modal reflects
  * mid-conversation skill loads.
  */
 export function buildSkillDiscoveryTools(
   skills: ResolvedSkill[],
   templateCtx: SkillTemplateContext,
-  sessionStore?: SessionStore,
-  sessionId?: number,
+  sessionStore?: FsSessionStore,
+  sessionId?: SessionId,
   installedNamespaces?: InstalledNamespaceSummary[],
 ): CoderTool[] {
   const installedByName = new Map<string, InstalledNamespaceSummary>();
@@ -184,7 +184,7 @@ export function buildSkillDiscoveryTools(
       const body = interpolateSkillVars(skill.promptBody, fullCtx);
       if (sessionStore && sessionId != null) {
         try {
-          sessionStore.recordSessionInput({
+          await sessionStore.recordSessionInput({
             session_id: sessionId,
             kind: 'skill_content',
             source_label: `skill:${skill.id}`,
@@ -222,15 +222,14 @@ export function buildSkillDiscoveryTools(
  * Build the `invoke_skill` meta-tool for all tool-mode skills.
  *
  * `sessionStore`, when provided, mirrors the interpolated skill body into
- * `coder_session_inputs` (kind `skill_content`, source `invoke_skill:<id>`)
+ * the session input files (kind `skill_content`, source `invoke_skill:<id>`)
  * for the Input tab.
  */
 export function buildInvokeSkillTool(
   skills: ResolvedSkill[],
   templateCtx: SkillTemplateContext,
-  dbPath: string,
-  sessionId: number,
-  sessionStore?: SessionStore,
+  sessionId: SessionId,
+  sessionStore?: FsSessionStore,
 ): CoderTool {
   // Build a concise catalog for the tool description
   const catalog = skills
@@ -276,7 +275,7 @@ export function buildInvokeSkillTool(
 
       if (sessionStore) {
         try {
-          sessionStore.recordSessionInput({
+          await sessionStore.recordSessionInput({
             session_id: sessionId,
             kind: 'skill_content',
             source_label: `invoke_skill:${skill.id}`,
@@ -293,19 +292,24 @@ export function buildInvokeSkillTool(
         }
       }
 
-      // Log usage (fire-and-forget)
-      try {
-        const store = new SkillStore(dbPath);
-        store.logSkillUsage({
-          session_id: sessionId,
-          skill_id: skillId,
-          invoked_by: 'model',
-          input_text: userInput || undefined,
-          duration_ms: Date.now() - start,
-        });
-        store.close();
-      } catch {
-        // Non-critical — don't fail the tool call
+      // Session-scoped usage belongs to the bundle, never SQLite.
+      if (sessionStore) {
+        try {
+          await sessionStore.appendSessionEvent(
+            sessionId,
+            'skill_usage',
+            {
+              skill_id: skillId,
+              invoked_by: 'model',
+              input_text: userInput || null,
+              duration_ms: Date.now() - start,
+              outcome: 'success',
+            },
+            `skill-usage:${skillId}:${start}`,
+          );
+        } catch {
+          // Non-critical — don't fail the tool call.
+        }
       }
 
       const toolRestriction = skill.allowedTools && skill.allowedTools.length > 0

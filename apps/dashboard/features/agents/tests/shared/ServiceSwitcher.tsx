@@ -11,7 +11,7 @@ import React from 'react';
 import { useSessionServices } from './useSessionServices.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   value: string;
   onChange: (serviceId: string) => void;
 }

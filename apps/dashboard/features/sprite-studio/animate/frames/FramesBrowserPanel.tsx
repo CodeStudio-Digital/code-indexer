@@ -36,12 +36,12 @@ export function FramesBrowserPanel({
   onImport,
 }: {
   projectId: number;
-  assetId: number;
-  currentVersionId: number | null;
+  assetId: string;
+  currentVersionId: string | null;
   versions: AssetVersion[];
   generations: GenerationGroup[];
   refresh: () => void;
-  onSelectVersion: (versionId: number) => void;
+  onSelectVersion: (versionId: string) => void;
   onImport: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');
@@ -123,7 +123,7 @@ export function FramesBrowserPanel({
     overscan: 6,
   });
 
-  const onThumbClick = useCallback((id: number, e: React.MouseEvent) => {
+  const onThumbClick = useCallback((id: string, e: React.MouseEvent) => {
     const s = useAnimateSession.getState();
     if (s.selectMode || e.shiftKey || e.metaKey || e.ctrlKey) {
       if (e.shiftKey) s.selectRange(id, orderedIds);
@@ -151,7 +151,7 @@ export function FramesBrowserPanel({
         onImport={onImport}
       />
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
-        {assetId <= 0 ? (
+        {!assetId ? (
           <div className="p-4 text-center text-[11px] text-muted-foreground">{t('frames.emptyPickAsset')}</div>
         ) : rows.length === 0 ? (
           <div className="p-4 text-center text-[11px] text-muted-foreground">{t('frames.emptyNoVersions')}</div>

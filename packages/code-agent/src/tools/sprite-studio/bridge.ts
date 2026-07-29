@@ -23,7 +23,7 @@ export interface SpriteGenerateToolInput {
   /** Existing/new asset display name (created when `assetId` is absent). */
   assetName?: string;
   /** Target an existing asset directly (skips name lookup/create). */
-  assetId?: number;
+  assetId?: string;
   /** What to draw ("a goblin chef with a ladle"). */
   intent: string;
   /** Asset category for a freshly created asset (default 'misc'). */
@@ -36,9 +36,9 @@ export interface SpriteGenerateToolInput {
 
 /** The version created by an auto-saved generate. */
 export interface SpriteGenerateToolResult {
-  assetId: number;
+  assetId: string;
   slug: string;
-  versionId: number;
+  versionId: string;
   /** Path of the PNG relative to `.sprite-studio/` (e.g. `assets/goblin/v001.png`). */
   fileRelPath: string;
   width: number;
@@ -56,7 +56,7 @@ export interface ISpriteStudioHost {
     filter?: { category?: string; q?: string },
   ): Promise<
     Array<{
-      id: number;
+      id: string;
       slug: string;
       name: string;
       category: string;
@@ -69,9 +69,9 @@ export interface ISpriteStudioHost {
   /** Apply deterministic ops to an asset's current version → a new version. */
   process(input: {
     projectId: number;
-    assetId: number;
+    assetId: string;
     ops: unknown[];
-  }): Promise<{ versionId: number }>;
+  }): Promise<{ versionId: string }>;
   /** Export assets to the project's export dir; returns written file paths. */
   export(input: {
     projectId: number;

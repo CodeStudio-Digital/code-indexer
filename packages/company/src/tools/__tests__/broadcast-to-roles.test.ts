@@ -6,6 +6,10 @@ import { describe, it, expect, vi } from 'vitest';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 
+const MASTER_AGENT_RUN_ID = 'a0000000-0000-4000-8000-000000000007';
+const BACKEND_MESSAGE_ID = 'f0000000-0000-4000-8000-000000000101';
+const FRONTEND_MESSAGE_ID = 'f0000000-0000-4000-8000-000000000102';
+
 function fakeOrchestrator(overrides: Partial<Record<string, unknown>>): CompanyOrchestrator {
   return new Proxy(
     {},
@@ -27,14 +31,16 @@ function broadcastTool(orch: CompanyOrchestrator) {
 describe('broadcast_to_roles', () => {
   it('sends the message to each unique role and mirrors to the board', async () => {
     const inboxSend = vi.fn((args: { toRole: string }) => ({
-      message: { id: args.toRole === 'backend' ? 101 : 102 },
+      message: {
+        id: args.toRole === 'backend' ? BACKEND_MESSAGE_ID : FRONTEND_MESSAGE_ID,
+      },
       deliveredImmediately: true,
     }));
     const postToBoard = vi.fn();
     const orch = fakeOrchestrator({
       inboxSend,
       postToBoard,
-      getMasterAgentRunId: () => 7,
+      getMasterAgentRunId: () => MASTER_AGENT_RUN_ID,
     });
     const res = await broadcastTool(orch).handler(
       { roles: ['backend', 'frontend', 'backend'], message: 'Auth header is X-Token' },
@@ -57,9 +63,13 @@ describe('broadcast_to_roles', () => {
   it('records a per-role failure without aborting the whole broadcast', async () => {
     const inboxSend = vi.fn((args: { toRole: string }) => {
       if (args.toRole === 'frontend') throw new Error('no such role');
-      return { message: { id: 1 }, deliveredImmediately: false };
+      return { message: { id: BACKEND_MESSAGE_ID }, deliveredImmediately: false };
     });
-    const orch = fakeOrchestrator({ inboxSend, postToBoard: vi.fn(), getMasterAgentRunId: () => 7 });
+    const orch = fakeOrchestrator({
+      inboxSend,
+      postToBoard: vi.fn(),
+      getMasterAgentRunId: () => MASTER_AGENT_RUN_ID,
+    });
     const res = await broadcastTool(orch).handler(
       { roles: ['backend', 'frontend'], message: 'ping' },
       {} as never,

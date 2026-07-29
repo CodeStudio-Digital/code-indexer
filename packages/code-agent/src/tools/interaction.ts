@@ -19,7 +19,7 @@ export function formatAskUserResult(answer: string): string {
  */
 export function formatInterruptedResult(
   toolName: string,
-  info: { kind?: 'plan' | 'question' | 'tasks' | 'spec'; agentRunId?: number; role?: string },
+  info: { kind?: 'plan' | 'question' | 'tasks' | 'spec'; agentRunId?: string | null; role?: string },
 ): string {
   const action =
     info.kind === 'plan'
@@ -194,7 +194,7 @@ export const askUser: CoderTool = {
       interrupted?: boolean;
       answer?: string;
       kind?: 'plan' | 'question' | 'tasks';
-      agentRunId?: number;
+      agentRunId?: string | null;
       role?: string;
     };
     try { parsed = JSON.parse(answer); } catch { parsed = { answer }; }
@@ -403,7 +403,7 @@ export const decisionGate: CoderTool = {
       interrupted?: boolean;
       answers?: DecisionGateAnswers;
       kind?: 'plan' | 'question' | 'tasks' | 'spec';
-      agentRunId?: number;
+      agentRunId?: string | null;
       role?: string;
     };
     try { parsed = JSON.parse(raw); } catch { parsed = {}; }

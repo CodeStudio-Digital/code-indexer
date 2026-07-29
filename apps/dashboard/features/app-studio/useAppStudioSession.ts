@@ -5,17 +5,33 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getAppStudioSession, type AppStudioSessionDetail } from './app-studio-api.js';
 
-export function useAppStudioSession(sessionId: number): {
+export function latestAppStudioEventSeq(detail: AppStudioSessionDetail): number {
+  return (detail.recent_events ?? []).reduce(
+    (latest, event) => Math.max(latest, event.seq),
+    0,
+  );
+}
+
+export function appStudioEventsUrl(sessionId: string, afterSeq: number): string {
+  return `/api/app-studio/apps/${sessionId}/events?after=${afterSeq}`;
+}
+
+export function useAppStudioSession(sessionId: string): {
   detail: AppStudioSessionDetail | null;
   error: string | null;
   refresh: () => Promise<void>;
 } {
   const [detail, setDetail] = useState<AppStudioSessionDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [streamSeed, setStreamSeed] = useState<{ sessionId: string; seq: number } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setDetail(await getAppStudioSession(sessionId));
+      const next = await getAppStudioSession(sessionId);
+      setDetail(next);
+      setStreamSeed((current) => current?.sessionId === sessionId
+        ? current
+        : { sessionId, seq: latestAppStudioEventSeq(next) });
       setError(null);
     } catch (e) {
       setError((e as Error).message);
@@ -26,8 +42,12 @@ export function useAppStudioSession(sessionId: number): {
     void refresh();
   }, [refresh]);
   useEffect(() => {
-    const events = new EventSource(`/api/app-studio/apps/${sessionId}/events`);
+    if (streamSeed?.sessionId !== sessionId) return;
+    let cursor = streamSeed.seq;
+    const events = new EventSource(appStudioEventsUrl(sessionId, cursor));
     const changed = (event: MessageEvent) => {
+      const eventSeq = Number(event.lastEventId);
+      if (Number.isSafeInteger(eventSeq) && eventSeq > cursor) cursor = eventSeq;
       if (event.type !== 'heartbeat') void refresh();
     };
     const eventNames = [
@@ -46,7 +66,7 @@ export function useAppStudioSession(sessionId: number): {
       eventNames.forEach((name) => events.removeEventListener(name, changed));
       events.close();
     };
-  }, [refresh, sessionId]);
+  }, [refresh, sessionId, streamSeed]);
 
   return { detail, error, refresh };
 }

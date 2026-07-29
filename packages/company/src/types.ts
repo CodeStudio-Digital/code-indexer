@@ -11,7 +11,7 @@
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
-import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/types.js';
 
 // Re-export every data model + event for backwards compatibility.
 // Existing imports `from '@mcp/company/types.js'` keep working unchanged.
@@ -25,15 +25,15 @@ export * from '@mcp/company-contracts';
  */
 export interface CompanyContext {
   orchestrator: import('@mcp/company/orchestrator.js').CompanyOrchestrator;
-  companySessionId: number;
+  companySessionId: string;
   /** Product capability hosted by the persistent Company lifecycle. */
   runtimeKind?: import('@mcp/company-contracts').CompanyRuntimeKind;
   /** Durable App Studio owner when runtimeKind === 'app_studio'. */
-  appStudioSessionId?: number;
+  appStudioSessionId?: string;
   /** Server-resolved, fail-closed runtime surface for this Company session. */
   capabilities?: import('@mcp/company-contracts').CompanySessionCapabilities;
   agentRole: string;
-  agentRunId: number | null;
+  agentRunId: string | null;
   allowedProjectIds: number[];
   isMaster: boolean;
   /**
@@ -91,10 +91,10 @@ export interface SandboxBinding {
 
 /** Runtime handle for a running subordinate agent. */
 export interface SubordinateHandle {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   projectIds: number[];
-  session: CoderSession;
+  session: FsCoderSession;
   runner: CoderRunner;
   bus: CoderRunBus;
   done: Promise<{ reason: string; usage: ChatUsage; error?: string }>;

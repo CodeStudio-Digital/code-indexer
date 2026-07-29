@@ -3,7 +3,7 @@ import { shouldEnableEphemeralSubagents } from '../ephemeral-subagent-capability
 
 const appCapabilities = {
   runtimeKind: 'app_studio' as const,
-  appStudioSessionId: 7,
+  appStudioSessionId: '00000000-0000-4000-8000-000000000007',
   promptProfile: 'app_studio' as const,
   toolProfile: 'app_studio' as const,
   autonomyPolicy: 'controlled_app_work' as const,

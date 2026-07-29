@@ -5,11 +5,25 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./review-intel-store.js": null,
+    "./mcp-agent-run-store.js": null,
+    "./db/builder-checkpoints.js": null,
+    "./control-plane/agent-run-store.js": null,
+    "./control-plane/capability-store.js": null,
+    "./control-plane/command-ledger-store.js": null,
+    "./control-plane/control-plane-store.js": null,
+    "./control-plane/divergence-store.js": null,
+    "./control-plane/policy-decision-store.js": null,
+    "./control-plane/policy-grant-store.js": null,
+    "./control-plane/projection-cursor-store.js": null,
+    "./control-plane/runtime-journal-store.js": null,
+    "./control-plane/runtime-projection-replay.js": null,
     "./*": "./src/*"
   },
   "dependencies": {
     "@mcp/agent-runtime-contracts": "workspace:*",
     "@mcp/app-studio": "workspace:*",
+    "@mcp/session-storage": "workspace:*",
     "@mcp/shared": "workspace:*"
   }
 }

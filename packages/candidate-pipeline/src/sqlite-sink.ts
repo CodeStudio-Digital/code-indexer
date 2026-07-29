@@ -1,6 +1,7 @@
 /**
- * SQLite-backed TelemetrySink — drains pipeline events into the
- * `pipeline_telemetry` table (migration 080).
+ * SQLite-backed TelemetrySink — drains only global pipeline events into the
+ * `pipeline_telemetry` table (migration 080). A composite host may attach a
+ * separate filesystem sink for events that carry a session UUID.
  *
  * Events are buffered and flushed in batches to amortize SQLite write
  * cost. The default flush interval is 1s, and the buffer also flushes when
@@ -36,9 +37,11 @@ export class SqliteTelemetrySink implements TelemetrySink {
   }
 
   emit(event: TelemetryEvent): void {
+    // The post-cut SQLite schema deliberately has no session columns. Dropping
+    // here also prevents an accidental session event from becoming an
+    // unscoped/global row if this sink is reused in a CompositeTelemetrySink.
+    if (event.sessionId != null || event.companySessionId != null) return;
     this.buffer.push({
-      session_id: event.sessionId ?? null,
-      company_session_id: event.companySessionId ?? null,
       pipeline_name: event.pipelineName,
       stage: event.stage,
       component_name: event.component,

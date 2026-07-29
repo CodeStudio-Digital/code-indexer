@@ -20,7 +20,7 @@ import { ProjectSelect } from '../builder/preview/ProjectSelect.js';
 import { useSessionProjects } from '../builder/preview/useSessionProjects.js';
 
 interface MemoryPanelProps {
-  sessionId: number;
+  sessionId: string;
 }
 
 export function MemoryPanel({ sessionId }: MemoryPanelProps) {

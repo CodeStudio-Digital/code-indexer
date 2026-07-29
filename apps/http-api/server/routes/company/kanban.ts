@@ -2,272 +2,425 @@ import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { publish } from '../../../coder-bus.js';
 import { activeOrchestrators } from './stream.js';
-import type { KanbanColumn, KanbanTag } from '@mcp/company/types.js';
-import { parseIdParam, notFound, resolveRootSessionId } from '../_helpers.js';
 import {
-  companySurfaceConflict,
-  resolveCompanyRouteRuntime,
-} from './runtime-capabilities.js';
+  KANBAN_COLUMNS,
+  type KanbanColumn,
+  type KanbanTag,
+} from '@mcp/company/types.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
+import { assertUuid, type CompanySessionId } from '@mcp/session-storage';
+import {
+  notFound,
+  parseCompanySessionIdParam,
+  parseJsonBody,
+  parseSessionRecordIdParam,
+} from '../_helpers.js';
+import { companySurfaceConflict } from './runtime-capabilities.js';
+
+interface KanbanContext {
+  requestedId: CompanySessionId;
+  rootId: CompanySessionId;
+  files: CompanySessionFiles;
+  unavailable: boolean;
+}
+
+const KANBAN_TAGS = new Set<KanbanTag>([
+  'bug',
+  'feature',
+  'refactor',
+  'documentation',
+]);
+
+function parseColumn(value: unknown, required = false): KanbanColumn | undefined {
+  if (value == null && !required) return undefined;
+  if (
+    typeof value !== 'string' ||
+    !KANBAN_COLUMNS.includes(value as KanbanColumn)
+  ) {
+    throw new TypeError('column must be a valid Company kanban column');
+  }
+  return value as KanbanColumn;
+}
+
+function parseTag(value: unknown): KanbanTag | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== 'string' || !KANBAN_TAGS.has(value as KanbanTag)) {
+    throw new TypeError('tag must be a valid Company kanban tag');
+  }
+  return value as KanbanTag;
+}
 
 export function mountCompanyKanbanRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore } = deps;
+  const { sessionStore } = deps;
 
   /**
-   * Kanban is a project-wide artefact (migration 067). Sub-sessions
-   * resolve to the parent's id so all tabs see the same board. Use this
-   * helper everywhere `:id` is the company session id.
+   * Child sessions keep their own transcript/agents/inbox but share Kanban
+   * with their root Company bundle. The root is resolved exclusively from
+   * `session.json`; no SQLite lookup or compatibility fallback is involved.
    */
-  const sessionRoot = (c: Context) =>
-    resolveRootSessionId(companyStore, parseIdParam(c));
-
-  const kanbanUnavailable = (c: Context) => {
-    const runtime = resolveCompanyRouteRuntime(companyStore, parseIdParam(c));
-    return runtime != null && !runtime.capabilities.allowCompanyKanban;
+  const resolveKanban = async (c: Context): Promise<KanbanContext | null> => {
+    const requestedId = parseCompanySessionIdParam(c);
+    await sessionStore.ensureCatalog();
+    let requestedFiles: CompanySessionFiles;
+    try {
+      requestedFiles = new CompanySessionFiles({
+        companySessionId: requestedId,
+        sessionStore,
+      });
+    } catch {
+      return null;
+    }
+    const requested = requestedFiles.getSession();
+    const rootId = requested.parent_session_id ?? requestedId;
+    let files = requestedFiles;
+    if (rootId !== requestedId) {
+      try {
+        files = new CompanySessionFiles({
+          companySessionId: rootId,
+          sessionStore,
+        });
+      } catch {
+        return null;
+      }
+    }
+    const root = files.getSession();
+    const capabilities = resolveCompanySessionCapabilities(
+      root.runtime_kind,
+      root.runtime_kind === 'app_studio' ? rootId : null,
+    );
+    return {
+      requestedId,
+      rootId,
+      files,
+      unavailable: !capabilities.allowCompanyKanban,
+    };
   };
 
-  /** Helper: publish a kanban event through the active orchestrator's metaBus if available. */
-  function publishKanbanEvent(sessionId: number, event: string, data: unknown): void {
+  function publishKanbanEvent(
+    sessionId: CompanySessionId,
+    event: string,
+    data: unknown,
+  ): void {
     const orchestrator = activeOrchestrators.get(sessionId);
-    if (orchestrator) {
-      publish(orchestrator.metaBus, event, data);
-    }
+    if (orchestrator) publish(orchestrator.metaBus, event, data);
   }
 
-  // ─── List all cards (full) ──────────────────────────────────
-
-  app.get('/api/company/sessions/:id/kanban', (c) => {
-    if (kanbanUnavailable(c)) return c.json([]);
-    const id = sessionRoot(c);
-    const column = c.req.query('column') as KanbanColumn | undefined;
-    if (column) {
-      const cards = companyStore.listKanbanCardsFull(id).filter(c => c.column === column);
-      return c.json(cards);
+  function findChecklistItem(files: CompanySessionFiles, itemId: string) {
+    for (const card of files.listKanbanCardsFullSync()) {
+      const item = card.checklist.find((candidate) => candidate.id === itemId);
+      if (item) return { card, item };
     }
-    return c.json(companyStore.listKanbanCardsFull(id));
+    return null;
+  }
+
+  app.get('/api/company/sessions/:id/kanban', async (c) => {
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return c.json([]);
+    let column: KanbanColumn | undefined;
+    try {
+      column = parseColumn(c.req.query('column'));
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 400);
+    }
+    return c.json(resolved.files.listKanbanCardsFullSync({ column }));
   });
 
-  // ─── Get single card (full) ─────────────────────────────────
-
-  app.get('/api/company/sessions/:id/kanban/:cardId', (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const cardId = parseIdParam(c, 'cardId');
-    const card = companyStore.getKanbanCardFull(cardId);
-    if (!card) return notFound(c, 'Card not found');
-    return c.json(card);
+  app.get('/api/company/sessions/:id/kanban/:cardId', async (c) => {
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const cardId = parseSessionRecordIdParam(c, 'cardId');
+    const card = resolved.files.getKanbanCardFullSync(cardId);
+    return card ? c.json(card) : notFound(c, 'Card not found');
   });
-
-  // ─── Create card ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban', async (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const body = await c.req.json<{
-      title: string;
-      description?: string;
-      column?: KanbanColumn;
-      tag?: KanbanTag;
-      checklist?: string[];
-    }>();
-
-    if (!body.title) return c.json({ error: 'title is required' }, 400);
-
-    const card = companyStore.createKanbanCard(sessionId, {
-      title: body.title,
-      description: body.description,
-      column: body.column,
-      tag: body.tag,
-      created_by: 'human',
-    });
-
-    // Add checklist items if provided
-    if (body.checklist) {
-      for (let i = 0; i < body.checklist.length; i++) {
-        companyStore.addChecklistItem(card.id, body.checklist[i], i);
-      }
-    }
-
-    const full = companyStore.getKanbanCardFull(card.id)!;
-    publishKanbanEvent(sessionId, 'kanban_card_created', full);
-    return c.json(full, 201);
-  });
-
-  // ─── Update card ────────────────────────────────────────────
-
-  app.patch('/api/company/sessions/:id/kanban/:cardId', async (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const cardId = parseIdParam(c, 'cardId');
-    const body = await c.req.json<{
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const body = await parseJsonBody<{
       title?: string;
       description?: string;
-      tag?: KanbanTag | null;
-    }>();
-
-    const card = companyStore.updateKanbanCard(cardId, body);
-    if (!card) return notFound(c, 'Card not found');
-
-    publishKanbanEvent(sessionId, 'kanban_card_updated', { cardId, patch: body });
-    return c.json(card);
+      column?: unknown;
+      tag?: unknown;
+      checklist?: unknown;
+    }>(c);
+    if (typeof body.title !== 'string' || !body.title.trim()) {
+      return c.json({ error: 'title is required' }, 400);
+    }
+    if (
+      body.checklist !== undefined &&
+      (
+        !Array.isArray(body.checklist) ||
+        body.checklist.some((item) => typeof item !== 'string')
+      )
+    ) {
+      return c.json({ error: 'checklist must be an array of strings' }, 400);
+    }
+    try {
+      const full = resolved.files.createKanbanCardSync({
+        title: body.title,
+        description: body.description,
+        column: parseColumn(body.column),
+        tag: parseTag(body.tag),
+        checklist: body.checklist as string[] | undefined,
+        createdBy: 'human',
+      });
+      publishKanbanEvent(resolved.rootId, 'kanban_card_created', full);
+      return c.json(full, 201);
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 400);
+    }
   });
 
-  // ─── Move card ──────────────────────────────────────────────
+  app.patch('/api/company/sessions/:id/kanban/:cardId', async (c) => {
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const cardId = parseSessionRecordIdParam(c, 'cardId');
+    const body = await parseJsonBody<{
+      title?: string;
+      description?: string;
+      tag?: unknown;
+    }>(c);
+    try {
+      const patch = {
+        ...(body.title === undefined ? {} : { title: body.title }),
+        ...(body.description === undefined
+          ? {}
+          : { description: body.description }),
+        ...(body.tag === undefined ? {} : { tag: parseTag(body.tag) }),
+      };
+      const card = resolved.files.updateKanbanCardSync(cardId, patch);
+      if (!card) return notFound(c, 'Card not found');
+      publishKanbanEvent(resolved.rootId, 'kanban_card_updated', {
+        cardId,
+        patch,
+      });
+      return c.json(card);
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 400);
+    }
+  });
 
   app.post('/api/company/sessions/:id/kanban/:cardId/move', async (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const cardId = parseIdParam(c, 'cardId');
-    const body = await c.req.json<{
-      column: KanbanColumn;
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const cardId = parseSessionRecordIdParam(c, 'cardId');
+    const body = await parseJsonBody<{
+      column?: unknown;
       position?: number;
-    }>();
-
-    if (!body.column) return c.json({ error: 'column is required' }, 400);
-
-    // Validate dependency constraints
-    if (['in_progress', 'review', 'done'].includes(body.column)) {
-      const full = companyStore.getKanbanCardFull(cardId);
-      if (full && full.blocked_by.length > 0) {
+    }>(c);
+    try {
+      const column = parseColumn(body.column, true)!;
+      const before = resolved.files.getKanbanCardFullSync(cardId);
+      if (!before) return notFound(c, 'Card not found');
+      if (
+        ['in_progress', 'review', 'done'].includes(column) &&
+        before.column !== column &&
+        before.blocked_by.length > 0
+      ) {
         return c.json({
-          error: `Card is blocked by cards: ${full.blocked_by.join(', ')}`,
-          blocked_by: full.blocked_by,
+          error: `Card is blocked by cards: ${before.blocked_by.join(', ')}`,
+          blocked_by: before.blocked_by,
         }, 409);
       }
-    }
-
-    try {
-      const before = companyStore.getKanbanCard(cardId);
-      const card = companyStore.moveKanbanCard(cardId, body.column, body.position);
-      publishKanbanEvent(sessionId, 'kanban_card_moved', {
+      const card = resolved.files.moveKanbanCardSync(
         cardId,
-        fromColumn: before?.column,
-        toColumn: body.column,
+        column,
+        body.position,
+      )!;
+      publishKanbanEvent(resolved.rootId, 'kanban_card_moved', {
+        cardId,
+        fromColumn: before.column,
+        toColumn: column,
         position: card.position,
       });
       return c.json(card);
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 400);
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 400);
     }
   });
 
-  // ─── Delete card ────────────────────────────────────────────
-
-  app.delete('/api/company/sessions/:id/kanban/:cardId', (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const cardId = parseIdParam(c, 'cardId');
-    const ok = companyStore.deleteKanbanCard(cardId);
-    if (!ok) return notFound(c, 'Card not found');
-
-    publishKanbanEvent(sessionId, 'kanban_card_deleted', { cardId });
-    return c.json({ ok: true });
+  app.delete('/api/company/sessions/:id/kanban/:cardId', async (c) => {
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const cardId = parseSessionRecordIdParam(c, 'cardId');
+    try {
+      if (!resolved.files.deleteKanbanCardSync(cardId)) {
+        return notFound(c, 'Card not found');
+      }
+      publishKanbanEvent(resolved.rootId, 'kanban_card_deleted', { cardId });
+      return c.json({ ok: true, recoverable: true });
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 409);
+    }
   });
-
-  // ─── Add comment ────────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/comments', async (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const cardId = parseIdParam(c, 'cardId');
-    const body = await c.req.json<{ content: string }>();
-
-    if (!body.content) return c.json({ error: 'content is required' }, 400);
-
-    const comment = companyStore.addKanbanComment(cardId, 'human', null, body.content);
-    publishKanbanEvent(sessionId, 'kanban_comment_added', { cardId, comment });
-    return c.json(comment, 201);
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const cardId = parseSessionRecordIdParam(c, 'cardId');
+    const body = await parseJsonBody<{ content?: string }>(c);
+    if (typeof body.content !== 'string' || !body.content.trim()) {
+      return c.json({ error: 'content is required' }, 400);
+    }
+    try {
+      const comment = resolved.files.addKanbanCommentSync(
+        cardId,
+        'human',
+        null,
+        body.content,
+      );
+      publishKanbanEvent(resolved.rootId, 'kanban_comment_added', {
+        cardId,
+        comment,
+      });
+      return c.json(comment, 201);
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 404);
+    }
   });
 
-  // ─── List comments ──────────────────────────────────────────
-
-  app.get('/api/company/sessions/:id/kanban/:cardId/comments', (c) => {
-    if (kanbanUnavailable(c)) return c.json([]);
-    const cardId = parseIdParam(c, 'cardId');
-    return c.json(companyStore.listKanbanComments(cardId));
+  app.get('/api/company/sessions/:id/kanban/:cardId/comments', async (c) => {
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return c.json([]);
+    const cardId = parseSessionRecordIdParam(c, 'cardId');
+    return c.json(
+      resolved.files.getKanbanCardFullSync(cardId)?.comments ?? [],
+    );
   });
-
-  // ─── Add checklist item ─────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/checklist', async (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const cardId = parseIdParam(c, 'cardId');
-    const body = await c.req.json<{ text: string }>();
-
-    if (!body.text) return c.json({ error: 'text is required' }, 400);
-
-    const item = companyStore.addChecklistItem(cardId, body.text);
-    publishKanbanEvent(sessionId, 'kanban_checklist_updated', { cardId, items: [item] });
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const cardId = parseSessionRecordIdParam(c, 'cardId');
+    const body = await parseJsonBody<{ text?: string }>(c);
+    if (typeof body.text !== 'string' || !body.text.trim()) {
+      return c.json({ error: 'text is required' }, 400);
+    }
+    const card = resolved.files.getKanbanCardFullSync(cardId);
+    if (!card) return notFound(c, 'Card not found');
+    const items = resolved.files.updateKanbanChecklistSync(cardId, [
+      ...card.checklist,
+      { text: body.text, checked: false },
+    ]);
+    const item = items.at(-1)!;
+    publishKanbanEvent(resolved.rootId, 'kanban_checklist_updated', {
+      cardId,
+      items: [item],
+    });
     return c.json(item, 201);
   });
 
-  // ─── Update checklist item ──────────────────────────────────
-
   app.patch('/api/company/sessions/:id/kanban/checklist/:itemId', async (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const itemId = parseIdParam(c, 'itemId');
-    const body = await c.req.json<{
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const itemId = parseSessionRecordIdParam(c, 'itemId');
+    const found = findChecklistItem(resolved.files, itemId);
+    if (!found) return notFound(c, 'Item not found');
+    const body = await parseJsonBody<{
       text?: string;
       checked?: boolean;
-    }>();
-
-    const item = companyStore.updateChecklistItem(itemId, body);
-    if (!item) return notFound(c, 'Item not found');
-
-    publishKanbanEvent(sessionId, 'kanban_checklist_updated', { cardId: item.card_id, items: [item] });
+    }>(c);
+    const items = resolved.files.updateKanbanChecklistSync(
+      found.card.id,
+      found.card.checklist.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              ...(body.text === undefined ? {} : { text: body.text }),
+              ...(body.checked === undefined
+                ? {}
+                : { checked: body.checked }),
+            }
+          : item,
+      ),
+    );
+    const item = items.find((candidate) => candidate.id === itemId)!;
+    publishKanbanEvent(resolved.rootId, 'kanban_checklist_updated', {
+      cardId: found.card.id,
+      items: [item],
+    });
     return c.json(item);
   });
 
-  // ─── Delete checklist item ──────────────────────────────────
-
-  app.delete('/api/company/sessions/:id/kanban/checklist/:itemId', (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const itemId = parseIdParam(c, 'itemId');
-    // Resolve card_id BEFORE deletion so we can include it in the event.
-    const item = companyStore.getChecklistItem(itemId);
-    const ok = companyStore.removeChecklistItem(itemId);
-    if (!ok) return notFound(c, 'Item not found');
-
-    if (item) {
-      publishKanbanEvent(sessionId, 'kanban_checklist_removed', {
-        cardId: item.card_id,
-        itemId,
-      });
-    }
+  app.delete('/api/company/sessions/:id/kanban/checklist/:itemId', async (c) => {
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const itemId = parseSessionRecordIdParam(c, 'itemId');
+    const found = findChecklistItem(resolved.files, itemId);
+    if (!found) return notFound(c, 'Item not found');
+    resolved.files.updateKanbanChecklistSync(
+      found.card.id,
+      found.card.checklist.filter((item) => item.id !== itemId),
+    );
+    publishKanbanEvent(resolved.rootId, 'kanban_checklist_removed', {
+      cardId: found.card.id,
+      itemId,
+    });
     return c.json({ ok: true });
   });
-
-  // ─── Add dependency ─────────────────────────────────────────
 
   app.post('/api/company/sessions/:id/kanban/:cardId/dependencies', async (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const cardId = parseIdParam(c, 'cardId');
-    const body = await c.req.json<{ depends_on_card_id: number }>();
-
-    if (!body.depends_on_card_id) return c.json({ error: 'depends_on_card_id is required' }, 400);
-
+    const resolved = await resolveKanban(c);
+    if (!resolved) return notFound(c, 'Session not found');
+    if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+    const cardId = parseSessionRecordIdParam(c, 'cardId');
+    const body = await parseJsonBody<{
+      depends_on_card_id?: unknown;
+    }>(c);
     try {
-      const dep = companyStore.addCardDependency(cardId, body.depends_on_card_id);
-      publishKanbanEvent(sessionId, 'kanban_dependency_added', { cardId, dependsOnId: body.depends_on_card_id });
-      return c.json(dep, 201);
-    } catch (e) {
-      return c.json({ error: (e as Error).message }, 400);
+      if (typeof body.depends_on_card_id !== 'string') {
+        throw new TypeError('depends_on_card_id must be a canonical UUID');
+      }
+      const dependsOnId = assertUuid(
+        body.depends_on_card_id,
+        'depends_on_card_id',
+      );
+      const dependency = resolved.files.addKanbanDependencySync(
+        cardId,
+        dependsOnId,
+      );
+      publishKanbanEvent(resolved.rootId, 'kanban_dependency_added', {
+        cardId,
+        dependency,
+      });
+      return c.json(dependency, 201);
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 400);
     }
   });
 
-  // ─── Remove dependency ──────────────────────────────────────
-
-  app.delete('/api/company/sessions/:id/kanban/:cardId/dependencies/:depCardId', (c) => {
-    if (kanbanUnavailable(c)) return companySurfaceConflict(c, 'kanban');
-    const sessionId = sessionRoot(c);
-    const cardId = parseIdParam(c, 'cardId');
-    const depCardId = parseIdParam(c, 'depCardId');
-    const ok = companyStore.removeCardDependency(cardId, depCardId);
-    if (!ok) return notFound(c, 'Dependency not found');
-
-    publishKanbanEvent(sessionId, 'kanban_dependency_removed', { cardId, dependsOnId: depCardId });
-    return c.json({ ok: true });
-  });
+  app.delete(
+    '/api/company/sessions/:id/kanban/:cardId/dependencies/:depCardId',
+    async (c) => {
+      const resolved = await resolveKanban(c);
+      if (!resolved) return notFound(c, 'Session not found');
+      if (resolved.unavailable) return companySurfaceConflict(c, 'kanban');
+      const cardId = parseSessionRecordIdParam(c, 'cardId');
+      const dependsOnId = parseSessionRecordIdParam(c, 'depCardId');
+      const dependency = resolved.files.removeKanbanDependencySync(
+        cardId,
+        dependsOnId,
+      );
+      if (!dependency) return notFound(c, 'Dependency not found');
+      publishKanbanEvent(resolved.rootId, 'kanban_dependency_removed', {
+        cardId,
+        dependencyId: dependency.id,
+        dependsOnId,
+      });
+      return c.json({ ok: true });
+    },
+  );
 }

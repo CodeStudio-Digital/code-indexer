@@ -3,7 +3,7 @@
  *
  * The DELETE flow has to orchestrate cleanup across MULTIPLE artefact
  * stores — the container runtime (sandbox manager), the file system
- * (virtual-project dirs, workdir archive), the project rows
+ * (virtual-project dirs and the complete session bundle), the project rows
  * (synthetic `_builder_*` projects), and the dependency volumes
  * (`mcp-sbx-nm-*`). Mixed in with the regular session CRUD inside
  * `sessions.ts`, the body of this single handler grew past 150 LOC
@@ -21,15 +21,18 @@
  *     Body: { remove_project_paths?: string[], remove_node_modules_volumes?: string[] }
  *     Orchestrates the cascade: stop orchestrator → destroy sandbox →
  *     drop session row (cascades to agent_runs/kanban/etc) → remove
- *     selected virtual project dirs + the workdir archive + selected
+ *     selected virtual project dirs + selected
  *     dependency volumes.
  */
 import type { Hono } from 'hono';
 import { rm } from 'node:fs/promises';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  notFound,
+} from '../_helpers.js';
 import { cleanupSessionPersistence, getSandboxManager } from '@mcp/services/sandbox/index.js';
-import { sandboxArchivePath } from '@mcp/company/services/SandboxService.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 import {
   evictCompanyOrchestrator,
   getCompanyOrchestrator,
@@ -40,14 +43,14 @@ import {
  * the sandbox manager. Exported because the delete-plan needs to
  * enumerate which volumes the cleanup CAN remove.
  */
-export function nodeModulesVolumeName(sessionId: number | string, serviceId?: string): string {
+export function nodeModulesVolumeName(sessionId: CompanySessionId | string, serviceId?: string): string {
   const safeSession = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
   const base = `mcp-sbx-nm-${safeSession}`;
   return serviceId ? `${base}-${serviceId}` : base;
 }
 
 /** Stop the worker-owned Company runtime before its durable rows disappear. */
-export async function stopCompanySessionRuntime(sessionId: number): Promise<void> {
+export async function stopCompanySessionRuntime(sessionId: CompanySessionId): Promise<void> {
   const orchestrator = getCompanyOrchestrator(sessionId);
   if (orchestrator) {
     try {
@@ -75,10 +78,15 @@ export async function stopCompanySessionRuntime(sessionId: number): Promise<void
 }
 
 export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): void {
-  const { db, companyStore, companySandboxStore, companySandboxServicesStore } = deps;
+  const {
+    db,
+    operationalSessionFiles,
+    companySandboxStore,
+    companySandboxServicesStore,
+  } = deps;
 
-  function buildSessionDeletePlan(id: number) {
-    const full = companyStore.getCompanySessionFull(id);
+  async function buildSessionDeletePlan(id: CompanySessionId) {
+    const full = await operationalSessionFiles.getCompanySessionFull(id);
     const projectPaths: Array<{
       project_id: number;
       name: string;
@@ -123,27 +131,29 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
     };
   }
 
-  app.get('/api/company/sessions/:id/delete-plan', (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
+  app.get('/api/company/sessions/:id/delete-plan', async (c) => {
+    const id = parseCompanySessionIdParam(c);
+    const session = await operationalSessionFiles.getCompanySession(id);
     if (!session) return notFound(c);
     if (session.runtime_kind === 'app_studio') {
+      const appSession = await deps.appStudioStore.getSessionByCompanySessionId(id);
       return c.json({
         error: 'This team is owned by App Studio. Delete the App so its workflow, team and project are removed together.',
-        app_session_id: deps.appStudioStore.getSessionByCompanySessionId(id)?.id ?? null,
+        app_session_id: appSession?.id ?? null,
       }, 409);
     }
-    return c.json(buildSessionDeletePlan(id));
+    return c.json(await buildSessionDeletePlan(id));
   });
 
   app.delete('/api/company/sessions/:id', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
+    const id = parseCompanySessionIdParam(c);
+    const session = await operationalSessionFiles.getCompanySession(id);
     if (!session) return notFound(c);
     if (session.runtime_kind === 'app_studio') {
+      const appSession = await deps.appStudioStore.getSessionByCompanySessionId(id);
       return c.json({
         error: 'App Studio owns this team. Delete it from the App Studio surface to avoid orphaning workflow state.',
-        app_session_id: deps.appStudioStore.getSessionByCompanySessionId(id)?.id ?? null,
+        app_session_id: appSession?.id ?? null,
       }, 409);
     }
     const deleteBody = (await c.req.json().catch(() => ({}))) as {
@@ -155,7 +165,7 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
         ? deleteBody.remove_project_paths.filter((p): p is string => typeof p === 'string')
         : [],
     );
-    const deletePlan = buildSessionDeletePlan(id);
+    const deletePlan = await buildSessionDeletePlan(id);
     const removableProjectPaths = new Set(
       deletePlan.project_paths.filter((p) => p.removable).map((p) => p.root_path),
     );
@@ -190,7 +200,7 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
           .listBySessionAll(id)
           .map((row) => row.built_image_tag),
       ].filter((tag): tag is string => !!tag);
-      const full = companyStore.getCompanySessionFull(id);
+      const full = await operationalSessionFiles.getCompanySessionFull(id);
       if (full) {
         virtualProjects = full.projects
           .map((p) => db.getProject(p.project_id))
@@ -205,16 +215,15 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
     //
     // 1. If a master/company orchestrator is live, abort it. That
     //    also fires `sandboxService.teardown()` → destroys the
-    //    container AND writes the workdir archive (which we'll
-    //    promptly delete below — acceptable, the archive write is
-    //    cheap and the code path stays uniform).
+    //    container. The 'session-deleted' reason skips a redundant final
+    //    archive because the complete bundle is moved to trash below.
     // 2. If no orchestrator is live but a sandbox still lingers in
     //    the manager map (TTL-alive after the user left the tab),
     //    destroy it directly.
     await stopCompanySessionRuntime(id);
 
-    // ── Delete the DB row (cascades to agent_runs, kanban, etc) ──
-    const deleted = companyStore.deleteCompanySession(id);
+    // ── Move the complete bundle to same-volume trash ──
+    const deleted = await operationalSessionFiles.deleteCompanySession(id);
     if (!deleted) return notFound(c);
 
     // ── Remove virtual project rows; remove host dirs only when selected ──
@@ -247,19 +256,6 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
       }
     }
 
-    // ── Remove the persisted workdir archive ──
-    //
-    // `SandboxService.teardown()` writes it on abort/idle. Keeping
-    // it around after an explicit delete is just landfill — the user
-    // said "I'm done with this session."
-    try {
-      await rm(sandboxArchivePath(id), { force: true });
-    } catch (e) {
-      console.warn(
-        `[company] remove sandbox archive for session ${id} failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
-
     // ── Remove selected dependency volumes only ──
     //
     // When the sandbox ran under the persistent bind-mount layout
@@ -274,6 +270,6 @@ export function mountCompanySessionDeleteRoutes(app: Hono, deps: ServerDeps): vo
       nodeModulesVolumeNames,
     });
 
-    return c.json({ ok: true });
+    return c.json({ ok: true, recoverable: true });
   });
 }

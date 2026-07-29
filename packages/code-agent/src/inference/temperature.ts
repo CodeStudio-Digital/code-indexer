@@ -36,7 +36,7 @@ export interface TemperatureResolutionContext {
   providerName: string;
   model: string;
   thinking?: boolean;
-  /** Per-session override from `coder_sessions.temperature_override`. */
+  /** Per-session override from the filesystem state projection. */
   sessionOverride?: number | null;
   /** Per-role override from `CompanyRoleConfig.temperature` (company mode). */
   roleOverride?: number | null;

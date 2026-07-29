@@ -24,10 +24,10 @@ export type CompanyAgentDispatchSource =
   | 'retry';
 
 export interface CompanyAgentRun {
-  id: number;
-  company_session_id: number;
+  id: string;
+  company_session_id: string;
   role: string;
-  coder_session_id: number;
+  coder_session_id: string;
   project_ids_json: string;
   provider: string;
   model: string;
@@ -43,5 +43,5 @@ export interface CompanyAgentRun {
   created_at: string;
   updated_at: string;
   /** Null = active; non-null = belongs to that archived snapshot (migration 038). */
-  archive_id: number | null;
+  archive_id: string | null;
 }

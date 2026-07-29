@@ -26,9 +26,9 @@ const SEVERE_KINDS = new Set([
 const RECENT_WINDOW_MS = 10 * 60 * 1000;
 
 /** Survives remounts (module scope); reset only on full reload. */
-const dismissedBySession = new Map<number, number>();
+const dismissedBySession = new Map<string, number>();
 
-export function AutonomyIncidentBanner({ sessionId = null }: { sessionId?: number | null }) {
+export function AutonomyIncidentBanner({ sessionId = null }: { sessionId?: string | null }) {
   const { t } = useTranslation('agents');
   const state = useCompanyStore((s) => selectAutonomy(s, sessionId ?? null));
   const [, bump] = useState(0);

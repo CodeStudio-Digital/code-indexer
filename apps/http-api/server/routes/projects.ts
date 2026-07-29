@@ -160,17 +160,29 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/projects/semantic/status', async (c) => {
     const projects = await h.list(undefined, createContext());
     const profiles = deps.semanticStore.listProfiles();
-    const allJobs = deps.semanticStore.listJobs();
+    // One query for every project's collections. The per-project call in this
+    // loop was N synchronous SQLite round-trips in a single main-thread burst.
+    const collectionsByProject = deps.docStore.listCollectionsForProjects(
+      projects.map((project) => project.id),
+    );
     const namespacesByProject = projects.map((project) => [
       codeNamespace(project.id),
       snapshotNamespace(project.id),
       projectMemoryNamespace(project.id),
-      ...deps.docStore.listCollectionsForProject(project.id)
+      ...(collectionsByProject.get(project.id) ?? [])
         .map((collection) => docNamespace(collection.id)),
     ]);
     const allNamespaceStatuses = deps.localVectorRouter.getNamespaceStatuses(
       namespacesByProject.flat(),
     );
+    // Only the namespaces this response actually reports. Fetching every job
+    // ever recorded and filtering in JS grew with history, unbounded.
+    const allJobs = deps.semanticStore.listJobs({
+      namespaces: [
+        ...namespacesByProject.flat(),
+        ...projects.map((project) => `semantic:reindex:code:p${project.id}`),
+      ],
+    });
     let statusCursor = 0;
     const results = projects.map((project, index) => {
       const nextStatusCursor = statusCursor + namespacesByProject[index].length;
@@ -314,9 +326,31 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
         rerankerDiagnostics?: (purpose: 'code' | 'docs' | 'memory') => Promise<unknown> | unknown;
       }
     ).rerankerDiagnostics?.('code') ?? null;
+    const searchTelemetry = await (
+      deps.hybridSearch as typeof deps.hybridSearch & {
+        telemetrySummary?: (projectId: number, periodDays?: number) => Promise<unknown>;
+      }
+    )?.telemetrySummary?.(id, 30) ?? null;
     const diagnostics = rerankerDiagnostics && typeof rerankerDiagnostics === 'object'
       ? rerankerDiagnostics as Record<string, unknown>
       : null;
+    const rerankerTarget = profile?.reranker_target ?? null;
+    const rerankerConfigured = !!rerankerTarget && rerankerTarget.kind !== 'disabled';
+    const configuredModel = rerankerTarget && 'model' in rerankerTarget
+      ? rerankerTarget.model
+      : undefined;
+    const lastError = diagnostics?.last_error
+      ? String(diagnostics.last_error)
+      : null;
+    const rerankerStatus = !rerankerConfigured
+      ? 'disabled'
+      : diagnostics?.active === true
+        ? 'running'
+        : lastError
+          ? 'failed'
+          : diagnostics?.last_success_at || diagnostics?.last_latency_ms != null
+            ? 'active'
+            : 'configured';
     const activeGeneration = generations.find((generation) =>
       generation.id === codeStatus?.active?.generationId) ?? null;
     const buildingGeneration = generations.find((generation) =>
@@ -345,10 +379,19 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
             : 'profile_disabled',
       },
       reranker: rerankerDiagnostics,
-      resolved_reranker: diagnostics ? {
-        ...diagnostics,
-        model: diagnostics.resolved_model ?? diagnostics.requested_model,
-        estimated_memory_bytes: diagnostics.estimated_peak_bytes,
+      search_telemetry: searchTelemetry,
+      resolved_reranker: rerankerTarget ? {
+        ...(diagnostics ?? {}),
+        configured: rerankerConfigured,
+        status: rerankerStatus,
+        target_kind: rerankerTarget.kind,
+        model: diagnostics?.resolved_model
+          ?? diagnostics?.model
+          ?? diagnostics?.requested_model
+          ?? configuredModel
+          ?? rerankerTarget.kind,
+        estimated_memory_bytes: diagnostics?.estimated_peak_bytes,
+        last_error: lastError,
       } : null,
     });
   });

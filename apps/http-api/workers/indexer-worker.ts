@@ -44,11 +44,6 @@ if (!port) throw new Error('indexer-worker.ts: not running inside a worker_threa
 
 const { dbPath, ignorePatterns, maxFileSizeKB, concurrency } = workerData as IndexerWorkerData;
 
-// We ARE the offload thread — a nested tree-sitter worker pool inside this
-// worker would only multiply threads for zero main-thread benefit. The
-// dispatch reads this at call time and parses in-process here.
-process.env.MCP_INDEX_WORKERS = '0';
-
 const db = new CodeIndexDB(dbPath);
 
 const bridge = new MessageBridge({
@@ -62,8 +57,11 @@ const bridge = new MessageBridge({
 registerPerfStatsHandler(bridge);
 
 bridge.handle('structuralIndex', async (payload) => {
-  const { projectId, maxFiles, allowEmptyWipe } = payload as {
-    projectId: number; maxFiles?: number; allowEmptyWipe?: boolean;
+  const { projectId, maxFiles, allowEmptyWipe, reportChanges } = payload as {
+    projectId: number;
+    maxFiles?: number;
+    allowEmptyWipe?: boolean;
+    reportChanges?: boolean;
   };
   let lastEmit = 0;
   return runStructuralIndex(db, projectId, {
@@ -72,6 +70,15 @@ bridge.handle('structuralIndex', async (payload) => {
     concurrency,
     maxFiles,
     allowEmptyWipe,
+    onChanges: reportChanges
+      ? async (events) => {
+          await bridge.request(
+            'structural.changes',
+            { projectId, events },
+            { timeoutMs: 30_000 },
+          );
+        }
+      : undefined,
     onProgress: (p) => {
       const now = Date.now();
       if (p.current !== p.total && now - lastEmit < 150) return;
@@ -83,7 +90,11 @@ bridge.handle('structuralIndex', async (payload) => {
 
 bridge.handle('indexFiles', async (payload) => {
   const { projectId, relPaths } = payload as { projectId: number; relPaths: string[] };
-  return indexFilesStructural(db, projectId, relPaths, { ignorePatterns, maxFileSizeKB });
+  return indexFilesStructural(db, projectId, relPaths, {
+    ignorePatterns,
+    maxFileSizeKB,
+    concurrency,
+  });
 });
 
 bridge.handle('removeFiles', async (payload) => {

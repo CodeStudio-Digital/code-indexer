@@ -35,7 +35,7 @@ import {
 } from './docs/useCompanyDocs.js';
 
 interface DocsTabProps {
-  companySessionId: number;
+  companySessionId: string;
   /** Optional list of secondary services so the user can target one. */
   services?: Array<{ service_id: string; name: string }>;
 }
@@ -51,7 +51,7 @@ interface TocEntry {
  * `null` when the file is missing / malformed — callers then fall back
  * to the flat list.
  */
-function useIndexFile(sessionId: number, service: string | null, hasIndex: boolean): {
+function useIndexFile(sessionId: string, service: string | null, hasIndex: boolean): {
   sections: TocEntry[] | null;
 } {
   const [sections, setSections] = useState<TocEntry[] | null>(null);

@@ -82,7 +82,7 @@ export interface SandboxSnapshot {
  */
 const DISCONNECTED_HEARTBEAT_MS = 10_000;
 
-export function useSandboxStatus(sessionId: number | null): {
+export function useSandboxStatus(sessionId: string | null): {
   data: SandboxSnapshot | null;
   error: string | null;
   refresh: () => void;

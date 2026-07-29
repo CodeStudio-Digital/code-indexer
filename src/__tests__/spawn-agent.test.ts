@@ -18,7 +18,7 @@ const ctx: ToolContext = {
   cwd: '/tmp',
   projectName: 'test',
   runner: {
-    sessionId: 42,
+    sessionId: '11111111-1111-4111-8111-111111111111',
     agentLoopV2: false,
     emit: vi.fn(),
   },
@@ -29,8 +29,8 @@ const globalCtx: ToolContext = {
   cwd: 'C:/data/global-workspaces/ws-1',
   projectName: '__global_ws_1',
   globalWorkspace: {
-    syntheticProjectName: '__global_ws_1',
-    rootPath: 'C:/data/global-workspaces/ws-1',
+    sessionTitle: 'Global workspace 1',
+    primaryRootPath: 'D:/repos/backend',
     projects: [
       {
         projectId: 1,
@@ -123,10 +123,12 @@ describe('spawn_agent profiles', () => {
     const text = (spec.initialMessages[0].content[0] as { text: string }).text;
 
     expect(text).toContain('<workspace-context>');
-    expect(text).toContain('GLOBAL session over a virtual union workspace');
+    expect(text).toContain('GLOBAL multi-project session');
+    expect(text).toContain('Primary project root: D:/repos/backend');
     expect(text).toContain('backend_loyalty/ -> Backend Loyalty (primary)');
     expect(text).toContain('intranet_loyalty/ -> Intranet Loyalty');
-    expect(text).toContain('Do not pass or invent project_name');
+    expect(text).toContain('There is no virtual union directory');
+    expect(text).toContain('set cwd to the project slug');
     expect(text).toContain('# Delegated task\nfind recurring charge flow');
   });
 

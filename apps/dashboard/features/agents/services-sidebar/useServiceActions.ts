@@ -17,7 +17,7 @@ import { confirm, prompt } from '../../../components/ui/prompt-dialog.js';
 import { KNOWN_STACKS, type ServiceRow } from './types.js';
 
 export interface UseServiceActionsParams {
-  sessionId: number;
+  sessionId: string;
   services: ServiceRow[];
   reload: () => Promise<void>;
   setError: (msg: string | null) => void;

@@ -20,12 +20,23 @@ import {
   clearSupervisorIncidentBusForTests,
   type SupervisorIncidentEnvelope,
 } from '../supervisor-incident-bus.js';
+import {
+  asAgentRunId,
+  asCompanySessionId,
+} from '@mcp/session-storage';
+
+const COMPANY_SESSION_ID = asCompanySessionId(
+  '00000000-0000-4000-8000-000000000042',
+);
+const AGENT_RUN_ID = asAgentRunId(
+  '00000000-0000-4000-8000-000000000001',
+);
 
 function env(over: Partial<SupervisorIncidentEnvelope> = {}): SupervisorIncidentEnvelope {
   return {
-    sessionId: 42,
+    sessionId: COMPANY_SESSION_ID,
     kind: 'stuck_detected',
-    agentRunId: 1,
+    agentRunId: AGENT_RUN_ID,
     detail: 'test',
     detectedAtMs: Date.now(),
     ...over,

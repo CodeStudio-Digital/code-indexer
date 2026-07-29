@@ -62,8 +62,8 @@ import { asAbortSignal } from '../../abort-signal.js';
 
 /**
  * Why a tool_result was synthesized/replaced by the harness instead of (or on
- * top of) a real invocation. Persisted to telemetry (`coder_tool_calls.
- * refusal_kind`) so guard refusals are separable from genuine tool failures —
+ * top of) a real invocation. Persisted in the tool-call metadata so guard
+ * refusals are separable from genuine tool failures —
  * `is_error=1` alone conflated them and poisoned per-tool error rates.
  */
 export type RefusalKind =
@@ -196,7 +196,11 @@ export interface DispatchArgs {
     content: string;
     isError: boolean;
     turn: number;
-  }) => { content: string; isError?: boolean } | null | void;
+  }) =>
+    | { content: string; isError?: boolean }
+    | null
+    | void
+    | Promise<{ content: string; isError?: boolean } | null | void>;
   /**
    * Polling-stuck detector. Returns a refusal string when a polling
    * tool returned identical content N times in a row. Replaces the
@@ -385,9 +389,9 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // Hidden-call handling (pin mechanism). A registered tool can be absent
     // from the model's visible list (tier-hidden or cap-cut) yet still be
     // called by name — find_tools tells the model to do exactly that.
-    // Policy: disabled tools hard-block; goal-gated create_goal refuses
-    // with redirection; everything else flows through ALL the gates below,
-    // executes, and is pinned at the result tail.
+    // Policy: disabled tools hard-block; every other registered capability
+    // flows through the normal gates, executes, and is pinned at the result
+    // tail. Goal state has no special dispatch authority.
     const pinDisabled = process.env.CODER_TOOL_PIN_DISABLE === '1';
     // Disabled/policy-blocked capabilities are a security boundary, not a
     // pinning feature. The pin kill switch may suppress hidden-tool discovery,
@@ -414,26 +418,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       !!args.visibleToolNames &&
       !args.visibleToolNames.has(tu.name) &&
       !args.pinnedTools?.has(tu.name);
-    if (hiddenFromModel && tu.name === 'create_goal') {
-      // create_goal is hidden by the goal-gate while a goal is in_progress
-      // (sessions 656/658 looped on it) — pinning would permanently defeat
-      // that gate, so refuse with the correct redirection instead.
-      const goal = args.toolContext.getGoalState?.();
-      if (goal && goal.status === 'in_progress') {
-        await pushResult({
-          toolUseId: tu.id,
-          name: tu.name,
-          content:
-            '[goal-gate] a goal is already in_progress — call update_goal to progress or complete it instead of creating a new one.',
-          isError: true,
-          durationMs: 0,
-          wasRefusedByDedup: false,
-          refusalKind: 'gate',
-          stateEpoch: invocationGuard.stateEpoch,
-        });
-        continue;
-      }
-    }
 
     // Pre-dispatch gate (plan/spec/policy refusal). Synthesises an error
     // tool_result without touching the dedup counter — the call never
@@ -761,29 +745,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         nestedCapabilityDispatch: {
           turn: args.turn,
           preflight: async (input) => {
-            const pinDisabled = process.env.CODER_TOOL_PIN_DISABLE === '1';
             if (input.tool && args.isToolBlocked) {
               const blockedText = args.isToolBlocked(input.toolName);
               if (blockedText !== null) {
                 return {
                   content: blockedText,
-                  isError: true,
-                  refusalKind: 'gate',
-                };
-              }
-            }
-            const hiddenFromModel =
-              !pinDisabled
-              && !!input.tool
-              && !!args.visibleToolNames
-              && !args.visibleToolNames.has(input.toolName)
-              && !args.pinnedTools?.has(input.toolName);
-            if (hiddenFromModel && input.toolName === 'create_goal') {
-              const goal = args.toolContext.getGoalState?.();
-              if (goal?.status === 'in_progress') {
-                return {
-                  content:
-                    '[goal-gate] a goal is already in_progress — call update_goal to progress or complete it instead of creating a new one.',
                   isError: true,
                   refusalKind: 'gate',
                 };
@@ -955,7 +921,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     }
 
     try {
-      const postProcessed = args.postProcessToolResult?.({
+      const postProcessed = await args.postProcessToolResult?.({
         toolUseId: tu.id,
         name: tu.name,
         input: normalizedInput,

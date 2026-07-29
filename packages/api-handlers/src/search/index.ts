@@ -26,7 +26,16 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
   const { db, hybridSearch } = deps;
 
   return {
-    async project({ projectId, query, mode, type, limit, supersessionKey, bypassCache }, ctx) {
+    async project({
+      projectId,
+      query,
+      mode,
+      type,
+      limit,
+      supersessionKey,
+      bypassCache,
+      consumer,
+    }, ctx) {
       const project = db.getProject(projectId);
       if (!project) throw new ApiError('not_found', 404, 'project not found');
       const effectiveMode = (mode ?? project.search_mode ?? 'hybrid') as SearchMode;
@@ -43,6 +52,14 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
             : undefined,
           signal: ctx.signal,
           bypassCache,
+          telemetryContext: {
+            requestId: ctx.requestId,
+            consumer: consumer ?? (
+              ctx.clientInfo?.sourceType === 'cli' ? 'cli' : 'api'
+            ),
+            sessionId: ctx.telemetryScope?.sessionId,
+            companySessionId: ctx.telemetryScope?.companySessionId,
+          },
         },
       );
       const activeGeneration = deps.semanticStore.getActiveGeneration(codeNamespace(projectId));
@@ -68,7 +85,7 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
       };
     },
 
-    async global({ query, mode, type, limit, supersessionKey }, ctx) {
+    async global({ query, mode, type, limit, supersessionKey, consumer }, ctx) {
       const cap = limit ?? 20;
       const projects = db.listProjects();
       const results = await hybridSearch.searchGlobal(projects, query, {
@@ -79,12 +96,36 @@ export function createSearchHandlers(deps: HandlerDeps): SearchApi {
           ? `global:${ctx.clientInfo?.sourceType ?? 'unknown'}:${supersessionKey.trim().slice(0, 128)}`
           : undefined,
         signal: ctx.signal,
+        telemetryContext: {
+          requestId: ctx.requestId,
+          consumer: consumer ?? (
+            ctx.clientInfo?.sourceType === 'cli' ? 'cli' : 'api'
+          ),
+          sessionId: ctx.telemetryScope?.sessionId,
+          companySessionId: ctx.telemetryScope?.companySessionId,
+        },
       });
       return results.map(({ projectId, projectName, result }) => ({
         ...(result as object),
         project_id: projectId,
         project: projectName,
       })) as never;
+    },
+
+    async outcome({ projectId, requestId, semanticWin }) {
+      if (!db.getProject(projectId)) {
+        throw new ApiError('not_found', 404, 'project not found');
+      }
+      const normalizedRequestId = requestId.trim();
+      if (!normalizedRequestId || normalizedRequestId.length > 128) {
+        throw new ApiError('invalid_request', 400, 'invalid search request id');
+      }
+      hybridSearch.recordTelemetryOutcome({
+        projectId,
+        requestId: normalizedRequestId,
+        semanticWin,
+      });
+      return { ok: true };
     },
 
     async symbols({ projectId, query, limit }) {

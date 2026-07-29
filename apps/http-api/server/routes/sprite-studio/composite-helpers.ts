@@ -26,10 +26,13 @@ export interface CompositeColumn {
  * version file (`missing version N`) or mismatched cell dims inside a column
  * (`layer_size_mismatch` from compositeLayers — Align is the fix).
  */
-export function resolveCompositeColumns(deps: ServerDeps, ctx: AnimContext): CompositeColumn[] {
+export async function resolveCompositeColumns(
+  deps: ServerDeps,
+  ctx: AnimContext,
+): Promise<CompositeColumn[]> {
   const { anim, root } = ctx;
   if (!root) throw new Error('no_workspace');
-  const frames = deps.spriteAnimationsStore.listFrames(anim.id);
+  const frames = await deps.spriteFileStore.listFrames(anim.id);
   if (frames.length === 0) return [];
   const visible = new Set(
     normalizeTracks(anim.settings).filter((t) => t.visible).map((t) => t.id),
@@ -42,11 +45,11 @@ export function resolveCompositeColumns(deps: ServerDeps, ctx: AnimContext): Com
   // read+inflate per cell is the expensive part (this runs on the Electron
   // MAIN process). Callers may mutate the returned buffer downstream, so cache
   // the pristine decode and hand out a fresh copy per call (memcpy ≪ decode).
-  const decoded = new Map<number, RgbaImage>();
-  const decodeCell = (versionId: number): RgbaImage => {
+  const decoded = new Map<string, RgbaImage>();
+  const decodeCell = async (versionId: string): Promise<RgbaImage> => {
     let img = decoded.get(versionId);
     if (!img) {
-      const version = deps.spriteAssetsStore.getVersion(versionId);
+      const version = await deps.spriteFileStore.getVersion(versionId);
       if (!version) throw new Error(`missing version ${versionId}`);
       img = decodeImage(fs.readFileSync(resolveInsideSpriteDir(root, version.file_rel_path)));
       decoded.set(versionId, img);
@@ -64,7 +67,9 @@ export function resolveCompositeColumns(deps: ServerDeps, ctx: AnimContext): Com
       columns.push({ image: null, durationMs });
       continue;
     }
-    const images = cells.map((f) => decodeCell(f.version_id));
+    const images = await Promise.all(
+      cells.map((f) => decodeCell(f.version_id)),
+    );
     columns.push({ image: images.length === 1 ? images[0] : compositeLayers(images), durationMs });
   }
   return columns;

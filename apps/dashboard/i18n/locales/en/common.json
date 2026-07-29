@@ -206,5 +206,9 @@
   "onboarding.project.indexingHelp": "Symbols and FTS update in the background with low overhead. No local model is loaded and no semantic index is created automatically; you can start it later for an individual project.",
   "onboarding.project.pickLater": "Pick later from the list",
   "onboarding.project.open": "Open project",
-  "commandPalette.open": "Search Everywhere"
+  "commandPalette.open": "Search Everywhere",
+  "actions.answered": "Answered",
+  "actions.approved": "Approved",
+  "actions.back": "Back",
+  "actions.rejected": "Rejected"
 }

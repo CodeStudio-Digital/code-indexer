@@ -13,13 +13,14 @@
  */
 import type { ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export type HookPhase = 'before' | 'after';
 
 // ─── Context types ────────────────────────────────────────────────
 
 export interface BaseHookContext {
-  sessionId: number;
+  sessionId: SessionId;
   projectName: string;
   provider: string;
   model: string;

@@ -71,13 +71,13 @@ export function SpriteStudioView() {
   // Focused edit session: "Editar frame"/pencil opens the editor locked onto
   // ONE version — primary save OVERWRITES it in place ("Salvar Sprite").
   const [editSession, setEditSession] = useState<{
-    versionId: number; origin: 'frame' | 'version';
-    animationId?: number; frameIndex?: number; track?: number;
+    versionId: string; origin: 'frame' | 'version';
+    animationId?: string; frameIndex?: number; track?: number;
   } | null>(null);
 
   // Single lifted version+generation fetch shared by all three animate rails
   // (center provenance, LEFT Frames browser, RIGHT FrameInspector).
-  const av = useAssetVersions(projectId ?? 0, state.activeAssetId ?? 0);
+  const av = useAssetVersions(projectId ?? 0, state.activeAssetId ?? '');
   const activeAnimation = useAnimateSession((s) => s.animContext);
   const timelineCanUndo = useAnimateSession((s) => s.timelineCanUndo);
   const timelineCanRedo = useAnimateSession((s) => s.timelineCanRedo);
@@ -107,7 +107,7 @@ export function SpriteStudioView() {
   // older one, so a slow selectAsset can't land its selectVersion on top of a
   // different asset (mixing (assetId, versionId) across two tabs).
   const focusSeqRef = useRef(0);
-  const focusImage = (assetId: number, versionId: number | null) => {
+  const focusImage = (assetId: string, versionId: string | null) => {
     const seq = ++focusSeqRef.current;
     void (async () => {
       if (assetId !== state.activeAssetId) await c.selectAsset(assetId);
@@ -154,8 +154,8 @@ export function SpriteStudioView() {
     if (state.mode !== 'edit') setEditSession(null);
   }, [state.mode]);
   // "Iterate from this version" (inspector) → generate mode with the ref queued.
-  const [pendingIterate, setPendingIterate] = useState<{ kind: 'version'; versionId: number; label: string } | null>(null);
-  const onIterateVersion = (versionId: number, label: string) => {
+  const [pendingIterate, setPendingIterate] = useState<{ kind: 'version'; versionId: string; label: string } | null>(null);
+  const onIterateVersion = (versionId: string, label: string) => {
     setPendingIterate({ kind: 'version', versionId, label });
     c.setMode('generate');
   };
@@ -205,7 +205,7 @@ export function SpriteStudioView() {
   // refreshAssets before selectAsset: selectAsset resolves the active version
   // from the client-side asset row, so racing them focused the OLD current
   // version after a save-as-new. In edit mode land exactly on the new version.
-  const onSaved = (assetId: number, versionId?: number) => {
+  const onSaved = (assetId: string, versionId: string) => {
     // Save-as-new from the editor: the doc's content now LIVES in the new
     // version — retire the old image's tab/engine when it reads clean
     // (Photoshop "Save As": the tab morphs into the new file). A dirty one
@@ -226,13 +226,13 @@ export function SpriteStudioView() {
       await c.refreshAssets();
       await c.selectAsset(assetId);
       if (focusSeqRef.current !== seq) return;
-      if (inEdit && versionId != null && versionId > 0) c.selectVersion(versionId);
+      if (inEdit) c.selectVersion(versionId);
     })();
   };
 
   // Timeline "edit frame": open that exact version in a FOCUSED session —
   // the primary save overwrites it in place, so the frame updates visually.
-  const onEditVersion = (_assetId: number, versionId: number, frameIndex: number, track: number) => {
+  const onEditVersion = (_assetId: string, versionId: string, frameIndex: number, track: number) => {
     c.selectVersion(versionId);
     setEditSession({
       versionId, origin: 'frame', animationId: activeAnimation?.animationId, frameIndex, track,
@@ -241,7 +241,7 @@ export function SpriteStudioView() {
   };
 
   // Versions-list pencil: same focused session, but returning stays in edit.
-  const onEditVersionInPlace = (versionId: number) => {
+  const onEditVersionInPlace = (versionId: string) => {
     c.selectVersion(versionId);
     setEditSession({ versionId, origin: 'version' });
     c.setMode('edit');
@@ -281,7 +281,7 @@ export function SpriteStudioView() {
     else c.selectVersion(targetId);
   };
 
-  const onDeleteAsset = async (assetId: number) => {
+  const onDeleteAsset = async (assetId: string) => {
     if (projectId == null) return;
     await api.deleteAsset(projectId, assetId);
     disposeEnginesByPrefix(`${projectId}:${assetId}:`);
@@ -290,7 +290,7 @@ export function SpriteStudioView() {
     void c.selectAsset(null);
   };
 
-  const onDeleteVersion = async (versionId: number) => {
+  const onDeleteVersion = async (versionId: string) => {
     if (projectId == null || state.activeAssetId == null) return;
     const assetId = state.activeAssetId;
     const seq = ++focusSeqRef.current;
@@ -307,7 +307,7 @@ export function SpriteStudioView() {
   // version, but the apply used to create the row and never refresh the UI (the
   // onApplied callback was unwired) — so it "didn't save to the versions list".
   // Reload the shared views + the version list and focus the new version.
-  const onEnhanceApplied = async (versionId: number) => {
+  const onEnhanceApplied = async (versionId: string) => {
     if (projectId == null) return;
     av.refresh();
     await c.refreshAssets();
@@ -394,7 +394,7 @@ export function SpriteStudioView() {
             frames={
               <FramesBrowserPanel
                 projectId={projectId}
-                assetId={state.activeAssetId ?? 0}
+                assetId={state.activeAssetId ?? ''}
                 currentVersionId={c.activeAsset?.currentVersionId ?? null}
                 versions={av.versions}
                 generations={av.generations}
@@ -443,8 +443,11 @@ export function SpriteStudioView() {
                 generations={av.generations}
                 versionById={av.versionById}
                 refreshVersions={av.refresh}
-                onEditVersion={(versionId, frameIndex, track) =>
-                  onEditVersion(state.activeAssetId ?? 0, versionId, frameIndex, track)}
+                onEditVersion={(versionId, frameIndex, track) => {
+                  if (state.activeAssetId) {
+                    onEditVersion(state.activeAssetId, versionId, frameIndex, track);
+                  }
+                }}
                 onEditVersionInPlace={onEditVersionInPlace}
                 onEnhanceApplied={onEnhanceApplied}
                 editSession={editSession}

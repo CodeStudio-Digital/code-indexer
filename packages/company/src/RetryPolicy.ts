@@ -60,7 +60,7 @@ export class RetryPolicy {
   private readonly maxRetries: number;
   private readonly baseBackoffMs: number;
   private readonly maxBackoffMs: number;
-  private readonly used = new Map<number, number>();
+  private readonly used = new Map<string, number>();
 
   constructor(opts: RetryPolicyOpts = {}) {
     const envDefault = Number(process.env.CODER_SUBORDINATE_MAX_RETRIES);
@@ -79,7 +79,7 @@ export class RetryPolicy {
    * consuming one retry budget. Returns false if the error is permanent
    * or the budget is exhausted.
    */
-  shouldRetry(agentRunId: number, errorDetail: string | null | undefined): boolean {
+  shouldRetry(agentRunId: string, errorDetail: string | null | undefined): boolean {
     if (!isTransientError(errorDetail)) return false;
     const already = this.used.get(agentRunId) ?? 0;
     if (already >= this.maxRetries) return false;
@@ -88,7 +88,7 @@ export class RetryPolicy {
   }
 
   /** How many retries have been consumed for this subordinate (for UI/board). */
-  usedCount(agentRunId: number): number {
+  usedCount(agentRunId: string): number {
     return this.used.get(agentRunId) ?? 0;
   }
 
@@ -102,7 +102,7 @@ export class RetryPolicy {
    * parse one out of the error) takes precedence as a floor — we never retry
    * sooner than the provider asked.
    */
-  backoffMs(agentRunId: number, retryAfterMs?: number): number {
+  backoffMs(agentRunId: string, retryAfterMs?: number): number {
     const attempt = Math.max(1, this.used.get(agentRunId) ?? 1);
     const exp = this.baseBackoffMs * 2 ** (attempt - 1);
     const capped = Math.min(exp, this.maxBackoffMs);
@@ -117,7 +117,7 @@ export class RetryPolicy {
   }
 
   /** Forget retry count when the subordinate finishes successfully. */
-  clear(agentRunId: number): void {
+  clear(agentRunId: string): void {
     this.used.delete(agentRunId);
   }
 }

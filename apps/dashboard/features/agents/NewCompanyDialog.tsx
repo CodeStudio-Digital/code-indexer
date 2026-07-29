@@ -16,7 +16,7 @@ import { type Project, type Template } from './new-company-dialog/types.js';
 
 interface NewCompanyDialogProps {
   onClose: () => void;
-  onCreated: (sessionId: number) => void;
+  onCreated: (sessionId: string) => void;
 }
 
 /**
@@ -87,7 +87,7 @@ export function NewCompanyDialog({ onClose, onCreated }: NewCompanyDialogProps) 
     setCreating(true);
     setError(null);
     try {
-      const res = await apiPost<{ session: { id: number } }>('/company/sessions', {
+      const res = await apiPost<{ session: { id: string } }>('/company/sessions', {
         template_id: selectedTemplateId,
         name: name.trim(),
         project_ids: selectedProjectIds,

@@ -3,7 +3,7 @@ import { extname } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { ImageBlock } from '@mcp/code-agent/core/messages.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
+import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 
 const VIEW_IMAGE_DESC =
@@ -37,7 +37,7 @@ export const viewImage: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      path: { type: 'string', description: 'Project-relative path, or absolute image path under an authorized external root.' },
+      path: { type: 'string', description: 'Project-relative path, "<project-slug>/..." in a global session, or an authorized absolute image path.' },
       describe: {
         type: 'string',
         description:
@@ -49,7 +49,7 @@ export const viewImage: CoderTool = {
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     const path = String(args.path ?? '');
-    const resolved = resolveAuthorizedPath(path, ctx.cwd, ctx.externalRoots, 'read');
+    const resolved = resolveWorkspacePath(path, ctx, 'read');
     if (!resolved.ok) return err(resolved.reason);
     const abs = resolved.abs;
 

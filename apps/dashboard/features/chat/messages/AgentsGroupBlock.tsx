@@ -10,11 +10,11 @@ interface AgentsGroupBlockProps {
   group: AgentsGroup;
   resultSource?: AgentsGroupResultSource;
   /** Enables per-agent abort on live rows (POST /agents/abort). */
-  sessionId?: number;
+  sessionId?: string;
 }
 
 export interface AgentsGroupResultSource {
-  sessionId: number;
+  sessionId: string;
   toolUseId: string;
   input?: Record<string, unknown>;
   isTruncated?: boolean;
@@ -356,7 +356,7 @@ function AgentActivityLine({ agent, runningMeta }: { agent: ParallelAgent; runni
 }
 
 /** Fire-and-forget per-agent abort — the SSE stream reflects the outcome. */
-function abortOneAgent(sessionId: number, groupId: string, agentIndex: number): void {
+function abortOneAgent(sessionId: string, groupId: string, agentIndex: number): void {
   void fetch(`/api/coder/sessions/${sessionId}/agents/abort`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

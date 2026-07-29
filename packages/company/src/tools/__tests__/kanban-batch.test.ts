@@ -10,15 +10,22 @@ import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { kanbanCreateCardTool, kanbanMoveCardTool } from '../kanban-batch.js';
 
-interface StubCard { id: number; title: string; column: string; position: number; blocked_by: number[] }
+const CARD_IDS = [
+  '10000001-0000-4000-8000-000000000001',
+  '10000002-0000-4000-8000-000000000002',
+  '10000003-0000-4000-8000-000000000003',
+  '10000004-0000-4000-8000-000000000004',
+] as const;
+
+interface StubCard { id: string; title: string; column: string; position: number; blocked_by: string[] }
 
 function stubOrchestrator() {
-  const cards = new Map<number, StubCard>();
-  let nextId = 1;
+  const cards = new Map<string, StubCard>();
+  let nextId = 0;
   const orchestrator = {
     kanbanCreateCard(input: { title: string; column?: string }) {
       const card: StubCard = {
-        id: nextId++,
+        id: CARD_IDS[nextId++]!,
         title: input.title,
         column: input.column ?? 'backlog',
         position: cards.size,
@@ -27,10 +34,10 @@ function stubOrchestrator() {
       cards.set(card.id, card);
       return card;
     },
-    kanbanGetCard(id: number) {
+    kanbanGetCard(id: string) {
       return cards.get(id) ?? null;
     },
-    kanbanMoveCard(id: number, column: string, position?: number) {
+    kanbanMoveCard(id: string, column: string, position?: number) {
       const card = cards.get(id);
       if (!card) throw new Error(`card #${id} not found`);
       card.column = column;
@@ -59,8 +66,8 @@ describe('kanban_create_card — batch', () => {
     );
     expect(res.isError).toBeFalsy();
     expect(res.content).toContain('3/3 succeeded');
-    expect(res.content).toContain('[1/3] #1 "Setup backend"');
-    expect(res.content).toContain('[3/3] #3 "Write docs"');
+    expect(res.content).toContain(`[1/3] #${CARD_IDS[0]} "Setup backend"`);
+    expect(res.content).toContain(`[3/3] #${CARD_IDS[2]} "Write docs"`);
   });
 
   it('keeps the single form working', async () => {
@@ -68,7 +75,7 @@ describe('kanban_create_card — batch', () => {
     const tool = kanbanCreateCardTool(orchestrator);
     const res = await tool.handler({ title: 'Solo card' }, ctx);
     expect(res.isError).toBeFalsy();
-    expect(res.content).toContain('#1 "Solo card" → backlog');
+    expect(res.content).toContain(`#${CARD_IDS[0]} "Solo card" → backlog`);
   });
 
   it('rejects mixing forms, empty batches and oversized batches', async () => {
@@ -103,32 +110,39 @@ describe('kanban_move_card — batch with per-item isolation', () => {
     const { orchestrator, cards } = stubOrchestrator();
     const create = kanbanCreateCardTool(orchestrator);
     await create.handler({ cards: [{ title: 'A' }, { title: 'B' }, { title: 'C' }] }, ctx);
-    cards.get(2)!.blocked_by = [1]; // B is blocked by A
+    cards.get(CARD_IDS[1])!.blocked_by = [CARD_IDS[0]]; // B is blocked by A
 
     const move = kanbanMoveCardTool(orchestrator);
     const res = await move.handler(
       {
         moves: [
-          { card_id: 1, column: 'in_progress' },
-          { card_id: 2, column: 'in_progress' }, // blocked → fails
-          { card_id: 3, column: 'review' },
+          { card_id: CARD_IDS[0], column: 'in_progress' },
+          { card_id: CARD_IDS[1], column: 'in_progress' }, // blocked → fails
+          { card_id: CARD_IDS[2], column: 'review' },
         ],
       },
       ctx,
     );
     expect(res.isError).toBeFalsy(); // partial success is not a tool error
     expect(res.content).toContain('2/3 succeeded, 1 failed');
-    expect(res.content).toContain('[2/3] FAILED: Card #2 is blocked by cards: 1');
-    expect(cards.get(1)!.column).toBe('in_progress');
-    expect(cards.get(2)!.column).toBe('backlog'); // untouched
-    expect(cards.get(3)!.column).toBe('review');
+    expect(res.content).toContain(
+      `[2/3] FAILED: Card #${CARD_IDS[1]} is blocked by cards: ${CARD_IDS[0]}`,
+    );
+    expect(cards.get(CARD_IDS[0])!.column).toBe('in_progress');
+    expect(cards.get(CARD_IDS[1])!.column).toBe('backlog'); // untouched
+    expect(cards.get(CARD_IDS[2])!.column).toBe('review');
   });
 
   it('is an error only when EVERY entry fails', async () => {
     const { orchestrator } = stubOrchestrator();
     const move = kanbanMoveCardTool(orchestrator);
     const res = await move.handler(
-      { moves: [{ card_id: 99, column: 'done' }, { card_id: 100, column: 'done' }] },
+      {
+        moves: [
+          { card_id: '90000099-0000-4000-8000-000000000099', column: 'done' },
+          { card_id: '90000100-0000-4000-8000-000000000100', column: 'done' },
+        ],
+      },
       ctx,
     );
     expect(res.isError).toBe(true);
@@ -139,16 +153,16 @@ describe('kanban_move_card — batch with per-item isolation', () => {
     const { orchestrator, cards } = stubOrchestrator();
     const create = kanbanCreateCardTool(orchestrator);
     await create.handler({ cards: [{ title: 'A' }, { title: 'B' }] }, ctx);
-    cards.get(2)!.blocked_by = [1];
+    cards.get(CARD_IDS[1])!.blocked_by = [CARD_IDS[0]];
 
     const move = kanbanMoveCardTool(orchestrator);
-    const okMove = await move.handler({ card_id: 1, column: 'in_progress' }, ctx);
+    const okMove = await move.handler({ card_id: CARD_IDS[0], column: 'in_progress' }, ctx);
     expect(okMove.isError).toBeFalsy();
-    expect(okMove.content).toContain('Card #1 moved to in_progress');
+    expect(okMove.content).toContain(`Card #${CARD_IDS[0]} moved to in_progress`);
 
-    const blocked = await move.handler({ card_id: 2, column: 'in_progress' }, ctx);
+    const blocked = await move.handler({ card_id: CARD_IDS[1], column: 'in_progress' }, ctx);
     expect(blocked.isError).toBe(true);
-    expect(blocked.content).toContain('blocked by cards: 1');
+    expect(blocked.content).toContain(`blocked by cards: ${CARD_IDS[0]}`);
     expect(blocked.content).toContain('kanban_remove_dependency');
   });
 });

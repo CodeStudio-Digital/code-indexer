@@ -1,24 +1,26 @@
-import { useEffect, useState } from 'react';
+import { memo } from 'react';
 import { Activity, Check, Clock, Loader2, X } from 'lucide-react';
 import type { StreamActivityBlock } from '../../hooks/agent-stream/types.js';
+import { useNow } from '../../lib/perf/shared-clock.js';
 import { cn } from '../../lib/utils.js';
 
 interface ActivityLineBlockProps {
   activity: StreamActivityBlock;
 }
 
-export function ActivityLineBlock({ activity }: ActivityLineBlockProps) {
+/**
+ * Memoized: a live turn can hold many activity lines and re-renders on every
+ * rAF flush. Only the block whose `activity` object actually changed this frame
+ * reconciles; the elapsed label advances through the shared 1 Hz clock, which
+ * costs one timer for the whole app instead of one per running line.
+ */
+export const ActivityLineBlock = memo(function ActivityLineBlock({ activity }: ActivityLineBlockProps) {
   const running = activity.status === 'running';
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!running) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [running, activity.startedAt]);
+  const now = useNow(running);
 
   const Icon = iconForStatus(activity.status);
   const elapsed = running
-    ? Math.max(0, Date.now() - activity.startedAt)
+    ? Math.max(0, now - activity.startedAt)
     : activity.elapsedMs;
   const phase = activity.phase ? readable(activity.phase) : readable(activity.kind);
   const remaining =
@@ -55,7 +57,7 @@ export function ActivityLineBlock({ activity }: ActivityLineBlockProps) {
       )}
     </div>
   );
-}
+});
 
 function iconForStatus(status: StreamActivityBlock['status']) {
   if (status === 'running') return Loader2;

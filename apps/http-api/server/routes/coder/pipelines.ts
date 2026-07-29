@@ -1,7 +1,13 @@
-import type { Hono } from 'hono';
+import type { Handler, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseIdParam,
+  parseJsonBody,
+  parseSessionIdParam,
+  parseSessionRecordIdParam,
+  notFound,
+} from '../_helpers.js';
 import { validatePipelineGraph } from '@mcp/company/services/PipelineService.js';
 import { generateAiPipeline } from '@mcp/api-handlers';
 import { ChatPipelineExecutor } from '@mcp/code-agent/pipelines/ChatPipelineExecutor.js';
@@ -17,13 +23,13 @@ import type {
 /**
  * HTTP routes for the chat pipeline mode (PR-3).
  *
- * Mirrors the company-pipelines surface but binds executions to a
- * `coder_sessions` row instead of a `company_sessions` row. Pipeline
- * executors are lazily instantiated per chat session and live in
- * `runtime.coderPipelineRegistry` until the server restarts.
+ * Mirrors the company-pipelines surface but binds each execution to the
+ * filesystem bundle of its coder session. Pipeline executors are lazily
+ * instantiated per chat session and live in `runtime.coderPipelineRegistry`
+ * until the server restarts.
  *
- * Read paths fall through to `companyStore` so the dashboard can display
- * past executions even when no executor is loaded for the session yet.
+ * Read paths fall through to the bundle repository so the dashboard can
+ * display past executions even when no executor is loaded for the session.
  */
 export function mountCoderPipelineRoutes(
   app: Hono,
@@ -34,23 +40,25 @@ export function mountCoderPipelineRoutes(
 
   // ─── List pipelines available to a chat session ──────────────
 
-  app.get('/api/coder/sessions/:id/pipelines', (c) => {
-    const sessionId = parseIdParam(c);
-    const session = sessionStore.getSession(sessionId);
+  app.get('/api/coder/sessions/:id/pipelines', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c, 'Session not found');
     // Project scope: pipelines owned by this chat's project + global ones.
     // Company-owned pipelines are intentionally NOT surfaced here — they
     // run via the orchestrator, keeping the two worlds separate.
     return c.json(
-      companyStore.listPipelines({ projectId: session.project_id }),
+      await companyStore.listPipelines({
+        projectId: session.project_id ?? undefined,
+      }),
     );
   });
 
   // ─── Pipeline CRUD (project-scoped, chat builder) ────────────
 
   app.post('/api/coder/sessions/:id/pipelines', async (c) => {
-    const sessionId = parseIdParam(c);
-    const session = sessionStore.getSession(sessionId);
+    const sessionId = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c, 'Session not found');
     const body = await parseJsonBody<{
       name: string;
@@ -61,7 +69,7 @@ export function mountCoderPipelineRoutes(
     if (!body.graph) return c.json({ error: 'graph is required' }, 400);
     const validation = validatePipelineGraph(body.graph, null);
     if (!validation.ok) return c.json({ error: 'invalid graph', issues: validation.errors }, 400);
-    const created = companyStore.createPipeline({
+    const created = await companyStore.createPipeline({
       name: body.name,
       description: body.description,
       graph: body.graph,
@@ -77,8 +85,8 @@ export function mountCoderPipelineRoutes(
   });
 
   app.post('/api/coder/sessions/:id/pipelines/generate', async (c) => {
-    const sessionId = parseIdParam(c);
-    const session = sessionStore.getSession(sessionId);
+    const sessionId = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c, 'Session not found');
     const body = await parseJsonBody<{ intent?: string }>(c);
     const intent = String(body.intent ?? '').trim();
@@ -97,11 +105,11 @@ export function mountCoderPipelineRoutes(
   });
 
   app.patch('/api/coder/sessions/:id/pipelines/:pid', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     const pipelineId = parseIdParam(c, 'pid');
-    const session = sessionStore.getSession(sessionId);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c, 'Session not found');
-    const existing = companyStore.getPipeline(pipelineId);
+    const existing = await companyStore.getPipeline(pipelineId);
     if (!existing) return notFound(c, 'Pipeline not found');
     if (existing.project_id !== session.project_id) {
       return c.json({ error: 'Pipeline does not belong to this project.' }, 403);
@@ -117,7 +125,7 @@ export function mountCoderPipelineRoutes(
       if (!validation.ok) return c.json({ error: 'invalid graph', issues: validation.errors }, 400);
     }
     try {
-      const updated = companyStore.updatePipeline(
+      const updated = await companyStore.updatePipeline(
         pipelineId,
         { name: body.name, description: body.description, graph: body.graph },
         { expectedVersion: body.expected_version },
@@ -133,17 +141,17 @@ export function mountCoderPipelineRoutes(
     }
   });
 
-  app.delete('/api/coder/sessions/:id/pipelines/:pid', (c) => {
-    const sessionId = parseIdParam(c);
+  app.delete('/api/coder/sessions/:id/pipelines/:pid', async (c) => {
+    const sessionId = parseSessionIdParam(c);
     const pipelineId = parseIdParam(c, 'pid');
-    const session = sessionStore.getSession(sessionId);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c, 'Session not found');
-    const existing = companyStore.getPipeline(pipelineId);
+    const existing = await companyStore.getPipeline(pipelineId);
     if (!existing) return notFound(c, 'Pipeline not found');
     if (existing.project_id !== session.project_id) {
       return c.json({ error: 'Pipeline does not belong to this project.' }, 403);
     }
-    const ok = companyStore.deletePipeline(pipelineId);
+    const ok = await companyStore.deletePipeline(pipelineId);
     if (!ok) return notFound(c, 'Pipeline not found');
     return c.json({ ok: true });
   });
@@ -151,16 +159,16 @@ export function mountCoderPipelineRoutes(
   // ─── Pipeline executions ─────────────────────────────────────
 
   app.post('/api/coder/sessions/:id/pipelines/:pid/start', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     const pipelineId = parseIdParam(c, 'pid');
     const body = await parseJsonBody<{ initial_input?: string }>(c);
     const initialInput = String(body.initial_input ?? '').trim();
     if (!initialInput) return c.json({ error: 'initial_input is required' }, 400);
 
-    const session = sessionStore.getSession(sessionId);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c, 'Session not found');
 
-    const pipeline = companyStore.getPipeline(pipelineId);
+    const pipeline = await companyStore.getPipeline(pipelineId);
     if (!pipeline) return notFound(c, 'Pipeline not found');
     // Project gating: a chat session may run a pipeline only when it is
     // global (no owner) or owned by this chat's project. Company-owned
@@ -180,7 +188,10 @@ export function mountCoderPipelineRoutes(
       return c.json({ error: 'invalid graph', issues: validation.errors }, 400);
     }
 
-    const project = db.getProject(session.project_id);
+    const project =
+      session.project_id == null
+        ? null
+        : db.getProject(session.project_id);
 
     // Lazily instantiate the executor for this session.
     let entry = runtime.coderPipelineRegistry.get(sessionId);
@@ -225,52 +236,66 @@ export function mountCoderPipelineRoutes(
     }
   });
 
-  app.get('/api/coder/sessions/:id/pipelines/executions', (c) => {
-    const sessionId = parseIdParam(c);
+  const listExecutionsHandler: Handler = async (c) => {
+    const sessionId = parseSessionIdParam(c);
     const status = c.req.query('status') as PipelineExecutionStatus | undefined;
     const pipelineRaw = c.req.query('pipeline_id');
     const pipelineId = pipelineRaw ? parseInt(pipelineRaw, 10) : undefined;
 
     const entry = runtime.coderPipelineRegistry.get(sessionId);
     if (entry) {
-      return c.json(
-        entry.executor.listExecutions({
+      const payload = JSON.stringify(
+        await entry.executor.listExecutions({
           pipelineId: Number.isFinite(pipelineId ?? NaN) ? pipelineId : undefined,
           status,
         }),
       );
+      return c.body(payload, 200, { 'Content-Type': 'application/json' });
     }
-    return c.json(
-      companyStore.listPipelineExecutions({
-        coderSessionId: sessionId,
-        pipelineId: Number.isFinite(pipelineId ?? NaN) ? pipelineId : undefined,
+    const payload = JSON.stringify(
+      await sessionStore.chatPipelines.listExecutions(sessionId, {
+        pipeline_id: Number.isFinite(pipelineId ?? NaN)
+          ? pipelineId
+          : undefined,
         status,
       }),
     );
-  });
+    return c.body(payload, 200, { 'Content-Type': 'application/json' });
+  };
+  app.get(
+    '/api/coder/sessions/:id/pipelines/executions',
+    listExecutionsHandler,
+  );
 
-  app.get('/api/coder/sessions/:id/pipelines/executions/:execId', (c) => {
-    const sessionId = parseIdParam(c);
-    const execId = parseIdParam(c, 'execId');
+  app.get('/api/coder/sessions/:id/pipelines/executions/:execId', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    const execId = parseSessionRecordIdParam(c, 'execId');
 
     const entry = runtime.coderPipelineRegistry.get(sessionId);
     if (entry) {
-      const result = entry.executor.status(execId);
+      const result = await entry.executor.status(execId);
       if (!result) return notFound(c, 'Execution not found');
-      return c.json(result);
+      return c.body(
+        JSON.stringify(result),
+        200,
+        { 'Content-Type': 'application/json' },
+      );
     }
-    const execution = companyStore.getPipelineExecution(execId);
+    const execution =
+      await sessionStore.chatPipelines.getExecution(sessionId, execId);
     if (!execution) return notFound(c, 'Execution not found');
-    if (execution.coder_session_id !== sessionId) {
-      return c.json({ error: 'Execution belongs to a different session.' }, 403);
-    }
-    const nodes = companyStore.listPipelineNodeExecutions(execId);
-    return c.json({ execution, nodes });
+    const nodes =
+      await sessionStore.chatPipelines.listNodeExecutions(sessionId, execId);
+    return c.body(
+      JSON.stringify({ execution, nodes }),
+      200,
+      { 'Content-Type': 'application/json' },
+    );
   });
 
   app.post('/api/coder/sessions/:id/pipelines/executions/:execId/abort', async (c) => {
-    const sessionId = parseIdParam(c);
-    const execId = parseIdParam(c, 'execId');
+    const sessionId = parseSessionIdParam(c);
+    const execId = parseSessionRecordIdParam(c, 'execId');
     const body = await parseJsonBody<{ reason?: string }>(c);
 
     const entry = runtime.coderPipelineRegistry.get(sessionId);
@@ -280,7 +305,7 @@ export function mountCoderPipelineRoutes(
         409,
       );
     }
-    const ok = entry.executor.abort(execId, body.reason);
+    const ok = await entry.executor.abort(execId, body.reason);
     if (!ok) {
       return c.json(
         { error: 'Execution is not abortable (not found or already terminal).' },
@@ -290,19 +315,19 @@ export function mountCoderPipelineRoutes(
     return c.json({ ok: true });
   });
 
-  app.post('/api/coder/sessions/:id/pipelines/executions/:execId/pause', (c) => {
-    const sessionId = parseIdParam(c);
-    const execId = parseIdParam(c, 'execId');
+  app.post('/api/coder/sessions/:id/pipelines/executions/:execId/pause', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    const execId = parseSessionRecordIdParam(c, 'execId');
     const entry = runtime.coderPipelineRegistry.get(sessionId);
     if (!entry) return c.json({ error: 'No active pipeline executor for this session.' }, 409);
-    const ok = entry.executor.pause(execId);
+    const ok = await entry.executor.pause(execId);
     if (!ok) return c.json({ error: 'Only running executions can be paused.' }, 409);
     return c.json({ ok: true });
   });
 
   app.post('/api/coder/sessions/:id/pipelines/executions/:execId/resume', async (c) => {
-    const sessionId = parseIdParam(c);
-    const execId = parseIdParam(c, 'execId');
+    const sessionId = parseSessionIdParam(c);
+    const execId = parseSessionRecordIdParam(c, 'execId');
     const entry = runtime.coderPipelineRegistry.get(sessionId);
     if (!entry) return c.json({ error: 'No active pipeline executor for this session.' }, 409);
     try {
@@ -321,8 +346,8 @@ export function mountCoderPipelineRoutes(
    * delegates to `resume()`).
    */
   app.post('/api/coder/sessions/:id/pipelines/executions/:execId/confirm', async (c) => {
-    const sessionId = parseIdParam(c);
-    const execId = parseIdParam(c, 'execId');
+    const sessionId = parseSessionIdParam(c);
+    const execId = parseSessionRecordIdParam(c, 'execId');
     const entry = runtime.coderPipelineRegistry.get(sessionId);
     if (!entry) return c.json({ error: 'No active pipeline executor for this session.' }, 409);
     try {
@@ -347,7 +372,7 @@ export function mountCoderPipelineRoutes(
    * so the dashboard can keep watching even when no chat run is active.
    */
   app.get('/api/coder/sessions/:id/pipelines/stream', (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     const entry = runtime.coderPipelineRegistry.get(sessionId);
     if (!entry) {
       return c.json({ error: 'No active pipeline executor for this session.' }, 404);

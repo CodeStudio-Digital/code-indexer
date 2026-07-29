@@ -25,7 +25,14 @@ export interface McpSemanticSearchClient {
   searchProject(
     projectId: number,
     query: string,
-    options?: { mode?: SearchMode; type?: SearchType; limit?: number },
+    options?: {
+      mode?: SearchMode;
+      type?: SearchType;
+      limit?: number;
+      consumer?: 'agent';
+      sessionId?: string;
+      companySessionId?: string;
+    },
   ): Promise<SemanticClientResult<ProjectSemanticSearchResponse>>;
   searchProjectMemory(
     projectId: number,
@@ -61,9 +68,9 @@ export function createMcpSemanticSearchClient(
   config: IndexerConfig,
   fetchImpl?: FetchLike,
 ): McpSemanticSearchClient {
-  const request = (path: string) => requestMcpLocalServer(
+  const request = (path: string, headers?: Record<string, string>) => requestMcpLocalServer(
     path,
-    { method: 'GET' },
+    { method: 'GET', headers },
     { config, fetchImpl, timeoutMs: 20_000 },
   );
 
@@ -73,7 +80,16 @@ export function createMcpSemanticSearchClient(
       if (options.mode) params.set('mode', options.mode);
       if (options.type) params.set('type', options.type);
       if (options.limit !== undefined) params.set('limit', String(options.limit));
-      const response = await request(`/api/projects/${projectId}/search?${params}`);
+      params.set('consumer', options.consumer ?? 'agent');
+      const headers: Record<string, string> = {};
+      if (options.sessionId) headers['x-mcp-session-id'] = options.sessionId;
+      if (options.companySessionId) {
+        headers['x-mcp-company-session-id'] = options.companySessionId;
+      }
+      const response = await request(
+        `/api/projects/${projectId}/search?${params}`,
+        headers,
+      );
       if (!response.ok) return failed(response.error);
       const value = parseProjectResponse(response.body);
       return value

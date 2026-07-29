@@ -8,12 +8,14 @@
  *     {"stack":"react-ts","port":5181,"kind":"ds","packageName":"@acme/ds"}
  *   consumidor (projeto builder vinculado a um DS publicado):
  *     {"stack":"react-ts","port":5181,
- *      "designSystem":{"sessionId":3,"packageName":"@acme/ui","semver":"1.2.0"}}
+ *      "designSystem":{"sessionId":"<uuid>","packageName":"@acme/ui","semver":"1.2.0"}}
  *
  * `kind` ausente = builder comum (V0-style) ou projeto normal. As duas
  * variantes são mutuamente exclusivas: um workspace `kind:'ds'` nunca é
  * tratado como consumidor (parseDsConsumer retorna null nele).
  */
+
+import { asSessionId, isUuid, type SessionId } from '@mcp/session-storage';
 
 export type DsWorkspaceMode = 'fidelity' | 'creative';
 
@@ -93,7 +95,7 @@ export function parseAppWorkspace(builderJson: string | null | undefined): AppWo
 
 /** Vínculo de consumo: projeto builder apontando para um DS publicado. */
 export interface DsConsumerConfig {
-  sessionId: number;
+  sessionId: SessionId;
   packageName: string;
   semver: string;
 }
@@ -111,10 +113,14 @@ export function parseDsConsumer(builderJson: string | null | undefined): DsConsu
       | { sessionId?: unknown; packageName?: unknown; semver?: unknown }
       | undefined;
     if (!ds || typeof ds !== 'object') return null;
-    if (typeof ds.sessionId !== 'number' || !Number.isInteger(ds.sessionId) || ds.sessionId <= 0) return null;
+    if (typeof ds.sessionId !== 'string' || !isUuid(ds.sessionId)) return null;
     if (typeof ds.packageName !== 'string' || !ds.packageName) return null;
     if (typeof ds.semver !== 'string' || !ds.semver) return null;
-    return { sessionId: ds.sessionId, packageName: ds.packageName, semver: ds.semver };
+    return {
+      sessionId: asSessionId(ds.sessionId),
+      packageName: ds.packageName,
+      semver: ds.semver,
+    };
   } catch {
     return null;
   }

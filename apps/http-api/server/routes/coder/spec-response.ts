@@ -3,7 +3,7 @@ import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import { formatSpecResult } from '@mcp/code-agent/tools/spec/index.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
-import { parseIdParam } from '../_helpers.js';
+import { parseSessionIdParam } from '../_helpers.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
@@ -32,7 +32,7 @@ export function mountCoderSpecResponseRoute(
   const workerPool = getCoderWorkerPool();
 
   app.post('/api/coder/sessions/:id/spec-response', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<SpecResponseBody>();
     const approved = !!body.approved;
     const requested = body.requested_changes;
@@ -53,7 +53,7 @@ export function mountCoderSpecResponseRoute(
       );
     }
 
-    const pending = findPendingInteraction(id);
+    const pending = await findPendingInteraction(id);
     if (!pending || (pending.name !== 'submit_spec' && pending.name !== 'submit_specification_to_master')) {
       return c.json({ error: 'no pending spec' }, 404);
     }
@@ -67,13 +67,17 @@ export function mountCoderSpecResponseRoute(
         content: formatSpecResult(approved, specPath, requested),
       }],
     };
-    sessionStore.appendMessage(id, toolMsg);
+    await sessionStore.appendMessage({
+      session_id: id,
+      operation_id: `interaction:spec-response:${pending.toolUseId}`,
+      message: toolMsg,
+    });
 
     if (approved) {
-      const session = sessionStore.getSession(id);
+      const session = await sessionStore.getSession(id);
       if (resolveAgentSelection(deps.providerStore, session?.agent)?.baseAgentId === 'spec') {
         try {
-          sessionStore.setSessionAgent(id, 'build');
+          await sessionStore.setSessionAgent(id, 'build');
           const reminder: AgentMessage = {
             role: 'user',
             content: [{
@@ -83,7 +87,12 @@ export function mountCoderSpecResponseRoute(
                 `Derive tasks from its "## Implementation Plan" via submit_tasks, then execute each per task scope.</system-reminder>`,
             }],
           };
-          sessionStore.appendMessage(id, reminder);
+          await sessionStore.appendMessage({
+            session_id: id,
+            operation_id:
+              `interaction:spec-build-reminder:${pending.toolUseId}`,
+            message: reminder,
+          });
         } catch (e) {
           console.warn(
             `[coder] spec→build transition (offline path) failed: ${e instanceof Error ? e.message : String(e)}`,

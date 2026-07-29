@@ -43,7 +43,7 @@ interface StateSummary {
 }
 
 interface SessionStateBannerProps {
-  sessionId: number;
+  sessionId: string;
   refreshKey?: number;
   onActiveTaskChange?: (taskId: string | null) => void;
 }

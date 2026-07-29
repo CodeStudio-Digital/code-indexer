@@ -1,6 +1,6 @@
 /**
  * Track (animation layer) metadata helpers — pure functions over
- * `sprite_animations.settings_json.tracks`. Track 0 ("Base") is NEVER
+ * each animation entity's `settings.tracks`. Track 0 ("Base") is NEVER
  * materialized until the user edits tracks: `normalizeTracks` injects it on
  * read, so legacy animations need zero backfill and there is exactly one
  * normalization choke point. Track ids are max+1 (id reuse after delete is

@@ -16,7 +16,7 @@ export interface TreeNode {
  * on-demand (when the user expands it). Keeps expansion state + cached
  * children per node so collapsing/expanding doesn't refetch.
  */
-export function useFileTree(sessionId: number, projectId: number | null) {
+export function useFileTree(sessionId: string, projectId: number | null) {
   const [root, setRoot] = useState<TreeNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['.']));
   const [error, setError] = useState<string | null>(null);

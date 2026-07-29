@@ -43,7 +43,7 @@ export interface TabContentProps {
   projectName: string;
   /** Native `root_path` — forwarded to CodeSurface → file tree menu. */
   projectRoot?: string | null;
-  initialSessionId?: number;
+  initialSessionId?: string;
   onOpenFile: (path: string) => void;
   activeFilePath: string | null;
   contribWindows: ContribToolWindow[];

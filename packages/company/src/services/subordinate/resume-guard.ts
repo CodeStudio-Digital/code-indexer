@@ -15,21 +15,21 @@
  * function to completion before yielding at the first `await`, so two
  * concurrent `resumeSubordinate(id)` calls cannot both acquire.
  */
-const inFlight = new Set<number>();
+const inFlight = new Set<string>();
 
 /** Reserve the resume slot for `agentRunId`. Returns false if already held. */
-export function tryAcquireResume(agentRunId: number): boolean {
+export function tryAcquireResume(agentRunId: string): boolean {
   if (inFlight.has(agentRunId)) return false;
   inFlight.add(agentRunId);
   return true;
 }
 
 /** Release the resume slot for `agentRunId` (no-op if not held). */
-export function releaseResume(agentRunId: number): void {
+export function releaseResume(agentRunId: string): void {
   inFlight.delete(agentRunId);
 }
 
 /** True when a resume is currently in flight for `agentRunId`. */
-export function isResumeInFlight(agentRunId: number): boolean {
+export function isResumeInFlight(agentRunId: string): boolean {
   return inFlight.has(agentRunId);
 }

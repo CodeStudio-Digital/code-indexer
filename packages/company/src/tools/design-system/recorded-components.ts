@@ -4,6 +4,7 @@
  * por ds_get_pipeline / ds_submit_stage / audit.
  */
 import type { DesignSystemStore } from '@mcp/store/design-system-store.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface RecordedComponent {
   name: string;
@@ -11,20 +12,20 @@ export interface RecordedComponent {
   props_schema_json: string | null;
 }
 
-export function collectRecordedComponents(
+export async function collectRecordedComponents(
   store: DesignSystemStore,
-  sessionId: number,
-): RecordedComponent[] {
+  sessionId: SessionId,
+): Promise<RecordedComponent[]> {
   const byName = new Map<string, RecordedComponent>();
-  const published = store.getLatestPublishedVersion(sessionId);
+  const published = await store.getLatestPublishedVersion(sessionId);
   if (published) {
-    for (const c of store.listComponents(published.id)) {
+    for (const c of await store.listComponents(published.id)) {
       byName.set(c.name.toLowerCase(), { name: c.name, kind: c.kind, props_schema_json: c.props_schema_json });
     }
   }
-  const draft = store.getLatestVersionAny(sessionId);
+  const draft = await store.getLatestVersionAny(sessionId);
   if (draft && (draft.status === 'draft' || draft.status === 'building')) {
-    for (const c of store.listComponents(draft.id)) {
+    for (const c of await store.listComponents(draft.id)) {
       byName.set(c.name.toLowerCase(), { name: c.name, kind: c.kind, props_schema_json: c.props_schema_json });
     }
   }

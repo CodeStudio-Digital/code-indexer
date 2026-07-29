@@ -2,11 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 import { HumanInTheLoop } from '../HumanInTheLoop.js';
 import type { MasterPrompt } from '@mcp/company/types.js';
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const MASTER_AGENT_RUN_ID = '00000000-0000-4000-8000-000000000009';
+
 function prompt(kind: 'plan' | 'question'): MasterPrompt {
   return {
-    id: kind === 'plan' ? 71 : 72,
-    company_session_id: 1,
-    agent_run_id: 9,
+    id:
+      kind === 'plan'
+        ? '00000000-0000-4000-8000-000000000071'
+        : '00000000-0000-4000-8000-000000000072',
+    company_session_id: COMPANY_SESSION_ID,
+    agent_run_id: MASTER_AGENT_RUN_ID,
     kind,
     runner_block_id: null,
     body: kind === 'plan' ? 'ship it' : 'why?',
@@ -28,24 +34,24 @@ function makeHarness(kind: 'plan' | 'question', delivered: boolean) {
     order.push('deliver');
     return delivered;
   });
-  const claimMasterPromptDelivery = vi.fn(() => {
+  const claimMasterPromptDelivery = vi.fn(async () => {
     order.push('claim');
     return { kind: 'claimed' as const, prompt: pending, token: 'store-token' };
   });
-  const releaseMasterPromptDelivery = vi.fn(() => {
+  const releaseMasterPromptDelivery = vi.fn(async () => {
     order.push('release');
     return true;
   });
-  const completeMasterPromptDelivery = vi.fn<() => MasterPrompt | null>(() => {
+  const completeMasterPromptDelivery = vi.fn(async (): Promise<MasterPrompt | null> => {
     order.push('complete');
     return { ...pending, status: 'answered' };
   });
-  const markMasterPromptDeliveryOutcomeUnknown = vi.fn(() => {
+  const markMasterPromptDeliveryOutcomeUnknown = vi.fn(async () => {
     order.push('unknown');
     return true;
   });
-  const companyStore = {
-    getPendingMasterPrompt: vi.fn(() => pending),
+  const companyFiles = {
+    getPendingMasterPrompt: vi.fn(async () => pending),
     claimMasterPromptDelivery,
     releaseMasterPromptDelivery,
     completeMasterPromptDelivery,
@@ -56,12 +62,12 @@ function makeHarness(kind: 'plan' | 'question', delivered: boolean) {
   const status = { setStatus: vi.fn(), publishStatus: vi.fn() };
   const master = {
     handle: { runner: { provideUserInput } },
-    agentRunId: 9,
+    agentRunId: MASTER_AGENT_RUN_ID,
     setShouldContinue: vi.fn(),
     notify: vi.fn(),
   };
   const attention = { signal: vi.fn(), on: () => () => {} };
-  const ctx = { companySessionId: 1, companyStore };
+  const ctx = { companySessionId: COMPANY_SESSION_ID, companyFiles };
   const hitl = new HumanInTheLoop(
     bus as never,
     board as never,
@@ -88,12 +94,12 @@ function makeHarness(kind: 'plan' | 'question', delivered: boolean) {
 describe('HumanInTheLoop master prompt delivery authority', () => {
   it.each(['plan', 'question'] as const)(
     'leaves a refused %s response pending and never reports success',
-    (kind) => {
+    async (kind) => {
       const h = makeHarness(kind, false);
 
-      const result = kind === 'plan'
+      const result = await (kind === 'plan'
         ? h.hitl.respondToMasterPlan(true, undefined, h.pending.id)
-        : h.hitl.respondToMasterQuestion('because', h.pending.id);
+        : h.hitl.respondToMasterQuestion('because', h.pending.id));
 
       expect(result).toBeNull();
       expect(h.order).toEqual(['claim', 'deliver', 'release']);
@@ -106,12 +112,12 @@ describe('HumanInTheLoop master prompt delivery authority', () => {
 
   it.each(['plan', 'question'] as const)(
     'persists a successful %s response only after runner acknowledgement',
-    (kind) => {
+    async (kind) => {
       const h = makeHarness(kind, true);
 
-      const result = kind === 'plan'
+      const result = await (kind === 'plan'
         ? h.hitl.respondToMasterPlan(true, undefined, h.pending.id)
-        : h.hitl.respondToMasterQuestion('because', h.pending.id);
+        : h.hitl.respondToMasterQuestion('because', h.pending.id));
 
       expect(result).toMatchObject({ status: 'answered' });
       expect(h.order).toEqual(['claim', 'deliver', 'complete']);
@@ -120,15 +126,16 @@ describe('HumanInTheLoop master prompt delivery authority', () => {
     },
   );
 
-  it('fences a delivered response whose durable completion cannot be confirmed', () => {
+  it('fences a delivered response whose durable completion cannot be confirmed', async () => {
     const h = makeHarness('question', true);
-    h.completeMasterPromptDelivery.mockImplementationOnce(() => {
+    h.completeMasterPromptDelivery.mockImplementationOnce(async () => {
       h.order.push('complete');
       return null;
     });
 
-    expect(() => h.hitl.respondToMasterQuestion('because', h.pending.id))
-      .toThrowError(expect.objectContaining({ code: 'OUTCOME_UNKNOWN' }));
+    await expect(
+      h.hitl.respondToMasterQuestion('because', h.pending.id),
+    ).rejects.toMatchObject({ code: 'OUTCOME_UNKNOWN' });
     expect(h.order).toEqual(['claim', 'deliver', 'complete', 'unknown']);
     expect(h.bus.publish).not.toHaveBeenCalled();
   });

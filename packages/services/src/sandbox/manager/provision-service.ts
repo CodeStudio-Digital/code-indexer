@@ -97,7 +97,7 @@ export interface ProvisionServiceDeps {
     sb: Sandbox,
     status: PersistedSandboxStatus,
   ) => void;
-  syncManagedEnvs: (sessionId: string) => void;
+  syncManagedEnvs: (sessionId: string) => Promise<void>;
   syncEnvsToAllContainers: (sessionId: string) => Promise<void>;
   destroyService: (sessionId: string, serviceId: string, reason: string) => Promise<void>;
 
@@ -264,7 +264,7 @@ export async function provisionAdditionalService(
         );
       }
       if (mountKind !== 'external') {
-        importDotEnvIntoStore(deps.envStore, hostWorkdirMount, req.sessionId);
+        await importDotEnvIntoStore(deps.envStore, hostWorkdirMount, req.sessionId);
       }
     }
 
@@ -372,7 +372,7 @@ export async function provisionAdditionalService(
     deps.emit({ kind: 'ready', sandboxId: serviceSandboxId, previewUrl });
     // Session-keyed sibling of `ready` (company B2) — see SandboxEvent union.
     deps.emit({ kind: 'service_provisioned', sandboxId: req.sessionId, serviceId: req.serviceId });
-    deps.syncManagedEnvs(req.sessionId);
+    await deps.syncManagedEnvs(req.sessionId);
     void deps.syncEnvsToAllContainers(req.sessionId).catch(() => void 0);
     return seed;
   } catch (e) {

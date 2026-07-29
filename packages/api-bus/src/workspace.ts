@@ -23,34 +23,34 @@ export interface WorkspaceTreeNode {
 export interface WorkspaceApi {
   /** Resolve a short-lived workspace auth token tied to a session. */
   auth: {
-    issue(input: { sessionId: number; scope?: 'read' | 'write' }, ctx: ApiContext): Promise<{ token: string; expires_at: number }>;
+    issue(input: { sessionId: string; scope?: 'read' | 'write' }, ctx: ApiContext): Promise<{ token: string; expires_at: number }>;
   };
 
-  tree(input: { sessionId: number; root?: string; maxDepth?: number }, ctx: ApiContext): Promise<WorkspaceTreeNode>;
+  tree(input: { sessionId: string; root?: string; maxDepth?: number }, ctx: ApiContext): Promise<WorkspaceTreeNode>;
 
   file: {
-    read(input: { sessionId: number; path: string }, ctx: ApiContext): Promise<{ content: string; encoding: 'utf8' | 'base64'; size: number }>;
-    write(input: { sessionId: number; path: string; content: string; encoding?: 'utf8' | 'base64' }, ctx: ApiContext): Promise<{ ok: true }>;
-    delete(input: { sessionId: number; path: string }, ctx: ApiContext): Promise<{ ok: true }>;
-    rename(input: { sessionId: number; from: string; to: string }, ctx: ApiContext): Promise<{ ok: true }>;
+    read(input: { sessionId: string; path: string }, ctx: ApiContext): Promise<{ content: string; encoding: 'utf8' | 'base64'; size: number }>;
+    write(input: { sessionId: string; path: string; content: string; encoding?: 'utf8' | 'base64' }, ctx: ApiContext): Promise<{ ok: true }>;
+    delete(input: { sessionId: string; path: string }, ctx: ApiContext): Promise<{ ok: true }>;
+    rename(input: { sessionId: string; from: string; to: string }, ctx: ApiContext): Promise<{ ok: true }>;
   };
 
   git: {
-    status(input: { sessionId: number }, ctx: ApiContext): Promise<unknown>;
-    log(input: { sessionId: number; limit?: number; path?: string }, ctx: ApiContext): Promise<unknown[]>;
-    diff(input: { sessionId: number; ref?: string; path?: string }, ctx: ApiContext): Promise<{ patch: string }>;
+    status(input: { sessionId: string }, ctx: ApiContext): Promise<unknown>;
+    log(input: { sessionId: string; limit?: number; path?: string }, ctx: ApiContext): Promise<unknown[]>;
+    diff(input: { sessionId: string; ref?: string; path?: string }, ctx: ApiContext): Promise<{ patch: string }>;
     branch: {
-      list(input: { sessionId: number }, ctx: ApiContext): Promise<string[]>;
-      current(input: { sessionId: number }, ctx: ApiContext): Promise<string>;
-      checkout(input: { sessionId: number; name: string; create?: boolean }, ctx: ApiContext): Promise<void>;
+      list(input: { sessionId: string }, ctx: ApiContext): Promise<string[]>;
+      current(input: { sessionId: string }, ctx: ApiContext): Promise<string>;
+      checkout(input: { sessionId: string; name: string; create?: boolean }, ctx: ApiContext): Promise<void>;
     };
-    commit(input: { sessionId: number; message: string; paths?: string[] }, ctx: ApiContext): Promise<{ sha: string }>;
+    commit(input: { sessionId: string; message: string; paths?: string[] }, ctx: ApiContext): Promise<{ sha: string }>;
     stash: {
-      save(input: { sessionId: number; message?: string }, ctx: ApiContext): Promise<void>;
-      pop(input: { sessionId: number }, ctx: ApiContext): Promise<void>;
+      save(input: { sessionId: string; message?: string }, ctx: ApiContext): Promise<void>;
+      pop(input: { sessionId: string }, ctx: ApiContext): Promise<void>;
     };
   };
 
   /** Resolve absolute filesystem paths inside the sandbox (debug). */
-  paths(input: { sessionId: number; rel: string }, ctx: ApiContext): Promise<{ absolute: string; exists: boolean }>;
+  paths(input: { sessionId: string; rel: string }, ctx: ApiContext): Promise<{ absolute: string; exists: boolean }>;
 }

@@ -27,9 +27,13 @@ export interface PipelineQuery {
   decider?: unknown;
   /** Optional context for hierarchical provider resolution. */
   resolveContext?: {
-    sessionId?: number;
-    companySessionId?: number;
+    sessionId?: string;
+    companySessionId?: string;
     templateId?: number;
+    requestId?: string;
+    projectId?: number;
+    consumer?: string;
+    queryClass?: string;
   };
   /** Whether this query is being traced for debugging / counterfactual logs. */
   traceSampled?: boolean;

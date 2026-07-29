@@ -20,6 +20,7 @@ import { getPerfSampler } from '../../perf/perf-sampler.js';
 import { resetSlowCalls, slowCallsSnapshot } from '../../perf/slow-ipc.js';
 import { breakdownEnabled, breakdownSnapshot, resetBreakdown } from '../../perf/breakdown.js';
 import { freezeSnapshot, resetFreezes, freezeThresholdMs } from '../../perf/freeze-log.js';
+import { stallEvidenceInfo } from '../../perf/stall-evidence.js';
 import { getElectronProfiler } from '../../perf/electron-profiler.js';
 import { captureCpuProfile, writeHeapSnapshotToTmp } from '../../perf/cpu-profile.js';
 import {
@@ -32,15 +33,19 @@ import {
 } from '../../perf/persistent-diagnostics.js';
 import { getWorkerOrchestratorPool } from '../../../sse/workerPoolSingleton.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
+import { asCompanySessionId, asSessionId } from '@mcp/session-storage';
 
 /** Resolve the profile target: main isolate or one worker's isolate. */
 async function captureCpuProfileFor(target: string, durationMs: number): Promise<object | null> {
   if (target === 'main') return captureCpuProfile(durationMs);
   const [kind, idRaw] = target.split(':');
-  const sessionId = Number(idRaw);
-  if (!Number.isFinite(sessionId)) throw new Error(`invalid target "${target}"`);
-  if (kind === 'company') return getWorkerOrchestratorPool().cpuProfile(sessionId, durationMs);
-  if (kind === 'coder') return getCoderWorkerPool().cpuProfile(sessionId, durationMs);
+  if (!idRaw) throw new Error(`invalid target "${target}"`);
+  if (kind === 'company') {
+    return getWorkerOrchestratorPool().cpuProfile(asCompanySessionId(idRaw), durationMs);
+  }
+  if (kind === 'coder') {
+    return getCoderWorkerPool().cpuProfile(asSessionId(idRaw), durationMs);
+  }
   throw new Error(`unknown target "${target}" (use main | company:<id> | coder:<id>)`);
 }
 
@@ -190,8 +195,12 @@ export function mountPerfRoutes(app: Hono): void {
 
   // Main-loop freezes (real event-loop stalls), attributed to the in-flight
   // IPC handler. Renderer-side freezes (LoAF) are merged in the panel.
+  // `evidence` reports which signals this runtime can actually produce. In the
+  // Electron main process `eluAvailable` is false (Chromium drives libuv, so
+  // eventLoopUtilization always reads 0) — the panel must say so, otherwise a
+  // stall with no attribution reads as a measurement rather than a blind spot.
   app.get('/api/admin/perf/freezes', (c) =>
-    c.json({ thresholdMs: freezeThresholdMs(), events: freezeSnapshot() }),
+    c.json({ thresholdMs: freezeThresholdMs(), events: freezeSnapshot(), evidence: stallEvidenceInfo() }),
   );
   app.post('/api/admin/perf/freezes/reset', (c) => {
     resetFreezes();

@@ -15,8 +15,6 @@
  */
 import { runCoder, type CoderAttachment, type RunCoderOptions } from '@mcp/code-agent/index.js';
 import { createBus } from '@apps/http-api/coder-bus.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
 import { buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
 import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
 import type {
@@ -55,8 +53,8 @@ export interface ResumeSubordinateDeps {
   humanInLoop: HumanInTheLoop;
   wirer: IMetaBusWirer;
   orchestratorRef: unknown;
-  subordinates: Map<number, SubordinateHandle>;
-  runningIds: Set<number>;
+  subordinates: Map<string, SubordinateHandle>;
+  runningIds: Set<string>;
   notifyIdleChanged: () => void;
   wireDeps: {
     humanInLoop: HumanInTheLoop;
@@ -66,8 +64,8 @@ export interface ResumeSubordinateDeps {
 }
 
 interface ResumeResult {
-  agentRunId: number;
-  coderSessionId: number;
+  agentRunId: string;
+  coderSessionId: string;
   status: AgentRunStatus;
 }
 
@@ -80,7 +78,7 @@ interface ResumeResult {
  * impossible; the loser throws and its caller degrades gracefully.
  */
 export async function resumeSubordinate(
-  agentRunId: number,
+  agentRunId: string,
   message: string | undefined,
   roleOverride: string | undefined,
   attachments: CoderAttachment[] | undefined,
@@ -107,7 +105,7 @@ export async function resumeSubordinate(
 }
 
 async function resumeSubordinateInner(
-  agentRunId: number,
+  agentRunId: string,
   message: string | undefined,
   roleOverride: string | undefined,
   attachments: CoderAttachment[] | undefined,
@@ -115,12 +113,19 @@ async function resumeSubordinateInner(
   deps: ResumeSubordinateDeps,
 ): Promise<ResumeResult> {
   const ctx = deps.ctx;
-  const agentRun = ctx.companyStore.getAgentRun(agentRunId);
+  const agentRun = ctx.companyFiles.getAgentRunSync(agentRunId);
   if (!agentRun) throw new Error(`Agent run ${agentRunId} not found`);
   if (agentRun.company_session_id !== ctx.companySessionId) {
     throw new Error(`Agent run ${agentRunId} does not belong to this company session`);
   }
-  const resumableStatuses = ['error', 'aborted', 'waiting', 'completed', 'interrupted'];
+  const resumableStatuses = [
+    'error',
+    'aborted',
+    'paused',
+    'waiting',
+    'completed',
+    'interrupted',
+  ];
   if (!resumableStatuses.includes(agentRun.status)) {
     throw new Error(
       `Agent run ${agentRunId} status is ${agentRun.status}, not resumable (need: ${resumableStatuses.join('/')})`,
@@ -132,7 +137,7 @@ async function resumeSubordinateInner(
   // fallback), while tier/prompt/sampling/thinking settings would otherwise
   // silently disappear after waiting, pause or process restart. App roles fail
   // closed when their configuration was removed or disabled.
-  const companySession = ctx.companyStore.getCompanySession(ctx.companySessionId);
+  const companySession = ctx.companyFiles.getSession();
   const runtimePolicy = readRoleRuntimePolicy(
     companySession?.config_json,
     agentRun.role,
@@ -172,8 +177,15 @@ async function resumeSubordinateInner(
   // resumed run re-submits and creates a fresh entry if it still needs input.
   deps.humanInLoop.clearForAgent(agentRunId);
 
-  const config = loadConfig();
-  const store = new SessionStore(config.dbPath);
+  const sessionStore = ctx.companyFiles.sessionStore;
+  const coderSession = await sessionStore.getSession(
+    agentRun.coder_session_id,
+  );
+  if (!coderSession) {
+    throw new Error(
+      `Coder session ${agentRun.coder_session_id} for agent run ${agentRun.id} was not found`,
+    );
+  }
   const projectIds: number[] = JSON.parse(agentRun.project_ids_json);
   const projectId = projectIds[0];
   const project = ctx.db.getProject(projectId);
@@ -250,7 +262,7 @@ async function resumeSubordinateInner(
     // Re-inject operational rules on every resume — keeps policy present after
     // plan/question pauses and across compaction (lives in the system prompt).
     operationalRules: readOperationalRules(
-      ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
+      companySession.config_json,
     ),
     runtimeKind: ctx.capabilities.promptProfile,
   });
@@ -296,7 +308,6 @@ async function resumeSubordinateInner(
       `[SYSTEM] @${agentRun.role} (agent_run_id=${agentRun.id}) resume FAILED: ${detail}. ` +
         `Use spawn_subordinate_agent for a fresh start.`,
     );
-    store.close();
     throw e;
   }
 
@@ -308,7 +319,7 @@ async function resumeSubordinateInner(
     agentRunId: agentRun.id,
     role: agentRun.role,
     projectIds,
-    session: store.getSession(agentRun.coder_session_id)!,
+    session: coderSession,
     runner: handle.runner,
     bus: createBus(new AbortController()),
     done: handle.done,
@@ -326,7 +337,6 @@ async function resumeSubordinateInner(
     deps.completionDeps,
   );
 
-  store.close();
   return {
     agentRunId: agentRun.id,
     coderSessionId: agentRun.coder_session_id,

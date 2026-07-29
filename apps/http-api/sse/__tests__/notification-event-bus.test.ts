@@ -8,6 +8,17 @@ import {
   recentNotificationRuntimeEvents,
   subscribeToNotificationRuntimeEvents,
 } from '../notification-event-bus.js';
+import {
+  asCompanySessionId,
+  asSessionId,
+} from '@mcp/session-storage';
+
+const CODER_SESSION_ID = asSessionId(
+  '00000000-0000-4000-8000-000000000001',
+);
+const COMPANY_SESSION_ID = asCompanySessionId(
+  '00000000-0000-4000-8000-000000000002',
+);
 
 describe('notification-event-bus', () => {
   beforeEach(() => clearNotificationEventBusForTests());
@@ -17,16 +28,16 @@ describe('notification-event-bus', () => {
     const unsubscribe = subscribeToNotificationRuntimeEvents(listener);
 
     expect(publishNotificationRuntimeEvent({
-      kind: 'coder', sessionId: 2, event: 'text_delta', data: { text: 'x' },
+      kind: 'coder', sessionId: CODER_SESSION_ID, event: 'text_delta', data: { text: 'x' },
     })).toBeNull();
     expect(publishNotificationRuntimeEvent({
-      kind: 'coder', sessionId: 2, event: 'agent_progress', data: { event: 'heartbeat' },
+      kind: 'coder', sessionId: CODER_SESSION_ID, event: 'agent_progress', data: { event: 'heartbeat' },
     })).toBeNull();
     const done = publishNotificationRuntimeEvent({
-      kind: 'coder', sessionId: 2, event: 'done', data: { reason: 'completed' },
+      kind: 'coder', sessionId: CODER_SESSION_ID, event: 'done', data: { reason: 'completed' },
     });
     const question = publishNotificationRuntimeEvent({
-      kind: 'company', sessionId: 9, event: 'master_question_posted', data: {},
+      kind: 'company', sessionId: COMPANY_SESSION_ID, event: 'master_question_posted', data: {},
     });
 
     expect(done?.id).toBe(1);
@@ -39,7 +50,7 @@ describe('notification-event-bus', () => {
   it('replays only entries after the cursor and caps the ring', () => {
     for (let i = 0; i < NOTIFICATION_EVENT_RING_CAPACITY + 5; i += 1) {
       publishNotificationRuntimeEvent({
-        kind: 'coder', sessionId: 1, event: 'done', data: { run: i },
+        kind: 'coder', sessionId: CODER_SESSION_ID, event: 'done', data: { run: i },
       });
     }
     const replay = recentNotificationRuntimeEvents(0);
@@ -52,7 +63,7 @@ describe('notification-event-bus', () => {
   it('expires old entries instead of accumulating them for a later connection', () => {
     publishNotificationRuntimeEvent({
       kind: 'coder',
-      sessionId: 1,
+      sessionId: CODER_SESSION_ID,
       event: 'error',
       data: { message: 'old' },
       ts: Date.now() - NOTIFICATION_EVENT_RING_TTL_MS - 1,

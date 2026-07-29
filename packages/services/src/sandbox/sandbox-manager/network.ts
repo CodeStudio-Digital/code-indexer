@@ -39,9 +39,13 @@ export async function destroySessionNetwork(sessionId: string): Promise<void> {
   const name = sessionNetworkName(sessionId);
   const binary = resolveRuntimeBinary();
   await new Promise<void>((resolve) => {
-    const child = spawnChild(binary, ['network', 'rm', name], { stdio: 'ignore' });
-    child.once('error', () => resolve());
-    child.once('close', () => resolve());
+    try {
+      const child = spawnChild(binary, ['network', 'rm', name], { stdio: 'ignore' });
+      child.once('error', () => resolve());
+      child.once('close', () => resolve());
+    } catch {
+      resolve();
+    }
   });
 }
 

@@ -39,8 +39,8 @@ export interface RoleDescriptor {
 }
 
 export interface IdleRunDescriptor {
-  /** Reused agent run id from the company_agent_runs table. */
-  agentRunId: number;
+  /** Reused independent agent-run UUID. */
+  agentRunId: string;
   /** The role this idle run was originally spawned for. */
   role: string;
   /** Tokens already consumed by this run (so cost continues from there). */

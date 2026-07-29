@@ -25,11 +25,15 @@ import type { DB } from '../db/types.js';
 import { initSchema } from '../db/schema/index.js';
 import { runMigrations, getSchemaVersion } from '../migrations/index.js';
 import { trimProjectSchema } from './trim/index.js';
+import { assertSessionScopedSqliteAbsent } from '../session-layout-guard.js';
 
 export function initProjectSchema(db: DB): void {
   initSchema(db);
   runMigrations(db);
   trimProjectSchema(db);
+  // Project DBs do not carry the global layout marker after trimming, but they
+  // are still forbidden from retaining any operational session table/column.
+  assertSessionScopedSqliteAbsent(db);
 }
 
 export function getProjectSchemaVersion(db: DB): number {

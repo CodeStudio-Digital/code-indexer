@@ -16,13 +16,13 @@ export const MAX_GENERATION_REFS = 3;
 export interface GenerateRouteBody {
   prompt?: string;
   n?: number;
-  assetId?: number;
+  assetId?: string;
   rawPrompt?: boolean;
   seed?: number | null;
   /** 'inpaint' | 'enhance' route to the img2img flow; anything else → generate. */
   kind?: string;
   /** Version to edit — required for inpaint/enhance. */
-  versionId?: number;
+  versionId?: string;
   /** Raw base64 PNG mask (no data: prefix), white = repaint. Masks are small. */
   maskBase64?: string;
   /** Reserved: img2img strength (0..1). Persisted in the snapshot only for now. */
@@ -31,7 +31,7 @@ export interface GenerateRouteBody {
   /** Attach the asset's CURRENT version as the identity reference. */
   useCurrentAsRef?: boolean;
   /** Library versions to attach as references (must belong to this project). */
-  referenceIds?: number[];
+  referenceIds?: string[];
   /** Disk uploads (client downscales to ≤768px): raw base64, no data: prefix. */
   uploadRefs?: Array<{ base64: string; mediaType: string }>;
 }
@@ -42,23 +42,25 @@ export interface GenerateRouteBody {
  * capped at MAX_GENERATION_REFS. `readVersionPng` is injected so this stays
  * a pure, unit-testable mapping.
  */
-export function buildGenerationRefs(
+export async function buildGenerationRefs(
   body: GenerateRouteBody,
-  readVersionPng: (versionId: number) => Buffer | null,
-  currentVersionId: number | null,
-): ImageRef[] {
+  readVersionPng: (versionId: string) => Promise<Buffer | null> | Buffer | null,
+  currentVersionId: string | null,
+): Promise<ImageRef[]> {
   const refs: ImageRef[] = [];
-  const seen = new Set<number>();
-  const pushVersion = (versionId: number) => {
+  const seen = new Set<string>();
+  const pushVersion = async (versionId: string) => {
     if (refs.length >= MAX_GENERATION_REFS || seen.has(versionId)) return;
-    const png = readVersionPng(versionId);
+    const png = await readVersionPng(versionId);
     if (!png) return;
     seen.add(versionId);
     refs.push({ base64: png.toString('base64'), mediaType: 'image/png' });
   };
-  if (body.useCurrentAsRef && currentVersionId != null) pushVersion(currentVersionId);
+  if (body.useCurrentAsRef && currentVersionId != null) {
+    await pushVersion(currentVersionId);
+  }
   for (const id of body.referenceIds ?? []) {
-    if (typeof id === 'number') pushVersion(id);
+    if (typeof id === 'string') await pushVersion(id);
   }
   for (const up of body.uploadRefs ?? []) {
     if (refs.length >= MAX_GENERATION_REFS) break;

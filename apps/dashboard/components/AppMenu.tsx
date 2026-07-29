@@ -11,6 +11,7 @@ import {
 } from './ui/dropdown-menu.js';
 import { AboutDialog } from './AboutDialog.js';
 import { useWindowChrome } from '../hooks/useWindowChrome.js';
+import { LOGO_MARK_URL } from '../lib/public-asset.js';
 
 /**
  * The brand logo doubles as the application menu (replacing the hidden
@@ -32,7 +33,7 @@ export function AppMenu() {
             aria-label={t('appMenu.menuAria')}
             className="no-drag inline-flex h-7 items-center gap-1.5 rounded px-2 text-[12px] font-semibold text-foreground hover:bg-muted"
           >
-            <img src="/brand/logo-mark.svg" alt="" className="h-5 w-5 shrink-0" draggable={false} />
+            <img src={LOGO_MARK_URL} alt="" className="h-5 w-5 shrink-0" draggable={false} />
             <span>CodeStudio</span>
             <span className="text-[9px] font-normal uppercase tracking-wider text-muted-foreground">
               v{__APP_VERSION__}

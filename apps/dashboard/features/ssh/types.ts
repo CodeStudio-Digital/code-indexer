@@ -29,6 +29,7 @@ export interface SshHost {
   /** 1 = shared across all projects (lives in the central DB, visible everywhere). */
   is_shared: number;
   keepalive_secs: number | null;
+  /** DEAD COLUMN — not the TOFU pin. See @mcp/store ssh-store-types.ts. */
   known_host_sha256: string | null;
   startup_snippet_id: number | null;
   last_used_at: string | null;

@@ -11,8 +11,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ImageGenClient, ImageGenResult } from '@mcp/provider-sdk/images.js';
-import type { SpriteGenerationJobRow, SpriteJobStatus } from '@mcp/store/sprite-studio/types.js';
-import type { ImageChainLink, SpriteJobDeps } from './deps.js';
+import type { SpriteJobStatus } from '@mcp/store/sprite-studio/types.js';
+import type { ImageChainLink, SpriteJobDeps, SpriteJobRecord } from './deps.js';
 import type { SpriteJobCandidateRef } from './events.js';
 import {
   buildPostOps,
@@ -92,21 +92,25 @@ async function generateWithFailover(
 
 export async function runGenerationJob(
   deps: SpriteJobDeps,
-  jobRow: SpriteGenerationJobRow,
+  jobRow: SpriteJobRecord,
   params: SpriteGenerationJobParams,
   signal?: AbortSignal,
 ): Promise<void> {
   const { jobs } = deps.stores;
   const jobId = jobRow.id;
-  const setStatus = (status: SpriteJobStatus, pct?: number, note?: string): void => {
-    jobs.updateStatus(jobId, status);
+  const setStatus = async (
+    status: SpriteJobStatus,
+    pct?: number,
+    note?: string,
+  ): Promise<void> => {
+    await jobs.updateStatus(jobId, status);
     deps.emit({ type: 'sprite_job', jobId, status, pct, note });
   };
 
   try {
     // ── prompting ──────────────────────────────────────────────────────
     assertNotAborted(signal);
-    setStatus('prompting');
+    await setStatus('prompting');
     const hasRefs = (params.referenceImages?.length ?? 0) > 0;
     let prompt = params.rawPrompt
       ? params.intent.trim()
@@ -125,12 +129,12 @@ export async function runGenerationJob(
         /* expander is best-effort — deterministic template already in place */
       }
     }
-    jobs.setResult(jobId, { expanded_prompt: prompt });
+    await jobs.setResult(jobId, { expanded_prompt: prompt });
     const negative = buildNegative(params.style);
 
     // ── generating ─────────────────────────────────────────────────────
     assertNotAborted(signal);
-    setStatus('generating');
+    await setStatus('generating');
     // Frame-pack (default for n>1): ONE grid image sliced locally — image
     // models bill per image, so n variants cost 1. Opt out via packVariants
     // for maximum diversity (independent samplings, n× the cost).
@@ -141,7 +145,7 @@ export async function runGenerationJob(
     const genPrompt = packed ? prompt + buildGridSuffix(grid.cols, grid.rows, wantN) : prompt;
     const genParams = packed ? { ...params, n: 1 } : params;
     const won = await generateWithFailover(deps, genParams, genPrompt, negative, signal);
-    jobs.setResult(jobId, {
+    await jobs.setResult(jobId, {
       provider_id: won.link.providerId,
       model_id: won.link.modelId,
       // Subscription-billed providers (ChatGPT OAuth) have no per-image cost.
@@ -152,7 +156,7 @@ export async function runGenerationJob(
 
     // ── postprocess (stage candidates in scratch, outside the repo) ────
     assertNotAborted(signal);
-    setStatus('postprocess');
+    await setStatus('postprocess');
     const rawImages: Buffer[] = [];
     for (const image of won.result.images) {
       rawImages.push(Buffer.from(stripDataUriPrefix(image.base64), 'base64'));
@@ -193,27 +197,27 @@ export async function runGenerationJob(
     if (params.autoSave) {
       if (!deps.projectRoot) throw new Error('autoSave requires deps.projectRoot');
       if (jobRow.asset_id == null) throw new Error('autoSave requires job.asset_id');
-      const asset = deps.stores.assets.get(jobRow.asset_id);
+      const asset = await deps.stores.assets.get(jobRow.asset_id);
       if (!asset) throw new Error(`autoSave: unknown asset ${jobRow.asset_id}`);
-      setStatus('saving');
+      await setStatus('saving');
       const version = await promoteCandidate(
         { stores: deps.stores, scratchDir: deps.scratchDir, projectRoot: deps.projectRoot, now: deps.now },
         { jobId, candidateIndex: 0, asset: { id: asset.id, slug: asset.slug } },
       );
-      jobs.updateStatus(jobId, 'done');
+      await jobs.updateStatus(jobId, 'done');
       deps.emit({ type: 'sprite_job_done', jobId, versionId: version.id });
     } else {
-      jobs.updateStatus(jobId, 'done');
+      await jobs.updateStatus(jobId, 'done');
       deps.emit({ type: 'sprite_job_done', jobId, candidates });
     }
   } catch (err) {
     if (signal?.aborted || (err as Error).name === 'AbortError') {
-      jobs.updateStatus(jobId, 'cancelled');
+      await jobs.updateStatus(jobId, 'cancelled');
       deps.emit({ type: 'sprite_job', jobId, status: 'cancelled' });
       return;
     }
     const message = (err as Error).message || String(err);
-    jobs.setError(jobId, message);
+    await jobs.setError(jobId, message);
     deps.emit({ type: 'sprite_job_failed', jobId, error: message });
   }
 }

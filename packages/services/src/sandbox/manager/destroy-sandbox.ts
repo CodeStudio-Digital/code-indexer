@@ -7,10 +7,10 @@
  *
  * Steps:
  *   1. Resolve the in-memory entry; bail when missing.
- *   2. Pre-destroy archive (best-effort): tar the workdir out so the
+ *   2. Pre-destroy archive (fail-closed): tar the workdir out so the
  *      next provision can `restoreArchive` it. Skipped for bind-mount
  *      sandboxes (workdir already on host) and the 'session-deleted'
- *      reason (DELETE handler wipes the archive right after).
+ *      reason (the complete session bundle is about to move to trash).
  *   3. `driver.destroy(containerId)`. Failure logged, not rethrown —
  *      we still want to release local state.
  *   4. `allocator.release` + remove from registry + flip status to
@@ -39,14 +39,15 @@ export async function destroySandboxInternal(
 ): Promise<void> {
   const sb = deps.registry.getPrimary(sessionId);
   if (!sb) return;
+  const previousStatus = sb.status;
   sb.status = 'destroying';
   deps.emit({ kind: 'destroying', sandboxId: sessionId, reason });
 
   // Persist the workdir BEFORE destroying. Applied to every destroy
   // path uniformly — TTL eviction, orchestrator teardown, server-side
   // abort, the 'session-deleted' reason from DELETE /sessions. The
-  // DELETE path is the one exception we DON'T want to archive for;
-  // its handler `deleteArchive` runs right after to wipe the file.
+  // DELETE path is the one exception we DON'T want to archive for because
+  // the complete bundle, including any existing archive, moves to trash.
   //
   // Bind-mounted sandboxes already persist on the host — archiving
   // would duplicate data and stale out on the next edit.
@@ -58,14 +59,26 @@ export async function destroySandboxInternal(
   if (shouldArchive && sb.containerId && deps.driver) {
     try {
       const tar = await deps.driver.exportWorkdir(sb.containerId, sb.workdir);
-      if (tar && tar.byteLength > 0) {
-        await saveArchive(sessionId, tar);
+      if (!tar || tar.byteLength === 0) {
+        throw new Error('sandbox driver returned an empty workdir archive');
       }
+      await saveArchive(sessionId, tar);
     } catch (e) {
-      // Archive is a best-effort optimization — failure must NOT block
-      // destroy. Log so operators can diagnose repeat failures.
-      console.warn(
-        `[sandbox-manager] pre-destroy archive ${sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+      // Keep the live container and its registry entry intact. Destroying it
+      // after an authority/write failure would turn a recoverable storage
+      // outage into data loss.
+      sb.status = previousStatus;
+      const message =
+        `Destroy refused because the session archive could not be committed: ${
+          e instanceof Error ? e.message : String(e)
+        }`;
+      sb.error = message;
+      deps.emit({ kind: 'error', sandboxId: sessionId, message });
+      throw new Error(
+        `[sandbox-manager] pre-destroy archive ${sessionId} failed closed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+        { cause: e },
       );
     }
   }
@@ -84,15 +97,12 @@ export async function destroySandboxInternal(
     deps.registry.primary.delete(sessionId);
     sb.status = 'destroyed';
     if (deps.store) {
-      const numericId = Number(sessionId);
-      if (Number.isFinite(numericId)) {
-        try {
-          deps.store.delete(numericId);
-        } catch (e) {
-          console.warn(
-            `[sandbox-manager] delete DB row for ${sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
-          );
-        }
+      try {
+        deps.store.delete(sessionId);
+      } catch (e) {
+        console.warn(
+          `[sandbox-manager] trash sandbox record for ${sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+        );
       }
     }
     deps.emit({ kind: 'destroyed', sandboxId: sessionId });

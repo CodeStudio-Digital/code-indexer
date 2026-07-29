@@ -29,7 +29,7 @@ export interface UseServicesPollingResult {
 
 const DISCONNECTED_HEARTBEAT_MS = 5_000;
 
-export function useServicesPolling(sessionId: number): UseServicesPollingResult {
+export function useServicesPolling(sessionId: string): UseServicesPollingResult {
   const { t } = useTranslation('agents');
   const [services, setServices] = useState<ServiceRow[]>([]);
   const [loading, setLoading] = useState(false);

@@ -6,14 +6,16 @@
  * events that can notify in one app-wide sequence so the dashboard can stay
  * subscribed regardless of the active route.
  */
+import type { CompanySessionId, SessionId } from '@mcp/session-storage';
 
 export type NotificationRuntimeKind = 'coder' | 'company';
+export type NotificationSessionId = SessionId | CompanySessionId;
 
 export interface NotificationRuntimeEvent {
   id: number;
   ts: number;
   kind: NotificationRuntimeKind;
-  sessionId: number;
+  sessionId: NotificationSessionId;
   event: string;
   data: unknown;
 }
@@ -21,7 +23,7 @@ export interface NotificationRuntimeEvent {
 export interface PublishNotificationRuntimeEvent {
   ts?: number;
   kind: NotificationRuntimeKind;
-  sessionId: number;
+  sessionId: NotificationSessionId;
   event: string;
   data: unknown;
 }

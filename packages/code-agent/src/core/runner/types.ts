@@ -11,6 +11,9 @@ import type {
   PolicyShadowPort,
   PolicyShadowSessionContext,
 } from '@mcp/code-agent/core/policy-shadow-adapter.js';
+import type { SessionId } from '@mcp/session-storage';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { FsTurnTelemetrySink } from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
 
 /**
  * Recovery transition kinds (PR-4, Row 3 from
@@ -77,7 +80,7 @@ export interface CompactionCheckpoint {
 
 export interface CompactionCheckpointResult {
   status: 'committed' | 'compatibility' | 'noop' | 'failed' | 'disabled';
-  chapterId?: number | null;
+  chapterId?: string | null;
   boundaryId?: number | null;
   reason?: string | null;
 }
@@ -102,7 +105,7 @@ export interface RunnerOptions {
   initialMessages?: AgentMessage[];
   maxTurns?: number;
   /** Persistent session id — used only for tagging logs. */
-  sessionId?: number;
+  sessionId?: SessionId;
   /** True for ephemeral subagents. Tags logs as `s=<parentId>/sub`. */
   isSubagent?: boolean;
   /** Parent runner correlation for an ephemeral child. */
@@ -171,7 +174,7 @@ export interface RunnerOptions {
    * Per-session tool permission mode driving the PermissionGate
    * ('ask' | 'auto' | 'unrestricted'). Null/undefined → 'auto'. Read live by
    * the gate via `getToolPermissionMode()`, so mid-run changes apply to the
-   * next gated call. Mirrors `coder_sessions.tool_permission_mode`.
+   * next gated call. Mirrors the permission mode in `state.json`.
    */
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted' | null;
   /** Initial set of active tool tiers. Filters tools array each turn. */
@@ -239,6 +242,8 @@ export interface RunnerOptions {
       recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
       /** Pins must survive relevance selection just like the model/tool cap. */
       protectedToolNames?: ReadonlySet<string>;
+      /** Filesystem owner for session-scoped shadow telemetry. */
+      sessionId?: SessionId;
     },
   ) => Promise<Array<{ name: string; description: string; parameters: import('../tool.js').JsonSchema }>>;
   /**
@@ -282,10 +287,10 @@ export interface RunnerOptions {
   isCompanySubordinate?: boolean;
   /** Role identity text from template's systemPromptOverride. Re-injected as user message reminder. */
   companyRoleOverride?: string;
-  /** Company agent_run_id — populated for company subordinates. */
-  companyAgentRunId?: number | null;
-  /** Company session id — populated for company subordinates. */
-  companySessionId?: number | null;
+  /** Opaque Company agent-run UUID — populated for Company subordinates. */
+  companyAgentRunId?: string | null;
+  /** Opaque Company filesystem-session UUID — populated for Company agents. */
+  companySessionId?: string | null;
   /** Stateful Responses API: previous response identifier. */
   previousResponseId?: string | null;
   /** Companion to `previousResponseId` — number of messages already on the server. */
@@ -317,7 +322,7 @@ export interface RunnerOptions {
    * decide whether to surface the `self_review` reminder — gated by the
    * CODER_SELF_REVIEW toggle. Unset = no reminder (and tests stay quiet).
    */
-  hasReviewableChanges?: () => boolean;
+  hasReviewableChanges?: () => boolean | Promise<boolean>;
   /**
    * Fix A — richer self_review nudge signals (supersedes `hasReviewableChanges`
    * for the nudge decision). Lets the Executing node nudge ONLY when there are
@@ -326,7 +331,7 @@ export interface RunnerOptions {
    * doom-loop). Host reads the snapshot + review stores; unset on
    * subagents/tests → the node falls back to `hasReviewableChanges`.
    */
-  collectSelfReviewSignals?: () => {
+  collectSelfReviewSignals?: () => ({
     /** `${activeBaselineCount}:${maxLastEditedAtMs}`; '' when no active snapshots. */
     pendingFingerprint: string;
     /** ms-epoch of the newest active snapshot edit, or null when none. */
@@ -335,7 +340,12 @@ export interface RunnerOptions {
     lastReviewAt: number | null;
     /** total completed auto self_reviews this session (drives the hard-stop). */
     totalAutoReviews: number;
-  } | null;
+  } | null) | Promise<{
+    pendingFingerprint: string;
+    lastEditAt: number | null;
+    lastReviewAt: number | null;
+    totalAutoReviews: number;
+  } | null>;
   /**
    * Session State Block data — host-provided sync read of the session's
    * persisted state (goal, active plan, todos, notes, changed files,
@@ -358,10 +368,10 @@ export interface RunnerOptions {
    */
   getProjectMemoryIndex?: () => ReadonlyArray<{ title: string; category: string }> | null;
   /** Titles-only index of immutable summaries for this coder session. */
-  getConversationChapterIndex?: () => {
+  getConversationChapterIndex?: () => Promise<{
     total: number;
-    entries: ReadonlyArray<{ id: number; ordinal: number; title: string; source?: string }>;
-  } | null;
+    entries: ReadonlyArray<{ id: string; ordinal: number; title: string; source?: string }>;
+  } | null>;
   /** Up to two bounded excerpts for a materially new task in this session. */
   getRelevantConversationChapters?: (
     taskText: string,
@@ -385,19 +395,10 @@ export interface RunnerOptions {
   sessionTemperature?: number | null;
   /** Per-role temperature override (company mode). */
   roleTemperature?: number | null;
-  /** SessionStore — when present, lifecycle injections get mirrored into `coder_session_inputs`. */
-  sessionStore?: import('@mcp/code-agent/sessions/store.js').SessionStore;
-  /** Telemetry-only store; unlike sessionStore it never mirrors child messages. */
-  turnTelemetryStore?: Pick<import('@mcp/code-agent/sessions/store.js').SessionStore, 'recordTurnTelemetry'>;
-  /**
-   * Perf W1 — async turn-telemetry writer (dbWriter worker). Wins over
-   * `turnTelemetryStore`/`sessionStore` when present: the per-turn INSERT
-   * leaves the coder thread and the id resolves as a promise (mirrored on
-   * `runner.lastTurnTelemetryIdPromise` for the host's tool-call stamping).
-   */
-  turnTelemetryAsync?: (
-    input: Parameters<import('@mcp/code-agent/sessions/store.js').SessionStore['recordTurnTelemetry']>[0],
-  ) => Promise<number | null>;
+  /** Filesystem session runtime used for lifecycle/input/task persistence. */
+  sessionStore?: FsSessionStore;
+  /** Immutable per-turn filesystem telemetry; there is no SQLite fallback. */
+  turnTelemetryStore?: FsTurnTelemetrySink;
   /**
    * SkillStore — resolves each `selectedSkillIds` entry and injects bodies
    * as `<active_skills>` each turn.
@@ -408,15 +409,17 @@ export interface RunnerOptions {
    * the stop-guard, and the auto-continue recap.
    */
   agentLoopV2?: boolean;
-  /** Enable the one-shot completion-evidence nudge for this run/cohort. */
+  /** Enable completion-evidence collection for advisory health reporting. */
   verificationEvidenceEnabled?: boolean;
   /** Persisted cross-run verification evidence; current-run ordering uses ToolCallLedger. */
-  collectVerifyEvidence?: () => import('@mcp/code-agent/core/review-evidence.js').VerifyEvidence | null;
+  collectVerifyEvidence?: () =>
+    | import('@mcp/code-agent/core/review-evidence.js').VerifyEvidence
+    | null
+    | Promise<import('@mcp/code-agent/core/review-evidence.js').VerifyEvidence | null>;
   /**
-   * A1 — independent goal-completion verifier (host-built closure). The bridge
-   * forwards it to the Executing node, which calls it before persisting
-   * update_goal(complete). Returns null when disabled / not applicable / on
-   * error (fail-open). See index.ts for the baseline policy.
+   * Independent goal-completion reviewer (host-built closure). The bridge
+   * schedules it after update_goal(complete) is durable. Its verdict is audit
+   * data only and null means inconclusive.
    */
   verifyGoalCompletion?: (
     evidence?: import('./nodes/executing-verification-gate.js').VerificationReadiness,

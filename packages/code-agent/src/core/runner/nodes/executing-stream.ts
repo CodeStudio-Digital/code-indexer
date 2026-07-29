@@ -37,8 +37,8 @@ export interface StreamResult {
   /**
    * Sanitized provider request/response metadata (Anthropic betas,
    * rate-limit headers, response model echo, …). Provided by providers
-   * that emit a `response_meta` delta; null for the rest. Persisted by
-   * `coder_turn_telemetry` (migration 093).
+   * that emit a `response_meta` delta; null for the rest. Persisted in the
+   * session's immutable turn metric.
    */
   responseMeta: ChatProviderResponseMeta | null;
 }

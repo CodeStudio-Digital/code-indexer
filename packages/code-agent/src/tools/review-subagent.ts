@@ -374,7 +374,7 @@ export async function runReviewSubagent(parent: SubagentParent, input: ReviewInp
   // the implement subagent so review prompts are auditable.
   if (parent.sessionStore && parent.sessionId != null) {
     try {
-      parent.sessionStore.recordSessionInput({
+      await parent.sessionStore.recordSessionInput({
         session_id: parent.sessionId,
         kind: 'subagent_prompt',
         source_label: 'subagent:review',

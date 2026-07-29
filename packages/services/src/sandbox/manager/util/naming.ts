@@ -1,18 +1,18 @@
+import { asSessionId } from '@mcp/session-storage/types.js';
+
 /**
  * Deterministic name for the per-session `node_modules` named volume.
  */
 export function nodeModulesVolumeFor(sessionId: string): string {
-  const safe = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
-  return `mcp-sbx-nm-${safe}`;
+  return `mcp-sbx-nm-${asSessionId(sessionId)}`;
 }
 
 /**
  * Deterministic image tag for a custom-built session image.
  */
 export function projectImageTag(sessionId: string, serviceId = 'main'): string {
-  const safeSession = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
   const safeService = String(serviceId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 32);
-  return `mcp-session-${safeSession}-${safeService}:latest`;
+  return `mcp-session-${asSessionId(sessionId)}-${safeService}:latest`;
 }
 
 /**
@@ -21,8 +21,7 @@ export function projectImageTag(sessionId: string, serviceId = 'main'): string {
  * by service_id.
  */
 export function sessionNetworkName(sessionId: string): string {
-  const safe = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
-  return `mcp-sbx-net-${safe}`;
+  return `mcp-sbx-net-${asSessionId(sessionId)}`;
 }
 
 /**

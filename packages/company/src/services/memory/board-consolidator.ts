@@ -20,23 +20,23 @@
 import { getCompanyMemoryPorts } from './ports.js';
 
 interface BoardEntryLike {
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   author_role: string;
   kind: string;
   content: string;
 }
 
 interface AgentRunLike {
-  id: number;
+  id: string;
   role: string;
   project_ids_json: string;
 }
 
 export interface ConsolidateBoardDeps {
-  companySessionId: number;
-  companyStore: {
-    readBoard(companySessionId: number, opts?: { sinceId?: number; limit?: number }): BoardEntryLike[];
-    listAgentRuns(companySessionId: number): AgentRunLike[];
+  companySessionId: string;
+  companyFiles: {
+    listBoardEntriesSync(opts?: { sinceSeq?: number; limit?: number }): BoardEntryLike[];
+    listAgentRunsSync(): AgentRunLike[];
   };
   db: {
     getProjectMemoryEnabled(projectId: number): boolean;
@@ -68,14 +68,14 @@ export async function consolidateBoardToMemory(
     if (!ports) return { projects: 0, entries: 0 };
     if (!(await ports.runEndMemory.isConfigured())) return { projects: 0, entries: 0 };
 
-    const entries = deps.companyStore
-      .readBoard(deps.companySessionId, { limit: BOARD_READ_LIMIT })
+    const entries = deps.companyFiles
+      .listBoardEntriesSync({ limit: BOARD_READ_LIMIT })
       .filter((e) => DISTILL_KINDS.has(e.kind));
     if (entries.length === 0) return { projects: 0, entries: 0 };
 
     const sessionProjectIds = deps.projects.map((p) => p.project_id);
-    const runProjects = new Map<number, number[]>();
-    for (const run of deps.companyStore.listAgentRuns(deps.companySessionId)) {
+    const runProjects = new Map<string, number[]>();
+    for (const run of deps.companyFiles.listAgentRunsSync()) {
       try {
         const ids = JSON.parse(run.project_ids_json) as number[];
         // The master's run row lists every session project — same effect

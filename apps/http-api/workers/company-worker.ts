@@ -31,7 +31,6 @@
 // resolve identically under tsx, tsc and raw node.
 import { parentPort, workerData } from 'node:worker_threads';
 import { installLlmDispatcher } from '../install-llm-dispatcher.js';
-import { closeDbWriter } from '../../../packages/indexer/src/workers/dbWriter/client.js';
 import {
   MessageBridge,
   openWorkerDb,
@@ -54,7 +53,6 @@ import { CompanySessionEnvStore } from '../../../packages/store/src/company-sess
 import { QaTestRunStore } from '../../../packages/services/src/qa/store/qa-test-run-store.js';
 import { CompanyServiceTransitionsStore } from '../../../packages/store/src/company-service-transitions-store.js';
 import { CompanyServiceLogsStore } from '../../../packages/store/src/company-service-logs-store.js';
-import { CompanySandboxServicesHealth } from '../../../packages/store/src/company-sandbox-services-health.js';
 import { CompanySandboxServicesStore } from '../../../packages/store/src/company-sandbox-services-store.js';
 import { CompanySandboxStore } from '../../../packages/store/src/company-sandbox-store.js';
 import { CompanyLocalProjectStore } from '../../../packages/store/src/company-local-project-store.js';
@@ -62,6 +60,7 @@ import {
   setCompanySandboxServicesStore,
   setCompanySandboxStore,
   setCompanySessionEnvStore,
+  setSandboxArchiveBundleResolver,
 } from '../../../packages/services/src/sandbox/index.js';
 import { setServiceSupervisorStores } from '../../../packages/company/src/services/service-supervisor/stores.js';
 import { CompanyOrchestrator } from '../../../packages/company/src/orchestrator.js';
@@ -88,7 +87,7 @@ import { setEnvToolStore } from '../../../packages/company/src/tools/env-tools.j
 import {
   startAgentSupervisorIfEnabled,
   setGlobalAgentSupervisor,
-  SqliteSupervisionPersistence,
+  FileSupervisionPersistence,
   type AgentSupervisor,
   type SupervisionPersistence,
 } from '../../../packages/company/src/services/supervisor/index.js';
@@ -130,11 +129,23 @@ import { registerWorkerPluginProviders } from './worker-plugin-providers.js';
 import { subscribe, publish, markEnded, type CoderRunBus } from '../coder-bus.js';
 import { mergeAdjacentStreamDeltas } from './stream-delta-coalescer.js';
 import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
+import { getSharedSessionStore } from '../../../packages/code-agent/src/index.js';
 import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
+import type {
+  CompanySessionId,
+  ProjectId,
+} from '../../../packages/session-storage/src/index.js';
+import { CompanySessionFiles } from '../../../packages/company/src/services/CompanySessionFiles.js';
 
 interface CompanyWorkerData {
-  companySessionId: number;
+  companySessionId: CompanySessionId;
   dbPath: string;
+  sessionContext: {
+    sessionId: CompanySessionId;
+    bundlePath: string;
+    projectId: ProjectId | null;
+    projectRoot: string | null;
+  };
 }
 
 interface BusEventEnvelope {
@@ -151,7 +162,19 @@ interface BusEndEnvelope {
 const port = parentPort;
 if (!port) throw new Error('company-worker.ts: not running inside a worker_thread');
 
-const { companySessionId, dbPath } = workerData as CompanyWorkerData;
+const {
+  companySessionId,
+  dbPath,
+  sessionContext,
+} = workerData as CompanyWorkerData;
+if (sessionContext.sessionId !== companySessionId) {
+  throw new Error('company-worker.ts: session runtime context identity mismatch');
+}
+if (sessionContext.projectId != null && !sessionContext.projectRoot) {
+  throw new Error(
+    `company-worker.ts: project root unavailable for filesystem session ${companySessionId}`,
+  );
+}
 
 // Open a dedicated SQLite connection in WAL mode. The shutdown hook
 // flushes it on process exit so the main thread doesn't see a
@@ -280,7 +303,20 @@ registerPerfStatsHandler(bridge);
 // `CompanyStore` opened its OWN second writer on the same file, which (× the
 // per-runCoder handles) starved the WAL during multi-agent runs.
 const db = new CodeIndexDB(dbPath);
-const companyStore = new CompanyStore(db.raw());
+const sessionStore = getSharedSessionStore(dbPath);
+await sessionStore.ensureCatalog();
+setSandboxArchiveBundleResolver({
+  resolveBundle: async (sessionId) => {
+    const location = await sessionStore.getSessionLocation(sessionId);
+    return location
+      ? {
+          sessionRoot: location.session_root,
+          bundlePath: location.bundle_path,
+        }
+      : null;
+  },
+});
+const companyStore = new CompanyStore(db.raw(), sessionStore);
 
 // ─── Company-tool store bindings (DS + QA) ──────────────────────
 // worker_threads don't share module state, so the setDesignSystemStore()
@@ -294,19 +330,41 @@ const companyStore = new CompanyStore(db.raw());
 // Harmless when the feature is off: tool registration stays gated by
 // designSystemEnabled in packages/code-agent/src/index.ts.
 const rawDb = db.raw();
-setDesignSystemStore(new DesignSystemStore(rawDb));
-// App Studio store — mesma postura (module globals não cruzam workers).
-setAppStudioStore(new AppStudioStore(rawDb));
+setDesignSystemStore(new DesignSystemStore(sessionStore));
+// App Studio operational state is filesystem-only. SQLite remains involved
+// here only as the essential project-root catalog.
+setAppStudioStore(new AppStudioStore({
+  repository: sessionStore.repository,
+  catalog: sessionStore.catalog,
+  locator: sessionStore.locator,
+  getProject: (projectId) => {
+    const project = db.getProject(projectId);
+    return project
+      ? { id: project.id, root_path: project.root_path }
+      : null;
+  },
+}));
 // API client store for the `api_*` tools, re-wired per worker (module globals
 // don't cross worker_threads).
 setApiClientStore(new ApiClientStore(rawDb));
 // db_* v2 tools — worker-local DbClientStore on the shared central handle
 // (company sessions read central; per-project routing is a main-thread
-// concern) + the session's linked projects via CompanyStore. Secrets are
+// concern) + the session's linked projects via its filesystem bundle. Secrets are
 // keychain-bound to the MAIN process → decrypt RPCs over the bridge
 // (registered by WorkerOrchestratorPool via worker-secrets-handlers).
 const dbClientStore = new DbClientStore(rawDb);
-setDbToolsStores(dbClientStore, companyStore);
+setDbToolsStores(dbClientStore, {
+  listCompanySessionProjects: (sessionId) => {
+    const session = new CompanySessionFiles({
+      companySessionId: sessionId,
+      sessionStore,
+    }).getSession();
+    return session.project_ids.map((projectId) => ({
+      project_id: projectId,
+      label: session.project_labels[String(projectId)] ?? null,
+    }));
+  },
+});
 setAppStudioDbClientStore({
   listConnections: (projectId) => dbClientStore.listConnections(projectId),
   createConnection: (input) => dbClientStore.createConnection(input),
@@ -340,38 +398,52 @@ setGlobalDocsHintProvider({
 // "VerdaccioService not wired" (pre-existing gap — the service reads all
 // state from the DB, so a worker-local instance is equivalent to main's).
 setVerdaccioService(new VerdaccioService({ store: new VerdaccioStore(rawDb) }));
-setQaTestRunStore(new QaTestRunStore(rawDb));
+setQaTestRunStore(new QaTestRunStore(sessionStore));
 // One CompanySessionEnvStore shared by BOTH the QA browser-endpoint tools and
 // the env_* tools (env_list/env_read/env_set/…). Each has its own module-level
 // binding that server.ts wires on the main thread; worker_threads don't share
 // those globals, so master+subordinates running in THIS worker would otherwise
 // hit "env tools unavailable (store not wired)". Re-wire both against the
 // worker's own DB handle.
-const sessionEnvStore = new CompanySessionEnvStore(rawDb);
+const sessionEnvStore = new CompanySessionEnvStore(sessionStore, {
+  encrypt: (plaintext) =>
+    bridge.request<string>(
+      'secretsEncrypt',
+      { plaintext },
+      { timeoutMs: 10_000 },
+    ),
+  decrypt: (ciphertext) =>
+    bridge.request<string>(
+      'secretsDecrypt',
+      { blob: ciphertext },
+      { timeoutMs: 10_000 },
+    ),
+});
+await sessionEnvStore.initialize();
 setQaEndpointEnvStore(sessionEnvStore);
 setEnvToolStore(sessionEnvStore);
 setCompanySessionEnvStore(sessionEnvStore);
-const companySandboxStore = new CompanySandboxStore(rawDb);
-const companySandboxServicesStore = new CompanySandboxServicesStore(rawDb);
+const companySandboxStore = new CompanySandboxStore(sessionStore);
+const companySandboxServicesStore = new CompanySandboxServicesStore(sessionStore);
 setCompanySandboxStore(companySandboxStore);
 setCompanySandboxServicesStore(companySandboxServicesStore);
 // B1 — per-service transition audit + ring-buffered logs (mig 188), built on
 // the worker's own shared handle like QaTestRunStore above.
-const companyServiceTransitionsStore = new CompanyServiceTransitionsStore(rawDb);
-const companyServiceLogsStore = new CompanyServiceLogsStore(rawDb);
+const companyServiceTransitionsStore = new CompanyServiceTransitionsStore(sessionStore);
+const companyServiceLogsStore = new CompanyServiceLogsStore(sessionStore);
 // B3/B4/B5 — module bindings consumed by the ServiceSupervisor (health +
 // transitions + structured log sink) and by the service_* / list_services
 // tools (paged log reads + health projection). Worker-only by design: main
 // never calls this setter, so these paths exist only where the supervisor
 // and the company agents actually run.
 setServiceSupervisorStores({
-  health: new CompanySandboxServicesHealth(rawDb),
+  health: companySandboxServicesStore,
   transitions: companyServiceTransitionsStore,
   logs: companyServiceLogsStore,
   services: companySandboxServicesStore,
   // B8 — host-process discovery for the supervisor. The LocalProcessManager
   // singleton lives on the MAIN process; the worker sees the SQLite row.
-  localProjects: new CompanyLocalProjectStore(rawDb),
+  localProjects: new CompanyLocalProjectStore(sessionStore),
 });
 
 // NOTE: this constructor synchronously wires every domain service.
@@ -379,6 +451,7 @@ setServiceSupervisorStores({
 // network probes, the failure surfaces here BEFORE we report ready.
 const orchestrator = new CompanyOrchestrator({
   companySessionId,
+  sessionStore,
   companyStore,
   db,
 });
@@ -402,24 +475,14 @@ const orchestrator = new CompanyOrchestrator({
 // singleton pattern (each worker's module scope has its own copy of `global.ts`
 // — that's why the main-process call doesn't reach here, and why we MUST
 // call it inside the worker too).
-// Phase 2.4 — supervisor persistence is opt-in via env. When enabled,
-// the supervisor reads `agent_supervision` on boot, detects ghost-running
-// rows (process died mid-flight), and mirrors every state transition +
-// incident to disk. The persistence opens its OWN better-sqlite3 handle
-// against the same dbPath — WAL mode allows safe concurrent access.
-let workerSupervisionPersistence: SupervisionPersistence | null = null;
-if (process.env.MCP_SUPERVISOR_PERSISTENCE !== '0') {
-  try {
-    // Share the worker's ONE central handle (Phase 2) instead of opening a
-    // separate writer connection to the same file.
-    workerSupervisionPersistence = new SqliteSupervisionPersistence(db.raw());
-  } catch (e) {
-    console.warn(
-      `[company-worker ${companySessionId}] failed to open supervisor persistence:`,
-      e,
-    );
-  }
-}
+// Supervisor state is always bundle-local: one JSON per agent record and one
+// JSON per incident. Construction fails closed when the bundle is unavailable
+// or read-only; there is no in-memory/SQLite production fallback.
+const workerSupervisionPersistence: SupervisionPersistence =
+  new FileSupervisionPersistence({
+    companySessionId,
+    sessionRoot: sessionContext.bundlePath,
+  });
 
 // Phase 2.2 — RecoveryContext bridges the supervisor to the
 // orchestrator's public service methods. Each recovery action picks
@@ -456,7 +519,7 @@ const workerSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
     // worker, so `injectToolResultError` unwedges a single stuck tool call
     // without terminating the run; falls back to `abort()` when inject misses.
     runners: {
-      get: (agentRunId: number) => {
+      get: (agentRunId: string) => {
         const runner = orchestrator.getSubordinate(agentRunId)?.runner;
         if (!runner) return undefined;
         return {
@@ -467,7 +530,7 @@ const workerSupervisor: AgentSupervisor | null = startAgentSupervisorIfEnabled({
       },
     },
   },
-  persistence: workerSupervisionPersistence ?? undefined,
+  persistence: workerSupervisionPersistence,
 });
 setGlobalAgentSupervisor(workerSupervisor);
 if (workerSupervisor) {
@@ -654,7 +717,7 @@ bridge.handle('supervisor.rpc', (payload) => {
     case 'getStatus':
       return workerSupervisor.getStatus();
     case 'listRecentIncidents': {
-      const [sessionId, limit] = args as [number, number?];
+      const [sessionId, limit] = args as [CompanySessionId, number?];
       return workerSupervisor.listRecentIncidents(sessionId, limit ?? 50);
     }
     case 'isRoleQuarantined':
@@ -679,15 +742,6 @@ bridge.handle('stop', async () => {
   } catch (err) {
     console.warn(`[company-worker ${companySessionId}] abortAll threw:`, err);
   }
-  // Drain the size-1 dbWriter (when MCP_DB_WORKER=1) so the in-flight final
-  // turn-persist completes before this worker exits — same lost-final-turn
-  // guard the main process applies in server.ts. No-op when the writer was
-  // never created (flag off / no runCoder ran).
-  try {
-    await closeDbWriter();
-  } catch (err) {
-    console.warn(`[company-worker ${companySessionId}] closeDbWriter threw:`, err);
-  }
   // Phase 1.6 — stop the supervisor's periodic tick + unsubscribe its
   // observation layer. Order matters: stop AFTER abortAll so terminal
   // events still flow through; but BEFORE busUnsubscribe so the
@@ -698,12 +752,9 @@ bridge.handle('stop', async () => {
   } catch (err) {
     console.warn(`[company-worker ${companySessionId}] supervisor stop threw:`, err);
   }
-  // Phase 2.4 — close the persistence handle. The SQLite driver
-  // is sync; this is a best-effort flush before process exit.
+  // Flush queued atomic bundle writes before the worker exits.
   try {
-    if (workerSupervisionPersistence && 'close' in workerSupervisionPersistence) {
-      (workerSupervisionPersistence as { close: () => void }).close();
-    }
+    await workerSupervisionPersistence?.close?.();
   } catch (err) {
     console.warn(
       `[company-worker ${companySessionId}] supervisor persistence close threw:`,
@@ -712,6 +763,7 @@ bridge.handle('stop', async () => {
   }
   flushPending();
   busUnsubscribe();
+  setSandboxArchiveBundleResolver(null);
   try { companyStore.close(); } catch { /* best-effort */ }
   return { ok: true };
 });

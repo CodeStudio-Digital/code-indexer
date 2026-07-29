@@ -27,6 +27,8 @@ import {
   resolveExternalProjectSpec,
   type ExternalProjectRuntime,
 } from './sandbox-helpers.js';
+import type { CompanySessionId } from '@mcp/session-storage';
+import { resolveCompanySessionContext } from '../_helpers.js';
 
 /**
  * Provision (or retry) the primary sandbox of a session that was created
@@ -35,15 +37,16 @@ import {
  */
 export async function startPrimarySandboxForSession(
   deps: ServerDeps,
-  id: number,
+  id: CompanySessionId,
   retry = false,
 ): Promise<
   | { ok: true; sandbox: Sandbox }
   | { ok: false; status: 400 | 404 | 409 | 500; error: string }
 > {
-  const { companyStore, db } = deps;
-  const session = companyStore.getCompanySession(id);
-  if (!session) return { ok: false, status: 404, error: 'session not found' };
+  const { db } = deps;
+  const resolved = await resolveCompanySessionContext(deps.sessionStore, id);
+  if (!resolved) return { ok: false, status: 404, error: 'session not found' };
+  const session = resolved.root;
 
   let stack: ProvisionableStack | null = null;
   let limits: { memory?: string; cpus?: string; pids?: number } | undefined;
@@ -67,7 +70,10 @@ export async function startPrimarySandboxForSession(
   }
 
   const mainProjectId = cfg.builder?.main_project_id;
-  const linkedProjects = companyStore.listCompanySessionProjects(id);
+  const linkedProjects = session.project_ids.map((projectId) => ({
+    project_id: projectId,
+    label: session.project_labels[String(projectId)] ?? null,
+  }));
   const primaryLink =
     mainProjectId != null
       ? linkedProjects.find((p) => p.project_id === mainProjectId)
@@ -100,7 +106,7 @@ export async function startPrimarySandboxForSession(
 
   try {
     const sandbox = await getSandboxManager().provision({
-      sessionId: String(id),
+      sessionId: id,
       stack,
       retry,
       limits,
@@ -148,12 +154,17 @@ export function serviceStartPayload(serviceId: string, sb: Sandbox) {
  */
 export async function removeServiceAndProject(
   deps: ServerDeps,
-  id: number,
+  id: CompanySessionId,
   serviceId: string,
 ): Promise<void> {
-  const { companyStore, db } = deps;
-  const linked = companyStore
-    .listCompanySessionProjects(id)
+  const { db } = deps;
+  const resolved = await resolveCompanySessionContext(deps.sessionStore, id);
+  if (!resolved) return;
+  const linked = resolved.root.project_ids
+    .map((projectId) => ({
+      project_id: projectId,
+      label: resolved.root.project_labels[String(projectId)] ?? null,
+    }))
     .find((p) => p.label === serviceId);
   const linkedProject = linked ? db.getProject(linked.project_id) : null;
   const serviceRow = deps.companySandboxServicesStore.get(id, serviceId);
@@ -168,7 +179,7 @@ export async function removeServiceAndProject(
     // (so list_containers/list_services stop reporting it) and the
     // persisted row. The user's container keeps running outside.
     await getSandboxManager()
-      .destroyService(String(id), serviceId, 'user-removed')
+      .destroyService(id, serviceId, 'user-removed')
       .catch(() => void 0);
     deps.companySandboxServicesStore.delete(id, serviceId);
     return;
@@ -179,14 +190,14 @@ export async function removeServiceAndProject(
     await orch.removeSandboxService(serviceId);
   } else {
     await getSandboxManager()
-      .destroyService(String(id), serviceId, 'user-removed-offline')
+      .destroyService(id, serviceId, 'user-removed-offline')
       .catch(() => void 0);
     deps.companySandboxServicesStore.delete(id, serviceId);
   }
 
   if (linkedProject) {
     try {
-      companyStore.removeProjectFromCompanySession(id, linkedProject.id);
+      await resolved.rootFiles.removeLinkedProject(linkedProject.id);
     } catch { /* best effort */ }
     if (isExternalProject) {
       return;
@@ -210,7 +221,7 @@ export async function removeServiceAndProject(
     // Link existed but project row was already gone (orphan). Drop
     // the dangling link so it doesn't keep showing up as `project-<id>`.
     try {
-      companyStore.removeProjectFromCompanySession(id, linked.project_id);
+      await resolved.rootFiles.removeLinkedProject(linked.project_id);
     } catch { /* best effort */ }
   }
 }

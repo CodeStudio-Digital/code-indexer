@@ -80,7 +80,8 @@ export function describeControlError(serviceId: string, e: unknown): string {
 }
 
 export interface FormattableLogRow {
-  id: number;
+  id: string;
+  seq: number;
   serviceId: string;
   stream: string;
   line: string;
@@ -97,10 +98,13 @@ export function formatServiceLogPage(rowsNewestFirst: FormattableLogRow[], limit
   const body = ascending
     .map((r) => `[${r.serviceId}/${r.stream}] ${new Date(r.atMs).toISOString()} ${r.line}`)
     .join('\n');
-  const minId = rowsNewestFirst.reduce((m, r) => Math.min(m, r.id), Number.POSITIVE_INFINITY);
+  const minSeq = rowsNewestFirst.reduce(
+    (minimum, row) => Math.min(minimum, row.seq),
+    Number.POSITIVE_INFINITY,
+  );
   const footer =
-    rowsNewestFirst.length >= limit && Number.isFinite(minId)
-      ? `\n\n(older lines exist — pass before_id=${minId} to page back)`
+    rowsNewestFirst.length >= limit && Number.isFinite(minSeq)
+      ? `\n\n(older lines exist — pass before_seq=${minSeq} to page back)`
       : '';
   return `${body}${footer}`;
 }

@@ -33,7 +33,7 @@ interface EnvRow {
 }
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
 }
 
 interface ServiceUrls {

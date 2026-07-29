@@ -1,19 +1,21 @@
 /**
  * Durable side of automatic compaction. The in-memory CompactingNode shrinks
- * `ctx.messages` for the CURRENT run only; a fresh runner re-reads the full DB
+ * `ctx.messages` for the CURRENT run only; a fresh runner re-reads the full
+ * bundle
  * transcript and the saving evaporates. This module persists the reduction as a
  * boundary + summary on the session (migration 128) so the NEXT run starts from
  * the summary + a recent tail — durable, cross-run cost reduction.
  *
- * It operates over DB ROWS (not the runner's in-memory array), so the summary
- * and the boundary are always aligned (no gap) and there's no in-memory↔DB
+ * It operates over durable message sequences (not the runner's in-memory array), so the summary
+ * and the boundary are always aligned (no gap) and there's no in-memory-to-disk
  * index mapping. Cumulative: any prior summary is folded into the new one. Runs
  * off the hot path (fire-and-forget from `index.ts`); any failure is a no-op
  * for the run — we simply don't move the boundary.
  */
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/session-storage';
 import {
   computeCutoffIndexByTokens,
   snapCutoffPreservingPairs,
@@ -49,8 +51,8 @@ export interface DurableCompactionResult {
  * worth compacting or the summary call fails.
  */
 export async function runDurableCompaction(args: {
-  store: SessionStore;
-  sessionId: number;
+  store: FsSessionStore;
+  sessionId: SessionId;
   provider: ChatProvider;
   /**
    * Test-only override for the summary step. Production passes undefined so we
@@ -63,7 +65,7 @@ export async function runDurableCompaction(args: {
   ) => Promise<import('@mcp/code-agent/core/summarizer.js').CompactionSummaryV2 | null>;
 }): Promise<DurableCompactionResult> {
   const { store, sessionId, provider } = args;
-  const data = store.loadSessionWithMessages(sessionId);
+  const data = await store.loadSessionWithMessages(sessionId);
   if (!data) return { ok: false, reason: 'nothing-to-compact' };
 
   const rows = data.message_rows;
@@ -91,7 +93,17 @@ export async function runDurableCompaction(args: {
   const summary = await summarize(head, provider);
   if (!summary) return { ok: false, reason: 'summary-failed' };
 
-  const boundaryId = rows[cutoff - 1].id;
-  const res = store.setCompactionBoundary(sessionId, renderSummaryV2(summary), boundaryId, 'auto');
-  return { ok: true, boundaryId: res.boundary_id, prunedCount: res.pruned_count, summary };
+  const boundarySeq = rows[cutoff - 1].seq;
+  const res = await store.setCompactionBoundary(
+    sessionId,
+    renderSummaryV2(summary),
+    boundarySeq,
+    'auto',
+  );
+  return {
+    ok: true,
+    boundaryId: res.boundary_seq,
+    prunedCount: res.pruned_count,
+    summary,
+  };
 }

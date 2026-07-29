@@ -12,7 +12,11 @@ import {
   type WorkerBackedOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import { pumpBusToSSE, parseLastEventId } from '../../../sse/pumpBusToSSE.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  parseJsonBody,
+  notFound,
+} from '../_helpers.js';
 import { withSessionLock } from '../coder/sessionLock.js';
 import {
   RecentMessageKeys,
@@ -28,6 +32,7 @@ import {
   runtimeEventsToJsonl,
   summarizeRuntimeEvents,
 } from '../../../sse/runtime-event-log.js';
+import { getWorkerOrchestratorPool } from '../../../sse/workerPoolSingleton.js';
 import { resolveAndRunMaster } from './master-resolve.js';
 import {
   ensureCompanyMasterLive,
@@ -35,8 +40,6 @@ import {
 } from './ensure-master-live.js';
 import {
   appOwnedControlPlaneConflict,
-  isAppOwnedCompanySession,
-  routeAllowsCompanySurface,
 } from './runtime-capabilities.js';
 import { resolveEffectiveMasterRuntime } from '@mcp/company/services/subordinate/role-runtime.js';
 import { abortCompanyRuntime } from './runtime-lifecycle.js';
@@ -49,6 +52,8 @@ import { validateAttachments } from '@mcp/services/services/docs/attachment-vali
 import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { getDefinition } from '@mcp/services/providers/registry.js';
+import type { CompanySessionId } from '@mcp/session-storage';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import {
   acceptLocalCompanyCommand,
   bindLocalCommandBus,
@@ -63,9 +68,9 @@ import {
  * are not supported — all orchestrators are spawned via `getOrSpawn`.
  */
 export const activeOrchestrators = {
-  get: (id: number) => getCompanyOrchestrator(id),
-  has: (id: number) => hasCompanyOrchestrator(id),
-  delete: (id: number) => deleteCompanyOrchestrator(id),
+  get: (id: CompanySessionId) => getCompanyOrchestrator(id),
+  has: (id: CompanySessionId) => hasCompanyOrchestrator(id),
+  delete: (id: CompanySessionId) => deleteCompanyOrchestrator(id),
 };
 
 interface AttachmentBody {
@@ -101,7 +106,7 @@ interface PlanResponseBody {
   approved: boolean;
   feedback?: string;
   /** Optional id of the master_prompt being resolved (idempotent across replay). */
-  prompt_id?: number;
+  prompt_id?: string;
   /**
    * Explicitly accept a possible duplicate when recovering an acknowledged-
    * unknown delivery. The payload must match the original attempt.
@@ -123,11 +128,21 @@ type PersistedPromptDeliveryResult =
     };
 
 export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db, providerStore } = deps;
+  const { db, providerStore } = deps;
   // Idempotency store for the streaming POSTs (/start, /resume). Per-mount so
   // route tests get a fresh, isolated instance. See recent-message-keys.ts.
   const recentMessageKeys = new RecentMessageKeys<WorkerBackedOrchestrator['metaBus']>();
   const controlPlaneStore = deps.controlPlaneStore ?? null;
+
+  const companyFilesFor = async (
+    id: CompanySessionId,
+  ): Promise<CompanySessionFiles> => {
+    await deps.sessionStore.ensureCatalog();
+    return new CompanySessionFiles({
+      companySessionId: id,
+      sessionStore: deps.sessionStore,
+    });
+  };
 
   type CompanyClaim =
     | {
@@ -171,13 +186,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     return null;
   }
 
-  function claimCompanyCommand(input: {
-    sessionId: number;
+  async function claimCompanyCommand(input: {
+    sessionId: CompanySessionId;
     kind: 'start' | 'resume';
     dedupeKey?: string;
     fingerprint: Record<string, unknown>;
     lastEventId: number;
-  }): CompanyClaim {
+  }): Promise<CompanyClaim> {
     const fingerprintHash = hashControlPlanePayload(input.fingerprint);
     const memoryClaim = input.dedupeKey
       ? recentMessageKeys.claim(input.sessionId, input.dedupeKey, fingerprintHash)
@@ -227,7 +242,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         guard,
       );
     };
-    const acceptance = acceptLocalCompanyCommand({
+    const acceptance = await acceptLocalCompanyCommand({
       store: controlPlaneStore,
       companySessionId: input.sessionId,
       kind: input.kind,
@@ -306,7 +321,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           const reason = typeof data.reason === 'string'
             ? data.reason
             : end.event === 'done' ? 'completed' : 'error';
-          terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+          await terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
             status: end.event === 'done' ? 'succeeded' : 'failed',
             reason,
           });
@@ -330,7 +345,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           since: input.lastEventId,
         };
       }
-      terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+      await terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
         status: 'failed',
         reason: 'executor-bus-unavailable',
         errorRef: 'error:executor-bus-unavailable',
@@ -352,17 +367,19 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     return { kind: 'owner', acceptance, ...(guard ? { guard } : {}) };
   }
 
-  function bindCompanyCommandCompletion(
-    sessionId: number,
+  async function bindCompanyCommandCompletion(
+    sessionId: CompanySessionId,
     dedupeKey: string | undefined,
     acceptance: LocalCoderShadowAcceptance | null,
     bus: WorkerBackedOrchestrator['metaBus'],
     guard?: { token: symbol; fingerprintHash: string },
-  ): boolean {
+  ): Promise<boolean> {
     if (!acceptance?.commandContext) return true;
-    if (!bindLocalCommandBus(controlPlaneStore, acceptance, bus.busId)) return false;
+    if (!(await bindLocalCommandBus(controlPlaneStore, acceptance, bus.busId))) {
+      return false;
+    }
     let settled = false;
-    const settle = (): void => {
+    const settle = async (): Promise<void> => {
       if (settled || !bus.ended) return;
       if (
         acceptance.commandStatus === 'succeeded'
@@ -385,7 +402,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         ? data.reason
         : end.event === 'done' ? 'completed' : 'error';
       const cancelled = reason === 'aborted' || reason === 'cancelled';
-      terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
+      await terminalizeLocalCoderCommand(controlPlaneStore, acceptance, {
         status: cancelled ? 'cancelled' : end.event === 'done' ? 'succeeded' : 'failed',
         reason,
       });
@@ -396,8 +413,8 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         }, -1, guard);
       }
     };
-    if (bus.ended) settle();
-    else bus.endListeners.add(settle);
+    if (bus.ended) void settle();
+    else bus.endListeners.add(() => void settle());
     return true;
   }
 
@@ -409,12 +426,12 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   // General file transports also keep Office/OpenDocument bytes native. The
   // model is resolved through the same authoritative contract as launch, so
   // an incomplete App Master cannot gain a legacy attachment-time fallback.
-  function masterAttachmentOpts(id: number): {
+  async function masterAttachmentOpts(id: CompanySessionId): Promise<{
     extractImages: boolean;
     extractPdfText: boolean;
     keepBinaryDocuments: boolean;
-  } {
-    const cur = companyStore.getCompanySession(id);
+  }> {
+    const cur = (await companyFilesFor(id)).getSession();
     const runtime = resolveEffectiveMasterRuntime({
       configJson: cur?.config_json,
       runtimeKind: cur?.runtime_kind === 'app_studio' ? 'app_studio' : 'company',
@@ -437,9 +454,14 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     };
   }
 
-  app.get('/api/company/sessions/:id/events.jsonl', (c) => {
-    const id = parseIdParam(c);
-    const events = getRuntimeEventLog('company', id);
+  app.get('/api/company/sessions/:id/events.jsonl', async (c) => {
+    const id = parseCompanySessionIdParam(c);
+    const context = await getWorkerOrchestratorPool().resolveRuntimeContext(id);
+    const events = await getRuntimeEventLog(
+      'company',
+      id,
+      { bundlePath: context.bundlePath },
+    );
     return new Response(runtimeEventsToJsonl(events), {
       headers: {
         'content-type': 'application/x-ndjson; charset=utf-8',
@@ -448,9 +470,14 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     });
   });
 
-  app.get('/api/company/sessions/:id/events-summary', (c) => {
-    const id = parseIdParam(c);
-    return c.json(summarizeRuntimeEvents(getRuntimeEventLog('company', id)));
+  app.get('/api/company/sessions/:id/events-summary', async (c) => {
+    const id = parseCompanySessionIdParam(c);
+    const context = await getWorkerOrchestratorPool().resolveRuntimeContext(id);
+    return c.json(summarizeRuntimeEvents(await getRuntimeEventLog(
+      'company',
+      id,
+      { bundlePath: context.bundlePath },
+    )));
   });
 
   /**
@@ -461,11 +488,16 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * the runner is wired to the metaBus before any events are emitted.
    * The subscribe with sinceSeq=-1 replays ALL buffered events, so
    * events emitted during startMaster() are never lost.
-   */
+  */
   app.post('/api/company/sessions/:id/start', attachmentBodyLimit, async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+    const id = parseCompanySessionIdParam(c);
+    let files: CompanySessionFiles;
+    try {
+      files = await companyFilesFor(id);
+    } catch {
+      return notFound(c);
+    }
+    const session = files.getSession();
 
     const body = await parseJsonBody<StartBody>(c);
     const attachmentsCheck = validateAttachments(body.attachments);
@@ -534,10 +566,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const commandAcceptance = earlyClaim.acceptance;
     const claimGuard = earlyClaim.guard;
     let commandSettled = false;
-    const settleCommandFailure = (reason: string, code?: string): void => {
+    const settleCommandFailure = async (
+      reason: string,
+      code?: string,
+    ): Promise<void> => {
       if (commandSettled) return;
       commandSettled = true;
-      terminalizeLocalCoderCommand(controlPlaneStore, commandAcceptance, {
+      await terminalizeLocalCoderCommand(controlPlaneStore, commandAcceptance, {
         status: 'failed',
         reason,
       });
@@ -549,11 +584,11 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       }
     };
     try {
-    let attachmentOpts: ReturnType<typeof masterAttachmentOpts>;
+    let attachmentOpts: Awaited<ReturnType<typeof masterAttachmentOpts>>;
     try {
-      attachmentOpts = masterAttachmentOpts(id);
+      attachmentOpts = await masterAttachmentOpts(id);
     } catch (error) {
-      settleCommandFailure('master-runtime-invalid');
+      await settleCommandFailure('master-runtime-invalid');
       return c.json({
         error: error instanceof Error ? error.message : String(error),
         code: 'MASTER_RUNTIME_INVALID',
@@ -566,7 +601,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         attachmentOpts,
       );
     } catch (error) {
-      settleCommandFailure('attachment-normalization-failed');
+      await settleCommandFailure('attachment-normalization-failed');
       throw error;
     }
 
@@ -586,13 +621,12 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       | { kind: 'replay'; bus: WorkerBackedOrchestrator['metaBus']; since: number }
       | { kind: 'gone' }
     > => {
-      const cur = companyStore.getCompanySession(id);
-      if (!cur) return { kind: 'reject', status: 404, body: { error: 'Not found' } };
+      const cur = files.getSession();
       if (cur.status === 'running' || hasCompanyOrchestrator(id)) {
         return { kind: 'reject', status: 409, body: { error: 'Already running' } };
       }
 
-      // Parse config from DB — this is the source of truth for roles
+      // Parse config from the bundle metadata — this is the source of truth for roles.
       let config: {
         role_assignments?: Array<{ role: string; provider: string; model: string; tier: string; skills?: string[]; projectIds?: number[]; projectHints?: string[]; systemPromptOverride?: string }>;
       } = {};
@@ -625,13 +659,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       const busForPump = spawned.bus;
       // Bind the immutable command↔bus correlation before pipeline recovery
       // or master startup can produce any external effect.
-      if (!bindCompanyCommandCompletion(
+      if (!(await bindCompanyCommandCompletion(
         id,
         dedupeKey,
         commandAcceptance,
         busForPump,
         claimGuard,
-      )) {
+      ))) {
         await evictCompanyOrchestrator(id);
         return {
           kind: 'reject',
@@ -646,7 +680,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       // Pause any pipeline executions that were 'running' before the
       // server restart. The dashboard will surface a Resume button.
       // Fire-and-forget: never block startMaster on this.
-      if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
+      if (cur.runtime_kind !== 'app_studio') {
         void orchestrator.pipelineRecoverRunning().catch((err) => {
           console.warn(`[company s=${id}] pipeline recovery failed:`, err);
         });
@@ -658,8 +692,8 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       // duplicate master. The 409 guard above already handled "currently
       // running"; here the session is stopped (error/idle/paused/completed).
       try {
-        const masterExists = companyStore
-          .listAgentRuns(id)
+        const masterExists = files
+          .listAgentRunsSync()
           .some((r) => r.role === 'master');
         await resolveAndRunMaster(orchestrator, masterExists, {
           userMessage,
@@ -683,7 +717,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         await evictCompanyOrchestrator(id);
         // A closed port may have lost only the acknowledgement; do not assert
         // that a possibly-started session failed.
-        if (!outcomeUnknown) companyStore.updateCompanySessionStatus(id, 'error');
+        if (!outcomeUnknown) await files.updateSessionStatus('error');
         return {
           kind: 'reject',
           status: 500,
@@ -699,13 +733,12 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       }
 
       // Persist the user message so it survives page reload
-      companyStore.setLastUserMessage(id, userMessage);
       return { kind: 'success', orchestrator, bus: busForPump };
     });
 
     if (decision.kind === 'reject') {
       const outcomeUnknown = decision.body.code === 'OUTCOME_UNKNOWN';
-      settleCommandFailure(
+      await settleCommandFailure(
         outcomeUnknown
           ? 'outcome_unknown'
           : decision.status === 409 ? 'company-command-conflict' : 'company-start-failed',
@@ -728,7 +761,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     commandSettled = true;
     return response;
     } catch (error) {
-      settleCommandFailure('company-start-setup-failed');
+      await settleCommandFailure('company-start-setup-failed');
       throw error;
     }
   });
@@ -736,9 +769,9 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   /**
    * Reattach to an in-flight company session's SSE stream.
    * Uses Last-Event-ID header for replay from the client's last seen seq.
-   */
+  */
   app.get('/api/company/sessions/:id/attach', (c) => {
-    const id = parseIdParam(c);
+    const id = parseCompanySessionIdParam(c);
     const orchestrator = getCompanyOrchestrator(id);
     if (!orchestrator) return c.json({ error: 'No active orchestrator' }, 404);
 
@@ -751,16 +784,21 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * Resume a company session that has already run (completed/paused/error).
    * Creates a new orchestrator but resumes the master from the EXISTING coder
    * session, preserving full conversation history and board context.
-   */
+  */
   app.post('/api/company/sessions/:id/resume', attachmentBodyLimit, async (c) => {
-    const id = parseIdParam(c);
+    const id = parseCompanySessionIdParam(c);
     const body = await parseJsonBody<{ message: string; attachments?: AttachmentBody[]; thinking?: boolean; client_msg_id?: string }>(c);
     const attachmentsCheck = validateAttachments(body.attachments);
     if (!attachmentsCheck.ok) {
       return c.json({ error: attachmentsCheck.error, code: attachmentsCheck.code }, attachmentsCheck.status);
     }
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+    let files: CompanySessionFiles;
+    try {
+      files = await companyFilesFor(id);
+    } catch {
+      return notFound(c);
+    }
+    const session = files.getSession();
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     const message = body.message?.trim()
       ? body.message
@@ -818,10 +856,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const commandAcceptance = earlyClaim.acceptance;
     const claimGuard = earlyClaim.guard;
     let commandSettled = false;
-    const settleResumeFailure = (reason: string, code?: string): void => {
+    const settleResumeFailure = async (
+      reason: string,
+      code?: string,
+    ): Promise<void> => {
       if (commandSettled) return;
       commandSettled = true;
-      terminalizeLocalCoderCommand(controlPlaneStore, commandAcceptance, {
+      await terminalizeLocalCoderCommand(controlPlaneStore, commandAcceptance, {
         status: 'failed',
         reason,
       });
@@ -833,11 +874,11 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       }
     };
     try {
-    let attachmentOpts: ReturnType<typeof masterAttachmentOpts>;
+    let attachmentOpts: Awaited<ReturnType<typeof masterAttachmentOpts>>;
     try {
-      attachmentOpts = masterAttachmentOpts(id);
+      attachmentOpts = await masterAttachmentOpts(id);
     } catch (error) {
-      settleResumeFailure('master-runtime-invalid');
+      await settleResumeFailure('master-runtime-invalid');
       return c.json({
         error: error instanceof Error ? error.message : String(error),
         code: 'MASTER_RUNTIME_INVALID',
@@ -850,7 +891,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         attachmentOpts,
       );
     } catch (error) {
-      settleResumeFailure('attachment-normalization-failed');
+      await settleResumeFailure('attachment-normalization-failed');
       throw error;
     }
 
@@ -870,13 +911,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     > => {
       const existing = getCompanyOrchestrator(id);
       if (existing) {
-        if (!bindCompanyCommandCompletion(
+        if (!(await bindCompanyCommandCompletion(
           id,
           dedupeKey,
           commandAcceptance,
           existing.metaBus,
           claimGuard,
-        )) {
+        ))) {
           return {
             kind: 'reject',
             status: 500,
@@ -938,7 +979,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
       // Sub-sessions (migration 067): a brand-new tab has no master_run
       // yet, so we cold-start instead of trying to resume.
-      const agentRuns = companyStore.listAgentRuns(id);
+      const agentRuns = files.listAgentRunsSync();
       const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
 
       // Parse role configs from session config
@@ -973,20 +1014,20 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       }> => {
         const spawned = await getOrSpawnCompanyOrchestrator(id);
         const orchestrator = spawned.orchestrator;
-        if (!bindCompanyCommandCompletion(
+        if (!(await bindCompanyCommandCompletion(
           id,
           dedupeKey,
           commandAcceptance,
           spawned.bus,
           claimGuard,
-        )) {
+        ))) {
           await evictCompanyOrchestrator(id);
           throw new Error('failed to bind the command to its company stream');
         }
         if (dedupeKey) {
           recentMessageKeys.record(id, dedupeKey, spawned.bus, -1, claimGuard);
         }
-        if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
+        if (session.runtime_kind !== 'app_studio') {
           void orchestrator.pipelineRecoverRunning().catch((err) => {
             console.warn(`[company s=${id}] pipeline recovery failed:`, err);
           });
@@ -1043,7 +1084,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
     if (decision.kind === 'reject') {
       const outcomeUnknown = decision.body.code === 'OUTCOME_UNKNOWN';
-      settleResumeFailure(
+      await settleResumeFailure(
         outcomeUnknown
           ? 'outcome_unknown'
           : decision.body.code === 'MASTER_MESSAGE_DELIVERY_FAILED'
@@ -1074,19 +1115,23 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     commandSettled = true;
     return response;
     } catch (error) {
-      settleResumeFailure('company-resume-setup-failed');
+      await settleResumeFailure('company-resume-setup-failed');
       throw error;
     }
   });
 
   /**
    * Abort the entire company session — stops all runners.
-   */
+  */
   app.post('/api/company/sessions/:id/abort', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
-    if (isAppOwnedCompanySession(companyStore, id)) {
+    const id = parseCompanySessionIdParam(c);
+    let files: CompanySessionFiles;
+    try {
+      files = await companyFilesFor(id);
+    } catch {
+      return notFound(c);
+    }
+    if (files.getSession().runtime_kind === 'app_studio') {
       return appOwnedControlPlaneConflict(c, 'session abort');
     }
     const result = await abortCompanyRuntime(id);
@@ -1103,12 +1148,17 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * Switch the master agent's provider/model and optionally update
    * subordinate role defaults. Works both while running (live swap)
    * and while idle (changes take effect on next start/resume).
-   */
+  */
   app.post('/api/company/sessions/:id/switch', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
-    if (isAppOwnedCompanySession(companyStore, id)) {
+    const id = parseCompanySessionIdParam(c);
+    let files: CompanySessionFiles;
+    try {
+      files = await companyFilesFor(id);
+    } catch {
+      return notFound(c);
+    }
+    const session = files.getSession();
+    if (session.runtime_kind === 'app_studio') {
       return appOwnedControlPlaneConflict(c, 'runtime/model configuration');
     }
 
@@ -1120,13 +1170,13 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
     if (!body.provider) return c.json({ error: 'provider required' }, 400);
 
-    // Update config_json in DB
+    // Update bundle-owned session configuration.
     let config: Record<string, unknown> = {};
     try { config = JSON.parse(session.config_json); } catch { /* defaults */ }
     config.master_provider = body.provider;
     if (body.model) config.master_model = body.model;
     if (body.role_assignments) config.role_assignments = body.role_assignments;
-    companyStore.updateCompanySessionConfig(id, JSON.stringify(config));
+    await files.updateSessionConfig(JSON.stringify(config));
 
     let resolvedProvider = body.provider;
     let resolvedModel = body.model ?? '';
@@ -1147,11 +1197,15 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       }
     }
 
-    // Update the master's agent_run record
-    const agentRuns = companyStore.listAgentRuns(id);
+    // Update the master's independent agent-run record.
+    const agentRuns = files.listAgentRunsSync();
     const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
     if (masterRun) {
-      companyStore.updateAgentRunProvider(masterRun.id, resolvedProvider, resolvedModel);
+      await files.updateAgentRunProvider(
+        masterRun.id,
+        resolvedProvider,
+        resolvedModel,
+      );
     }
 
     return c.json({ ok: true, provider: resolvedProvider, model: resolvedModel });
@@ -1160,12 +1214,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   /**
    * Human responds to the Master's submit_plan.
    * This unblocks the Master's waitForUserInput() call.
-   */
+  */
   app.post('/api/company/sessions/:id/plan-response', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseCompanySessionIdParam(c);
     const body = await parseJsonBody<PlanResponseBody>(c);
     if (body.approved === undefined) {
       return c.json({ error: 'approved field required' }, 400);
+    }
+    let files: CompanySessionFiles;
+    try {
+      files = await companyFilesFor(id);
+    } catch {
+      return notFound(c);
     }
 
     // Live path.
@@ -1216,7 +1276,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const delivery = await withSessionLock(
       id,
       async (): Promise<PersistedPromptDeliveryResult> => {
-        const pendingPlan = companyStore.getPendingMasterPrompt(id, 'plan');
+        const pendingPlan = await files.getPendingMasterPrompt('plan');
         const promptId = body.prompt_id ?? pendingPlan?.id;
         if (promptId == null) {
           return {
@@ -1228,11 +1288,10 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         }
 
         const deliveryToken = randomUUID();
-        let claim: ReturnType<typeof companyStore.claimMasterPromptDelivery>;
+        let claim: Awaited<ReturnType<typeof files.claimMasterPromptDelivery>>;
         try {
-          claim = companyStore.claimMasterPromptDelivery(
+          claim = await files.claimMasterPromptDelivery(
             promptId,
-            id,
             'plan',
             deliveryToken,
             hashControlPlanePayload({
@@ -1286,7 +1345,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         if ('error' in res) {
           if (res.code === 'OUTCOME_UNKNOWN') {
             try {
-              companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+              await files.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
             } catch { /* the response remains outcome-unknown */ }
             return {
               ok: false,
@@ -1298,7 +1357,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
             };
           }
           try {
-            if (!companyStore.releaseMasterPromptDelivery(promptId, deliveryToken)) {
+            if (!(await files.releaseMasterPromptDelivery(promptId, deliveryToken))) {
               return {
                 ok: false,
                 error: 'Plan delivery failed and its durable reservation could not be released',
@@ -1326,7 +1385,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
         let prompt: MasterPrompt | null;
         try {
-          prompt = companyStore.completeMasterPromptDelivery(
+          prompt = await files.completeMasterPromptDelivery(
             promptId,
             deliveryToken,
             {
@@ -1337,7 +1396,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
           );
         } catch (error) {
           try {
-            companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+            await files.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
           } catch { /* preserve primary failure */ }
           return {
             ok: false,
@@ -1350,7 +1409,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         }
         if (!prompt) {
           try {
-            companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+            await files.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
           } catch { /* response remains outcome-unknown */ }
           return {
             ok: false,
@@ -1384,15 +1443,18 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
    * `/plan-response` / `/answer` route. Pass `{ "interject": true }` to
    * break the wait and inject the message anyway — useful when the human
    * wants to redirect the conversation mid-loop.
-   */
+  */
   app.post('/api/company/sessions/:id/message', attachmentBodyLimit, async (c) => {
-    const id = parseIdParam(c);
+    const id = parseCompanySessionIdParam(c);
     const body = await parseJsonBody<{ message: string; interject?: boolean; attachments?: AttachmentBody[]; thinking?: boolean }>(c);
     const attachmentsCheck = validateAttachments(body.attachments);
     if (!attachmentsCheck.ok) {
       return c.json({ error: attachmentsCheck.error, code: attachmentsCheck.code }, attachmentsCheck.status);
     }
-    const attachments = await normalizeAttachmentsForModel(attachmentsCheck.value, masterAttachmentOpts(id));
+    const attachments = await normalizeAttachmentsForModel(
+      attachmentsCheck.value,
+      await masterAttachmentOpts(id),
+    );
     const message = body.message?.trim()
       ? body.message
       : (attachments?.length ? DEFAULT_ATTACHMENT_PROMPT : '');
@@ -1464,16 +1526,22 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
   /**
    * Human answers a Master agent's ask_user question.
    * This unblocks the Master's waitForUserInput() call.
-   */
+  */
   app.post('/api/company/sessions/:id/answer', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseCompanySessionIdParam(c);
     const body = await parseJsonBody<{
       answer: string;
-      prompt_id?: number;
+      prompt_id?: string;
       retry_outcome_unknown?: boolean;
     }>(c);
     if (!body.answer) {
       return c.json({ error: 'answer required' }, 400);
+    }
+    let files: CompanySessionFiles;
+    try {
+      files = await companyFilesFor(id);
+    } catch {
+      return notFound(c);
     }
 
     // Live path — master runner is in the pool: deliver to its waitForUserInput.
@@ -1519,7 +1587,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
     const delivery = await withSessionLock(
       id,
       async (): Promise<PersistedPromptDeliveryResult> => {
-        const pendingPrompt = companyStore.getPendingMasterPrompt(id, 'question');
+        const pendingPrompt = await files.getPendingMasterPrompt('question');
         const promptId = body.prompt_id ?? pendingPrompt?.id;
         if (promptId == null) {
           return {
@@ -1531,11 +1599,10 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         }
 
         const deliveryToken = randomUUID();
-        let claim: ReturnType<typeof companyStore.claimMasterPromptDelivery>;
+        let claim: Awaited<ReturnType<typeof files.claimMasterPromptDelivery>>;
         try {
-          claim = companyStore.claimMasterPromptDelivery(
+          claim = await files.claimMasterPromptDelivery(
             promptId,
-            id,
             'question',
             deliveryToken,
             hashControlPlanePayload({ kind: 'question', answer: body.answer }),
@@ -1584,7 +1651,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         if ('error' in res) {
           if (res.code === 'OUTCOME_UNKNOWN') {
             try {
-              companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+              await files.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
             } catch { /* the response remains outcome-unknown */ }
             return {
               ok: false,
@@ -1596,7 +1663,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
             };
           }
           try {
-            if (!companyStore.releaseMasterPromptDelivery(promptId, deliveryToken)) {
+            if (!(await files.releaseMasterPromptDelivery(promptId, deliveryToken))) {
               return {
                 ok: false,
                 error: 'Answer delivery failed and its durable reservation could not be released',
@@ -1624,14 +1691,14 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
         let prompt: MasterPrompt | null;
         try {
-          prompt = companyStore.completeMasterPromptDelivery(
+          prompt = await files.completeMasterPromptDelivery(
             promptId,
             deliveryToken,
             { kind: 'question', answer: body.answer! },
           );
         } catch (error) {
           try {
-            companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+            await files.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
           } catch { /* preserve primary failure */ }
           return {
             ok: false,
@@ -1644,7 +1711,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         }
         if (!prompt) {
           try {
-            companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+            await files.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
           } catch { /* response remains outcome-unknown */ }
           return {
             ok: false,
@@ -1671,9 +1738,9 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
   /**
    * Check if there's an active orchestrator for a company session.
-   */
+  */
   app.get('/api/company/sessions/:id/status', (c) => {
-    const id = parseIdParam(c);
+    const id = parseCompanySessionIdParam(c);
     return c.json({
       active: hasCompanyOrchestrator(id),
       company_session_id: id,

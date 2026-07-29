@@ -6,7 +6,10 @@ import {
 import { agentTools } from '../agents.js';
 
 const { startRun } = vi.hoisted(() => ({
-  startRun: vi.fn().mockResolvedValue({ id: 'run-1', sessionId: 42 }),
+  startRun: vi.fn().mockResolvedValue({
+    id: 'run-1',
+    sessionId: '11111111-1111-4111-8111-111111111111',
+  }),
 }));
 
 vi.mock('../../agent-run-manager.js', () => ({

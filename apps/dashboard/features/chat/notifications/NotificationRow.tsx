@@ -26,7 +26,7 @@ import {
 } from './session-notifications-store.js';
 
 interface NotificationRowProps {
-  sessionId: number;
+  sessionId: string;
   notification: SessionNotification;
   mode: 'banner' | 'history';
 }

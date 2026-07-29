@@ -20,7 +20,6 @@ import type {
 export interface PersistedSessionCommand extends SessionCommandResult {
   schemaVersion: 1;
   sessionId: SessionId;
-  legacySessionId?: number;
   idempotencyKey: string;
   kind: SessionCommandKind;
   payloadHash: string;
@@ -95,7 +94,6 @@ export interface AgentRunResolutionPatch {
 export interface AcceptCommandInput<T = unknown> {
   command: SessionCommand<T>;
   payloadHash: string;
-  legacySessionId?: number;
   /**
    * Historical command kinds that shared this command's idempotency namespace.
    * They are checked in the same IMMEDIATE transaction before a new command is
@@ -114,7 +112,6 @@ export type AcceptCommandResult =
 
 export interface ControlPlaneCommandContext {
   sessionId: SessionId;
-  legacySessionId?: number;
   commandId: SessionCommandId;
   correlationId: CorrelationId;
   actor: SessionCommand['actor'];
@@ -136,7 +133,6 @@ export interface RuntimeEventAppendInput<T = unknown>
   extends Omit<RuntimeEventEnvelopeV1<T>, 'globalSeq' | 'recordedAt' | 'payloadHash'> {
   recordedAt?: string;
   payloadHash?: string;
-  legacySessionId?: number;
 }
 
 export interface TerminalizeRunInput {

@@ -18,7 +18,7 @@ export function SessionBanners({
 }: {
   stream: ReturnType<typeof useCompanyStream>;
   /** C1 — needed by the autonomy incident banner; optional for older call-sites. */
-  sessionId?: number | null;
+  sessionId?: string | null;
   readOnly?: boolean;
 }) {
   return (

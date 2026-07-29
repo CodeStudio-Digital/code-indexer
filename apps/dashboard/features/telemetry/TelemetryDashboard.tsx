@@ -34,7 +34,7 @@ interface ModelRow {
 }
 
 interface TopSession {
-  session_id: number | null;
+  session_id: string | null;
   title: string | null;
   provider: string | null;
   model: string | null;

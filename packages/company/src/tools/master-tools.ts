@@ -17,6 +17,7 @@ import { resolveAgentRunId } from '@mcp/company/tools/path-resolution.js';
 import { runAgentWaitLoop } from '@mcp/company/tools/agent-wait-loop.js';
 import { observeOutcome } from '@mcp/services/shadow-traffic/index.js';
 import { getGlobalCompanyRecommend } from '@mcp/company/services/scheduler/recommend-shim.js';
+import { isUuid } from '@mcp/session-storage';
 
 /** FNV-1a hash — matches the producer in recommendations.ts so observed
  *  outcomes correlate with the shadow rows created at recommend-role time. */
@@ -86,7 +87,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
       },
       tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Tool tier for the agent. IGNORED for template-locked roles (template tier wins). Default for untemplated: navigate.' },
       skills: { type: 'array', items: { type: 'string' }, description: 'Optional skill IDs. IGNORED for template-locked roles (template skills win).' },
-      kanban_card_id: { type: 'number', description: 'Optional Kanban card ID. When provided, the card\'s full context (description, checklist, comments) is prepended to the task, the agent is auto-assigned to the card, and the card moves to in_progress.' },
+      kanban_card_id: { type: 'string', description: 'Optional Kanban card UUID. When provided, the card\'s full context (description, checklist, comments) is prepended to the task, the agent is auto-assigned to the card, and the card moves to in_progress.' },
       wait: { type: 'boolean', description: 'If true, block until the subordinate completes (default: false)' },
       forward_user_attachments: {
         type: 'boolean',
@@ -108,7 +109,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       try {
         const role = args.role as string;
-        let kanbanCardId = args.kanban_card_id as number | undefined;
+        let kanbanCardId = args.kanban_card_id as string | undefined;
         let task = args.task as string;
 
         // P16 — Auto-create a kanban card when the master forgot to
@@ -335,8 +336,8 @@ function approveSubordinatePlan(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run. Equivalent to passing `path` — use whichever you have.' },
-      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
+      agent_run_id: { type: 'string', description: 'UUID of the subordinate agent run. Equivalent to passing `path` — use whichever you have.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents. Alternative to agent_run_id.' },
       approved: { type: 'boolean', description: 'Whether to approve (true) or reject (false) the plan' },
       feedback: { type: 'string', description: 'Optional feedback for the subordinate' },
     },
@@ -375,8 +376,8 @@ function answerSubordinateQuestion(orchestrator: CompanyOrchestrator): CoderTool
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run. Equivalent to passing `path`.' },
-      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
+      agent_run_id: { type: 'string', description: 'UUID of the subordinate agent run. Equivalent to passing `path`.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents. Alternative to agent_run_id.' },
       answer: { type: 'string', description: 'Your answer to the subordinate\'s question' },
     },
     required: ['answer'],
@@ -415,8 +416,8 @@ function approveSubordinateTasks(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run. Equivalent to passing `path`.' },
-      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
+      agent_run_id: { type: 'string', description: 'UUID of the subordinate agent run. Equivalent to passing `path`.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents. Alternative to agent_run_id.' },
       approved: { type: 'boolean', description: 'Whether to approve (true) or reject (false) the task list' },
       feedback: { type: 'string', description: 'Optional feedback for the subordinate' },
       execution_mode: {
@@ -463,8 +464,8 @@ function abortSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the subordinate agent run to abort. Equivalent to passing `path`.' },
-      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
+      agent_run_id: { type: 'string', description: 'UUID of the subordinate agent run to abort. Equivalent to passing `path`.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents. Alternative to agent_run_id.' },
       reason: { type: 'string', description: 'Optional reason for the abort' },
     },
     required: [],
@@ -561,8 +562,8 @@ function forwardToAgent(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the target subordinate agent. Equivalent to passing `path`.' },
-      path: { type: 'string', description: 'Agent path as returned by list_agents (e.g. "/root/master/qa-7"). Alternative to agent_run_id.' },
+      agent_run_id: { type: 'string', description: 'UUID of the target subordinate agent. Equivalent to passing `path`.' },
+      path: { type: 'string', description: 'Agent path as returned by list_agents. Alternative to agent_run_id.' },
       message: { type: 'string', description: 'Message to forward to the agent' },
       forward_user_attachments: {
         type: 'boolean',
@@ -716,7 +717,7 @@ function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      agent_run_id: { type: 'number', description: 'ID of the failed/aborted subordinate agent to resume' },
+      agent_run_id: { type: 'string', description: 'UUID of the failed/aborted subordinate agent to resume' },
       message: { type: 'string', description: 'Optional message to send when resuming (default: "Continue your task")' },
       thinking: {
         type: 'boolean',
@@ -734,7 +735,7 @@ function resumeSubordinate(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       try {
         const result = await orchestrator.resumeSubordinate(
-          args.agent_run_id as number,
+          args.agent_run_id as string,
           args.message as string | undefined,
           args.thinking as boolean | undefined,
         );
@@ -896,7 +897,10 @@ function broadcastToRoles(orchestrator: CompanyOrchestrator): CoderTool {
       if (roles.length === 0) return err('Provide at least one target role.');
       if (!message) return err('message cannot be empty');
       const uniqueRoles = [...new Set(roles)];
-      const masterRunId = orchestrator.getMasterAgentRunId() ?? 0;
+      const masterRunId = orchestrator.getMasterAgentRunId();
+      if (!masterRunId) {
+        return err('The master agent run is not available.');
+      }
 
       const lines: string[] = [];
       for (const role of uniqueRoles) {
@@ -940,8 +944,8 @@ function respondToInbox(orchestrator: CompanyOrchestrator): CoderTool {
       type: 'object',
       properties: {
         message_id: {
-          type: 'number',
-          description: 'Id of the inbox message to answer (printed in the [INBOX ...] header).',
+          type: 'string',
+          description: 'UUID of the inbox message to answer (printed in the [INBOX ...] header).',
         },
         answer: { type: 'string', description: 'Your answer. Plain text — keep it focused.' },
       },
@@ -950,9 +954,12 @@ function respondToInbox(orchestrator: CompanyOrchestrator): CoderTool {
     },
     source: 'native',
     handler: async (args) => {
-      const messageId = Number(args.message_id);
+      const messageId =
+        typeof args.message_id === 'string'
+          ? args.message_id.toLowerCase()
+          : '';
       const answer = String(args.answer ?? '').trim();
-      if (!Number.isFinite(messageId)) return err('message_id must be a number');
+      if (!isUuid(messageId)) return err('message_id must be a canonical UUID');
       if (!answer) return err('answer cannot be empty');
       const ok2 = orchestrator.inboxRespond(messageId, answer);
       if (!ok2) {

@@ -13,8 +13,8 @@ import type { AgentAttachment } from '../../../../hooks/useAgentStream.js';
  * time); the ✕ drops it before sending. Sibling of `SelectionChip` — that cites
  * the elements inside the box, this shows the captured box image.
  */
-export function RegionShotChip({ sessionId }: { sessionId: number }) {
-  const shots = usePendingAttachments(sessionId);
+export function RegionShotChip({ projectId }: { projectId: number }) {
+  const shots = usePendingAttachments(projectId);
   if (!shots.length) return null;
   return (
     <div className="flex flex-wrap items-center gap-1 mt-1">
@@ -37,7 +37,7 @@ export function RegionShotChip({ sessionId }: { sessionId: number }) {
           </span>
           <button
             type="button"
-            onClick={() => removePendingAttachment(sessionId, i)}
+            onClick={() => removePendingAttachment(projectId, i)}
             className="ml-0.5 text-muted-foreground hover:text-foreground"
             aria-label="Remove screenshot"
           >
@@ -49,12 +49,12 @@ export function RegionShotChip({ sessionId }: { sessionId: number }) {
   );
 }
 
-/** Subscribe to the module store for this session's staged screenshots. */
-function usePendingAttachments(sessionId: number): AgentAttachment[] {
-  const [atts, setAtts] = React.useState<AgentAttachment[]>(() => getPendingAttachments(sessionId));
+/** Subscribe to the module store for this project's staged screenshots. */
+function usePendingAttachments(projectId: number): AgentAttachment[] {
+  const [atts, setAtts] = React.useState<AgentAttachment[]>(() => getPendingAttachments(projectId));
   React.useEffect(() => {
-    setAtts(getPendingAttachments(sessionId));
-    return subscribePendingAttachments(sessionId, () => setAtts(getPendingAttachments(sessionId)));
-  }, [sessionId]);
+    setAtts(getPendingAttachments(projectId));
+    return subscribePendingAttachments(projectId, () => setAtts(getPendingAttachments(projectId)));
+  }, [projectId]);
   return atts;
 }

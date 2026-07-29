@@ -118,6 +118,19 @@ export function trackProcessTree(pid: number | undefined | null): () => void {
   return () => trackedProcessTrees.delete(pid);
 }
 
+/**
+ * Pids of every transient tree tracked in this realm.
+ *
+ * These are the children nobody else can enumerate: LSP servers, debug
+ * adapters and the like register here for shutdown, but their own managers
+ * hold handles rather than pids. The task manager reads this to keep such
+ * processes visible (and adoptable as orphan roots) after their spawning
+ * parent is gone.
+ */
+export function listTrackedProcessTrees(): number[] {
+  return [...trackedProcessTrees];
+}
+
 /** Hard-stop and await all transient process trees in this JavaScript realm. */
 export async function disposeTrackedProcessTrees(): Promise<void> {
   const snapshot = [...trackedProcessTrees];

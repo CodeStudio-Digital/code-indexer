@@ -1,149 +1,243 @@
-/**
- * CompanySessionEnvStore — shared env vars for a company session.
- *
- * Used by:
- *   - REST routes (`GET/PUT/DELETE /api/company/sessions/:id/envs`) so
- *     users manage the list from the Env tab.
- *   - `SandboxManager` at provision/resume time to seed container env.
- *   - The `env_*` agent tools (read / list / set / delete) so agents
- *     can introspect and evolve shared config without leaving the sandbox.
- *
- * The store is a plain CRUD facade; all policy (what's a valid key,
- * whose turn it is to modify, audit trails) lives in the callers.
- */
-import type DatabaseConstructor from 'better-sqlite3';
+import {
+  CompanySessionFileCollection,
+  type CompanyOperationalSessionStore,
+} from './company-session-file-collection.js';
 import { normalizeServiceScope, scopeIncludesService } from './env-scope.js';
-
-type DB = InstanceType<typeof DatabaseConstructor>;
 
 export type CompanySessionEnvSource = 'user' | 'imported' | 'auto' | 'agent';
 
 export interface CompanySessionEnvRow {
-  session_id: number;
+  id: string;
+  seq: number;
+  session_id: string;
   key: string;
   value: string;
   is_secret: 0 | 1;
   source: CompanySessionEnvSource;
-  /**
-   * Per-service scope (migration 192): NULL = every service; otherwise
-   * a CSV of service ids ('main' addresses the primary container).
-   * Parsing/matching semantics live in `env-scope.ts`.
-   */
   service_scope: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export interface UpsertOptions {
-  /** Provenance tag — see migration 039. Defaults to `'user'`. */
   source?: CompanySessionEnvSource;
-  /**
-   * Insert-only: when true, skip the write if a row already exists for
-   * this (session, key). Used by the `.env` import path so a pre-
-   * existing user value is never overwritten by the imported default.
-   */
   onlyIfAbsent?: boolean;
-  /**
-   * Per-service scope. Tri-state on purpose:
-   *   - `undefined` (omitted) → an existing row KEEPS its scope; new
-   *     rows land unscoped. Legacy callers (managed-env sync, chrome
-   *     service) never clobber operator-set scopes this way.
-   *   - `null` → explicitly clear the scope (var goes to all services).
-   *   - string → CSV of service ids, normalized before storage.
-   */
   serviceScope?: string | null;
 }
 
-export class CompanySessionEnvStore {
-  constructor(private readonly db: DB) {}
+export interface CompanyEnvSecretCodec {
+  encrypt(plaintext: string): string | Promise<string>;
+  decrypt(ciphertext: string): string | Promise<string>;
+}
 
-  list(sessionId: number): CompanySessionEnvRow[] {
-    return this.db
-      .prepare(
-        'SELECT * FROM company_session_envs WHERE session_id = ? ORDER BY key ASC',
-      )
-      .all(sessionId) as CompanySessionEnvRow[];
+interface EncryptedEnvValue {
+  kind: 'encrypted-company-secret';
+  version: 1;
+  algorithm: 'os-keychain';
+  ciphertext: string;
+}
+
+interface CompanyEnvironmentFileData {
+  [key: string]: unknown;
+  name: string;
+  variables: {
+    is_secret: boolean;
+    value: string | null;
+    source: CompanySessionEnvSource;
+    service_scope: string | null;
+  };
+  secrets: Record<string, EncryptedEnvValue>;
+}
+
+function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    typeof (value as Promise<T>).then === 'function'
+  );
+}
+
+function assertCiphertext(value: string): string {
+  if (!value.startsWith('enc:') || value.length <= 4) {
+    throw new Error(
+      'Company env secret encryption is unavailable; refusing plaintext/non-keychain persistence',
+    );
   }
+  return value;
+}
 
-  get(sessionId: number, key: string): CompanySessionEnvRow | null {
-    return (
-      (this.db
-        .prepare('SELECT * FROM company_session_envs WHERE session_id = ? AND key = ?')
-        .get(sessionId, key) as CompanySessionEnvRow | undefined) ?? null
+export class CompanySessionEnvStore {
+  private readonly files: CompanySessionFileCollection<CompanyEnvironmentFileData>;
+  private readonly plaintextCache = new Map<string, string>();
+
+  constructor(
+    sessions: CompanyOperationalSessionStore,
+    private readonly secretCodec?: CompanyEnvSecretCodec,
+  ) {
+    this.files = new CompanySessionFileCollection(
+      sessions,
+      'environments',
+      'company.environment',
     );
   }
 
   /**
-   * Write a key. Upsert — an existing entry's value/is_secret/source
-   * fields are overwritten by default, created_at preserved. Pass
-   * `onlyIfAbsent: true` to keep existing rows untouched (used by the
-   * `.env` import path so imports don't clobber user edits).
+   * Worker startup hydrates keychain-backed values before sync sandbox helpers
+   * begin reading them. Failure is fatal: no empty-string/plaintext fallback.
    */
-  upsert(
-    sessionId: number,
+  async initialize(): Promise<void> {
+    if (!this.secretCodec) return;
+    for (const { sessionId, record } of this.files.listAcrossSessions()) {
+      if (!record.data.variables.is_secret) continue;
+      const envelope = record.data.secrets.value;
+      if (!envelope) {
+        throw new Error(
+          `Secret Company env ${sessionId}:${record.data.name} has no encrypted envelope`,
+        );
+      }
+      const plaintext = await this.secretCodec.decrypt(envelope.ciphertext);
+      this.plaintextCache.set(this.cacheKey(sessionId, record.id), plaintext);
+    }
+  }
+
+  list(sessionId: string): CompanySessionEnvRow[] {
+    return this.files
+      .list(sessionId)
+      .map((record) => this.mapRow(sessionId, record))
+      .sort((left, right) => left.key.localeCompare(right.key));
+  }
+
+  get(sessionId: string, key: string): CompanySessionEnvRow | null {
+    const record = this.files
+      .list(sessionId)
+      .find((candidate) => candidate.data.name === key);
+    return record ? this.mapRow(sessionId, record) : null;
+  }
+
+  async upsert(
+    sessionId: string,
     key: string,
     value: string,
     isSecret: boolean,
     opts: UpsertOptions = {},
-  ): void {
-    const source: CompanySessionEnvSource = opts.source ?? 'user';
-    // Tri-state scope: `scopeProvided = 0` keeps the existing row's
-    // scope on conflict (see UpsertOptions.serviceScope).
-    const scopeProvided = opts.serviceScope !== undefined ? 1 : 0;
-    const scope = normalizeServiceScope(opts.serviceScope ?? null);
-    if (opts.onlyIfAbsent) {
-      this.db
-        .prepare(
-          `INSERT OR IGNORE INTO company_session_envs (session_id, key, value, is_secret, source, service_scope)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        )
-        .run(sessionId, key, value, isSecret ? 1 : 0, source, scope);
-      return;
+  ): Promise<void> {
+    const existing = this.files
+      .list(sessionId)
+      .find((candidate) => candidate.data.name === key);
+    if (existing && opts.onlyIfAbsent) return;
+    const serviceScope =
+      opts.serviceScope === undefined
+        ? existing?.data.variables.service_scope ?? null
+        : normalizeServiceScope(opts.serviceScope);
+    let envelope: EncryptedEnvValue | null = null;
+    if (isSecret) {
+      if (!this.secretCodec) {
+        throw new Error(
+          `Cannot persist secret Company env ${key}: OS keychain codec unavailable`,
+        );
+      }
+      const ciphertext = assertCiphertext(
+        await this.secretCodec.encrypt(value),
+      );
+      envelope = {
+        kind: 'encrypted-company-secret',
+        version: 1,
+        algorithm: 'os-keychain',
+        ciphertext,
+      };
     }
-    this.db
-      .prepare(
-        `INSERT INTO company_session_envs (session_id, key, value, is_secret, source, service_scope)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(session_id, key) DO UPDATE SET
-           value = excluded.value,
-           is_secret = excluded.is_secret,
-           source = excluded.source,
-           service_scope = CASE WHEN ? = 1
-             THEN excluded.service_scope
-             ELSE company_session_envs.service_scope END,
-           updated_at = datetime('now')`,
-      )
-      .run(sessionId, key, value, isSecret ? 1 : 0, source, scope, scopeProvided);
+    const data: CompanyEnvironmentFileData = {
+      name: key,
+      variables: {
+        is_secret: isSecret,
+        value: isSecret ? null : value,
+        source: opts.source ?? 'user',
+        service_scope: serviceScope,
+      },
+      secrets: envelope ? { value: envelope } : {},
+    };
+    const record = existing
+      ? this.files.update(sessionId, existing.id, () => data)
+      : this.files.create(sessionId, { data });
+    const cacheKey = this.cacheKey(sessionId, record.id);
+    if (isSecret) this.plaintextCache.set(cacheKey, value);
+    else this.plaintextCache.delete(cacheKey);
   }
 
-  delete(sessionId: number, key: string): void {
-    this.db
-      .prepare('DELETE FROM company_session_envs WHERE session_id = ? AND key = ?')
-      .run(sessionId, key);
+  delete(sessionId: string, key: string): void {
+    const existing = this.files
+      .list(sessionId)
+      .find((candidate) => candidate.data.name === key);
+    if (!existing) return;
+    this.files.moveToTrash(sessionId, existing.id);
+    this.plaintextCache.delete(this.cacheKey(sessionId, existing.id));
   }
 
-  /** Flat key→value map, convenient for container env injection. */
-  asRecord(sessionId: number): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const row of this.list(sessionId)) {
-      out[row.key] = row.value;
-    }
-    return out;
+  asRecord(sessionId: string): Record<string, string> {
+    return Object.fromEntries(
+      this.list(sessionId).map((row) => [row.key, row.value]),
+    );
   }
 
-  /**
-   * Like `asRecord`, but ENFORCES `service_scope` (migration 192): only
-   * rows whose scope is NULL (all services) or whose CSV contains
-   * `serviceId` land in the record. The primary container's id is
-   * `'main'` — same id the services listing and env-sync targets use.
-   */
-  asRecordForService(sessionId: number, serviceId: string): Record<string, string> {
-    const out: Record<string, string> = {};
-    for (const row of this.list(sessionId)) {
-      if (scopeIncludesService(row.service_scope, serviceId)) {
-        out[row.key] = row.value;
+  asRecordForService(
+    sessionId: string,
+    serviceId: string,
+  ): Record<string, string> {
+    return Object.fromEntries(
+      this.list(sessionId)
+        .filter((row) => scopeIncludesService(row.service_scope, serviceId))
+        .map((row) => [row.key, row.value]),
+    );
+  }
+
+  private mapRow(
+    sessionId: string,
+    record: ReturnType<CompanySessionFileCollection<CompanyEnvironmentFileData>['list']>[number],
+  ): CompanySessionEnvRow {
+    const variables = record.data.variables;
+    let value = variables.value ?? '';
+    if (variables.is_secret) {
+      const envelope = record.data.secrets.value;
+      if (!envelope || envelope.kind !== 'encrypted-company-secret') {
+        throw new Error(
+          `Secret Company env ${sessionId}:${record.data.name} has no encrypted envelope`,
+        );
+      }
+      const cacheKey = this.cacheKey(sessionId, record.id);
+      const cached = this.plaintextCache.get(cacheKey);
+      if (cached !== undefined) {
+        value = cached;
+      } else {
+        if (!this.secretCodec) {
+          throw new Error(
+            `Cannot decrypt secret Company env ${record.data.name}: OS keychain codec unavailable`,
+          );
+        }
+        const decrypted = this.secretCodec.decrypt(envelope.ciphertext);
+        if (isPromise(decrypted)) {
+          throw new Error(
+            `Secret Company env ${record.data.name} was not hydrated before synchronous access`,
+          );
+        }
+        value = decrypted;
+        this.plaintextCache.set(cacheKey, decrypted);
       }
     }
-    return out;
+    return {
+      id: record.id,
+      seq: record.seq,
+      session_id: sessionId,
+      key: record.data.name,
+      value,
+      is_secret: variables.is_secret ? 1 : 0,
+      source: variables.source,
+      service_scope: variables.service_scope,
+      created_at: record.createdAt,
+      updated_at: record.updatedAt,
+    };
+  }
+
+  private cacheKey(sessionId: string, entityId: string): string {
+    return `${sessionId.toLowerCase()}:${entityId.toLowerCase()}`;
   }
 }

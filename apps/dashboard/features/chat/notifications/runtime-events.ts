@@ -4,7 +4,7 @@ import { pushNotification } from './session-notifications-store.js';
 interface RuntimeEvent {
   id: number;
   ts: number;
-  sessionId: number;
+  sessionId: string;
   event: string;
   data: unknown;
 }

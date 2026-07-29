@@ -49,7 +49,6 @@ function makeCache(): SubAgentResultCacheStore {
       return v
         ? {
             id: 1,
-            session_id: null,
             prompt_hash: opts.prompt_hash,
             context_digest: opts.context_digest,
             agent_type: opts.agent_type,

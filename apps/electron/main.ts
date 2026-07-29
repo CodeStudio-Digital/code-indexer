@@ -4,10 +4,11 @@
  * the React dashboard.
  *
  * Flow on startup:
- *   1. `createApp()` instantiates the full deps graph (SQLite, providers,
- *      stores). Same `createDeps` the Hono server uses — we just skip
- *      `serve()`. The Hono `app` is unused unless MCP_DEV_HTTP=1 (debug).
- *   2. `mountIpcHandlers()` wires every handler in @mcp/api-handlers to
+ *   1. `createBackend()` returns a `BackendHandle` (src/backend/handle.ts).
+ *      Today the only implementation boots the full deps graph (SQLite,
+ *      providers, stores) in THIS process — same `createDeps` the Hono server
+ *      uses, minus `serve()`. Selected by `MCP_BACKEND_PROCESS`.
+ *   2. `backend.attachRenderer()` wires every handler in @mcp/api-handlers to
  *      `ipcMain.handle('api:<namespace>:<method>', …)`. Streaming methods
  *      register on a separate channel that returns a MessagePort.
  *   3. The window loads either the Vite dev URL (npm run electron:dev)
@@ -16,26 +17,38 @@
  * The renderer reaches the backend via `window.electronAPI.api.*`
  * (defined in preload.ts via contextBridge). There is no port open on
  * loopback — every call is in-process IPC.
+ *
+ * Why the indirection: the backend is what freezes this process (260 sync
+ * migrations at boot, then every synchronous handler), and this process also
+ * owns the window, the menus, IPC dispatch for all renderers and the PTYs.
+ * `BackendHandle` is the seam a `utilityProcess` implementation slots into.
+ * Anything main still reaches through `backend.local` is coupling that has to
+ * become an RPC first — the property is nullable so the compiler lists it.
  */
 
 import { app, BrowserWindow, ipcMain, dialog, shell, Notification, protocol, session } from 'electron';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { createApp } from '@apps/http-api/server.js';
 import { seedBundledPlugins } from '@apps/http-api/server/bundled-plugins.js';
-import { timeCall } from '@apps/http-api/server/perf/slow-ipc.js';
 import { installLlmDispatcher } from '@apps/http-api/install-llm-dispatcher.js';
-import { mountIpcHandlers } from './src/handlers-mount.js';
+import { createBackend } from './src/backend/create.js';
+import { runBackendSpike } from './src/backend/spike/run-spike.js';
 import { createElectronProfiler } from './src/perf-trace.js';
 import { setElectronProfiler } from '@apps/http-api/server/perf/electron-profiler.js';
-import { setMainSecretDecryptor } from '@apps/http-api/server/secret-decrypt-port.js';
+import {
+  setMainSecretDecryptor,
+  setMainSecretEncryptor,
+} from '@apps/http-api/server/secret-decrypt-port.js';
 import { setGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
 import { PreviewWindowService } from './src/preview-window/service.js';
 import { buildRunnerBridge } from './src/preview-window/build-runner-bridge.js';
-import { startOptionalDevHttp, stopDevHttp } from './src/dev-http.js';
-import { OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
+import { type BackendDispatch, OAUTH_LOOPBACK_PORT, startOAuthLoopback, stopOAuthLoopback } from './src/oauth-loopback.js';
 import { mountTerminalIpc } from './src/terminal-ipc.js';
-import { decryptSecretBlob, mountSecretsIpc } from './src/secrets-ipc.js';
+import {
+  decryptSecretBlob,
+  encryptSecretBlob,
+  mountSecretsIpc,
+} from './src/secrets-ipc.js';
 import { registerWindowControlsIpc } from './src/window-controls-ipc.js';
 import { registerWindowRegistryIpc } from './src/window-registry-ipc.js';
 import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
@@ -45,17 +58,23 @@ import { installGlobalHardening, applyProductionHardening } from './src/security
 import { APP_DISPLAY_NAME, APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
 import { enrichElectronProcessMetrics } from './src/process-metrics.js';
-import { registerTaskManagerShortcut, TASK_MANAGER_ROUTE } from './src/task-manager-shortcut.js';
+import {
+  registerTaskManagerShortcut,
+  TASK_MANAGER_ROUTE,
+  TASK_MANAGER_WINDOW,
+} from './src/task-manager-shortcut.js';
 import { childRegistry } from './src/child-process-registry.js';
 import { sharedPtyManager } from '@mcp/api-handlers';
-import {
-  forceDisposeAppProcessResources,
-  shutdownAppRuntime,
-} from '@apps/http-api/server/runtime-shutdown.js';
-import type { Hono } from 'hono';
+import { forceDisposeAppProcessResources } from '@apps/http-api/server/runtime-shutdown.js';
+import { applyDesktopRuntimeEnvDefaults } from './src/desktop-runtime-env.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Installed builds do not inherit the repository `.env`. Apply the desktop's
+// durable-data defaults before any backend/store is constructed so dev and
+// packaged launches route already-split projects to the same SQLite files.
+applyDesktopRuntimeEnvDefaults();
 
 // Streaming-resilient global undici dispatcher for the main-process realm
 // (provider-refresh, model-pricing, quality-watchdog fetch here). Workers set
@@ -238,16 +257,25 @@ async function bootstrap() {
     console.warn(`[bundled-plugins] desktop seed failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 
+  // THROWAWAY (Onda 0 gate): MCP_BACKEND_SPIKE=1 probes what a utilityProcess
+  // can actually do here before any of the backend moves into one. No-op
+  // otherwise, and it does not block the normal boot below.
+  runBackendSpike();
+
   // Boot the backend in-process. The Hono app is built but not served
   // unless MCP_DEV_HTTP=1 — that flag exists so an operator can curl
   // the same backend from outside the Electron window for debugging.
-  const { app: honoApp, deps, mcpPool, chromeService, verdaccioService } = createApp();
-  await startOptionalDevHttp(honoApp);
+  const backend = createBackend();
+  await backend.ready();
+  // `local` is non-null only while the backend shares this process. Everything
+  // read through it is coupling that becomes a control-bridge RPC when the
+  // backend moves into a utilityProcess — see backend/handle.ts.
+  const { deps, honoApp } = backend.local!;
 
   // Perf monitor: hand the backend the Electron process tree
   // (GPU/renderer/utility working sets — what Task Manager shows).
   // Read lazily per sampler tick, so assigning after createApp is fine.
-  deps.processMetricsProvider = () => enrichElectronProcessMetrics(
+  backend.setProcessMetricsProvider(() => enrichElectronProcessMetrics(
     app.getAppMetrics(),
     BrowserWindow.getAllWindows()
       .filter((window) => !window.isDestroyed() && !window.webContents.isDestroyed())
@@ -256,7 +284,20 @@ async function bootstrap() {
         url: window.webContents.getURL(),
         appWindow: (window as unknown as { __mcpAppWindow?: boolean }).__mcpAppWindow === true,
       })),
-  );
+  ));
+
+  // Task manager: the desktop-only child registry (terminal PTYs, the shared
+  // runner PTY manager, dev-http) as labelled inventory entries. Same
+  // late-binding contract as the metrics provider — read lazily per request.
+  backend.setProcessInventoryProvider(() => childRegistry.list().flatMap((child) => (
+    typeof child.pid === 'number' && child.pid > 0
+      ? [{
+        pid: child.pid,
+        kind: child.kind === 'pty' ? ('terminal' as const) : ('helper' as const),
+        label: child.label,
+      }]
+      : []
+  )));
 
   // Wire the admin "Restart backend" button to Electron's relaunch
   // primitives — without this, `process.exit(75)` would kill the main
@@ -283,19 +324,24 @@ async function bootstrap() {
   // every IPC channel not yet covered by a pure handler in
   // @mcp/api-handlers. The fallback dispatches via `app.fetch(Request)`
   // in-process — same routes, zero port. See hono-dispatch.ts.
-  const handlers = mountIpcHandlers(deps, honoApp);
+  backend.attachRenderer();
+  const handlers = backend.local!.handlers;
   mountTerminalIpc(deps);
   mountSecretsIpc();
   // Server-side decrypt port: lets http-api code (and workers via the
   // secretsDecrypt bridge handler) resolve `enc:` blobs with safeStorage
   // without importing electron. See server/secret-decrypt-port.ts.
   setMainSecretDecryptor(decryptSecretBlob);
+  setMainSecretEncryptor(encryptSecretBlob);
   registerNativeIpc();
   registerWindowIpc();
   registerWindowControlsIpc();
   registerWindowRegistryIpc();
-  registerOAuthLoopbackIpc(honoApp);
-  registerMcpProtocol(honoApp);
+  // Both speak Request/Response, so both go through the SAME dispatch — which
+  // is what lets a forwarder replace it wholesale later.
+  const dispatch = (req: Request): Promise<Response> => backend.fetch(req);
+  registerOAuthLoopbackIpc(dispatch);
+  registerMcpProtocol(dispatch);
 
   // Full-app trace (contentTracing) + renderer CPU profile (CDP) — the two
   // capabilities the in-process http-api can't reach. Drives /api/admin/perf/
@@ -336,7 +382,7 @@ async function bootstrap() {
   // Windows GUI quit emits NO SIGINT/SIGTERM, so the http-api signal handlers
   // never fire in the desktop app — `will-quit` is the one place we can flush
   // and reap everything. Two phases, order critical:
-  //   1. GRACEFUL — flush in-flight worker turns, close the dbWriter, stop
+  //   1. GRACEFUL — flush in-flight per-session writers, stop
   //      LSP/ONNX/DB pools, shut external MCP subprocesses + company dev
   //      servers, close the optional dev-http listener. Force-killing here
   //      would lose the user's last turn (the very reason pools go first).
@@ -353,16 +399,10 @@ async function bootstrap() {
       setGlobalPreviewDevtools(null);
       await previewService.closeAll();
       stopOAuthLoopback();
-      await stopDevHttp();
-      await shutdownAppRuntime({
-        deps,
-        mcpPool,
-        chromeService,
-        verdaccioService,
-        reason: 'electron-quit',
-      });
+      await backend.dispose('electron-quit');
       setElectronProfiler(null);
       setMainSecretDecryptor(null);
+      setMainSecretEncryptor(null);
     })();
 
     void (async () => {
@@ -474,16 +514,23 @@ function attachWindowHandlers(win: BrowserWindow) {
  * Create the main BrowserWindow (also reused for "open in new window"
  * spawned via the `window:open` IPC handler). `routeSuffix` is appended
  * to the dashboard base URL — e.g. `/projects/42` or
- * `/company/sessions/7/main/work/chat`. `onReveal` runs once the window
+ * `/company/sessions/<uuid>/main/work/chat`. `onReveal` runs once the window
  * has painted its first frame (used to dismiss the splash).
  */
-async function createAppWindow(routeSuffix?: string, onReveal?: () => void): Promise<BrowserWindow> {
+async function createAppWindow(
+  routeSuffix?: string,
+  onReveal?: () => void,
+  // Utility popouts (the task manager) are small companion windows; the
+  // 1024x720 minimum below is sized for the full IDE chrome and would force
+  // them far larger than they need to be.
+  geometry?: { width: number; height: number },
+): Promise<BrowserWindow> {
   const appIconPath = resolveAppIconPath();
   const win = new BrowserWindow({
-    width: 1400,
-    height: 900,
-    minWidth: 1024,
-    minHeight: 720,
+    width: geometry?.width ?? 1400,
+    height: geometry?.height ?? 900,
+    minWidth: geometry ? 520 : 1024,
+    minHeight: geometry ? 320 : 720,
     title: 'CodeStudio',
     ...(appIconPath ? { icon: appIconPath } : {}),
     autoHideMenuBar: true,
@@ -527,21 +574,20 @@ async function createAppWindow(routeSuffix?: string, onReveal?: () => void): Pro
   win.webContents.once('did-finish-load', reveal);
 
   attachWindowHandlers(win);
-  registerTaskManagerShortcut(win, () => focusOrOpenRoute(TASK_MANAGER_ROUTE));
+  registerTaskManagerShortcut(win, openTaskManagerWindow);
   applyProductionHardening(win);
 
   if (DEV_URL) {
-    const target = routeSuffix ? `${DEV_URL.replace(/\/$/, '')}${routeSuffix}` : DEV_URL;
+    // The renderer is hash-routed (createHashRouter — see apps/dashboard/App.tsx),
+    // so a deep link goes in the fragment, not the pathname. Same shape as the
+    // packaged branch below, which keeps dev and production on one code path.
+    const target = routeSuffix ? `${DEV_URL.replace(/\/$/, '')}/#${routeSuffix}` : DEV_URL;
     await win.loadURL(target);
     win.webContents.openDevTools({ mode: 'detach' });
   } else {
     // Production: dashboard build is bundled into the asar at dist/dashboard.
-    // React Router uses BrowserRouter, so a deep-link route lives in the
-    // pathname — we use hash-prefixed style here (`#/path`) only if the
-    // app is hash-routed. Today it's BrowserRouter, so we load the
-    // base index.html and rely on the renderer reading the hash/query
-    // we append. Simpler: pass the route via a `?initial=...` query the
-    // App entry reads on mount, falling back to current location.
+    // The renderer is hash-routed, so `{ hash: routeSuffix }` IS the route the
+    // router boots from — nothing has to re-navigate after mount.
     const baseFile = path.join(__dirname, '../../dashboard/index.html');
     if (routeSuffix) {
       await win.loadFile(baseFile, { hash: routeSuffix });
@@ -583,6 +629,28 @@ function normalizeInternalRoute(route: unknown): string | undefined {
   return trimmed;
 }
 
+/**
+ * The task manager is a singleton window: pressing Shift+Esc again focuses the
+ * existing one instead of stacking copies, which is what Chrome does and what
+ * anyone who mashes the shortcut expects.
+ */
+let taskManagerWindow: BrowserWindow | null = null;
+
+async function openTaskManagerWindow(): Promise<void> {
+  if (taskManagerWindow && !taskManagerWindow.isDestroyed()) {
+    if (taskManagerWindow.isMinimized()) taskManagerWindow.restore();
+    taskManagerWindow.show();
+    taskManagerWindow.focus();
+    return;
+  }
+  const win = await createAppWindow(TASK_MANAGER_ROUTE, undefined, TASK_MANAGER_WINDOW);
+  win.setTitle('CodeStudio — Task Manager');
+  taskManagerWindow = win;
+  win.once('closed', () => {
+    taskManagerWindow = null;
+  });
+}
+
 async function focusOrOpenRoute(route?: string): Promise<void> {
   const windows = BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed());
   const existing = BrowserWindow.getFocusedWindow()
@@ -614,8 +682,8 @@ async function focusOrOpenRoute(route?: string): Promise<void> {
  * dashboard calls start() right before opening the provider login in the
  * external browser, then stop() once consent completes or is cancelled.
  */
-function registerOAuthLoopbackIpc(honoApp: Hono) {
-  ipcMain.handle('oauth:loopback:start', () => startOAuthLoopback(honoApp));
+function registerOAuthLoopbackIpc(dispatch: BackendDispatch) {
+  ipcMain.handle('oauth:loopback:start', () => startOAuthLoopback(dispatch));
   ipcMain.on('oauth:loopback:stop', () => stopOAuthLoopback());
 }
 
@@ -705,16 +773,7 @@ function registerNativeIpc() {
  * behaves identically to talking to a real HTTP server — except there
  * is no socket, no port, no loopback.
  */
-/**
- * Collapse numeric path segments to `:id` so the slow-call table groups by
- * route shape — `/api/projects/10/git/status` and `/api/projects/123/git/status`
- * share one row — instead of exploding per id past the bounded MAX_CHANNELS.
- */
-function normalizeRouteKey(pathname: string): string {
-  return pathname.replace(/\/\d+(?=\/|$)/g, '/:id');
-}
-
-function registerMcpProtocol(honoApp: Hono) {
+function registerMcpProtocol(dispatch: BackendDispatch) {
   protocol.handle('mcp', async (req) => {
     try {
       const url = new URL(req.url);
@@ -739,15 +798,11 @@ function registerMcpProtocol(honoApp: Hono) {
       // groups:list, projects.get, files.* — flow through this protocol
       // handler, NOT the `invoke` path that handlers-mount already wraps with
       // timeCall. Without this they were invisible in the admin "slow IPC"
-      // panel even though they're the slow ones in the perf trace. Key by a
-      // normalized route (numeric ids → :id) so the bounded table groups by
-      // route instead of exploding per project/session id. For a JSON route
-      // honoApp.fetch resolves only after the (synchronous) SQLite handler +
-      // serialization complete, so this wall-time ≈ the main-thread block;
-      // cross-check against loopP99/loopMax in perf-sampler to separate true
-      // blocking from awaited async (e.g. git spawns).
-      const channel = `mcp:${req.method} ${normalizeRouteKey(url.pathname)}`;
-      return await timeCall(channel, () => honoApp.fetch(honoReq));
+      // panel even though they're the slow ones in the perf trace. The
+      // slow-call keying and the IN_PROCESS_ENV trust marker now live in the
+      // backend handle, so this path and the OAuth loopback are measured and
+      // trusted identically — and a forwarding implementation inherits both.
+      return await dispatch(honoReq);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return new Response(JSON.stringify({ error: message }), {

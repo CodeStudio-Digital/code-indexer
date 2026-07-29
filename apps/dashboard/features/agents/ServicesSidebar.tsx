@@ -33,7 +33,7 @@ import type { ServicesSidebarProps } from './services-sidebar/types.js';
  * and Timeline (status/health transitions) as two tiny tabs, following
  * the sidebar's compact text-[9/10px] visual language.
  */
-function ServiceDetail({ sessionId, serviceId }: { sessionId: number; serviceId: string }) {
+function ServiceDetail({ sessionId, serviceId }: { sessionId: string; serviceId: string }) {
   const { t } = useTranslation('agents');
   const [tab, setTab] = useState<'logs' | 'timeline'>('logs');
   const tabClass = (active: boolean) =>

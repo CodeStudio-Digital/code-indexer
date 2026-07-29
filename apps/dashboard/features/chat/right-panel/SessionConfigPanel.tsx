@@ -19,7 +19,7 @@ export function SessionConfigView({
   sessionId,
   loadKey,
 }: {
-  sessionId: number | null;
+  sessionId: string | null;
   loadKey?: number;
 }) {
   const { t } = useTranslation(['chat']);

@@ -1,6 +1,7 @@
 import { getAllKnownToolsMeta, profileToTiers } from '@mcp/code-agent/tools/tiers.js';
 import { appStudioToolNamesForRole } from '@mcp/company/tools/app-studio/index.js';
 import { isMasterAllowed } from '@mcp/company/tools/master-filter.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 export type AppTeamTier = 'bootstrap' | 'navigate' | 'full';
 
@@ -29,7 +30,7 @@ export interface AppTeamRoleConfig {
 }
 
 export interface AppTeamConfigView {
-  company_session_id: number;
+  company_session_id: CompanySessionId | null;
   status: 'idle' | 'running' | 'paused' | 'completed' | 'error';
   operational_rules: string;
   roles: AppTeamRoleConfig[];
@@ -168,7 +169,7 @@ function withAvailableToolCatalog(role: AppTeamRoleConfig): AppTeamRoleConfig {
 
 export function readAppTeamConfig(
   configJson: string | null,
-  companySessionId: number,
+  companySessionId: CompanySessionId | null,
   status: AppTeamConfigView['status'],
 ): AppTeamConfigView {
   const config = objectConfig(configJson);
@@ -273,7 +274,7 @@ export function applyAppTeamConfigPatch(
     changedKeys.push('operational_rules');
   }
 
-  const current = readAppTeamConfig(configJson, 0, 'idle').roles;
+  const current = readAppTeamConfig(configJson, null, 'idle').roles;
   if (patch.roles !== undefined && !Array.isArray(patch.roles)) throw new Error('roles must be an array');
   const roles = patch.roles === undefined ? current : patch.roles.map(normalizedRole);
   if (patch.roles !== undefined) {

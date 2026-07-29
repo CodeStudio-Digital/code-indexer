@@ -4,7 +4,7 @@
  * dashboard's QaRunBadge / TestsTab subscribe to `qa_run_completed`.
  *
  * The tool is a thin orchestrator: it validates input, publishes one
- * event on the meta bus, and returns. Persistence (qa_test_runs table,
+ * event on the meta bus, and returns. Persistence (bundle QA-run entity,
  * routes) lands in phase 2 — for now the badge re-derives state from
  * the live event stream + buffered SSE replay.
  */
@@ -57,7 +57,7 @@ const PARAMETERS: JsonSchema = {
 export function qaPublishResult(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
-  agentRunId: number | null,
+  agentRunId: string | null,
 ): CoderTool {
   return {
     name: 'qa_publish_result',
@@ -87,7 +87,7 @@ export function qaPublishResult(
 export function coercePayload(
   args: Record<string, unknown>,
   agentRole: string,
-  agentRunId: number | null,
+  agentRunId: string | null,
 ): QaRunCompletedPayload {
   const suite = mustString(args.suite, 'suite');
   const passed = mustNonNegativeInt(args.passed, 'passed');

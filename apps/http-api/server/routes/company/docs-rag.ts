@@ -23,7 +23,12 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  parseJsonBody,
+  resolveCompanySessionContext,
+  notFound,
+} from '../_helpers.js';
 import { checkRelativePath } from '@mcp/company/tools/file-path-core.js';
 import { DocError } from '@mcp/services/services/docs/index.js';
 import { runIngest } from '@mcp/services/services/docs/index-doc-use-case/run-ingest.js';
@@ -31,6 +36,8 @@ import type { IndexDocUseCaseDeps } from '@mcp/services/services/docs/index-doc-
 import type { RawPage } from '@mcp/services/services/docs/types.js';
 import type { DocCollection, DocSource } from '@mcp/store/doc-store.js';
 import { normalizeDocServiceId, readCompanyDoc, resolveDocsScopeKey } from './docs.js';
+import type { CompanySessionId } from '@mcp/session-storage';
+import type { CompanySessionFileSnapshot } from '@mcp/company/services/CompanySessionFiles.js';
 
 function docUri(scopeKey: string, service: string, path: string): string {
   return `companydoc://${scopeKey}/${service}/${path}`;
@@ -46,14 +53,8 @@ function collectionName(scopeKey: string): string {
  * corpus is global, but without a link the agents' scoped retrieval
  * would never surface the doc, so we refuse instead of mis-filing.
  */
-function resolveLinkedProjectId(deps: ServerDeps, sessionId: number): number | null {
-  const own = deps.companyStore.listCompanySessionProjects(sessionId);
-  if (own.length > 0) return own[0]!.project_id;
-  const session = deps.companyStore.getCompanySession(sessionId);
-  const parentId = (session as { parent_session_id?: number | null } | null)?.parent_session_id;
-  if (parentId == null) return null;
-  const parent = deps.companyStore.listCompanySessionProjects(parentId);
-  return parent.length > 0 ? parent[0]!.project_id : null;
+function resolveLinkedProjectId(session: CompanySessionFileSnapshot): number | null {
+  return session.project_ids[0] ?? null;
 }
 
 function ensureBridgeCollection(deps: ServerDeps, scopeKey: string): DocCollection {
@@ -70,7 +71,7 @@ function findSource(deps: ServerDeps, collectionId: number, uri: string): DocSou
   return deps.docStore.listSourcesByCollection(collectionId).find((s) => s.uri === uri);
 }
 
-function ingestDeps(deps: ServerDeps, sessionId: number): IndexDocUseCaseDeps {
+function ingestDeps(deps: ServerDeps, sessionId: CompanySessionId): IndexDocUseCaseDeps {
   return {
     docStore: deps.docStore,
     embeddingService: deps.embeddingService,
@@ -83,8 +84,12 @@ function ingestDeps(deps: ServerDeps, sessionId: number): IndexDocUseCaseDeps {
 
 export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/company/sessions/:id/docs/index-rag', async (c) => {
-    const id = parseIdParam(c);
-    if (!deps.companyStore.getCompanySession(id)) return notFound(c);
+    const resolved = await resolveCompanySessionContext(
+      deps.sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
     const body = await parseJsonBody<{ service?: string; path?: string }>(c);
     const path = typeof body.path === 'string' ? body.path : '';
     if (!checkRelativePath(path, { traversal: 'substring' }).ok) {
@@ -95,7 +100,7 @@ export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
     const doc = await readCompanyDoc(deps, id, serviceId, path);
     if (!doc) return c.json({ error: `doc not found: ${path}` }, 404);
 
-    const projectId = resolveLinkedProjectId(deps, id);
+    const projectId = resolveLinkedProjectId(resolved.root);
     if (projectId == null) {
       return c.json(
         { error: 'no_linked_project', message: 'Link a project to this company session first' },
@@ -152,9 +157,13 @@ export function mountCompanyDocsRagRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  app.get('/api/company/sessions/:id/docs/rag-status', (c) => {
-    const id = parseIdParam(c);
-    if (!deps.companyStore.getCompanySession(id)) return notFound(c);
+  app.get('/api/company/sessions/:id/docs/rag-status', async (c) => {
+    const resolved = await resolveCompanySessionContext(
+      deps.sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
     const path = c.req.query('path') || '';
     if (!checkRelativePath(path, { traversal: 'substring' }).ok) {
       return c.json({ error: 'invalid path' }, 400);

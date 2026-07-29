@@ -11,7 +11,7 @@ import type { AgentRunStatus, CompanyAgentDispatchSource } from '@mcp/company-co
 import type { AgentStreamState, StreamState } from '../types.js';
 
 export interface AgentStatusPayload {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   status: AgentRunStatus;
   message: string;
@@ -22,7 +22,7 @@ export interface AgentStatusPayload {
    * the runtime reconciler) omit it; the merge with persisted runs fills
    * the gap in that case.
    */
-  coderSessionId?: number;
+  coderSessionId?: string;
   configuredProvider?: string;
   configuredModel?: string;
   effectiveProvider?: string;
@@ -122,7 +122,7 @@ export function applyAgentStatus(prev: StreamState, d: AgentStatusPayload): Stre
 
 export function applySubordinateWaitingStatus(
   prev: StreamState,
-  agentRunId: number,
+  agentRunId: string,
   status: AgentStreamState['status'],
 ): StreamState {
   if (!prev.subordinateStates.has(agentRunId)) return prev;
@@ -174,7 +174,7 @@ export function applySessionIdle(prev: StreamState, d: SessionIdlePayload): Stre
       ? { ...prev.masterState, status, statusMessage }
       : {
           role: 'master',
-          agentRunId: 0,
+          agentRunId: null,
           textChunks: [],
           toolCalls: [],
           status,

@@ -9,22 +9,53 @@
 
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { SftpProgress, SshConnectSpec } from '@mcp/api-bus';
+import type { ArchiveProgress, SftpProgress, SshConnectSpec } from '@mcp/api-bus';
+import { mapLimit } from '@mcp/shared/utils/map-limit.js';
+import { apiCall } from '../../../lib/api-client.js';
 import { sftpCancel, sftpDownload, sftpUpload } from '../api.js';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { askConflict, type ConflictAction, type ConflictChoice } from './conflict-dialog.js';
 import { baseName, type FsAdapter, type FsItem } from './fs-adapter.js';
 import { foldPath, nextFreeName, planTransfer, remapRoot, type TransferPlan } from './transfer-walk.js';
 
+/**
+ * `zip`/`unzip` reuse this list so a compression job gets the same progress row
+ * and cancel button as a transfer — the work is a worker thread rather than an
+ * SFTP channel, which only changes which cancel API `cancel()` calls.
+ */
+export type TransferDir = 'up' | 'down' | 'zip' | 'unzip';
+
 export interface Transfer {
   id: string;
   name: string;
-  dir: 'up' | 'down';
+  dir: TransferDir;
   transferred: number;
   total: number;
   done?: boolean;
   error?: string;
   cancelled?: boolean;
+}
+
+const isArchiveDir = (dir: TransferDir): boolean => dir === 'zip' || dir === 'unzip';
+
+const archiveCancel = (archiveId: string) => apiCall('files.archiveCancel', { archiveId });
+
+/**
+ * Concurrent SFTP operations. Every transfer opens its own channel, and
+ * OpenSSH's default `MaxSessions` is 10 per connection — shared with the browse
+ * session, any tunnels and any open shells. 4 leaves headroom; 8+ risks
+ * "Channel open failure" on a stock sshd.
+ */
+const TRANSFER_CONCURRENCY = 4;
+
+/** Group relative dir paths into depth levels, shallowest first. */
+function byDepth(dirs: string[]): string[][] {
+  const levels: string[][] = [];
+  for (const d of dirs) {
+    const depth = d.split('/').length - 1;
+    (levels[depth] ??= []).push(d);
+  }
+  return levels.filter(Boolean);
 }
 
 export function useTransfers(spec: SshConnectSpec | null) {
@@ -63,9 +94,48 @@ export function useTransfers(spec: SshConnectSpec | null) {
     [update, t],
   );
 
+  /**
+   * Run an archive/extract job, mapping its worker frames onto the same
+   * progress row a transfer uses. Kept separate from `runTransfer` because the
+   * frame shape differs: SFTP streams carry tagged progress/done/error frames,
+   * the archive worker yields a plain progress object and signals failure by
+   * throwing.
+   */
+  const runArchive = useCallback(
+    async (tf: Transfer, stream: AsyncIterable<ArchiveProgress>, successLabel: string): Promise<boolean> => {
+      setTransfers((ts) => [...ts.filter((x) => x.id !== tf.id), tf]);
+      let ok = false;
+      try {
+        for await (const p of stream) {
+          update(tf.id, { transferred: p.bytes, total: p.totalBytes || tf.total });
+          if (p.done) ok = true;
+        }
+        if (ok) toast.success(successLabel);
+        else update(tf.id, { cancelled: true }); // stream ended without `done` → cancelled
+        update(tf.id, { done: true });
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : String(e);
+        update(tf.id, { done: true, error: reason });
+        toast.error(t('files.zipFailed', { reason }));
+      }
+      setTimeout(() => setTransfers((ts) => ts.filter((x) => x.id !== tf.id)), 4000);
+      return ok;
+    },
+    [update, t],
+  );
+
   const cancel = useCallback((id: string) => {
-    setTransfers((ts) => ts.map((x) => (x.id === id ? { ...x, cancelled: true } : x)));
-    void sftpCancel(id).catch(() => undefined);
+    let dir: TransferDir | undefined;
+    setTransfers((ts) =>
+      ts.map((x) => {
+        if (x.id !== id) return x;
+        dir = x.dir;
+        return { ...x, cancelled: true };
+      }),
+    );
+    // An archive job lives in a worker thread, not an SFTP channel.
+    const stop = dir && isArchiveDir(dir) ? archiveCancel(id) : sftpCancel(id);
+    void stop.catch(() => undefined);
   }, []);
 
   /** Copy `items` from `src` into `destDir` on `dest`. Returns true if anything transferred. */
@@ -108,15 +178,27 @@ export function useTransfers(spec: SshConnectSpec | null) {
         }
         if (job.targetBase !== job.item.name) plan = remapRoot(plan, job.item.name, job.targetBase);
         any = true; // a job always creates at least its own dir/file → the dest changed
-        // Pre-create destination dirs (BFS order = parent-first, so remote mkdir is fine).
-        for (const relDir of plan.dirs) {
-          const full = foldPath(dest.join, destDir, relDir);
-          await dest.mkdir(dest.parentDir(full), baseName(full)).catch(() => undefined);
+
+        // Pre-create destination dirs. Grouped BY DEPTH: siblings are created
+        // concurrently, but a whole level must land before the next starts —
+        // remote mkdir is non-recursive, so a child created before its parent
+        // fails. (`plan.dirs` is parent-first, which depth grouping preserves.)
+        for (const level of byDepth(plan.dirs)) {
+          await mapLimit(level, TRANSFER_CONCURRENCY, async (relDir) => {
+            const full = foldPath(dest.join, destDir, relDir);
+            await dest.mkdir(dest.parentDir(full), baseName(full)).catch(() => undefined);
+          });
         }
-        for (const f of plan.files) {
+
+        // Files, a few at a time. Each fastGet/fastPut opens its OWN SFTP
+        // channel and OpenSSH's default MaxSessions is 10 per connection —
+        // shared with the browse session, any tunnel and any open shell — so
+        // the cap stays well under it. A single large file already saturates
+        // the link (ssh2 pipelines 64 chunks internally); the win here is on
+        // many small files, where per-file round-trips dominate.
+        await mapLimit(plan.files, TRANSFER_CONCURRENCY, async (f) => {
           const destFull = foldPath(dest.join, destDir, f.relPath);
           const id = `${src.kind}->${dest.kind}:${destFull}`;
-          any = true;
           if (src.kind === 'local') {
             await runTransfer(
               { id, name: baseName(f.relPath), dir: 'up', transferred: 0, total: f.size },
@@ -128,12 +210,12 @@ export function useTransfers(spec: SshConnectSpec | null) {
               sftpDownload(spec, f.srcPath, dest.toLocalAbs(destFull), id),
             );
           }
-        }
+        });
       }
       return any;
     },
     [spec, runTransfer, t],
   );
 
-  return { transfers, transferItems, cancel };
+  return { transfers, transferItems, runArchive, cancel };
 }

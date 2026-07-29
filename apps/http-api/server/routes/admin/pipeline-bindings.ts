@@ -49,7 +49,7 @@ interface UpsertBody {
 
 interface PatchBody extends Partial<UpsertBody> {}
 
-const VALID_SCOPES: BindingScopeType[] = ['global', 'template', 'session'];
+const VALID_SCOPES: BindingScopeType[] = ['global', 'template'];
 
 function isValidScope(s: unknown): s is BindingScopeType {
   return typeof s === 'string' && VALID_SCOPES.includes(s as BindingScopeType);
@@ -135,7 +135,10 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
       enabledOnly?: boolean;
     } = {};
     if (pipelineName) opts.pipelineName = pipelineName;
-    if (scopeTypeRaw && isValidScope(scopeTypeRaw)) opts.scopeType = scopeTypeRaw;
+    if (scopeTypeRaw && !isValidScope(scopeTypeRaw)) {
+      return c.json({ error: 'scope_type must be global|template' }, 400);
+    }
+    if (scopeTypeRaw) opts.scopeType = scopeTypeRaw as BindingScopeType;
     if (scopeIdRaw && Number.isFinite(Number(scopeIdRaw))) opts.scopeId = Number(scopeIdRaw);
     if (enabledOnlyRaw === 'true' || enabledOnlyRaw === '1') opts.enabledOnly = true;
 
@@ -173,9 +176,9 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     if (!body.binding_role) errors.push('binding_role is required');
     if (!body.provider_id)  errors.push('provider_id is required');
     if (!body.model_id)     errors.push('model_id is required');
-    if (!isValidScope(body.scope_type)) errors.push('scope_type must be global|template|session');
-    if (body.scope_type !== 'global' && body.scope_id == null) {
-      errors.push('scope_id is required for template/session scopes');
+    if (!isValidScope(body.scope_type)) errors.push('scope_type must be global|template');
+    if (body.scope_type === 'template' && body.scope_id == null) {
+      errors.push('scope_id is required for template scope');
     }
     if (errors.length > 0) return c.json({ error: 'validation_failed', details: errors }, 400);
 
@@ -266,10 +269,10 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     if (nonConfigurable) return bindingNotConfigurableResponse(c, nonConfigurable);
 
     const scopeType = body.scope_type ?? existing.scope_type;
-    if (!isValidScope(scopeType)) return c.json({ error: 'scope_type must be global|template|session' }, 400);
+    if (!isValidScope(scopeType)) return c.json({ error: 'scope_type must be global|template' }, 400);
     const scopeId = scopeType === 'global' ? null : (body.scope_id !== undefined ? body.scope_id : existing.scope_id);
-    if (scopeType !== 'global' && scopeId == null) {
-      return c.json({ error: 'scope_id is required for template/session scopes' }, 400);
+    if (scopeType === 'template' && scopeId == null) {
+      return c.json({ error: 'scope_id is required for template scope' }, 400);
     }
 
     const providerId = body.provider_id ?? existing.provider_id;
@@ -353,7 +356,7 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
   // provider+model across all pipelines.
   //
   // Body shape:
-  //   { scope_type?: 'global' | 'template' | 'session',
+  //   { scope_type?: 'global' | 'template',
   //     scope_id?: number | null }
   //
   // Without a scope_type, EVERYTHING is wiped — guarded behind a
@@ -419,10 +422,10 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     if (!body.provider_id) errors.push('provider_id is required');
     if (!body.model_id)    errors.push('model_id is required');
     if (body.scope_type !== undefined && !isValidScope(body.scope_type)) {
-      errors.push('scope_type must be global|template|session');
+      errors.push('scope_type must be global|template');
     }
-    if ((body.scope_type === 'template' || body.scope_type === 'session') && body.scope_id == null) {
-      errors.push('scope_id is required for template/session scopes');
+    if (body.scope_type === 'template' && body.scope_id == null) {
+      errors.push('scope_id is required for template scope');
     }
     if (errors.length > 0) return c.json({ error: 'validation_failed', details: errors }, 400);
 
@@ -559,7 +562,9 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
   // ───── GET /resolve ────────────────────────────────────────────────────
   //
   // Lets an admin preview what `PipelineProviderResolver.resolve()` would
-  // return for a given (pipeline, role, session, template). Useful for
+  // return for a given (pipeline, role, template). Session-scoped mutable
+  // configuration lives in the session bundle and is not exposed by this
+  // SQLite-backed admin API.
   // debugging "why is my binding not being picked up?".
   app.get('/api/admin/pipeline-bindings/resolve', async (c) => {
     const pipelineName = c.req.query('pipeline_name');
@@ -572,9 +577,13 @@ export function mountAdminPipelineBindingsRoutes(app: Hono, deps: ServerDeps): v
     const companySessionIdRaw  = c.req.query('company_session_id');
     const templateIdRaw        = c.req.query('template_id');
 
-    const ctx: { sessionId?: number; companySessionId?: number; templateId?: number } = {};
-    if (sessionIdRaw && Number.isFinite(Number(sessionIdRaw))) ctx.sessionId = Number(sessionIdRaw);
-    if (companySessionIdRaw && Number.isFinite(Number(companySessionIdRaw))) ctx.companySessionId = Number(companySessionIdRaw);
+    if (sessionIdRaw != null || companySessionIdRaw != null) {
+      return c.json({
+        error: 'session_scope_not_supported',
+        detail: 'Session-scoped pipeline configuration lives in the filesystem session bundle.',
+      }, 400);
+    }
+    const ctx: { templateId?: number } = {};
     if (templateIdRaw && Number.isFinite(Number(templateIdRaw))) ctx.templateId = Number(templateIdRaw);
 
     const resolved = await pipelineProviderResolver.resolveOrNull(pipelineName, bindingRole, ctx);

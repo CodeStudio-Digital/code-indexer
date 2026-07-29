@@ -38,12 +38,11 @@ export function isGlobalSubAgentCacheEnabled(): boolean {
  */
 export function tryGlobalSubAgentRead<T>(
   keyInput: CacheKeyInput,
-  opts: { sessionId?: number | null } = {},
 ): { result: T; cached: true; ageMs: number; hitCount: number } | null {
   if (!enabled || !globalCache) return null;
   try {
     const key = globalCache.buildKey(keyInput);
-    return globalCache.tryRead<T>(key, opts);
+    return globalCache.tryRead<T>(key);
   } catch {
     return null;
   }
@@ -56,12 +55,11 @@ export function tryGlobalSubAgentRead<T>(
 export function writeGlobalSubAgentResult<T>(
   keyInput: CacheKeyInput,
   result: T,
-  opts: { sessionId?: number | null } = {},
 ): void {
   if (!enabled || !globalCache) return;
   try {
     const key = globalCache.buildKey(keyInput);
-    globalCache.write(key, result, opts);
+    globalCache.write(key, result);
   } catch {
     /* best-effort */
   }

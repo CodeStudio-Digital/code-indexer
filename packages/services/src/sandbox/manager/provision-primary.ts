@@ -17,7 +17,7 @@
  *   5. Build Dockerfile image (project_dockerfile path) → create
  *      container → prepareWorkdir + .env materialization.
  *   6. Persistence decision tree (4 paths): bind-mount populated /
- *      legacy archive / external Node / fresh scaffold.
+ *      bundle-local archive / external Node / fresh scaffold.
  *   7. Mark ready + persist 'running' + syncManagedEnvs + emit `ready`.
  *
  * Error path: keep the in-memory record in 'error' state (so the UI
@@ -28,7 +28,7 @@
  * documented in one place. The deps bag is wide; every collaborator
  * the original method touched is listed in `ProvisionPrimaryDeps`.
  */
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import type {
   Sandbox,
   SandboxEvent,
@@ -46,7 +46,10 @@ import type { PersistedSandboxStatus } from '@mcp/store/company-sandbox-store.js
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import { getNetworkController } from '@mcp/services/sandbox/network-controller.js';
 import { getScaffolder } from '@mcp/services/sandbox/scaffolders/registry.js';
-import { archivePath, loadArchive } from '@mcp/services/sandbox/archive.js';
+import {
+  deleteArchive,
+  loadArchive,
+} from '@mcp/services/sandbox/archive.js';
 import { previewPathPrefixOf } from '@mcp/services/sandbox/manager/util/preview-url.js';
 import {
   nodeModulesVolumeFor,
@@ -93,7 +96,7 @@ export interface ProvisionPrimaryDeps {
   appendLog: (sb: Sandbox, level: SandboxLogLine['level'], text: string) => void;
 
   persist: (sb: Sandbox, statusOverride?: PersistedSandboxStatus) => void;
-  syncManagedEnvs: (sessionId: string) => void;
+  syncManagedEnvs: (sessionId: string) => Promise<void>;
 
   destroyInternal: (sessionId: string, reason: string) => Promise<void>;
   resumeSandbox: (sessionId: string) => Promise<Sandbox>;
@@ -279,7 +282,7 @@ export async function provisionPrimarySandbox(
         );
       }
       if (mountKind !== 'external') {
-        importDotEnvIntoStore(deps.envStore, hostWorkdirMount, req.sessionId);
+        await importDotEnvIntoStore(deps.envStore, hostWorkdirMount, req.sessionId);
       }
     }
 
@@ -360,24 +363,18 @@ export async function provisionPrimarySandbox(
     }
 
     // Persistence decision tree (4 paths): bind-mount populated /
-    // legacy archive / external Node / fresh scaffold.
+    // bundle-local archive / external Node / fresh scaffold.
     const hostWorkdirPopulated =
       !!hostWorkdirMount && hasInitializedWorkdir(hostWorkdirMount);
 
     let archiveToRestore = req.restoreArchive;
     if (!archiveToRestore && !hostWorkdirPopulated) {
-      try {
-        const auto = await loadArchive(req.sessionId);
-        if (auto) {
-          archiveToRestore = auto;
-          deps.appendLog(seed, 'info', 'Restoring workdir from previous session archive…');
-        }
-      } catch (e) {
-        deps.appendLog(
-          seed,
-          'info',
-          `(non-fatal) could not read archive: ${e instanceof Error ? e.message : String(e)}`,
-        );
+      // Resolver/root/symlink failures are fatal. Silently scaffolding a fresh
+      // workdir would hide a missing filesystem authority and lose state.
+      const auto = await loadArchive(req.sessionId);
+      if (auto) {
+        archiveToRestore = auto;
+        deps.appendLog(seed, 'info', 'Restoring workdir from previous session archive…');
       }
     }
 
@@ -400,7 +397,7 @@ export async function provisionPrimarySandbox(
       await deps.driver.importWorkdir(containerId, deps.workdir, archiveToRestore);
       if (hostWorkdirMount) {
         try {
-          rmSync(archivePath(req.sessionId), { force: true });
+          await deleteArchive(req.sessionId);
         } catch {
           /* best effort */
         }
@@ -435,7 +432,7 @@ export async function provisionPrimarySandbox(
     seed.lastAccessAt = Date.now();
     deps.appendLog(seed, 'info', 'Dev server is ready.');
     deps.persist(seed, 'running');
-    deps.syncManagedEnvs(req.sessionId);
+    await deps.syncManagedEnvs(req.sessionId);
     deps.emit({ kind: 'ready', sandboxId: req.sessionId, previewUrl });
     return seed;
   } catch (e) {

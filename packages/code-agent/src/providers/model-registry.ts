@@ -31,10 +31,14 @@ export interface ModelRegistryEntry {
 
 export const MODEL_REGISTRY: Record<string, ModelRegistryEntry> = {
   // ── Anthropic ────────────────────────────────────────────────────────────
-  'claude-opus-4-7':            { maxTools: 200, contextWindow: 200_000, maxOutputTokens: 32_000 },
-  'claude-opus-4-6':            { maxTools: 200, contextWindow: 200_000, maxOutputTokens: 32_000 },
-  'claude-sonnet-4-6':          { maxTools: 200, contextWindow: 200_000, maxOutputTokens: 32_000 },
-  'claude-haiku-4-5-20251001':  { maxTools: 120, contextWindow: 200_000, maxOutputTokens: 16_000, note: 'Haiku prefers tighter catalogs' },
+  'claude-fable-5':             { maxTools: 200, contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  'claude-opus-5':              { maxTools: 200, contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  'claude-sonnet-5':            { maxTools: 200, contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  'claude-opus-4-8':            { maxTools: 200, contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  'claude-opus-4-7':            { maxTools: 200, contextWindow: 1_000_000, maxOutputTokens: 128_000 },
+  'claude-opus-4-6':            { maxTools: 200, contextWindow: 200_000, maxOutputTokens: 128_000 },
+  'claude-sonnet-4-6':          { maxTools: 200, contextWindow: 200_000, maxOutputTokens: 128_000 },
+  'claude-haiku-4-5-20251001':  { maxTools: 120, contextWindow: 200_000, maxOutputTokens: 64_000, note: 'Haiku prefers tighter catalogs' },
   // ── OpenAI ───────────────────────────────────────────────────────────────
   // GPT-5.6 family (Sol / Terra / Luna) — Codex catalog advertises a 372K
   // context window (codex-rs/models-manager/models.json). Sol is the flagship,

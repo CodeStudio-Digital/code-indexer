@@ -14,6 +14,8 @@ import { openStream, type OpenStreamDeps } from '../openStream.js';
 import { peekWorkerLog, noteWorkerLogBus, __resetWorkerLogForTests } from '../worker-log-store.js';
 
 const enc = new TextEncoder();
+const SESSION_ID = '44444444-4444-4444-8444-444444444444';
+const ATTACH_URL = `/api/coder/sessions/${SESSION_ID}/attach`;
 
 // Controlled handler map: `boom` crashes, everything else has no handler
 // (commitCursor must still run for handler-less events).
@@ -64,12 +66,12 @@ describe('openStream cursor semantics (B3)', () => {
       'id: 1\nevent: done\ndata: {}\n\n',
     ])));
     const d = deps();
-    const p = openStream(1, { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true }, d);
+    const p = openStream(SESSION_ID, { url: ATTACH_URL, method: 'GET', reattach: true }, d);
     await vi.advanceTimersByTimeAsync(10);
     await p;
     // The handler crashed before commitCursor — the event must be replayed
     // on the next reconnect instead of being skipped.
-    expect(d.lastSeenSeqMap.get(1)).toBeUndefined();
+    expect(d.lastSeenSeqMap.get(SESSION_ID)).toBeUndefined();
   });
 
   it('commits the cursor for unparseable payloads (poison-pill protection) and warns', async () => {
@@ -79,10 +81,10 @@ describe('openStream cursor semantics (B3)', () => {
       'id: 1\nevent: done\ndata: {}\n\n',
     ])));
     const d = deps();
-    const p = openStream(1, { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true }, d);
+    const p = openStream(SESSION_ID, { url: ATTACH_URL, method: 'GET', reattach: true }, d);
     await vi.advanceTimersByTimeAsync(10);
     await p;
-    expect(d.lastSeenSeqMap.get(1)).toBe(1);
+    expect(d.lastSeenSeqMap.get(SESSION_ID)).toBe(1);
     expect(warn).toHaveBeenCalledWith(
       '[agent-stream] dropping malformed event payload',
       { event: 'text', id: 0 },
@@ -100,8 +102,8 @@ describe('openStream cursor semantics (B3)', () => {
       ]);
     }));
     const d = deps();
-    const p = openStream(1, {
-      url: '/api/coder/sessions/1/attach',
+    const p = openStream(SESSION_ID, {
+      url: ATTACH_URL,
       method: 'GET',
       reattach: true,
       lastEventId: 42,
@@ -112,8 +114,8 @@ describe('openStream cursor semantics (B3)', () => {
 
     expect(requestHeaders.get('Last-Event-ID')).toBe('42');
     expect(requestHeaders.get('X-MCP-Bus-ID')).toBe('old-bus');
-    expect(d.lastSeenBusIdMap.get(1)).toBe('new-bus');
-    expect(d.lastSeenSeqMap.get(1)).toBe(0);
+    expect(d.lastSeenBusIdMap.get(SESSION_ID)).toBe('new-bus');
+    expect(d.lastSeenSeqMap.get(SESSION_ID)).toBe(0);
   });
 
   it('drops a process-owned stale turn after an evicted bus is confirmed terminal', async () => {
@@ -128,14 +130,14 @@ describe('openStream cursor semantics (B3)', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     const d = deps();
-    d.lastSeenSeqMap.set(1, 42);
-    d.lastSeenBusIdMap.set(1, 'evicted-bus');
+    d.lastSeenSeqMap.set(SESSION_ID, 42);
+    d.lastSeenBusIdMap.set(SESSION_ID, 'evicted-bus');
     const onMessageComplete = vi.fn();
 
     const p = openStream(
-      1,
+      SESSION_ID,
       {
-        url: '/api/coder/sessions/1/attach',
+        url: ATTACH_URL,
         method: 'GET',
         reattach: true,
         lastEventId: 42,
@@ -148,9 +150,9 @@ describe('openStream cursor semantics (B3)', () => {
     await vi.advanceTimersByTimeAsync(10);
     await p;
 
-    expect(d.lastSeenSeqMap.has(1)).toBe(false);
-    expect(d.lastSeenBusIdMap.has(1)).toBe(false);
-    expect(d.updateSession).toHaveBeenCalledWith(1, {
+    expect(d.lastSeenSeqMap.has(SESSION_ID)).toBe(false);
+    expect(d.lastSeenBusIdMap.has(SESSION_ID)).toBe(false);
+    expect(d.updateSession).toHaveBeenCalledWith(SESSION_ID, {
       error: null,
       currentTurn: null,
     });
@@ -162,16 +164,16 @@ describe('openStream replay-gap visibility (B4)', () => {
   it('warns when the server evicted events ahead of our cursor', async () => {
     // Simulate an earlier connection to the SAME bus so the bus_info does
     // not reset the cursor (noteWorkerLogBus returns false on repeat).
-    noteWorkerLogBus(1, 'b1');
+    noteWorkerLogBus(SESSION_ID, 'b1');
     vi.stubGlobal('fetch', vi.fn(async () => sse([
       'event: bus_info\ndata: {"bus_id":"b1","first_replay_seq":10,"dropped_replay_events":7}\n\n',
       'id: 10\nevent: done\ndata: {}\n\n',
     ])));
     const d = deps();
     const p = openStream(
-      1,
+      SESSION_ID,
       {
-        url: '/api/coder/sessions/1/attach',
+        url: ATTACH_URL,
         method: 'GET',
         reattach: true,
         lastEventId: 3,
@@ -181,7 +183,7 @@ describe('openStream replay-gap visibility (B4)', () => {
     );
     await vi.advanceTimersByTimeAsync(10);
     await p;
-    const gap = peekWorkerLog(1).find((e) => e.event === 'replay_gap');
+    const gap = peekWorkerLog(SESSION_ID).find((e) => e.event === 'replay_gap');
     expect(gap).toBeDefined();
     expect(gap?.level).toBe('warn');
     expect(gap?.message).toContain('7');
@@ -193,10 +195,10 @@ describe('openStream replay-gap visibility (B4)', () => {
       'id: 4\nevent: done\ndata: {}\n\n',
     ])));
     const d = deps();
-    const p = openStream(1, { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true }, d);
+    const p = openStream(SESSION_ID, { url: ATTACH_URL, method: 'GET', reattach: true }, d);
     await vi.advanceTimersByTimeAsync(10);
     await p;
-    const gap = peekWorkerLog(1).find((e) => e.event === 'replay_gap');
+    const gap = peekWorkerLog(SESSION_ID).find((e) => e.event === 'replay_gap');
     expect(gap).toBeDefined();
     expect(gap?.level).toBe('info');
   });
@@ -207,9 +209,9 @@ describe('openStream replay-gap visibility (B4)', () => {
       'id: 0\nevent: done\ndata: {}\n\n',
     ])));
     const d = deps();
-    const p = openStream(1, { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true }, d);
+    const p = openStream(SESSION_ID, { url: ATTACH_URL, method: 'GET', reattach: true }, d);
     await vi.advanceTimersByTimeAsync(10);
     await p;
-    expect(peekWorkerLog(1).find((e) => e.event === 'replay_gap')).toBeUndefined();
+    expect(peekWorkerLog(SESSION_ID).find((e) => e.event === 'replay_gap')).toBeUndefined();
   });
 });

@@ -29,8 +29,13 @@ import { verdaccioRouter } from './verdaccio.routes.js';
 import { bedrockModelAccessRouter } from './bedrock-model-access.routes.js';
 import { capabilitiesRouter } from './capabilities.routes.js';
 import { customAgentsRouter } from './custom-agents.routes.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
 
-export function createAdminRouter(store: ProviderStore, semantic: SemanticAdminRuntime): Hono {
+export function createAdminRouter(
+  store: ProviderStore,
+  semantic: SemanticAdminRuntime,
+  sessionStore: FsSessionStore,
+): Hono {
   const app = new Hono();
 
   app.route('/', providersRouter(store));
@@ -45,7 +50,7 @@ export function createAdminRouter(store: ProviderStore, semantic: SemanticAdminR
   app.route('/', googleOAuthRouter(store));
   app.route('/', toolsRouter(store));
   app.route('/', mcpServersRouter());
-  app.route('/', skillsRouter());
+  app.route('/', skillsRouter(sessionStore));
   app.route('/', generalAiRouter(store));
   app.route('/', chromeServiceRouter());
   app.route('/', verdaccioRouter());

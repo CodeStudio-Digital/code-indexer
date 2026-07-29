@@ -16,7 +16,6 @@
  * everything else 404s. So the exposure is one route, on 127.0.0.1, for the
  * seconds of the flow.
  */
-import type { Hono } from 'hono';
 
 /** Fixed so the DCR-registered redirect_uri matches what we later bind. */
 export const OAUTH_LOOPBACK_PORT = 7878;
@@ -37,7 +36,15 @@ let server: LoopbackServer | null = null;
 let autoStop: NodeJS.Timeout | null = null;
 /** Shared with the running server's fetch closure so either flow (MCP callback or
  *  browser-login /cb) works regardless of which one started the listener. */
-let currentHonoApp: Hono | null = null;
+/**
+ * How the callback reaches the backend. A plain function, not the Hono app:
+ * once the backend lives in a `utilityProcess` there is no Hono instance in
+ * this process to hold — only a way to dispatch. `BackendHandle.fetch` and the
+ * `mcp://` protocol handler are satisfied by the same one.
+ */
+export type BackendDispatch = (req: Request) => Promise<Response>;
+
+let currentDispatch: BackendDispatch | null = null;
 let authCapture: ((handoff: string) => void) | null = null;
 
 /** Arm a one-shot capture for the next `/cb?handoff=` hit (browser OAuth login). */
@@ -58,8 +65,8 @@ export interface LoopbackResult {
  * Start (or reuse) the loopback listener. Idempotent: calling it again while
  * already running just re-arms the safety timer and returns the port.
  */
-export async function startOAuthLoopback(honoApp?: Hono): Promise<LoopbackResult> {
-  if (honoApp) currentHonoApp = honoApp; // update the shared ref even when reusing
+export async function startOAuthLoopback(dispatch?: BackendDispatch): Promise<LoopbackResult> {
+  if (dispatch) currentDispatch = dispatch; // update the shared ref even when reusing
   rearmAutoStop();
   if (server) return { ok: true, port: OAUTH_LOOPBACK_PORT };
 
@@ -81,7 +88,7 @@ export async function startOAuthLoopback(honoApp?: Hono): Promise<LoopbackResult
             }
             return new Response(RETURN_HTML, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
           }
-          if (CALLBACK_PATH.test(url.pathname) && currentHonoApp) return currentHonoApp.fetch(req);
+          if (CALLBACK_PATH.test(url.pathname) && currentDispatch) return currentDispatch(req);
           return new Response('Not found', { status: 404 });
         },
         port: OAUTH_LOOPBACK_PORT,
@@ -112,7 +119,7 @@ export async function startOAuthLoopback(honoApp?: Hono): Promise<LoopbackResult
 export function stopOAuthLoopback(): void {
   clearAutoStop();
   authCapture = null;
-  currentHonoApp = null;
+  currentDispatch = null;
   if (!server) return;
   server.close();
   server = null;

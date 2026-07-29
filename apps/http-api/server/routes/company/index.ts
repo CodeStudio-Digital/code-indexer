@@ -1,7 +1,8 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { mountCompanyTemplateRoutes } from './templates.js';
-import { mountCompanySessionRoutes } from './sessions.js';
+import { mountCompanyFileSessionRoutes } from './session-files.routes.js';
+import { mountCompanySessionDeleteRoutes } from './session-delete.js';
 import { mountCompanyChildRoutes } from './children.js';
 import { mountCompanyStreamRoutes } from './stream.js';
 import { mountCompanyAgentControlRoutes } from './agents.js';
@@ -19,7 +20,6 @@ import { mountCompanyDocsRoutes } from './docs.js';
 import { mountCompanyDocsRagRoutes } from './docs-rag.js';
 import { mountCompanyEnvsRoutes } from './envs.js';
 import { mountCompanyOpenApiRoutes } from './openapi.js';
-import { mountCompanySessionDeleteRoutes } from './session-delete.js';
 import { mountCompanyServiceLifecycleRoutes } from './service-lifecycle.js';
 import { mountCompanyServiceLogsRoutes } from './service-logs.js';
 import { mountCompanySandboxRoutes } from './sandbox.js';
@@ -31,7 +31,8 @@ import { mountCompanyAutonomyRoutes } from './autonomy.js';
 
 export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyTemplateRoutes(app, deps);
-  mountCompanySessionRoutes(app, deps);
+  mountCompanyFileSessionRoutes(app, deps, { includeDelete: false });
+  mountCompanySessionDeleteRoutes(app, deps);
   mountCompanyChildRoutes(app, deps);
   mountCompanyStreamRoutes(app, deps);
   mountCompanyAgentControlRoutes(app, deps);
@@ -54,7 +55,6 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   mountCompanyDocsRagRoutes(app, deps);
   mountCompanyEnvsRoutes(app, deps);
   mountCompanyOpenApiRoutes(app, deps);
-  mountCompanySessionDeleteRoutes(app, deps);
   mountCompanyServiceLifecycleRoutes(app, deps);
   // B4 — structured log history + transitions timeline (read-only, mig 188).
   mountCompanyServiceLogsRoutes(app, deps);

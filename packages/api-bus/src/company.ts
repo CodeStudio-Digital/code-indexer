@@ -14,9 +14,9 @@ import type { ApiContext, AsyncStream } from './common.js';
  */
 
 export interface CompanySession {
-  id: number;
-  root_id: number;
-  front_id: number | null;
+  id: string;
+  root_id: string;
+  front_id: string | null;
   title: string;
   status: 'active' | 'paused' | 'archived' | 'interrupted';
   config_json: string;
@@ -27,12 +27,12 @@ export interface CompanySession {
 export interface CompanyApi {
   sessions: {
     list(input: { rootOnly?: boolean; archived?: boolean }, ctx: ApiContext): Promise<CompanySession[]>;
-    get(input: { id: number }, ctx: ApiContext): Promise<CompanySession>;
-    create(input: { title: string; config?: unknown; rootId?: number }, ctx: ApiContext): Promise<CompanySession>;
-    update(input: { id: number; title?: string; config?: unknown }, ctx: ApiContext): Promise<CompanySession>;
-    delete(input: { id: number }, ctx: ApiContext): Promise<void>;
-    archive(input: { id: number; archived: boolean }, ctx: ApiContext): Promise<void>;
-    children(input: { rootId: number }, ctx: ApiContext): Promise<CompanySession[]>;
+    get(input: { id: string }, ctx: ApiContext): Promise<CompanySession>;
+    create(input: { title: string; config?: unknown; rootId?: string }, ctx: ApiContext): Promise<CompanySession>;
+    update(input: { id: string; title?: string; config?: unknown }, ctx: ApiContext): Promise<CompanySession>;
+    delete(input: { id: string }, ctx: ApiContext): Promise<void>;
+    archive(input: { id: string; archived: boolean }, ctx: ApiContext): Promise<void>;
+    children(input: { rootId: string }, ctx: ApiContext): Promise<CompanySession[]>;
     archives(input: void, ctx: ApiContext): Promise<CompanySession[]>;
   };
 
@@ -41,87 +41,87 @@ export interface CompanyApi {
    * sandbox events, etc.). In Electron this is a MessagePort; on
    * Hono it's WebSocket (`/api/company/ws`) or SSE fallback.
    */
-  stream(input: { sessionId: number; since?: number }, ctx: ApiContext): AsyncStream<{ event: string; data: unknown }>;
+  stream(input: { sessionId: string; since?: number }, ctx: ApiContext): AsyncStream<{ event: string; data: unknown }>;
 
   kanban: {
-    board(input: { sessionId: number }, ctx: ApiContext): Promise<unknown>;
+    board(input: { sessionId: string }, ctx: ApiContext): Promise<unknown>;
     cards: {
-      list(input: { sessionId: number; column?: string }, ctx: ApiContext): Promise<unknown[]>;
-      create(input: { sessionId: number; column: string; title: string; body?: string }, ctx: ApiContext): Promise<unknown>;
-      update(input: { cardId: number; title?: string; body?: string; column?: string }, ctx: ApiContext): Promise<unknown>;
-      delete(input: { cardId: number }, ctx: ApiContext): Promise<void>;
-      move(input: { cardId: number; toColumn: string; position?: number }, ctx: ApiContext): Promise<void>;
+      list(input: { sessionId: string; column?: string }, ctx: ApiContext): Promise<unknown[]>;
+      create(input: { sessionId: string; column: string; title: string; body?: string }, ctx: ApiContext): Promise<unknown>;
+      update(input: { cardId: string; title?: string; body?: string; column?: string }, ctx: ApiContext): Promise<unknown>;
+      delete(input: { cardId: string }, ctx: ApiContext): Promise<void>;
+      move(input: { cardId: string; toColumn: string; position?: number }, ctx: ApiContext): Promise<void>;
     };
   };
 
   board: {
-    get(input: { sessionId: number }, ctx: ApiContext): Promise<unknown>;
-    set(input: { sessionId: number; board: unknown }, ctx: ApiContext): Promise<void>;
+    get(input: { sessionId: string }, ctx: ApiContext): Promise<unknown>;
+    set(input: { sessionId: string; board: unknown }, ctx: ApiContext): Promise<void>;
   };
 
   inbox: {
-    list(input: { sessionId: number }, ctx: ApiContext): Promise<unknown[]>;
-    enqueue(input: { sessionId: number; message: unknown }, ctx: ApiContext): Promise<void>;
+    list(input: { sessionId: string }, ctx: ApiContext): Promise<unknown[]>;
+    enqueue(input: { sessionId: string; message: unknown }, ctx: ApiContext): Promise<void>;
   };
 
   drive: {
-    list(input: { sessionId: number; path?: string }, ctx: ApiContext): Promise<unknown[]>;
-    read(input: { sessionId: number; path: string }, ctx: ApiContext): Promise<{ content: string }>;
-    write(input: { sessionId: number; path: string; content: string }, ctx: ApiContext): Promise<void>;
-    delete(input: { sessionId: number; path: string }, ctx: ApiContext): Promise<void>;
+    list(input: { sessionId: string; path?: string }, ctx: ApiContext): Promise<unknown[]>;
+    read(input: { sessionId: string; path: string }, ctx: ApiContext): Promise<{ content: string }>;
+    write(input: { sessionId: string; path: string; content: string }, ctx: ApiContext): Promise<void>;
+    delete(input: { sessionId: string; path: string }, ctx: ApiContext): Promise<void>;
   };
 
   sandbox: {
-    status(input: { sessionId: number }, ctx: ApiContext): Promise<unknown>;
-    provision(input: { sessionId: number; image?: string }, ctx: ApiContext): Promise<unknown>;
-    destroy(input: { sessionId: number }, ctx: ApiContext): Promise<void>;
+    status(input: { sessionId: string }, ctx: ApiContext): Promise<unknown>;
+    provision(input: { sessionId: string; image?: string }, ctx: ApiContext): Promise<unknown>;
+    destroy(input: { sessionId: string }, ctx: ApiContext): Promise<void>;
     services: {
-      list(input: { sessionId: number }, ctx: ApiContext): Promise<unknown[]>;
-      create(input: { sessionId: number; kind: string; config: unknown }, ctx: ApiContext): Promise<unknown>;
-      delete(input: { sessionId: number; id: string }, ctx: ApiContext): Promise<void>;
+      list(input: { sessionId: string }, ctx: ApiContext): Promise<unknown[]>;
+      create(input: { sessionId: string; kind: string; config: unknown }, ctx: ApiContext): Promise<unknown>;
+      delete(input: { sessionId: string; id: string }, ctx: ApiContext): Promise<void>;
       runtime: {
-        start(input: { sessionId: number; id: string }, ctx: ApiContext): Promise<void>;
-        stop(input: { sessionId: number; id: string }, ctx: ApiContext): Promise<void>;
-        status(input: { sessionId: number; id: string }, ctx: ApiContext): Promise<unknown>;
+        start(input: { sessionId: string; id: string }, ctx: ApiContext): Promise<void>;
+        stop(input: { sessionId: string; id: string }, ctx: ApiContext): Promise<void>;
+        status(input: { sessionId: string; id: string }, ctx: ApiContext): Promise<unknown>;
       };
     };
   };
 
   envs: {
-    get(input: { sessionId: number }, ctx: ApiContext): Promise<Record<string, string>>;
-    set(input: { sessionId: number; vars: Record<string, string> }, ctx: ApiContext): Promise<void>;
+    get(input: { sessionId: string }, ctx: ApiContext): Promise<Record<string, string>>;
+    set(input: { sessionId: string; vars: Record<string, string> }, ctx: ApiContext): Promise<void>;
   };
 
   databases: {
-    list(input: { sessionId: number }, ctx: ApiContext): Promise<unknown[]>;
-    create(input: { sessionId: number; kind: 'postgres' | 'mysql' | 'sqlite'; config: unknown }, ctx: ApiContext): Promise<unknown>;
-    delete(input: { sessionId: number; id: string }, ctx: ApiContext): Promise<void>;
+    list(input: { sessionId: string }, ctx: ApiContext): Promise<unknown[]>;
+    create(input: { sessionId: string; kind: 'postgres' | 'mysql' | 'sqlite'; config: unknown }, ctx: ApiContext): Promise<unknown>;
+    delete(input: { sessionId: string; id: string }, ctx: ApiContext): Promise<void>;
   };
 
   docs: {
-    list(input: { sessionId: number }, ctx: ApiContext): Promise<unknown[]>;
-    attach(input: { sessionId: number; collectionId: number }, ctx: ApiContext): Promise<void>;
-    detach(input: { sessionId: number; collectionId: number }, ctx: ApiContext): Promise<void>;
+    list(input: { sessionId: string }, ctx: ApiContext): Promise<unknown[]>;
+    attach(input: { sessionId: string; collectionId: number }, ctx: ApiContext): Promise<void>;
+    detach(input: { sessionId: string; collectionId: number }, ctx: ApiContext): Promise<void>;
   };
 
   qa: {
     runs: {
-      list(input: { sessionId: number }, ctx: ApiContext): Promise<unknown[]>;
-      create(input: { sessionId: number; plan: unknown }, ctx: ApiContext): Promise<unknown>;
-      get(input: { runId: number }, ctx: ApiContext): Promise<unknown>;
+      list(input: { sessionId: string }, ctx: ApiContext): Promise<unknown[]>;
+      create(input: { sessionId: string; plan: unknown }, ctx: ApiContext): Promise<unknown>;
+      get(input: { runId: string }, ctx: ApiContext): Promise<unknown>;
     };
     artifacts: {
-      list(input: { runId: number }, ctx: ApiContext): Promise<unknown[]>;
-      get(input: { runId: number; path: string }, ctx: ApiContext): Promise<{ content: string }>;
+      list(input: { runId: string }, ctx: ApiContext): Promise<unknown[]>;
+      get(input: { runId: string; path: string }, ctx: ApiContext): Promise<{ content: string }>;
     };
-    diagnostics(input: { sessionId: number }, ctx: ApiContext): Promise<unknown>;
-    restoreConfig(input: { sessionId: number }, ctx: ApiContext): Promise<void>;
+    diagnostics(input: { sessionId: string }, ctx: ApiContext): Promise<unknown>;
+    restoreConfig(input: { sessionId: string }, ctx: ApiContext): Promise<void>;
   };
 
   pipelines: {
-    list(input: { sessionId: number }, ctx: ApiContext): Promise<unknown[]>;
-    execute(input: { sessionId: number; pipelineId: string; params?: unknown }, ctx: ApiContext): Promise<unknown>;
-    status(input: { sessionId: number; pipelineId: string }, ctx: ApiContext): Promise<unknown>;
+    list(input: { sessionId: string }, ctx: ApiContext): Promise<unknown[]>;
+    execute(input: { sessionId: string; pipelineId: string; params?: unknown }, ctx: ApiContext): Promise<unknown>;
+    status(input: { sessionId: string; pipelineId: string }, ctx: ApiContext): Promise<unknown>;
   };
 
   templates: {
@@ -129,13 +129,13 @@ export interface CompanyApi {
     get(input: { id: string }, ctx: ApiContext): Promise<unknown>;
   };
 
-  recommendations(input: { sessionId: number }, ctx: ApiContext): Promise<unknown[]>;
+  recommendations(input: { sessionId: string }, ctx: ApiContext): Promise<unknown[]>;
 
   localProject: {
-    status(input: { sessionId: number }, ctx: ApiContext): Promise<unknown>;
-    start(input: { sessionId: number; command: string; cwd?: string }, ctx: ApiContext): Promise<{ pid: number }>;
-    stop(input: { sessionId: number }, ctx: ApiContext): Promise<void>;
+    status(input: { sessionId: string }, ctx: ApiContext): Promise<unknown>;
+    start(input: { sessionId: string; command: string; cwd?: string }, ctx: ApiContext): Promise<{ pid: number }>;
+    stop(input: { sessionId: string }, ctx: ApiContext): Promise<void>;
   };
 
-  openapi(input: { sessionId: number; serviceId: string }, ctx: ApiContext): Promise<unknown>;
+  openapi(input: { sessionId: string; serviceId: string }, ctx: ApiContext): Promise<unknown>;
 }

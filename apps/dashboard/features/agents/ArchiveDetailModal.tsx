@@ -7,19 +7,19 @@ import { useApi } from '../../hooks/useApi.js';
 import { AgentSessionModal } from './AgentSessionModal.js';
 
 interface ArchivedAgentRun {
-  id: number;
+  id: string;
   role: string;
   provider: string;
   model: string;
   status: string;
-  coder_session_id: number;
+  coder_session_id: string;
   created_at: string;
   updated_at: string;
   status_message: string | null;
 }
 
 interface ArchivedBoardEntry {
-  id: number;
+  id: string;
   author_role: string;
   kind: string;
   content: string;
@@ -27,7 +27,7 @@ interface ArchivedBoardEntry {
 }
 
 interface ArchivedKanbanCard {
-  id: number;
+  id: string;
   title: string;
   description: string;
   column: string;
@@ -36,7 +36,7 @@ interface ArchivedKanbanCard {
 
 interface ArchiveDetail {
   archive: {
-    id: number;
+    id: string;
     archived_at: string;
     reason: string | null;
     included_kanban: boolean;
@@ -54,8 +54,8 @@ interface ArchiveDetail {
 }
 
 interface ArchiveDetailModalProps {
-  companySessionId: number;
-  archiveId: number;
+  companySessionId: string;
+  archiveId: string;
   onClose: () => void;
 }
 

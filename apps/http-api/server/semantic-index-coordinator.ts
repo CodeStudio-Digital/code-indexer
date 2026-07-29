@@ -2537,7 +2537,7 @@ export class SemanticIndexCoordinator {
         ? this.targetedMemoryMutationKeys(captured)
         : null;
       const investigationRows = targetedKeys === null && scope === 'project'
-        ? this.deps.investigationSemanticIndex.listProject(projectId)
+        ? await this.deps.investigationSemanticIndex.listProject(projectId)
         : [];
       const total = targetedKeys === null
         ? this.memorySourceRows(scope, projectId).length + investigationRows.length
@@ -2692,9 +2692,9 @@ export class SemanticIndexCoordinator {
     const deleteKeys: string[] = [];
     const investigationById = scope === 'project'
       && itemKeys.some((itemKey) => itemKey.startsWith('investigation:'))
-      ? new Map(this.deps.investigationSemanticIndex.listProject(projectId)
+      ? new Map((await this.deps.investigationSemanticIndex.listProject(projectId))
         .map((row) => [row.id, row]))
-      : new Map<number, never>();
+      : new Map<string, never>();
 
     for (const itemKey of itemKeys) {
       const memoryMatch = /^agent_memory:(\d+)$/.exec(itemKey);
@@ -2721,9 +2721,9 @@ export class SemanticIndexCoordinator {
         continue;
       }
 
-      const investigationMatch = /^investigation:(\d+)$/.exec(itemKey);
+      const investigationMatch = /^investigation:(.+)$/.exec(itemKey);
       const investigation = investigationMatch
-        ? investigationById.get(Number(investigationMatch[1]))
+        ? investigationById.get(investigationMatch[1])
         : undefined;
       if (!investigation) {
         deleteKeys.push(itemKey);
@@ -2916,7 +2916,10 @@ export class SemanticIndexCoordinator {
       }
     }
     if (scope === 'project') {
-      for (const investigation of this.deps.investigationSemanticIndex.listProject(projectId)) {
+      for (
+        const investigation of
+        await this.deps.investigationSemanticIndex.listProject(projectId)
+      ) {
         expected.set(
           `investigation:${investigation.id}\0${0}`,
           investigationEmbeddingTextHash(investigation, fingerprint),

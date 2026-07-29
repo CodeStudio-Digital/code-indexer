@@ -21,7 +21,7 @@ import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 export function registerCompanyHooks(
   hookRegistry: RuntimeHookRegistry,
   orchestrator: CompanyOrchestrator,
-  agentRunId: number,
+  agentRunId: string,
   role: string,
 ): void {
   // ─── Error → notify master + post to board ──────────────────

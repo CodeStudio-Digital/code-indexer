@@ -1,6 +1,8 @@
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
+import type { JsonValue } from '@mcp/session-storage';
 import { selectRuntimeModelMetadata } from '@mcp/provider-sdk';
 import { TOOL_OUTPUT_CAP_LEVELS, parseToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import { AGENTS } from '@mcp/code-agent/agents/index.js';
@@ -17,11 +19,19 @@ import { TOOL_PERMISSION_MODES } from '@mcp/code-agent/core/permission-gate.js';
 import { deriveTodosFromState, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
-import { parseIdParam, parseIntQuery, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseIntQuery,
+  parseJsonBody,
+  parseSeqParam,
+  parseSeqQuery,
+  parseSeqValue,
+  parseSessionIdParam,
+  parseSessionIdValue,
+  notFound,
+} from '../_helpers.js';
 import {
   createGlobalWorkspaceSession,
   reuseGlobalWorkspaceSession,
-  teardownGlobalWorkspaceIfOrphan,
   attachProjectToGlobalSession,
   detachProjectFromGlobalSession,
   GlobalWorkspaceError,
@@ -207,18 +217,18 @@ function trimMessageBlocks<M extends { role?: string; content: unknown[] }>(mess
 /**
  * Read-time status repair: for tool_use blocks whose `tool_result` block is
  * absent from the loaded window, look up the recorded result in the
- * `coder_tool_calls` audit table. The dashboard seeds these into its
+ * session bundle's tool-call records. The dashboard seeds these into its
  * tool-result map so the call renders its real terminal status instead of a
  * perpetual "loading" spinner. This heals sessions written before the
  * paired-persistence fix (where a mid-run compaction dropped the tool message
  * while the audit row survived). Empty for healthy sessions — every block is
  * already paired — so it adds nothing to the common-case payload.
  */
-function reconstructMissingToolResults(
+async function reconstructMissingToolResults(
   sessionStore: ServerDeps['sessionStore'],
-  sessionId: number,
+  sessionId: SessionId,
   messages: Array<{ role?: string; content: unknown }>,
-): Array<{ tool_use_id: string; content: string; is_error: boolean; _truncated?: boolean; _originalLength?: number }> {
+): Promise<Array<{ tool_use_id: string; content: string; is_error: boolean; _truncated?: boolean; _originalLength?: number }>> {
   const useIds = new Set<string>();
   const resIds = new Set<string>();
   const toolNamesByUseId = new Map<string, string>();
@@ -235,7 +245,7 @@ function reconstructMissingToolResults(
   }
   const missing = [...useIds].filter((id) => !resIds.has(id));
   if (missing.length === 0) return [];
-  return sessionStore.getToolResultsByToolUseIds(sessionId, missing).map((r) => {
+  return (await sessionStore.getToolResultsByToolUseIds(sessionId, missing)).map((r) => {
     const content =
       r.result_text.length > TRIM_TOOL_RESULT
         ? trimToolResultContent(r.result_text, toolNamesByUseId.get(r.tool_use_id))
@@ -300,9 +310,8 @@ interface CreateGlobalSessionBody {
   primary_project_id?: number;
   /** All linked projects (including the primary). At least one required. */
   project_ids: number[];
-  /** Reuse an existing virtual workspace (synthetic union project) instead of
-   *  creating a new one. When set, `project_ids` is ignored. */
-  reuse_project_id?: number;
+  /** Copy the linked roots from an existing global session. */
+  reuse_session_id?: SessionId;
   /** Provider-independent orchestration mode. */
   execution_mode?: CoderExecutionMode;
   /** Native provider effort; legacy `ultra` is converted to execution_mode. */
@@ -326,6 +335,8 @@ interface CreateSessionBody {
   thinking_enabled?: boolean;
   /** Optional phase profile binding (Camada 2). Null = walk cascade. */
   phase_profile_id?: number | null;
+  /** Trusted host metadata persisted with the filesystem bundle. */
+  metadata?: Readonly<Record<string, JsonValue>>;
 }
 
 export function mountCoderSessionsRoutes(
@@ -339,11 +350,8 @@ export function mountCoderSessionsRoutes(
   const validateAgentSelection = (value: unknown): value is AgentSelectionId =>
     resolveAgentSelection(providerStore, value) !== null;
 
-  // Abort a session's live worker run — best-effort. Used
-  // before tearing down a global session's virtual workspace so the runner +
-  // indexer stop touching the junction dir + synthetic project we're about to
-  // remove (otherwise the cwd vanishes mid-turn and a re-index races deleteProject).
-  const abortActiveRun = async (id: number): Promise<void> => {
+  // Abort a session's live worker run before trashing its bundle.
+  const abortActiveRun = async (id: SessionId): Promise<void> => {
     try {
       await workerPool.abort(id);
     } catch {
@@ -352,11 +360,9 @@ export function mountCoderSessionsRoutes(
   };
 
   // Is a run in flight for this session? Used to reject mutations that must not
-  // race a live run (attach/detach project: rebuilding/removing a junction mid-
-  // turn could pull the cwd out from under the agent). Best-effort: a false
-  // negative just lets the mutation through (the change still only takes effect
-  // on the next run anyway).
-  const isRunActive = (id: number): boolean => {
+  // race a live run. Linked roots are read at run start, so mutations take
+  // effect on the next run.
+  const isRunActive = (id: SessionId): boolean => {
     try {
       return workerPool.isRunning(id);
     } catch {
@@ -384,9 +390,9 @@ export function mountCoderSessionsRoutes(
    * /api/coder/sessions/:id routes so Hono doesn't interpret "recent" as
    * an id parameter.
    */
-  app.get('/api/coder/sessions/recent', (c) => {
+  app.get('/api/coder/sessions/recent', async (c) => {
     const limit = Math.max(1, Math.min(50, parseIntQuery(c, 'limit', 10)));
-    return c.json(sessionStore.listRecentSessionsGlobal(limit));
+    return c.json(await sessionStore.listRecentSessionsGlobal(limit));
   });
 
   /**
@@ -394,34 +400,30 @@ export function mountCoderSessionsRoutes(
    * MUST be registered BEFORE the /api/coder/sessions/:id routes (same reason
    * as /recent: Hono would otherwise read "global" as an id).
    */
-  app.get('/api/coder/sessions/global', (c) => {
+  app.get('/api/coder/sessions/global', async (c) => {
     const archivedQ = c.req.query('archived');
     let archived: boolean | null = false;
     if (archivedQ === '1' || archivedQ === 'true') archived = true;
     else if (archivedQ === 'all') archived = null;
-    return c.json(sessionStore.listGlobalSessions({ archived }));
+    return c.json(await sessionStore.listGlobalSessions({ archived }));
   });
 
   /**
-   * Reusable virtual workspaces (synthetic union projects) — for the "Reaproveitar"
-   * option in the create dialog. Each is refcounted, so all listed here have ≥1
-   * session. `label` is the friendly description (the linked project names).
+   * Existing global bundles whose real linked-root set can seed a new session.
+   * The returned id is the source session UUID, never a synthetic project id.
    */
-  app.get('/api/coder/global-workspaces', (c) => {
-    const workspaces = deps.db.listSyntheticProjects().map((p) => ({
-      id: p.id,
-      label: p.description || p.name,
-      sessionCount: sessionStore.countSessionsForProject(p.id),
+  app.get('/api/coder/global-workspaces', async (c) => {
+    const workspaces = (await sessionStore.listGlobalSessions()).map((session) => ({
+      id: session.id,
+      label: session.workspace_label || session.title,
+      sessionCount: 1,
     }));
     return c.json(workspaces);
   });
 
   /**
-   * Create a global session: the agent works over a VIRTUAL UNION of the linked
-   * projects (a synthetic project whose root is a directory of junctions to each
-   * real project), so all tools — native + indexed search — span every project
-   * with no primary/secondary split and no bridges. The `primary` mark is just
-   * the default repo label (e.g. for git).
+   * Create a global UUID bundle over real linked project roots. The primary
+   * project is the default cwd; every root remains first-class in run context.
    */
   app.post('/api/coder/sessions/global', async (c) => {
     const body = await parseJsonBody<CreateGlobalSessionBody>(c);
@@ -435,22 +437,24 @@ export function mountCoderSessionsRoutes(
     if (!execution.ok) return c.json({ error: execution.error }, 400);
     const effortError = validateReasoningEffort(body.provider, body.model, execution.reasoningEffort);
     if (effortError) return c.json({ error: effortError }, 400);
-    // Reuse path: attach a new session to an EXISTING virtual workspace (already
-    // built + indexed) — no re-build, no re-index, instant.
-    if (body.reuse_project_id) {
+    if (body.reuse_session_id) {
       try {
-        const session = reuseGlobalWorkspaceSession(deps, {
-          reuseProjectId: body.reuse_project_id,
+        const reuseSessionId = parseSessionIdValue(
+          body.reuse_session_id,
+          'reuse_session_id',
+        );
+        const session = await reuseGlobalWorkspaceSession(deps, {
+          reuseSessionId,
           title: body.title,
           provider: body.provider,
           model: body.model ?? '',
           agent: body.agent ?? null,
+          execution_mode_override: execution.executionMode,
+          reasoning_effort_override: execution.reasoningEffort,
         });
-        sessionStore.setSessionExecutionMode(session.id, execution.executionMode);
-        sessionStore.setSessionReasoningEffort(session.id, execution.reasoningEffort);
-        return c.json(sessionStore.getSession(session.id) ?? session, 201);
+        return c.json((await sessionStore.getSession(session.id)) ?? session, 201);
       } catch (e) {
-        return c.json({ error: `could not reuse workspace: ${e instanceof Error ? e.message : String(e)}` }, 400);
+        return c.json({ error: `could not reuse global session: ${e instanceof Error ? e.message : String(e)}` }, 400);
       }
     }
     const projectIds = Array.isArray(body.project_ids)
@@ -467,10 +471,8 @@ export function mountCoderSessionsRoutes(
     for (const pid of projectIds) {
       const p = deps.db.getProject(pid);
       if (!p) return c.json({ error: `project ${pid} not found` }, 400);
-      // A synthetic union is itself a dir of junctions — linking one would nest a
-      // workspace inside a workspace. Reuse is the supported path (reuse_project_id).
       if (p.is_synthetic) {
-        return c.json({ error: `project ${pid} is a virtual workspace and cannot be linked` }, 400);
+        return c.json({ error: `project ${pid} is a legacy virtual workspace and cannot be linked` }, 400);
       }
       projects.push({ id: p.id, name: p.name, root_path: p.root_path, isPrimary: pid === primaryId });
     }
@@ -481,14 +483,14 @@ export function mountCoderSessionsRoutes(
         provider: body.provider,
         model: body.model ?? '',
         agent: body.agent ?? null,
+        execution_mode_override: execution.executionMode,
+        reasoning_effort_override: execution.reasoningEffort,
         projects,
       });
     } catch (e) {
       return c.json({ error: `could not create global workspace: ${e instanceof Error ? e.message : String(e)}` }, 500);
     }
-    sessionStore.setSessionExecutionMode(session.id, execution.executionMode);
-    sessionStore.setSessionReasoningEffort(session.id, execution.reasoningEffort);
-    return c.json(sessionStore.getSession(session.id) ?? session, 201);
+    return c.json((await sessionStore.getSession(session.id)) ?? session, 201);
   });
 
   /** Built-in presets plus enabled user-defined agents for the dashboard picker. */
@@ -540,7 +542,7 @@ export function mountCoderSessionsRoutes(
     });
   });
 
-  app.get('/api/coder/sessions', (c) => {
+  app.get('/api/coder/sessions', async (c) => {
     const projectId = parseIntQuery(c, 'project_id', 0);
     if (!projectId) return c.json({ error: 'project_id required' }, 400);
 
@@ -550,60 +552,65 @@ export function mountCoderSessionsRoutes(
     else if (archivedQ === 'all') archived = null;
 
     const groupQ = c.req.query('group_id');
-    let groupId: number | null | undefined;
+    let groupId: string | null | undefined;
     if (groupQ === 'null') groupId = null;
-    else if (groupQ !== undefined && groupQ !== '') groupId = parseInt(groupQ, 10);
+    else if (groupQ !== undefined && groupQ !== '') groupId = groupQ;
 
-    return c.json(sessionStore.listSessions(projectId, { archived, groupId }));
+    return c.json(await sessionStore.listSessions(projectId, { archived, groupId }));
   });
 
   app.post('/api/coder/sessions/batch-delete', async (c) => {
-    const body = await parseJsonBody<{ ids?: number[] }>(c);
-    const ids = Array.isArray(body.ids) ? body.ids.filter((n) => Number.isFinite(n)) : [];
+    const body = await parseJsonBody<{ ids?: string[] }>(c);
+    const ids = Array.isArray(body.ids)
+      ? body.ids.map((id) => parseSessionIdValue(id, 'ids[]'))
+      : [];
     if (ids.length === 0) return c.json({ error: 'ids required' }, 400);
-    // Capture the unions of the global sessions BEFORE deletion, then refcount-
-    // teardown each AFTER — so a union shared by several deleted sessions is torn
-    // down exactly once, only when it ends up with zero sessions.
-    const unionIds = new Set<number>();
     for (const id of ids) {
-      const session = sessionStore.getSession(id);
+      const session = await sessionStore.getSession(id);
       if (session?.is_global) {
-        unionIds.add(session.project_id);
-        await abortActiveRun(id); // stop the runner before its union is torn down
+        await abortActiveRun(id);
       }
     }
-    const deleted = sessionStore.deleteSessionsBatch(ids);
-    await Promise.all([...unionIds].map((u) => teardownGlobalWorkspaceIfOrphan(deps, u)));
-    return c.json({ ok: true, deleted });
+    const trashed = await sessionStore.trashSessionsBatch(ids);
+    return c.json({
+      ok: true,
+      deleted: trashed.length,
+      items: trashed.map((entry) => ({
+        session_id: entry.location.session_id,
+        trash_name: entry.trash_name,
+        trashed_at: entry.trashed_at,
+        scope: entry.location.scope,
+      })),
+    });
   });
 
   app.patch('/api/coder/sessions/:id/archive', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ archived?: boolean }>(c);
     if (typeof body.archived !== 'boolean') {
       return c.json({ error: 'archived:boolean required' }, 400);
     }
-    sessionStore.setSessionArchived(id, body.archived);
-    const session = sessionStore.getSession(id);
+    await sessionStore.setSessionArchived(id, body.archived);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
   });
 
   app.patch('/api/coder/sessions/:id/favorite', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ favorite?: boolean }>(c);
     if (typeof body.favorite !== 'boolean') {
       return c.json({ error: 'favorite:boolean required' }, 400);
     }
-    sessionStore.setSessionFavorite(id, body.favorite);
-    const session = sessionStore.getSession(id);
+    await sessionStore.setSessionFavorite(id, body.favorite);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
   });
 
   app.post('/api/coder/sessions/:id/generate-title', async (c) => {
-    const id = parseIdParam(c);
-    const src = sessionStore.loadSessionWithMessages(id);
+    const id = parseSessionIdParam(c);
+    const src = await sessionStore.loadSessionWithMessages(id);
     if (!src) return notFound(c);
 
     // Preflight normally titles the session before the agent run starts. This
@@ -643,30 +650,30 @@ export function mountCoderSessionsRoutes(
     }
 
     // Re-read after the model call: a concurrent manual rename always wins.
-    const current = sessionStore.getSession(id);
+    const current = await sessionStore.getSession(id);
     if (!current) return notFound(c);
     if (!isAutomaticSessionTitle(current.title)) {
       return c.json({ title: current.title, generated: false });
     }
-    sessionStore.setSessionTitle(id, result.title);
+    await sessionStore.setSessionTitle(id, result.title);
     return c.json({ title: result.title, generated: true });
   });
 
   app.patch('/api/coder/sessions/:id/title', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ title?: string }>(c);
     const title = (body.title ?? '').trim();
     if (!title) return c.json({ error: 'title must be a non-empty string' }, 400);
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
-    sessionStore.setSessionTitle(id, title);
-    return c.json(sessionStore.getSession(id));
+    await sessionStore.setSessionTitle(id, title);
+    return c.json(await sessionStore.getSession(id));
   });
 
-  app.post('/api/coder/sessions/:id/duplicate', (c) => {
-    const id = parseIdParam(c);
+  app.post('/api/coder/sessions/:id/duplicate', async (c) => {
+    const id = parseSessionIdParam(c);
     try {
-      const session = sessionStore.duplicateSession(id);
+      const session = await sessionStore.duplicateSession(id);
       return c.json({ session }, 201);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -675,14 +682,11 @@ export function mountCoderSessionsRoutes(
   });
 
   app.post('/api/coder/sessions/:id/fork', async (c) => {
-    const id = parseIdParam(c);
-    const body = await parseJsonBody<{ before_message_id?: number }>(c);
-    const beforeId = body.before_message_id;
-    if (typeof beforeId !== 'number' || !Number.isFinite(beforeId)) {
-      return c.json({ error: 'before_message_id:number required' }, 400);
-    }
+    const id = parseSessionIdParam(c);
+    const body = await parseJsonBody<{ before_seq?: number }>(c);
+    const beforeSeq = parseSeqValue(body.before_seq, 'before_seq');
     try {
-      const result = sessionStore.forkSessionBeforeMessage(id, beforeId);
+      const result = await sessionStore.forkSessionBeforeSeq(id, beforeSeq);
       return c.json(result, 201);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -691,14 +695,14 @@ export function mountCoderSessionsRoutes(
   });
 
   app.patch('/api/coder/sessions/:id/temperature', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ temperature?: number | null }>(c);
     const t = body.temperature;
     if (t !== null && (typeof t !== 'number' || !Number.isFinite(t))) {
       return c.json({ error: 'temperature:number|null required' }, 400);
     }
-    sessionStore.setSessionTemperature(id, t ?? null);
-    const session = sessionStore.getSession(id);
+    await sessionStore.setSessionTemperature(id, t ?? null);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
   });
@@ -711,21 +715,21 @@ export function mountCoderSessionsRoutes(
    * never holds a level the model can't accept.
    */
   app.patch('/api/coder/sessions/:id/reasoning-effort', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ effort?: string | null }>(c);
     const rawEffort = body.effort ?? null;
     if (rawEffort !== null && typeof rawEffort !== 'string') {
       return c.json({ error: 'effort:string|null required' }, 400);
     }
     const effort = typeof rawEffort === 'string' ? rawEffort.trim() || null : null;
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     // Backward compatibility for clients that exposed Ultra as a reasoning
     // option. Do not let the unsupported literal reach a provider request.
     if (effort?.toLowerCase() === 'ultra') {
-      sessionStore.setSessionExecutionMode(id, 'ultra');
-      sessionStore.setSessionReasoningEffort(id, null);
-      const updated = sessionStore.getSession(id);
+      await sessionStore.setSessionExecutionMode(id, 'ultra');
+      await sessionStore.setSessionReasoningEffort(id, null);
+      const updated = await sessionStore.getSession(id);
       if (!updated) return notFound(c);
       return c.json(updated);
     }
@@ -751,40 +755,40 @@ export function mountCoderSessionsRoutes(
     // effort (or model default via null) must let them leave Ultra again. New
     // clients use the dedicated execution-mode endpoint for the orthogonal axis.
     if (session.execution_mode_override === 'ultra') {
-      sessionStore.setSessionExecutionMode(id, 'standard');
+      await sessionStore.setSessionExecutionMode(id, 'standard');
     }
-    sessionStore.setSessionReasoningEffort(id, effort);
-    const updated = sessionStore.getSession(id);
+    await sessionStore.setSessionReasoningEffort(id, effort);
+    const updated = await sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
   });
 
   /** Persist the provider-independent execution mode for this conversation. */
   app.patch('/api/coder/sessions/:id/execution-mode', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ mode?: unknown }>(c);
     if (!isExecutionMode(body.mode)) {
       return c.json({ error: `mode: one of ${EXECUTION_MODES.join('|')} required` }, 400);
     }
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
-    sessionStore.setSessionExecutionMode(id, body.mode);
-    const updated = sessionStore.getSession(id);
+    await sessionStore.setSessionExecutionMode(id, body.mode);
+    const updated = await sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
   });
 
   /** Persist the extended-thinking icon state for this conversation. */
   app.patch('/api/coder/sessions/:id/thinking', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ thinking?: unknown }>(c);
     if (typeof body.thinking !== 'boolean') {
       return c.json({ error: 'thinking:boolean required' }, 400);
     }
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
-    sessionStore.setSessionThinkingEnabled(id, body.thinking);
-    const updated = sessionStore.getSession(id);
+    await sessionStore.setSessionThinkingEnabled(id, body.thinking);
+    const updated = await sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
   });
@@ -797,16 +801,16 @@ export function mountCoderSessionsRoutes(
    * into the system prompt at the next runner construction (like `/agent`).
    */
   app.patch('/api/coder/sessions/:id/plan-depth', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ depth?: string | null }>(c);
     const depth = body.depth ?? null;
     if (depth !== null && !PLAN_DEPTHS.includes(depth as PlanDepth)) {
       return c.json({ error: `depth: one of ${PLAN_DEPTHS.join('|')}|null required` }, 400);
     }
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
-    sessionStore.setSessionPlanDepth(id, depth);
-    const updated = sessionStore.getSession(id);
+    await sessionStore.setSessionPlanDepth(id, depth);
+    const updated = await sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
   });
@@ -819,7 +823,7 @@ export function mountCoderSessionsRoutes(
    * — the language is baked into the system prompt at the next runner construction.
    */
   app.patch('/api/coder/sessions/:id/response-language', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ language?: string | null }>(c);
     const raw = typeof body.language === 'string' ? body.language.trim() : null;
     if (raw !== null && raw.length > MAX_RESPONSE_LANGUAGE_LEN) {
@@ -828,10 +832,10 @@ export function mountCoderSessionsRoutes(
     // Store NULL for empty/"auto" so the resolution chain (project default →
     // neutral form) kicks in rather than an empty override short-circuiting it.
     const language = raw && raw.toLowerCase() !== 'auto' ? raw : null;
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
-    sessionStore.setSessionResponseLanguage(id, language);
-    const updated = sessionStore.getSession(id);
+    await sessionStore.setSessionResponseLanguage(id, language);
+    const updated = await sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
   });
@@ -843,7 +847,7 @@ export function mountCoderSessionsRoutes(
    * — baked into the system prompt at the next runner construction.
    */
   app.patch('/api/coder/sessions/:id/output-style', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ style?: string | null }>(c);
     // Treat empty/whitespace as a clear-to-NULL (parity with /response-language)
     // so a client resetting via `style:''` doesn't get a 400.
@@ -852,24 +856,24 @@ export function mountCoderSessionsRoutes(
     if (style !== null && !OUTPUT_STYLES.includes(style as OutputStyle)) {
       return c.json({ error: `style: one of ${OUTPUT_STYLES.join('|')}|null required` }, 400);
     }
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     // Persist NULL for the default so the column stays clean (proactive = no block).
-    sessionStore.setSessionOutputStyle(id, style === 'proactive' ? null : style);
-    const updated = sessionStore.getSession(id);
+    await sessionStore.setSessionOutputStyle(id, style === 'proactive' ? null : style);
+    const updated = await sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
   });
 
   app.patch('/api/coder/sessions/:id/unrestricted-output', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ enabled?: boolean | null }>(c);
     const v = body.enabled;
     if (v !== null && v !== undefined && typeof v !== 'boolean') {
       return c.json({ error: 'enabled:boolean|null required' }, 400);
     }
-    sessionStore.setSessionUnrestrictedToolOutput(id, v ?? null);
-    const session = sessionStore.getSession(id);
+    await sessionStore.setSessionUnrestrictedToolOutput(id, v ?? null);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
   });
@@ -883,16 +887,16 @@ export function mountCoderSessionsRoutes(
    * next runner construction (like `/plan-depth` and `/reasoning-effort`).
    */
   app.patch('/api/coder/sessions/:id/tool-output-cap-level', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ level?: string | null }>(c);
     const level = body.level ?? null;
     if (level !== null && parseToolOutputCapLevel(level) === null) {
       return c.json({ error: `level: one of ${TOOL_OUTPUT_CAP_LEVELS.join('|')}|null required` }, 400);
     }
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
-    sessionStore.setSessionToolOutputCapLevel(id, parseToolOutputCapLevel(level));
-    const updated = sessionStore.getSession(id);
+    await sessionStore.setSessionToolOutputCapLevel(id, parseToolOutputCapLevel(level));
+    const updated = await sessionStore.getSession(id);
     if (!updated) return notFound(c);
     return c.json(updated);
   });
@@ -904,18 +908,18 @@ export function mountCoderSessionsRoutes(
    * back to the default ('auto').
    */
   app.patch('/api/coder/sessions/:id/tool-permission-mode', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ mode?: 'ask' | 'auto' | 'unrestricted' | null }>(c);
     const mode = body.mode ?? null;
     if (mode !== null && !TOOL_PERMISSION_MODES.includes(mode)) {
       return c.json({ error: "mode:'ask'|'auto'|'unrestricted'|null required" }, 400);
     }
-    sessionStore.setSessionToolPermissionMode(id, mode);
+    await sessionStore.setSessionToolPermissionMode(id, mode);
     const effective = mode ?? 'auto';
     try {
       await workerPool.setToolPermissionMode(id, effective);
     } catch { /* no live worker — column alone covers the next run */ }
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
   });
@@ -934,31 +938,31 @@ export function mountCoderSessionsRoutes(
    * `null` clears the column.
    */
   app.patch('/api/coder/sessions/:id/agent', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ agent?: string | null }>(c);
     const agent = body.agent ?? null;
     if (agent !== null && !validateAgentSelection(agent)) {
       return c.json({ error: 'agent must reference an enabled built-in or custom agent, or null' }, 400);
     }
-    const previous = sessionStore.getSession(id);
+    const previous = await sessionStore.getSession(id);
     if (!previous) return notFound(c);
 
     if (previous.agent === agent) return c.json(previous);
 
-    sessionStore.stageManualAgentTransition(id, agent);
-    const session = sessionStore.getSession(id);
+    await sessionStore.stageManualAgentTransition(id, agent);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
   });
 
   app.patch('/api/coder/sessions/:id/group', async (c) => {
-    const id = parseIdParam(c);
-    const body = await parseJsonBody<{ group_id?: number | null }>(c);
-    if (body.group_id !== null && !Number.isFinite(body.group_id)) {
-      return c.json({ error: 'group_id:number|null required' }, 400);
+    const id = parseSessionIdParam(c);
+    const body = await parseJsonBody<{ group_id?: string | null }>(c);
+    if (body.group_id !== null && body.group_id !== undefined && typeof body.group_id !== 'string') {
+      return c.json({ error: 'group_id:string|null required' }, 400);
     }
-    sessionStore.setSessionGroup(id, body.group_id ?? null);
-    const session = sessionStore.getSession(id);
+    await sessionStore.setSessionGroup(id, body.group_id ?? null);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
     return c.json(session);
   });
@@ -966,7 +970,7 @@ export function mountCoderSessionsRoutes(
   app.post('/api/coder/sessions', async (c) => {
     const body = await c.req.json<CreateSessionBody>();
     const lastUsed = body.use_last_model === true
-      ? sessionStore.getLastUsedProviderModel()
+      ? await sessionStore.getLastUsedProviderModel()
       : null;
     const lastUsedMode = lastUsed?.model.split('::')[1] ?? '';
     const lastUsedModelId = lastUsed?.model.split('::')[0] ?? '';
@@ -994,48 +998,60 @@ export function mountCoderSessionsRoutes(
     // Builder projects (projects.builder_json set) default the chat agent to
     // `builder` (persona + scope) unless the caller passed an explicit agent.
     const isBuilderProject = !!deps.db.getProject(body.project_id)?.builder_json;
-    const session = sessionStore.createSession({
+    const session = await sessionStore.createSession({
       project_id: body.project_id,
       title: body.title,
       provider,
       model,
       agent: body.agent ?? (isBuilderProject ? 'builder' : null),
-      phase_profile_id: body.phase_profile_id ?? null,
+      execution_mode_override: execution.executionMode,
+      reasoning_effort_override: execution.reasoningEffort,
+      thinking_enabled: body.thinking_enabled === true,
+      metadata: body.metadata,
     });
-    sessionStore.setSessionExecutionMode(session.id, execution.executionMode);
-    sessionStore.setSessionReasoningEffort(session.id, execution.reasoningEffort);
-    if (body.thinking_enabled === true) {
-      sessionStore.setSessionThinkingEnabled(session.id, true);
-    }
     // Best-effort base_commit_sha capture for Camada 4's reviewer subagent.
     // We need the project workdir to run `git rev-parse HEAD`. If the project
     // isn't a git repo, or the workdir lookup fails, leave it null and the
     // reviewer will fall back to running `git_diff` itself (or report no diff).
-    try {
-      const project = (deps as { projectStore?: { getProject?: (id: number) => { workdir?: string | null } | null } }).projectStore?.getProject?.(body.project_id);
-      const workdir = project?.workdir;
-      if (workdir) {
-        const { execSync } = await import('node:child_process');
-        const sha = execSync('git rev-parse HEAD', { cwd: workdir, encoding: 'utf8', timeout: 2000 }).trim();
-        if (sha && /^[0-9a-f]{40}$/i.test(sha)) {
-          sessionStore.setSessionBaseCommit(session.id, sha);
+    const responseSession = (await sessionStore.getSession(session.id)) ?? session;
+    setImmediate(() => {
+      void (async () => {
+        try {
+          const project = (deps as { projectStore?: { getProject?: (id: number) => { workdir?: string | null } | null } }).projectStore?.getProject?.(body.project_id);
+          const workdir = project?.workdir;
+          if (workdir) {
+            // Base-commit discovery is useful for later review, but it is not
+            // part of publishing a new session. Keep process startup and Git's
+            // timeout entirely outside the latency observed by the + button.
+            const { execFile } = await import('node:child_process');
+            const { promisify } = await import('node:util');
+            const { stdout } = await promisify(execFile)('git', ['rev-parse', 'HEAD'], {
+              cwd: workdir,
+              encoding: 'utf8',
+              timeout: 2000,
+            });
+            const sha = stdout.trim();
+            if (sha && /^[0-9a-f]{40}$/i.test(sha)) {
+              await sessionStore.setSessionBaseCommit(session.id, sha);
+            }
+          }
+        } catch {
+          /* not a git repo or no workdir — fine, reviewer handles this */
         }
-      }
-    } catch {
-      /* not a git repo or no workdir — fine, reviewer handles this */
-    }
-    return c.json(sessionStore.getSession(session.id) ?? session, 201);
+      })();
+    });
+    return c.json(responseSession, 201);
   });
 
   /**
    * Linked projects of a (global) session — for the "linked projects" chip and
    * the active-root switcher. Returns [] for a normal session (no junction rows).
    */
-  app.get('/api/coder/sessions/:id/projects', (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+  app.get('/api/coder/sessions/:id/projects', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
-    return c.json(sessionStore.getSessionProjects(id));
+    return c.json(await sessionStore.getSessionProjects(id));
   });
 
   /**
@@ -1046,13 +1062,13 @@ export function mountCoderSessionsRoutes(
    * link set. MUST stay before the `/:id` catch-all (Hono route ordering).
    */
   app.post('/api/coder/sessions/:id/projects', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     if (isRunActive(id)) return c.json({ error: 'session is running' }, 409);
     const body = await parseJsonBody<{ project_id?: number }>(c);
     const projectId = Number(body.project_id);
     if (!Number.isFinite(projectId)) return c.json({ error: 'project_id required' }, 400);
     try {
-      return c.json(attachProjectToGlobalSession(deps, id, projectId));
+      return c.json(await attachProjectToGlobalSession(deps, id, projectId));
     } catch (e) {
       if (e instanceof GlobalWorkspaceError) return c.json({ error: e.message }, e.status);
       throw e;
@@ -1061,21 +1077,21 @@ export function mountCoderSessionsRoutes(
 
   /** Detach a real project from a global session's virtual workspace. Refuses the
    *  primary / last project. Rejected (409) while a run is in flight. */
-  app.delete('/api/coder/sessions/:id/projects/:projectId', (c) => {
-    const id = parseIdParam(c);
+  app.delete('/api/coder/sessions/:id/projects/:projectId', async (c) => {
+    const id = parseSessionIdParam(c);
     if (isRunActive(id)) return c.json({ error: 'session is running' }, 409);
     const projectId = parseInt(c.req.param('projectId') ?? '', 10);
     if (!Number.isFinite(projectId)) return c.json({ error: 'invalid project id' }, 400);
     try {
-      return c.json(detachProjectFromGlobalSession(deps, id, projectId));
+      return c.json(await detachProjectFromGlobalSession(deps, id, projectId));
     } catch (e) {
       if (e instanceof GlobalWorkspaceError) return c.json({ error: e.message }, e.status);
       throw e;
     }
   });
 
-  app.get('/api/coder/sessions/:id', (c) => {
-    const id = parseIdParam(c);
+  app.get('/api/coder/sessions/:id', async (c) => {
+    const id = parseSessionIdParam(c);
     const full = c.req.query('full') === '1';
     const preview = c.req.query('detail') === 'preview';
     const tailQ = c.req.query('tail');
@@ -1083,44 +1099,46 @@ export function mountCoderSessionsRoutes(
 
     // When ?tail=N, only parse the last N messages (avoids heap pressure on
     // large sessions). Without ?tail, load everything for backward compat.
-    const data = tail
+    const data = await (tail
       ? sessionStore.loadSessionMessagesTail(id, tail)
-      : sessionStore.loadSessionWithMessages(id);
+      : sessionStore.loadSessionWithMessages(id));
     if (!data) return notFound(c);
 
-    const total_messages = sessionStore.getMessageCount(id);
+    const total_messages = await sessionStore.getMessageCount(id);
     // Count of pre-boundary rows hidden by a manual "summarize & clear" — the
     // dashboard shows a "view earlier history" affordance when this is > 0.
-    const archived_count = sessionStore.getArchivedMessageCount(id);
-    const preceding_user_message_id = data.message_rows[0]
-      ? sessionStore.previousUserMessageId(id, data.message_rows[0].id)
+    const archived_count = await sessionStore.getArchivedMessageCount(id);
+    const preceding_user_seq = data.message_rows[0]
+      ? await sessionStore.previousUserMessageSeq(id, data.message_rows[0].seq)
       : null;
     // Status fallback for tool calls whose tool_result block was lost (pre-fix
     // sessions). Empty for healthy sessions — costs nothing in the common case.
-    const tool_results = reconstructMissingToolResults(sessionStore, id, data.messages);
+    const tool_results = await reconstructMissingToolResults(sessionStore, id, data.messages);
 
     // For a global session, surface the linked projects so the chat can render
     // the "linked projects" chip + default the file-tree root to the primary
     // (`session.project_id`). Empty for normal sessions — no extra query cost.
-    const linked_projects = data.session.is_global ? sessionStore.getSessionProjects(id) : [];
+    const linked_projects = data.session.is_global
+      ? await sessionStore.getSessionProjects(id)
+      : [];
 
     if (full || !preview) {
-      return c.json({ ...data, total_messages, archived_count, preceding_user_message_id, tool_results, linked_projects });
+      return c.json({ ...data, total_messages, archived_count, preceding_user_seq, tool_results, linked_projects });
     }
 
-    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count, preceding_user_message_id, tool_results, linked_projects });
+    return c.json({ ...data, messages: trimMessageBlocks(data.messages), total_messages, archived_count, preceding_user_seq, tool_results, linked_projects });
   });
 
   /**
-   * Paginated message loading: fetch N messages before a given message id.
+   * Paginated message loading: fetch N messages before a conversation seq.
    * Used by the dashboard "Load earlier" button.
    */
-  app.get('/api/coder/sessions/:id/messages', (c) => {
-    const sessionId = parseIdParam(c);
-    const session = sessionStore.getSession(sessionId);
+  app.get('/api/coder/sessions/:id/messages', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c);
 
-    let beforeId = parseIntQuery(c, 'before_id', 0);
+    let beforeSeq = parseSeqQuery(c, 'before_seq', 0);
     const limit = Math.max(1, Math.min(100, parseIntQuery(c, 'limit', 40)));
     // Cross a manual "summarize & clear" boundary to reveal the archived
     // (pre-summary) transcript — driven by the dashboard's "view earlier
@@ -1129,31 +1147,36 @@ export function mountCoderSessionsRoutes(
     const preview = c.req.query('detail') === 'preview';
 
     // A compacted session may have zero visible rows, so the dashboard has no
-    // earliest id to send when the user reveals the archived transcript. Use a
+    // earliest seq to send when the user reveals the archived transcript. Use a
     // stable exclusive upper bound in that case; ordinary callers can keep
-    // passing `before_id` unchanged.
-    if (!beforeId) beforeId = sessionStore.maxMessageId(sessionId) + 1;
+    // passing `before_seq` unchanged.
+    if (!beforeSeq) beforeSeq = (await sessionStore.maxMessageSeq(sessionId)) + 1;
 
-    const data = sessionStore.loadMessagesBefore(sessionId, beforeId, limit, includeArchived);
-    const preceding_user_message_id = data.message_rows[0]
-      ? sessionStore.previousUserMessageId(sessionId, data.message_rows[0].id)
+    const data = await sessionStore.loadMessagesBefore(
+      sessionId,
+      beforeSeq,
+      limit,
+      includeArchived,
+    );
+    const preceding_user_seq = data.message_rows[0]
+      ? await sessionStore.previousUserMessageSeq(sessionId, data.message_rows[0].seq)
       : null;
-    const tool_results = reconstructMissingToolResults(sessionStore, sessionId, data.messages);
+    const tool_results = await reconstructMissingToolResults(sessionStore, sessionId, data.messages);
     return c.json({
       messages: preview ? trimMessageBlocks(data.messages) : data.messages,
       message_rows: data.message_rows,
-      preceding_user_message_id,
+      preceding_user_seq,
       tool_results,
     });
   });
 
-  app.get('/api/coder/sessions/:id/tool-results/:toolUseId/full', (c) => {
-    const sessionId = parseIdParam(c);
-    const session = sessionStore.getSession(sessionId);
+  app.get('/api/coder/sessions/:id/tool-results/:toolUseId/full', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(sessionId);
     if (!session) return notFound(c);
     const toolUseId = c.req.param('toolUseId');
     if (!toolUseId) return c.json({ error: 'toolUseId required' }, 400);
-    const row = sessionStore.getToolResultsByToolUseIds(sessionId, [toolUseId])[0];
+    const row = (await sessionStore.getToolResultsByToolUseIds(sessionId, [toolUseId]))[0];
     if (!row) return notFound(c, 'tool result not found');
     return c.json({
       tool_use_id: row.tool_use_id,
@@ -1163,12 +1186,12 @@ export function mountCoderSessionsRoutes(
     });
   });
 
-  app.get('/api/coder/sessions/:id/stats', (c) => {
-    const id = parseIdParam(c);
-    const stats = sessionStore.getSessionStats(id);
+  app.get('/api/coder/sessions/:id/stats', async (c) => {
+    const id = parseSessionIdParam(c);
+    const stats = await sessionStore.getSessionStats(id);
     if (!stats) return notFound(c);
     // Resolve context window DB-first, then fall back to static registry.
-    const session = sessionStore.getSession(id);
+    const session = await sessionStore.getSession(id);
     let context_window: number | null = null;
     if (session) {
       const dbModel = deps.providerStore.listModels(session.provider).find((m) => m.model_id === session.model);
@@ -1177,26 +1200,26 @@ export function mountCoderSessionsRoutes(
     return c.json({ ...stats, context_window });
   });
 
-  app.get('/api/coder/sessions/:id/messages/:mid/full', (c) => {
-    const id = parseIdParam(c);
-    const mid = parseIdParam(c, 'mid');
-    const msg = sessionStore.getMessageById(id, mid);
+  app.get('/api/coder/sessions/:id/messages/:seq/full', async (c) => {
+    const id = parseSessionIdParam(c);
+    const seq = parseSeqParam(c);
+    const msg = await sessionStore.getMessageBySeq(id, seq);
     if (!msg) return notFound(c, 'message not found');
-    return c.json({ id: msg.row.id, role: msg.role, content: msg.content });
+    return c.json({ seq: msg.row.seq, role: msg.role, content: msg.content });
   });
 
   app.delete('/api/coder/sessions/:id', async (c) => {
-    const id = parseIdParam(c);
-    // Global session: refcount-teardown its synthetic workspace AFTER deletion —
-    // only when no other session still references the union (reuse-safe). Abort
-    // any live run first so the runner/indexer stops touching the union before
-    // we unlink its junctions + delete the synthetic project.
-    const session = sessionStore.getSession(id);
-    const unionId = session?.is_global ? session.project_id : null;
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (session?.is_global) await abortActiveRun(id);
-    sessionStore.deleteSession(id);
-    if (unionId != null) await teardownGlobalWorkspaceIfOrphan(deps, unionId);
-    return c.json({ ok: true });
+    const trashed = await sessionStore.deleteSession(id);
+    return c.json({
+      ok: true,
+      session_id: id,
+      trash_name: trashed.trash_name,
+      trashed_at: trashed.trashed_at,
+      scope: trashed.location.scope,
+    });
   });
 
   /**
@@ -1204,16 +1227,16 @@ export function mountCoderSessionsRoutes(
    * a "session header" widget without juggling two requests. Both fields
    * are nullable — a session with no goal AND no tasks returns nulls.
    */
-  app.get('/api/coder/sessions/:id/state-summary', (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+  app.get('/api/coder/sessions/:id/state-summary', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c, 'session not found');
-    const goal = sessionStore.getSessionGoal(id);
-    // Post-merge: todos + tasks share ONE store (coder_tasks_state, gate-typed).
+    const goal = await sessionStore.getSessionGoal(id);
+    // Post-merge: todos + tasks share one gate-typed session file.
     // A track-gate list IS the lightweight checklist → surface it as `todos`,
     // not `tasks`. An approve-gate list → `tasks`. This makes the sidebar render
     // exactly ONE section instead of stacking a duplicate of the same items.
-    const tasksState = sessionStore.getTasksState(id);
+    const tasksState = await sessionStore.getTasksState(id);
     const gate = effectiveGate(tasksState);
     const isTrack = !!tasksState && tasksState.tasks.length > 0 && gate === 'track';
 
@@ -1254,10 +1277,10 @@ export function mountCoderSessionsRoutes(
         ? {
             text: goal.text,
             status: goal.status,
-            budget_tokens: goal.budgetTokens,
-            completion_note: goal.completionNote,
-            created_at: goal.createdAt,
-            updated_at: goal.updatedAt,
+            budget_tokens: goal.budget_tokens,
+            completion_note: goal.completion_note,
+            created_at: goal.created_at,
+            updated_at: goal.updated_at,
           }
         : null,
       // Only an APPROVE list renders as "Tasks". A track checklist is returned
@@ -1288,7 +1311,7 @@ export function mountCoderSessionsRoutes(
    * POST /messages from the user.
    */
   app.get('/api/coder/sessions/:id/status', (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const bus = workerPool.getBus(id);
     return c.json({
       active: !!bus && !bus.ended,
@@ -1299,14 +1322,14 @@ export function mountCoderSessionsRoutes(
   // ─── Session Tool Config ──────────────────────────────────────
 
   /** List all tools (built-in + external MCP) with global + session disabled state. */
-  app.get('/api/coder/sessions/:id/tools', (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+  app.get('/api/coder/sessions/:id/tools', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c, 'session not found');
 
     const allTools = getAllKnownToolsMeta();
     const globalDisabled = new Set(deps.providerStore.listGlobalDisabledTools());
-    const sessionDisabled = sessionStore.getSessionDisabledTools(id);
+    const sessionDisabled = await sessionStore.getSessionDisabledTools(id);
 
     // Include cached external MCP server tools (populated by test/connect)
     let externalTools: ReturnType<typeof enumerateExternalTools>['tools'] = [];
@@ -1331,39 +1354,38 @@ export function mountCoderSessionsRoutes(
 
   /** Toggle a single tool for a session. */
   app.put('/api/coder/sessions/:id/tools/:name/disabled', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const toolName = c.req.param('name');
     const body = await c.req.json<{ disabled: boolean }>();
     if (typeof body.disabled !== 'boolean') {
       return c.json({ error: 'disabled (boolean) required' }, 400);
     }
-    sessionStore.setSessionToolDisabled(id, toolName, body.disabled);
+    await sessionStore.setSessionToolDisabled(id, toolName, body.disabled);
     return c.json({ ok: true });
   });
 
   /** Batch toggle tools for a session. */
   app.put('/api/coder/sessions/:id/tools/bulk-disabled', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await c.req.json<{
       tools: Array<{ name: string; disabled: boolean }>;
     }>();
     if (!Array.isArray(body.tools)) {
       return c.json({ error: 'tools array required' }, 400);
     }
-    const tx = (() => {
-      for (const t of body.tools) {
-        sessionStore.setSessionToolDisabled(id, t.name, t.disabled);
-      }
-    });
-    tx();
+    await Promise.all(
+      body.tools.map((tool) =>
+        sessionStore.setSessionToolDisabled(id, tool.name, tool.disabled),
+      ),
+    );
     return c.json({ ok: true });
   });
 
   /** Copy tool config from another session. */
-  app.post('/api/coder/sessions/:id/tools/copy-from/:sourceId', (c) => {
-    const id = parseIdParam(c);
-    const sourceId = parseIdParam(c, 'sourceId');
-    const copiedCount = sessionStore.copyToolConfig(sourceId, id);
+  app.post('/api/coder/sessions/:id/tools/copy-from/:sourceId', async (c) => {
+    const id = parseSessionIdParam(c);
+    const sourceId = parseSessionIdParam(c, 'sourceId');
+    const copiedCount = await sessionStore.copyToolConfig(sourceId, id);
     return c.json({ ok: true, copiedCount });
   });
 }

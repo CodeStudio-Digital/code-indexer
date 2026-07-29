@@ -212,7 +212,12 @@ describe('company scope', () => {
     const companyCtx = {
       ...ctx,
       projectId: undefined,
-      companyContext: { orchestrator: { effectiveSessionId: 7 }, companySessionId: 7 },
+      companyContext: {
+        orchestrator: {
+          effectiveSessionId: '11111111-1111-4111-8111-111111111111',
+        },
+        companySessionId: '11111111-1111-4111-8111-111111111111',
+      },
     } as unknown as ToolContext;
     const r = await byName('db_list').handler({}, companyCtx);
     expect(r.isError).toBeFalsy();

@@ -15,10 +15,13 @@ import {
 } from '../link-design-system.js';
 
 const URL = 'http://127.0.0.1:4873';
+const SESSION_ID = '11111111-1111-4111-8111-111111111111' as DesignSystemSession['id'];
+const UNKNOWN_SESSION_ID = '99999999-9999-4999-8999-999999999999' as DesignSystemSession['id'];
+const VERSION_ID = '22222222-2222-4222-8222-222222222222' as DesignSystemVersion['id'];
 
 function makeSession(over: Partial<DesignSystemSession> = {}): DesignSystemSession {
   return {
-    id: 3,
+    id: SESSION_ID,
     company_session_id: null,
     project_id: 99,
     kind: 'studio',
@@ -38,8 +41,8 @@ function makeSession(over: Partial<DesignSystemSession> = {}): DesignSystemSessi
 
 function makeVersion(over: Partial<DesignSystemVersion> = {}): DesignSystemVersion {
   return {
-    id: 7,
-    ds_session_id: 3,
+    id: VERSION_ID,
+    ds_session_id: SESSION_ID,
     semver: '1.2.0',
     bump_kind: 'minor',
     is_auto_bump: false,
@@ -59,9 +62,9 @@ function makeVersion(over: Partial<DesignSystemVersion> = {}): DesignSystemVersi
 
 function makeStore(session: DesignSystemSession | null, version: DesignSystemVersion | null) {
   return {
-    getSession: vi.fn(() => session),
-    getLatestPublishedVersion: vi.fn(() => version),
-    getVersionBySemver: vi.fn(() => version),
+    getSession: vi.fn(async () => session),
+    getLatestPublishedVersion: vi.fn(async () => version),
+    getVersionBySemver: vi.fn(async () => version),
   };
 }
 
@@ -110,7 +113,7 @@ function expectApiError(fn: () => unknown | Promise<unknown>, code: string, stat
 describe('resolveDsForLink', () => {
   it('throws 404 for an unknown session', async () => {
     await expectApiError(
-      () => resolveDsForLink(makeStore(null, null), { dsSessionId: 1, targetStack: 'react-ts' }),
+      () => resolveDsForLink(makeStore(null, null), { dsSessionId: UNKNOWN_SESSION_ID, targetStack: 'react-ts' }),
       'not_found',
       404,
     );
@@ -119,7 +122,7 @@ describe('resolveDsForLink', () => {
   it('throws 400 stack_mismatch naming both stacks', async () => {
     const store = makeStore(makeSession({ stack: 'angular' }), makeVersion());
     const err = await expectApiError(
-      () => resolveDsForLink(store, { dsSessionId: 3, targetStack: 'react-ts' }),
+      () => resolveDsForLink(store, { dsSessionId: SESSION_ID, targetStack: 'react-ts' }),
       'stack_mismatch',
       400,
     );
@@ -130,7 +133,7 @@ describe('resolveDsForLink', () => {
 
   it('throws 409 when nothing is published', async () => {
     await expectApiError(
-      () => resolveDsForLink(makeStore(makeSession(), null), { dsSessionId: 3, targetStack: 'react-ts' }),
+      () => resolveDsForLink(makeStore(makeSession(), null), { dsSessionId: SESSION_ID, targetStack: 'react-ts' }),
       'no_published_version',
       409,
     );
@@ -139,19 +142,19 @@ describe('resolveDsForLink', () => {
   it('throws 409 when the explicit semver is not published', async () => {
     const store = makeStore(makeSession(), makeVersion({ status: 'failed' }));
     await expectApiError(
-      () => resolveDsForLink(store, { dsSessionId: 3, semver: '9.9.9', targetStack: 'react-ts' }),
+      () => resolveDsForLink(store, { dsSessionId: SESSION_ID, semver: '9.9.9', targetStack: 'react-ts' }),
       'no_published_version',
       409,
     );
-    expect(store.getVersionBySemver).toHaveBeenCalledWith(3, '9.9.9');
+    expect(store.getVersionBySemver).toHaveBeenCalledWith(SESSION_ID, '9.9.9');
   });
 
-  it('resolves latest published when semver omitted', () => {
+  it('resolves latest published when semver omitted', async () => {
     const store = makeStore(makeSession(), makeVersion());
-    const { session, version } = resolveDsForLink(store, { dsSessionId: 3, targetStack: 'react-ts' });
+    const { session, version } = await resolveDsForLink(store, { dsSessionId: SESSION_ID, targetStack: 'react-ts' });
     expect(session.package_name).toBe('@acme/ui');
     expect(version.semver).toBe('1.2.0');
-    expect(store.getLatestPublishedVersion).toHaveBeenCalledWith(3);
+    expect(store.getLatestPublishedVersion).toHaveBeenCalledWith(SESSION_ID);
   });
 });
 
@@ -218,12 +221,12 @@ describe('linkDsToDir', () => {
     const runCmd = okRunCmd();
     const link = await linkDsToDir(deps, {
       targetDir: dir,
-      dsSessionId: 3,
+      dsSessionId: SESSION_ID,
       targetStack: 'react-ts',
       verdaccio: okVerdaccio(),
       runCmd,
     });
-    expect(link).toMatchObject({ sessionId: 3, packageName: '@acme/ui', semver: '1.2.0' });
+    expect(link).toMatchObject({ sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.2.0' });
     expect(typeof link.linkedAt).toBe('string');
     expect(readFileSync(join(dir, '.npmrc'), 'utf-8')).toBe(`@acme:registry=${URL}\n`);
     const call = runCmd.mock.calls[0][0] as { program: string; args: string[]; cwd: string };
@@ -242,7 +245,7 @@ describe('linkDsToDir', () => {
       () =>
         linkDsToDir(deps, {
           targetDir: dir,
-          dsSessionId: 3,
+          dsSessionId: SESSION_ID,
           targetStack: 'react-ts',
           verdaccio: okVerdaccio(),
           runCmd,
@@ -258,13 +261,13 @@ describe('linkDesignSystem', () => {
   it('rejects non-builder projects and DS workspaces', async () => {
     const a = makeDeps(null);
     await expectApiError(
-      () => linkDesignSystem(a.deps, { projectId: 1, dsSessionId: 3 }, undefined, { verdaccio: okVerdaccio(), runCmd: okRunCmd() }),
+      () => linkDesignSystem(a.deps, { projectId: 1, dsSessionId: SESSION_ID }, undefined, { verdaccio: okVerdaccio(), runCmd: okRunCmd() }),
       'not_builder',
       400,
     );
     const b = makeDeps(JSON.stringify({ stack: 'react-ts', kind: 'ds', packageName: '@acme/ds' }));
     await expectApiError(
-      () => linkDesignSystem(b.deps, { projectId: 1, dsSessionId: 3 }, undefined, { verdaccio: okVerdaccio(), runCmd: okRunCmd() }),
+      () => linkDesignSystem(b.deps, { projectId: 1, dsSessionId: SESSION_ID }, undefined, { verdaccio: okVerdaccio(), runCmd: okRunCmd() }),
       'ds_workspace',
       400,
     );
@@ -276,7 +279,7 @@ describe('linkDesignSystem', () => {
       makeStore(makeSession({ stack: 'vue-ts' }), makeVersion()),
     );
     await expectApiError(
-      () => linkDesignSystem(deps, { projectId: 1, dsSessionId: 3 }, undefined, { verdaccio: okVerdaccio(), runCmd: okRunCmd() }),
+      () => linkDesignSystem(deps, { projectId: 1, dsSessionId: SESSION_ID }, undefined, { verdaccio: okVerdaccio(), runCmd: okRunCmd() }),
       'stack_mismatch',
       400,
     );
@@ -284,7 +287,7 @@ describe('linkDesignSystem', () => {
 
   it('merges the link into builder_json preserving stack/port', async () => {
     const { deps, updateProject } = makeDeps(JSON.stringify({ stack: 'react-ts', port: 5181 }));
-    const out = await linkDesignSystem(deps, { projectId: 1, dsSessionId: 3 }, undefined, {
+    const out = await linkDesignSystem(deps, { projectId: 1, dsSessionId: SESSION_ID }, undefined, {
       verdaccio: okVerdaccio(),
       runCmd: okRunCmd(),
     });
@@ -293,12 +296,12 @@ describe('linkDesignSystem', () => {
     const written = JSON.parse(updateProject.mock.calls[0][1].builder_json as string);
     expect(written.stack).toBe('react-ts');
     expect(written.port).toBe(5181);
-    expect(written.designSystem).toMatchObject({ sessionId: 3, packageName: '@acme/ui', semver: '1.2.0' });
+    expect(written.designSystem).toMatchObject({ sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.2.0' });
   });
 
   it('404s on unknown project', async () => {
     const { deps } = makeDeps(null);
-    await expectApiError(() => linkDesignSystem(deps, { projectId: 2, dsSessionId: 3 }), 'not_found', 404);
+    await expectApiError(() => linkDesignSystem(deps, { projectId: 2, dsSessionId: SESSION_ID }), 'not_found', 404);
   });
 });
 
@@ -312,7 +315,7 @@ describe('unlinkDesignSystem', () => {
     const builderJson = JSON.stringify({
       stack: 'react-ts',
       port: 5181,
-      designSystem: { sessionId: 3, packageName: '@acme/ui', semver: '1.2.0', linkedAt: 'x' },
+      designSystem: { sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.2.0', linkedAt: 'x' },
     });
     const { deps, updateProject, dir } = makeDeps(builderJson);
     writeFileSync(join(dir, '.npmrc'), `fund=false\n@acme:registry=${URL}\n`, 'utf-8');

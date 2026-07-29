@@ -29,9 +29,9 @@ interface KanbanCardItemProps {
   /** True while the quick-dispatch POST for THIS card is in flight. */
   dispatching?: boolean;
   /** C3 — open another card's modal (blocked_by chips). */
-  onOpenCardById?: (cardId: number) => void;
+  onOpenCardById?: (cardId: string) => void;
   /** Resolve a card title for the blocked_by chips (falls back to #id). */
-  titleForCard?: (cardId: number) => string | undefined;
+  titleForCard?: (cardId: string) => string | undefined;
 }
 
 /** Convert a normalized priority score into a 1-5 dot rating. */

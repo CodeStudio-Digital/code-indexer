@@ -20,7 +20,7 @@ import { ReplaceVersionPopover } from './ReplaceVersionPopover.js';
 
 export interface FrameCellProps {
   projectId: number;
-  assetId: number;
+  assetId: string;
   frame: AnimFrame;
   index: number;
   selected: boolean;
@@ -33,9 +33,9 @@ export interface FrameCellProps {
   onDuration: (i: number, ms: number | null) => void;
   onDelete: (i: number) => void;
   onDuplicate: (i: number) => void;
-  onReplace: (i: number, versionId: number) => void;
+  onReplace: (i: number, versionId: string) => void;
   /** When absent, the Edit action is hidden (no editor orchestration wired). */
-  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
+  onEditVersion?: (versionId: string, frameIndex: number, track: number) => void;
   onDragStart: (i: number) => void;
   onDropOn: (i: number) => void;
   /** A version row was dropped ON this cell (replace; parent validates asset). */

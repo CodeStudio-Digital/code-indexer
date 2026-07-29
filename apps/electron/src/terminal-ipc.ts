@@ -38,6 +38,8 @@ import { ipcMain, MessageChannelMain, type IpcMainEvent } from 'electron';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
 import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { childRegistry } from './child-process-registry.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import { asCompanySessionId } from '@mcp/session-storage';
 
 const require = createRequire(import.meta.url);
 
@@ -96,13 +98,13 @@ function tryLoadPty(): NodePtyModule | null {
 }
 
 interface OpenInput {
-  sessionId: number;
+  sessionId: string;
   /** 'host' | 'sandbox'. Sandbox not yet supported via IPC (falls back to error). */
   target?: 'host' | 'sandbox';
   cols?: number;
   rows?: number;
   /** Project ID for `target=host` — its root_path is used as cwd. Optional;
-   *  falls back to companyStore.getSession when sessionId provided. */
+   *  falls back to the Company bundle's first linked project. */
   projectId?: number;
 }
 
@@ -162,23 +164,40 @@ export function mountTerminalIpc(deps: ServerDeps): void {
       return;
     }
 
-    // Resolve the working directory. If projectId provided, use its
-    // root_path. Otherwise look up the session's project. Fall back to
-    // user home if neither resolves.
-    let cwd = process.env.HOME ?? process.env.USERPROFILE ?? process.cwd();
+    // Resolve the working directory only from a project linked in the
+    // filesystem Company bundle. A caller cannot smuggle an unrelated numeric
+    // project id into a valid session terminal request.
+    let cwd: string;
     try {
-      if (payload.projectId) {
-        const project = deps.db.getProject(payload.projectId);
-        if (project?.root_path) cwd = project.root_path;
-      } else if (payload.sessionId) {
-        const session = deps.sessionStore.getSession(payload.sessionId);
-        if (session?.project_id) {
-          const project = deps.db.getProject(session.project_id);
-          if (project?.root_path) cwd = project.root_path;
-        }
+      await deps.sessionStore.ensureCatalog();
+      const requestedFiles = new CompanySessionFiles({
+        companySessionId: asCompanySessionId(payload.sessionId),
+        sessionStore: deps.sessionStore,
+      });
+      const requested = requestedFiles.getSession();
+      const rootFiles = requested.parent_session_id
+        ? new CompanySessionFiles({
+            companySessionId: requested.parent_session_id,
+            sessionStore: deps.sessionStore,
+          })
+        : requestedFiles;
+      const root = rootFiles.getSession();
+      const projectId = payload.projectId ?? root.project_ids[0];
+      if (projectId == null || !root.project_ids.includes(projectId)) {
+        throw new Error('requested project is not linked to this Company session');
       }
-    } catch {
-      /* keep fallback cwd */
+      const project = deps.db.getProject(projectId);
+      if (!project?.root_path) {
+        throw new Error(`linked project ${projectId} is unavailable`);
+      }
+      cwd = project.root_path;
+    } catch (error) {
+      fail(
+        `terminal session authorization failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return;
     }
 
     // Pick the shell. Windows: prefer pwsh, then powershell, then cmd.

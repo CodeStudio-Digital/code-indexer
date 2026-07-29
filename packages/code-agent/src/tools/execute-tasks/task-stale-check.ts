@@ -29,7 +29,8 @@
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/session-storage';
 import type { CoderTask } from '@mcp/code-agent/sessions/types.js';
 import { SYSTEM_PROMPT_VERSION } from '@mcp/code-agent/core/runner/assembly/system-prompt.js';
 import { taskKind } from './task-run-types.js';
@@ -94,7 +95,8 @@ function describeFile(pathInput: string, cwd: string): string {
 export interface ShouldSkipArgs {
   task: CoderTask;
   cwd: string;
-  store: SessionStore | null | undefined;
+  store: FsSessionStore | null | undefined;
+  sessionId: SessionId | null | undefined;
   /** Override; tests pass a fixed string so the fingerprint is stable. */
   systemPromptVersion?: string;
 }
@@ -112,7 +114,9 @@ export interface ShouldSkipResult {
  * changed since the last successful run. Pure aside from a single DB
  * read + N fs.statSync calls.
  */
-export function shouldSkipTask(args: ShouldSkipArgs): ShouldSkipResult {
+export async function shouldSkipTask(
+  args: ShouldSkipArgs,
+): Promise<ShouldSkipResult> {
   // Global bypass via env.
   if (process.env.CODER_TASKS_DISABLE_SKIP_STALE === '1') {
     return { skip: false, fingerprint: null };
@@ -136,17 +140,20 @@ export function shouldSkipTask(args: ShouldSkipArgs): ShouldSkipResult {
     return { skip: false, fingerprint: null };
   }
 
-  if (!args.store) {
+  if (!args.store || args.sessionId == null) {
     // No persistence layer → no history to compare against.
     return { skip: false, fingerprint };
   }
 
   let lastItem;
   try {
-    lastItem = args.store.findLastCompletedTaskItem(args.task.id);
+    lastItem = await args.store.findLastCompletedTaskItem(
+      args.sessionId,
+      args.task.id,
+    );
   } catch (e) {
     console.warn(
-      `[coder/tasks] shouldSkipTask: DB lookup failed (${e instanceof Error ? e.message : String(e)}); will not skip`,
+      `[coder/tasks] shouldSkipTask: bundle lookup failed (${e instanceof Error ? e.message : String(e)}); will not skip`,
     );
     return { skip: false, fingerprint };
   }

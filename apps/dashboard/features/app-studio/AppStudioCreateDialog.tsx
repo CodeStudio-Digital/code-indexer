@@ -17,7 +17,7 @@ export function AppStudioCreateDialog({
   onCreated,
 }: {
   onClose: () => void;
-  onCreated: (appSessionId: number, masterSessionId: number, idea: string) => void;
+  onCreated: (appSessionId: string, masterSessionId: string, idea: string) => void;
 }) {
   const { t } = useTranslation('appStudio');
   const {

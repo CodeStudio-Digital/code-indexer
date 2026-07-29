@@ -11,6 +11,7 @@ import type { CompactionSummaryV2 } from '@mcp/code-agent/core/summarizer.js';
 import { CompactingNode } from '../compacting.js';
 import type { CompactionCheckpoint } from '../../types.js';
 import { makeTestContext } from './test-helpers.js';
+import { asSessionId } from '@mcp/session-storage';
 
 function user(text: string): AgentMessage {
   return { role: 'user', content: [{ type: 'text', text }] };
@@ -77,7 +78,7 @@ describe('CompactingNode', () => {
     ));
     const checkpoint = vi.fn(async (_value: CompactionCheckpoint) => ({
       status: 'committed' as const,
-      chapterId: 1,
+      chapterId: '00000000-0000-4000-8000-000000000001',
       boundaryId: 10,
     }));
     ctx.opts.onCompactionCheckpoint = checkpoint;
@@ -114,10 +115,17 @@ describe('CompactingNode', () => {
     const { ctx } = makeTestContext();
     const finished: Array<{ status: string }> = [];
     Object.assign(ctx.opts, {
-      sessionId: 1,
+      sessionId: asSessionId('11111111-1111-4111-8111-111111111111'),
       sessionStore: {
-        startCompactionAttempt: () => 1,
-        finishCompactionAttempt: (_id: number, value: { status: string }) => finished.push(value),
+        startCompactionAttempt: async () =>
+          '22222222-2222-4222-8222-222222222222',
+        finishCompactionAttempt: async (
+          _sessionId: string,
+          _id: string,
+          value: { status: string },
+        ) => {
+          finished.push(value);
+        },
       },
     });
     const checkpoint = vi.fn()

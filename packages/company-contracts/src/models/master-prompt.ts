@@ -7,9 +7,9 @@ export interface MasterPromptOption {
 }
 
 export interface MasterPrompt {
-  id: number;
-  company_session_id: number;
-  agent_run_id: number | null;
+  id: string;
+  company_session_id: string;
+  agent_run_id: string | null;
   kind: MasterPromptKind;
   runner_block_id: string | null;
   /** Question text or plan text. */

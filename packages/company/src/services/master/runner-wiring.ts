@@ -67,7 +67,7 @@ export interface WireMasterRunnerDeps {
  */
 export function wireMasterRunnerListeners(
   runner: CoderRunner,
-  runId: number,
+  runId: string,
   deps: WireMasterRunnerDeps,
 ): void {
   const synthetic = { runner } as unknown as RunCoderHandle;
@@ -125,10 +125,10 @@ export interface AttachMasterCompletionDeps {
  */
 export function attachMasterCompletionHandler(
   handle: RunCoderHandle,
-  runId: number,
+  runId: string,
   deps: AttachMasterCompletionDeps,
 ): void {
-  const finalizeTerminalExit = (): void => {
+  const finalizeTerminalExit = async (): Promise<void> => {
     deps.state.setEnded(true);
     // Timestamp the exit so the dashboard's session_idle handler can
     // surface "Master finished at HH:MM" or "Master ended unexpectedly"
@@ -139,9 +139,7 @@ export function attachMasterCompletionHandler(
       try { deps.state.attentionOff(); } catch { /* best-effort */ }
       deps.state.setAttentionOff(null);
     }
-    try {
-      deps.humanInLoop.cancelPendingMasterPrompts();
-    } catch { /* best-effort */ }
+    await deps.humanInLoop.cancelPendingMasterPrompts().catch(() => undefined);
     deps.state.notifyIdleEnded();
   };
 
@@ -171,13 +169,11 @@ export function attachMasterCompletionHandler(
         continuedWithFallback = await tryFallback(error ?? `${reason}${detail}`);
         if (continuedWithFallback) return;
       }
-      try {
-        deps.ctx.companyStore.updateAgentRunStatus(
-          runId,
-          reason === 'completed' ? 'completed' : 'error',
-          reason !== 'completed' ? `${reason}${detail}` : undefined,
-        );
-      } catch { /* ignore */ }
+      await deps.ctx.companyFiles.updateAgentRunStatus(
+        runId,
+        reason === 'completed' ? 'completed' : 'error',
+        reason !== 'completed' ? `${reason}${detail}` : undefined,
+      ).catch(() => undefined);
       if (reason !== 'completed') {
         deps.state.setEndedWithError(`${reason}${detail}`);
       }
@@ -189,15 +185,15 @@ export function attachMasterCompletionHandler(
       const errMessage = err instanceof Error ? err.message : String(err);
       continuedWithFallback = await tryFallback(errMessage);
       if (continuedWithFallback) return;
-      try {
-        deps.ctx.companyStore.updateAgentRunStatus(runId, 'error');
-      } catch { /* ignore */ }
+      await deps.ctx.companyFiles
+        .updateAgentRunStatus(runId, 'error')
+        .catch(() => undefined);
       deps.state.setEndedWithError(errMessage);
       try {
         deps.board.post('system', null, 'message', `Master error: ${errMessage}`);
       } catch { /* best-effort */ }
     } finally {
-      if (!continuedWithFallback) finalizeTerminalExit();
+      if (!continuedWithFallback) await finalizeTerminalExit();
     }
   })();
 }

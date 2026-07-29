@@ -16,14 +16,14 @@ export interface DbToolsConnectionStore {
 }
 
 /**
- * Linked projects of a company session — structural slice of `CompanyStore`
- * (`company_session_projects`, see packages/store/src/company/session-projects.ts).
+ * Linked projects of a Company session — supplied from the owning filesystem
+ * bundle's `session.json`.
  * `label` is the link label (often the service id) used as the connection-name
  * prefix in company scope.
  */
 export interface DbToolsSessionProjects {
   listCompanySessionProjects(
-    companySessionId: number,
+    companySessionId: string,
   ): Array<{ project_id: number; label: string | null }>;
 }
 

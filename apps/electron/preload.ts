@@ -157,6 +157,10 @@ const STREAMING_METHOD_PATHS: ReadonlySet<string> = new Set([
   'terminal:output',
   'ssh:sftpDownloadStream',
   'ssh:sftpUploadStream',
+  // Zip/unzip progress — the work runs in a worker thread (see
+  // packages/api-handlers/src/files/archive-runner.ts), these carry its frames.
+  'files:archiveStream',
+  'files:extractStream',
   'runner:events',
   'debug:events',
   'runtime:download',

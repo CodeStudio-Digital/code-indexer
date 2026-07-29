@@ -26,7 +26,7 @@ interface SessionSkill {
 }
 
 interface SkillConfigDialogProps {
-  sessionId: number | null;
+  sessionId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -43,7 +43,7 @@ export function SkillConfigView({
   loadKey = 0,
   showDescription = true,
 }: {
-  sessionId: number | null;
+  sessionId: string | null;
   loadKey?: number;
   showDescription?: boolean;
 }) {

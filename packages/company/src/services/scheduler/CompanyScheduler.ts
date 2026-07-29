@@ -55,7 +55,7 @@ export interface SchedulerSpawn {
     task: string;
     projectId?: number;
     dispatchSource?: RoleDispatchSource;
-  }): Promise<{ agentRunId: number; coderSessionId: number }>;
+  }): Promise<{ agentRunId: string; coderSessionId: string }>;
 }
 
 export interface CompanySchedulerDeps {
@@ -162,15 +162,16 @@ export class CompanyScheduler {
     }
     if (cardsFull.length === 0) return;
 
-    // Running count from DB (excludes master) — sizes the batch; the hard cap
+    // Running count from independent agent-run files (excludes master) sizes
+    // the batch; the hard cap
     // is still enforced by subordinates.spawn.
-    const runs = this.deps.ctx.companyStore.listAgentRuns(sessionId);
+    const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
     const runningCount = runs.filter(
       (r) => r.role !== 'master' && ACTIVE_RUN_STATUSES.has(r.status),
     ).length;
 
     // Reverse "blocks" map for the priority pipeline (who does each card block?).
-    const blocksMap = new Map<number, number[]>();
+    const blocksMap = new Map<string, string[]>();
     for (const card of cardsFull) {
       for (const dep of card.dependencies) {
         const list = blocksMap.get(dep.depends_on_id) ?? [];
@@ -191,7 +192,7 @@ export class CompanyScheduler {
       columnUpdatedAtMs: c.updated_at ? new Date(c.updated_at).getTime() : undefined,
     }));
 
-    let orderedIds: number[];
+    let orderedIds: string[];
     try {
       const pipeline = createKanbanPriorityPipeline();
       const result = await prioritizeKanban(pipeline, {

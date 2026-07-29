@@ -44,7 +44,8 @@ describe('parseObligations', () => {
 });
 
 describe('IntentContractCompiler', () => {
-  const resolveContext = { sessionId: 1 };
+  const sessionId = '00000000-0000-4000-8000-000000000001';
+  const resolveContext = { sessionId };
 
   it('serves from the cache without resolving a model', async () => {
     let resolved = false;
@@ -62,7 +63,7 @@ describe('IntentContractCompiler', () => {
     const compiler = new IntentContractCompiler(resolver, cache);
     const obs = await compiler.compile({
       sessionKind: 'coder',
-      sessionId: 1,
+      sessionId,
       resolveContext,
       intentSource: 'Fix the bug',
     });
@@ -75,10 +76,10 @@ describe('IntentContractCompiler', () => {
     const resolver = { resolveChain: async () => [] } as unknown as PipelineProviderResolver;
     const compiler = new IntentContractCompiler(resolver);
     await expect(
-      compiler.compile({ sessionKind: 'coder', sessionId: 1, resolveContext, intentSource: 'x' }),
+      compiler.compile({ sessionKind: 'coder', sessionId, resolveContext, intentSource: 'x' }),
     ).resolves.toBeNull();
     await expect(
-      compiler.compile({ sessionKind: 'coder', sessionId: 1, resolveContext, intentSource: '   ' }),
+      compiler.compile({ sessionKind: 'coder', sessionId, resolveContext, intentSource: '   ' }),
     ).resolves.toBeNull();
   });
 });

@@ -64,7 +64,14 @@ function workspaceTypeScriptSpecifiers(): Plugin {
   };
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // Electron loads the packaged dashboard from disk via file:// (main.ts
+  // `win.loadFile(dist/dashboard/index.html)`). With Vite's default absolute
+  // base ('/'), the built index.html references `/assets/*.js`, which under
+  // file:// resolve to the filesystem root and 404 → black screen. A relative
+  // base emits `./assets/*.js`, resolved next to index.html. Dev keeps '/'
+  // (the Vite dev server serves from root; relative base breaks HMR).
+  base: command === 'build' ? './' : '/',
   plugins: [workspaceTypeScriptSpecifiers(), tailwindcss(), react()],
   root: __dirname,
   define: {
@@ -72,6 +79,13 @@ export default defineConfig({
   },
   resolve: {
     alias: [
+      // React 19 replays layout effects and refs while revealing subtrees.
+      // Radix 1.1.7 can dispatch forever in that phase; keep one renderer-wide
+      // replacement until the upstream Presence fix ships.
+      {
+        find: /^@radix-ui\/react-presence$/,
+        replacement: resolve(__dirname, "lib/radix-presence-react19.tsx"),
+      },
       ...pkgAliases('@mcp/api-bus', 'api-bus'),
       ...pkgAliases('@mcp/shared', 'shared'),
       ...pkgAliases('@mcp/store', 'store'),
@@ -92,6 +106,24 @@ export default defineConfig({
   build: {
     outDir: resolve(repoRoot, 'dist/dashboard'),
     emptyOutDir: true,
+    // The bundle is ~700 chunks (every Shiki grammar and lazy route is one).
+    // Gzipping each of them just to print a size column cost more than the
+    // rest of the build, and nothing consumes the number: Electron loads the
+    // assets from disk over file://, where no transfer encoding applies.
+    reportCompressedSize: false,
+    // Never inline the Material Icon Theme SVGs.
+    //
+    // `lib/material-icons/resolve.ts` eager-globs 1121 icons as `?url`, and each
+    // one landed UNDER the default 4 KB inline threshold — so all of them were
+    // url-encoded straight into the chunk. Measured: 1.29 MB of the 1.32 MB
+    // file-icon chunk was inline SVG text, parsed and retained by V8 the first
+    // time anything showed a file icon (explorer, chat file blocks, SFTP,
+    // session state). As real files they are ~55 KB of URL strings plus small
+    // on-disk reads for the handful of icons actually on screen, which Chromium
+    // then caches. Everything else keeps Vite's default threshold.
+    assetsInlineLimit: (filePath) => (
+      /[\\/]material-icons[\\/]svg[\\/]/.test(filePath) ? false : undefined
+    ),
   },
   server: {
     host: true,
@@ -150,4 +182,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

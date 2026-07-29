@@ -19,10 +19,15 @@ import {
 import { CompanyEventBus } from '../../CompanyEventBus.js';
 import { SubordinateCompletionBus } from '../../subordinate/completion-events.js';
 import { DEFAULT_STATE_TIMEOUT_MS } from '../state-machine.js';
+import { agentRunId, companySessionId } from './uuid-fixtures.js';
+
+const SESSION = companySessionId(100);
+const AGENT_1 = agentRunId(1);
+const AGENT_2 = agentRunId(2);
 
 function makeDeps(over: Partial<AgentSupervisorDeps> = {}): AgentSupervisorDeps {
   return {
-    companySessionId: 100,
+    companySessionId: SESSION,
     companyEventBus: new CompanyEventBus(),
     completionBus: new SubordinateCompletionBus(),
     tickIntervalMs: 60_000, // long so tests don't fire it unless they call tickOnce
@@ -59,7 +64,7 @@ describe('AgentSupervisor — lifecycle', () => {
 describe('AgentSupervisor — registration', () => {
   it('registerSubordinate adds to tracker', () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'frontend' });
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'frontend' });
     const status = sup.getStatus();
     expect(status.trackedCount).toBe(1);
     expect(status.byState.BOOTING).toBe(1);
@@ -67,7 +72,7 @@ describe('AgentSupervisor — registration', () => {
 
   it('registerMaster uses role=master', () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerMaster({ agentRunId: 1, companySessionId: 100 });
+    sup.registerMaster({ agentRunId: AGENT_1, companySessionId: SESSION });
     expect(sup.listRecords()[0].role).toBe('master');
   });
 });
@@ -75,30 +80,30 @@ describe('AgentSupervisor — registration', () => {
 describe('AgentSupervisor — manual transitions', () => {
   it('applied legal transition returns true', () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    expect(sup.transition(1, 'RUNNING_TURN')).toBe(true);
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
+    expect(sup.transition(AGENT_1, 'RUNNING_TURN')).toBe(true);
     expect(sup.listRecords()[0].state).toBe('RUNNING_TURN');
   });
 
   it('illegal transition returns false + emits incident', () => {
     const incidents: unknown[] = [];
     const sup = new AgentSupervisor(makeDeps({ emitIncident: (i) => { incidents.push(i); } }));
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
     // BOOTING → AWAITING_TOOL is illegal
-    expect(sup.transition(1, 'AWAITING_TOOL')).toBe(false);
+    expect(sup.transition(AGENT_1, 'AWAITING_TOOL')).toBe(false);
     expect(incidents).toHaveLength(1);
     expect((incidents[0] as { kind: string }).kind).toBe('illegal_transition');
   });
 
   it('heartbeat bumps lastHeartbeatAt without state change', () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    sup.transition(1, 'RUNNING_TURN');
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
+    sup.transition(AGENT_1, 'RUNNING_TURN');
     const before = sup.listRecords()[0].lastHeartbeatAt;
     // Wait a tick of wall-clock
     return new Promise<void>((resolve) => {
       setTimeout(() => {
-        sup.heartbeat(1);
+        sup.heartbeat(AGENT_1);
         const after = sup.listRecords()[0].lastHeartbeatAt;
         expect(after).toBeGreaterThan(before);
         resolve();
@@ -113,8 +118,8 @@ describe('AgentSupervisor — tickOnce stuck detection', () => {
     const sup = new AgentSupervisor(
       makeDeps({ emitIncident: (i) => { incidents.push(i); } }),
     );
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'frontend' });
-    sup.transition(1, 'RUNNING_TURN');
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'frontend' });
+    sup.transition(AGENT_1, 'RUNNING_TURN');
     // Manually push the record's heartbeat back so it's stuck.
     const records = sup.listRecords();
     const r = records[0];
@@ -123,7 +128,7 @@ describe('AgentSupervisor — tickOnce stuck detection', () => {
     const future = Date.now() + DEFAULT_STATE_TIMEOUT_MS.RUNNING_TURN! + 1000;
     const stuck = await sup.tickOnce(future);
     expect(stuck).toHaveLength(1);
-    expect(stuck[0].record.agentRunId).toBe(1);
+    expect(stuck[0].record.agentRunId).toBe(AGENT_1);
     expect(stuck[0].toStuckState).toBe('STUCK_TURN');
     expect(incidents.length).toBeGreaterThan(0);
     // After detection, state is STUCK_TURN
@@ -136,8 +141,8 @@ describe('AgentSupervisor — tickOnce stuck detection', () => {
     const sup = new AgentSupervisor(
       makeDeps({ emitIncident: (i) => { incidents.push(i); } }),
     );
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    sup.transition(1, 'RUNNING_TURN');
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
+    sup.transition(AGENT_1, 'RUNNING_TURN');
     const future = Date.now() + DEFAULT_STATE_TIMEOUT_MS.RUNNING_TURN! + 1000;
     await sup.tickOnce(future);
     const first = incidents.length;
@@ -148,9 +153,9 @@ describe('AgentSupervisor — tickOnce stuck detection', () => {
 
   it('detects AWAITING_TOOL stuck as STUCK_TOOL', async () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    sup.transition(1, 'RUNNING_TURN');
-    sup.transition(1, 'AWAITING_TOOL', { toolUseId: 'tu-1', toolName: 'Bash' });
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
+    sup.transition(AGENT_1, 'RUNNING_TURN');
+    sup.transition(AGENT_1, 'AWAITING_TOOL', { toolUseId: 'tu-1', toolName: 'Bash' });
     const future = Date.now() + DEFAULT_STATE_TIMEOUT_MS.AWAITING_TOOL! + 1000;
     const stuck = await sup.tickOnce(future);
     expect(stuck[0].toStuckState).toBe('STUCK_TOOL');
@@ -158,9 +163,9 @@ describe('AgentSupervisor — tickOnce stuck detection', () => {
 
   it('skips IDLE agents (no timeout)', async () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    sup.transition(1, 'RUNNING_TURN');
-    sup.transition(1, 'IDLE');
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
+    sup.transition(AGENT_1, 'RUNNING_TURN');
+    sup.transition(AGENT_1, 'IDLE');
     const future = Date.now() + 24 * 60 * 60_000; // 24hr later
     const stuck = await sup.tickOnce(future);
     expect(stuck).toHaveLength(0);
@@ -168,9 +173,9 @@ describe('AgentSupervisor — tickOnce stuck detection', () => {
 
   it('skips TERMINAL agents', async () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    sup.transition(1, 'RUNNING_TURN');
-    sup.transition(1, 'TERMINAL');
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
+    sup.transition(AGENT_1, 'RUNNING_TURN');
+    sup.transition(AGENT_1, 'TERMINAL');
     const future = Date.now() + 24 * 60 * 60_000;
     expect(await sup.tickOnce(future)).toHaveLength(0);
   });
@@ -186,9 +191,9 @@ describe('AgentSupervisor — tickOnce stuck detection', () => {
 describe('AgentSupervisor — getStatus', () => {
   it('reports counts by state', () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    sup.registerSubordinate({ agentRunId: 2, companySessionId: 100, role: 'frontend' });
-    sup.transition(1, 'RUNNING_TURN');
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
+    sup.registerSubordinate({ agentRunId: AGENT_2, companySessionId: SESSION, role: 'frontend' });
+    sup.transition(AGENT_1, 'RUNNING_TURN');
     // sup 2 stays in BOOTING
     const status = sup.getStatus();
     expect(status.trackedCount).toBe(2);
@@ -198,8 +203,8 @@ describe('AgentSupervisor — getStatus', () => {
 
   it('stuckCount reflects STUCK_* + FAILED_* + INBOX_EXPIRED states', async () => {
     const sup = new AgentSupervisor(makeDeps());
-    sup.registerSubordinate({ agentRunId: 1, companySessionId: 100, role: 'qa' });
-    sup.transition(1, 'RUNNING_TURN');
+    sup.registerSubordinate({ agentRunId: AGENT_1, companySessionId: SESSION, role: 'qa' });
+    sup.transition(AGENT_1, 'RUNNING_TURN');
     const future = Date.now() + DEFAULT_STATE_TIMEOUT_MS.RUNNING_TURN! + 1000;
     await sup.tickOnce(future);
     expect(sup.getStatus().stuckCount).toBe(1);

@@ -140,7 +140,7 @@ interface ComposerProps {
    */
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
   setToolPermissionMode?: (v: 'ask' | 'auto' | 'unrestricted') => void;
-  sessionId?: number | null;
+  sessionId?: string | null;
   /** Thinking mode toggle — only shown when provider supports it. */
   thinking?: boolean;
   setThinking?: (v: boolean) => void;

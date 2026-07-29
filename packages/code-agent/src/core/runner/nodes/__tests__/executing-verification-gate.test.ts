@@ -3,6 +3,7 @@ import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import {
+  buildGoalCompletionAdvisory,
   evaluateVerificationReadinessAtFinish,
   maybeVerificationCompletionRefusal,
   maybeVerificationNudge,
@@ -84,48 +85,50 @@ function validate(
 }
 
 describe('evaluateVerificationReadinessAtFinish', () => {
-  it('is not applicable when no files or writes exist', () => {
+  it('is not applicable when no files or writes exist', async () => {
     const { ctx } = harness([]);
-    expect(evaluateVerificationReadinessAtFinish(ctx).status).toBe('not_applicable');
+    expect((await evaluateVerificationReadinessAtFinish(ctx)).status).toBe(
+      'not_applicable',
+    );
   });
 
-  it('reports missing after a write with no validation', () => {
+  it('reports missing after a write with no validation', async () => {
     const { ctx, ledger } = harness();
     write(ledger);
-    expect(evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
       status: 'missing',
       source: 'ledger',
       lastWriteSeq: 1,
     });
   });
 
-  it('reports stale when validation precedes the latest write', () => {
+  it('reports stale when validation precedes the latest write', async () => {
     const { ctx, ledger } = harness();
     validate(ledger);
     write(ledger);
-    expect(evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
       status: 'stale',
       lastValidationSeq: 1,
       lastWriteSeq: 2,
     });
   });
 
-  it('reports stale when the post-write validation failed', () => {
+  it('reports stale when the post-write validation failed', async () => {
     const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger, true);
-    expect(evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
       status: 'stale',
       lastSuccessfulValidationSeq: null,
       lastValidationSeq: 2,
     });
   });
 
-  it('reports fresh when successful validation follows the latest write', () => {
+  it('reports fresh when successful validation follows the latest write', async () => {
     const { ctx, ledger } = harness();
     write(ledger);
     validate(ledger);
-    expect(evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
       status: 'fresh',
       lastWriteSeq: 1,
       lastSuccessfulValidationSeq: 2,
@@ -133,7 +136,7 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     });
   });
 
-  it('reports fresh for filtered workspace validation and PHP lint', () => {
+  it('reports fresh for filtered workspace validation and PHP lint', async () => {
     const workspace = harness();
     write(workspace.ledger);
     validate(
@@ -141,7 +144,7 @@ describe('evaluateVerificationReadinessAtFinish', () => {
       false,
       'pnpm --filter @migrator/core test -- siger.mapper.spec.ts',
     );
-    expect(evaluateVerificationReadinessAtFinish(workspace.ctx)).toMatchObject({
+    expect(await evaluateVerificationReadinessAtFinish(workspace.ctx)).toMatchObject({
       status: 'fresh',
       validationSignals: ['pnpm test'],
     });
@@ -149,16 +152,16 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     const php = harness(['sync-service/handlers/UserHandler.php']);
     write(php.ledger, 'sync-service/handlers/UserHandler.php');
     validate(php.ledger, false, 'php -l sync-service/handlers/UserHandler.php');
-    expect(evaluateVerificationReadinessAtFinish(php.ctx)).toMatchObject({
+    expect(await evaluateVerificationReadinessAtFinish(php.ctx)).toMatchObject({
       status: 'fresh',
       validationSignals: ['php -l'],
     });
   });
 
-  it('accepts a successful current-run validation for resumed changed files', () => {
+  it('accepts a successful current-run validation for resumed changed files', async () => {
     const { ctx, ledger } = harness();
     validate(ledger);
-    expect(evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
       status: 'fresh',
       source: 'ledger',
       lastWriteSeq: null,
@@ -166,7 +169,7 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     });
   });
 
-  it('uses persisted evidence on a resumed run with no current-run write', () => {
+  it('uses persisted evidence on a resumed run with no current-run write', async () => {
     const { ctx } = harness();
     ctx.opts.collectVerifyEvidence = () => ({
       lastVerify: {
@@ -179,45 +182,36 @@ describe('evaluateVerificationReadinessAtFinish', () => {
       filesEditedAfter: [],
       filesEditedAtSameTime: ['src/a.ts'],
     });
-    expect(evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
+    expect(await evaluateVerificationReadinessAtFinish(ctx)).toMatchObject({
       status: 'ambiguous',
       source: 'persisted',
     });
   });
 
-  it('nudges once, then lets the reversible gate yield', () => {
+  it('classifies fresh, absent, and weak evidence without blocking', async () => {
+    const empty = harness([]);
+    expect(buildGoalCompletionAdvisory(
+      await evaluateVerificationReadinessAtFinish(empty.ctx),
+    )).toMatchObject({ health: 'unverified' });
+
     const { ctx, ledger } = harness();
     write(ledger);
-    const readiness = evaluateVerificationReadinessAtFinish(ctx);
-    expect(maybeVerificationNudge(ctx, readiness)).toContain('Completion evidence is not fresh');
-    expect(maybeVerificationNudge(ctx, readiness)).toBeNull();
-  });
-
-  it('refuses an early update_goal, then accepts it after fresh validation', () => {
-    const { ctx, ledger } = harness();
-    ctx.opts.toolContext.getGoalState = () => ({
-      text: 'Implement and verify the change',
-      status: 'in_progress',
-      budgetTokens: null,
-      completionNote: null,
-      createdAt: '2026-07-23T00:00:00.000Z',
-      updatedAt: '2026-07-23T00:00:00.000Z',
-    });
-    write(ledger);
-
-    expect(maybeVerificationCompletionRefusal(ctx))
-      .toContain('Refused `update_goal`');
-    expect(ctx.verification.nudges).toBe(1);
+    expect(buildGoalCompletionAdvisory(
+      await evaluateVerificationReadinessAtFinish(ctx),
+    )).toMatchObject({ health: 'completed_with_warnings' });
 
     validate(ledger);
-    expect(maybeVerificationCompletionRefusal(ctx)).toBeNull();
+    expect(buildGoalCompletionAdvisory(
+      await evaluateVerificationReadinessAtFinish(ctx),
+    )).toMatchObject({ health: 'verified' });
   });
 
-  it('does not mask update_goal missing-goal handling', () => {
+  it('keeps the retired nudge and refusal APIs non-blocking', async () => {
     const { ctx, ledger } = harness();
-    ctx.opts.toolContext.getGoalState = () => null;
     write(ledger);
+    const readiness = await evaluateVerificationReadinessAtFinish(ctx);
 
+    expect(maybeVerificationNudge(ctx, readiness)).toBeNull();
     expect(maybeVerificationCompletionRefusal(ctx)).toBeNull();
     expect(ctx.verification.nudges).toBe(0);
   });

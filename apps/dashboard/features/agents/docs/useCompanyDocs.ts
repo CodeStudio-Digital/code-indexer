@@ -35,7 +35,7 @@ function coerceEntries(body: unknown): DocEntry[] {
   return [];
 }
 
-export function useDocsList(sessionId: number, service: string | null): {
+export function useDocsList(sessionId: string, service: string | null): {
   entries: DocEntry[];
   reload: () => void;
   loading: boolean;
@@ -78,7 +78,7 @@ export interface DocBody {
 
 /** Fetch + parse a doc body. Exported for `useIndexFile` reuse. */
 export async function fetchDocBody(
-  sessionId: number,
+  sessionId: string,
   service: string | null,
   path: string,
 ): Promise<{ content: string; origin: DocOrigin | null; mtime: string | null }> {
@@ -102,7 +102,7 @@ export async function fetchDocBody(
   return { content: text, origin: null, mtime: null };
 }
 
-export function useDocBody(sessionId: number, service: string | null, path: string | null): DocBody {
+export function useDocBody(sessionId: string, service: string | null, path: string | null): DocBody {
   const [state, setState] = useState<DocBody>({ body: '', origin: null, mtime: null, loading: false });
   useEffect(() => {
     if (!path) {
@@ -131,7 +131,7 @@ export type RagState = 'unknown' | 'not_indexed' | 'indexing' | 'indexed' | 'err
  * RAG status + trigger for the SELECTED doc. Optimistic: `index()`
  * flips to 'indexing' immediately and reverts on failure.
  */
-export function useDocsRag(sessionId: number, service: string | null, path: string | null): {
+export function useDocsRag(sessionId: string, service: string | null, path: string | null): {
   state: RagState;
   index: () => void;
 } {

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Download, ExternalLink, Loader2, RotateCcw, Server, WandSparkles } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import type { EditorSettings, EditorSettingsOverride } from '@mcp/shared/editor-settings.js';
 import type { EditorStatsResult, LspInstallFrame, LspServerInfo } from '@mcp/api-bus';
 import { Switch } from '../../../../components/ui/switch.js';
@@ -220,7 +221,7 @@ export function EditorAutocompletePane({ projectId }: { projectId: number }) {
           <span>{t('editorPreferences.acceptanceRate')}: <b className="text-foreground">{stats?.acceptRate == null ? '—' : `${Math.round(stats.acceptRate * 100)}%`}</b></span>
           <span>{t('editorPreferences.mode')}: <b className="text-foreground">{stats?.route?.suitability === 'best-effort-chat' ? t('editorPreferences.manual') : t('editorPreferences.automaticManual')}</b></span>
         </div>
-        <div className="mt-3 flex gap-2"><Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setSetupOpen(true)}><Server className="mr-1 h-3 w-3" />{t('editorPreferences.configureTest')}</Button><a href="/telemetry?panel=completion" className="inline-flex items-center text-[10px] text-primary hover:underline">{t('editorPreferences.openTelemetry')} <ExternalLink className="ml-1 h-3 w-3" /></a></div>
+        <div className="mt-3 flex gap-2"><Button size="sm" variant="outline" className="h-7 text-[11px]" onClick={() => setSetupOpen(true)}><Server className="mr-1 h-3 w-3" />{t('editorPreferences.configureTest')}</Button><Link to="/telemetry?panel=completion" className="inline-flex items-center text-[10px] text-primary hover:underline">{t('editorPreferences.openTelemetry')} <ExternalLink className="ml-1 h-3 w-3" /></Link></div>
       </section>
       <AutocompleteSetupDialog open={setupOpen} onClose={() => setSetupOpen(false)} />
     </div>

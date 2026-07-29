@@ -17,7 +17,7 @@ export interface ProjectPushRequest extends PushRequestBase {
 
 export interface WorkspacePushRequest extends PushRequestBase {
   kind: 'workspace';
-  sessionId: number;
+  sessionId: string;
   projectId: number;
 }
 

@@ -46,7 +46,10 @@ function makeDeps(overrides: Partial<ServerDeps> = {}): ServerDeps {
       listFiles: () => [{ id: 1 }],
     },
     config: { concurrency: 1, ignorePatterns: [], maxFileSize: 256 },
-    docStore: { listCollectionsForProject: () => [] },
+    docStore: {
+      listCollectionsForProject: () => [],
+      listCollectionsForProjects: (ids: readonly number[]) => new Map(ids.map((id) => [id, []])),
+    },
     projectIndexService: {
       ensureFresh: vi.fn(),
       ensureStructuralReady: vi.fn(async () => ({ status: 'ready', phase: 'ready' })),
@@ -143,9 +146,48 @@ describe('project indexing routes', () => {
       project_id: 7,
       automatic_backfill: { enabled: true, target_kind: 'onnx', reason: 'local_profile' },
       reranker: { model: 'Xenova/bge-reranker-base', dtype: 'q8' },
+      resolved_reranker: {
+        configured: true,
+        status: 'configured',
+        target_kind: 'onnx',
+        model: 'Xenova/bge-reranker-base',
+        dtype: 'q8',
+      },
       generations: [{ id: 8, fingerprint: 'pinned-fingerprint' }],
       jobs: [{ id: 41, namespace: 'code:p7', status: 'running' }],
       reindex_job: { id: 41, namespace: 'code:p7', status: 'running' },
+    });
+  });
+
+  it('reports a remote reranker as configured before its first invocation', async () => {
+    const deps = makeDeps();
+    vi.mocked(deps.semanticStore.getProfile).mockReturnValue({
+      purpose: 'code',
+      embedding_target: {
+        kind: 'onnx', model: 'Xenova/multilingual-e5-small', pooling: 'mean', normalize: true,
+        queryTemplate: 'query: {text}', documentTemplate: 'passage: {text}',
+      },
+      reranker_target: {
+        kind: 'provider',
+        providerId: 'openrouter',
+        model: 'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
+        protocol: 'openai-rerank',
+      },
+      created_at: '2026-07-29T00:00:00.000Z',
+      updated_at: '2026-07-29T00:00:00.000Z',
+    });
+    vi.mocked(deps.semanticProfileRuntime.rerankerDiagnostics).mockResolvedValue(null);
+
+    const response = await appWith(deps).request('/api/projects/7/semantic/status');
+    const body = await response.json() as {
+      resolved_reranker: Record<string, unknown>;
+    };
+
+    expect(body.resolved_reranker).toMatchObject({
+      configured: true,
+      status: 'configured',
+      target_kind: 'provider',
+      model: 'nvidia/llama-nemotron-rerank-vl-1b-v2:free',
     });
   });
 

@@ -63,10 +63,15 @@ export { SandboxFilesystemAdapter } from './adapters/sandbox-filesystem-adapter.
 export { SandboxShellAdapter } from './adapters/sandbox-shell-adapter.js';
 
 export {
-  archivePath,
+  resolveSandboxArchivePath,
   loadArchive,
   saveArchive,
   deleteArchive,
+  setSandboxArchiveBundleResolver,
+} from './archive.js';
+export type {
+  SandboxArchiveBundleLocation,
+  SandboxArchiveBundleResolver,
 } from './archive.js';
 
 export {

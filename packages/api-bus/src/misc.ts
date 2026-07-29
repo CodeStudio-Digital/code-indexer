@@ -12,7 +12,7 @@ import type { ApiContext, AsyncStream } from './common.js';
 
 export interface CostsApi {
   byProject(input: { projectId: number; since?: string }, ctx: ApiContext): Promise<{ total_usd: number; by_model: Array<{ model: string; total_usd: number; tokens_in: number; tokens_out: number }> }>;
-  bySession(input: { sessionId: number }, ctx: ApiContext): Promise<{ total_usd: number; turns: Array<{ ts: string; usd: number; tokens_in: number; tokens_out: number }> }>;
+  bySession(input: { sessionId: string }, ctx: ApiContext): Promise<{ total_usd: number; turns: Array<{ ts: string; usd: number; tokens_in: number; tokens_out: number }> }>;
   summary(input: { since?: string }, ctx: ApiContext): Promise<{ total_usd: number; by_provider: Array<{ provider: string; total_usd: number }> }>;
 }
 
@@ -119,7 +119,7 @@ export interface HygieneApi {
 // apps/http-api/server/routes/export.ts
 
 export interface ExportApi {
-  session(input: { sessionId: number; format: 'json' | 'markdown' }, ctx: ApiContext): Promise<{ content: string; filename: string }>;
+  session(input: { sessionId: string; format: 'json' | 'markdown' }, ctx: ApiContext): Promise<{ content: string; filename: string }>;
   project(input: { projectId: number; include?: Array<'snapshots' | 'sessions' | 'files'> }, ctx: ApiContext): Promise<{ content: string; filename: string }>;
 }
 
@@ -160,5 +160,5 @@ export interface ConfigApi {
 // apps/http-api/server/routes/preview-auth.ts (cookie for sandbox preview iframe)
 
 export interface PreviewAuthApi {
-  issue(input: { sessionId: number; serviceId: string }, ctx: ApiContext): Promise<{ token: string; expires_at: number }>;
+  issue(input: { sessionId: string; serviceId: string }, ctx: ApiContext): Promise<{ token: string; expires_at: number }>;
 }

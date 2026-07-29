@@ -4,8 +4,10 @@ import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { CoderProfile } from '@mcp/code-agent/tools/tiers.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { AgentDecisionGuidance } from '@mcp/code-agent/agents/decision-types.js';
-import type { CoderExecutionMode, CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
+import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/index.js';
 import type { HookBus } from '@mcp/code-agent/core/hook-bus.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface CoderAttachment {
   name: string;
@@ -45,8 +47,17 @@ export interface PreflightSeed {
 }
 
 export interface RunCoderOptions {
-  /** Numeric session id (existing) or "new" to create one */
-  session: { id: number } | { create: { project_id: number; title: string; provider: CoderProviderName; model?: string } };
+  /** Opaque filesystem session UUID (existing), or parameters for a new one. */
+  session:
+    | { id: SessionId }
+    | {
+        create: {
+          project_id: number;
+          title: string;
+          provider: CoderProviderName;
+          model?: string;
+        };
+      };
   /**
    * Opaque current AgentRun identity supplied by the execution host. This is
    * the only control-plane field transported into a coder worker; it lets an
@@ -121,7 +132,7 @@ export interface RunCoderOptions {
         /** Distill moment for the diagnostics log (compaction | manual_clear | idle). */
         trigger?: string;
         /** Session that produced the signal — recorded in the distill log. */
-        sessionId?: number;
+        sessionId?: SessionId;
         /** Durable session notes promoted to project-memory candidates (no LLM cost). */
         sessionNotes?: Array<{ title: string; body: string; kind: string; pinned: boolean }>;
       },
@@ -281,8 +292,8 @@ export interface RunCoderOptions {
   /**
    * Explicit tool-permission-mode override for this run. When omitted, the
    * effective mode resolves as: company runs → 'unrestricted' (V1 has no
-   * approval UI on the company board), single coder sessions →
-   * `coder_sessions.tool_permission_mode` (NULL → 'auto').
+   * approval UI on the company board), single coder sessions → the bundle
+   * state's permission mode (missing → 'auto').
    */
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
   /** Company orchestrator context — when present, company tools are registered. */
@@ -332,14 +343,14 @@ export interface RunCoderOptions {
    * Explicit reasoning-effort override (e.g. `minimal`/`low`/`medium`/`high`/
    * `xhigh`). Company callers pass the master/role config value here; for
    * single sessions it is left undefined and runCoder reads the sticky
-   * `coder_sessions.reasoning_effort_override` column instead. Orthogonal to
+   * filesystem state value instead. Orthogonal to
    * `thinking`; forwarded to the runner → `ChatRequest.reasoningEffort`.
    */
   reasoningEffort?: string;
   /**
    * Plan-depth directive for the `plan` agent: `simple` | `normal` | `complex`.
    * For single sessions it is left undefined and runCoder reads the sticky
-   * `coder_sessions.plan_depth_override` column instead (defaulting to
+   * filesystem state value instead (defaulting to
    * `normal`). Feeds the system prompt (cache-stable axis), not the provider.
    */
   planDepth?: 'simple' | 'normal' | 'complex';
@@ -383,10 +394,10 @@ export interface RunCoderOptions {
    * layer publish a `session_snapshot_changed` SSE event.
    */
   onSnapshotRecorded?: (info: {
-    baselineId: number;
-    globalBaselineId: number;
+    baselineId: string;
+    globalBaselineId: string;
     roundMessageId: number | null;
-    roundSnapshotId: number | null;
+    roundSnapshotId: string | null;
     filePath: string;
   }) => void;
   /**
@@ -431,7 +442,7 @@ export interface IndexStatus {
 }
 
 export interface RunCoderHandle {
-  session: CoderSession;
+  session: FsCoderSession;
   runner: CoderRunner;
   /**
    * Resolves as soon as the terminal assistant/tool transcript is durable.
@@ -451,7 +462,7 @@ export interface RunCoderHandle {
  * `CompanyOrchestrator.startMaster`) return this POJO summary instead.
  */
 export interface MasterStartResult {
-  masterSessionId: number;
+  masterSessionId: string;
   /**
    * Null when the master's `runCoder` hasn't booted yet — the company
    * start/resume path returns this ack as soon as the run is *registered*

@@ -20,6 +20,9 @@ import type {
 } from '@mcp/services/sandbox/ports/sandbox-driver.js';
 import type { Sandbox } from '@mcp/services/sandbox/types.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const OTHER_SESSION_ID = '00000000-0000-4000-8000-000000000999';
+
 /**
  * A minimal in-memory driver mock — zero dependency on Docker/Podman.
  * Exercises the adapter contract without shelling out.
@@ -162,7 +165,7 @@ describe('SandboxManager targeted reconciliation', () => {
     setDriverForTests(driver);
 
     const row = {
-      session_id: 1,
+      session_id: SESSION_ID,
       service_id: 'api',
       name: 'api',
       container_id: 'api-container',
@@ -207,10 +210,10 @@ describe('SandboxManager targeted reconciliation', () => {
     setCompanySandboxStore(primaryStore as never);
 
     const mgr = new SandboxManager({ statsIntervalMs: 0 });
-    const sb = await mgr.reconcileServiceFromDb('1', 'api');
+    const sb = await mgr.reconcileServiceFromDb(SESSION_ID, 'api');
 
-    expect(sb?.id).toBe('1:api');
-    expect(serviceStore.get).toHaveBeenCalledWith(1, 'api');
+    expect(sb?.id).toBe(`${SESSION_ID}:api`);
+    expect(serviceStore.get).toHaveBeenCalledWith(SESSION_ID, 'api');
     expect(serviceStore.listBySession).not.toHaveBeenCalled();
     expect(serviceStore.listActive).not.toHaveBeenCalled();
     expect(primaryStore.listActive).not.toHaveBeenCalled();
@@ -330,10 +333,8 @@ describe('SandboxShellAdapter', () => {
 
 describe('multi-service sandbox (migration 035)', () => {
   it('derives deterministic network names per session', () => {
-    expect(sessionNetworkName('42')).toBe('mcp-sbx-net-42');
-    expect(sessionNetworkName('abc')).toBe('mcp-sbx-net-abc');
-    // Disallowed chars get normalized so the name is docker-safe.
-    expect(sessionNetworkName('a/b:c')).toBe('mcp-sbx-net-a-b-c');
+    expect(sessionNetworkName(SESSION_ID)).toBe(`mcp-sbx-net-${SESSION_ID}`);
+    expect(() => sessionNetworkName('42')).toThrow(/canonical UUID/);
   });
 
   it('rejects invalid or reserved service_ids', async () => {
@@ -341,14 +342,14 @@ describe('multi-service sandbox (migration 035)', () => {
     const mgr = new SandboxManager({ driver });
     await expect(
       mgr.provisionAdditionalService({
-        sessionId: '999',
+        sessionId: OTHER_SESSION_ID,
         serviceId: 'main', // reserved
         stack: 'react-ts',
       }),
     ).rejects.toThrow(/reserved/);
     await expect(
       mgr.provisionAdditionalService({
-        sessionId: '999',
+        sessionId: OTHER_SESSION_ID,
         serviceId: 'Bad Name', // invalid chars
         stack: 'react-ts',
       }),
@@ -358,22 +359,22 @@ describe('multi-service sandbox (migration 035)', () => {
   it('listServices filters by session prefix', () => {
     const mgr = new SandboxManager({ driver: new FakeDriver() });
     // listServices() is safe to call on an empty manager — returns [].
-    expect(mgr.listServices('1')).toEqual([]);
-    expect(mgr.getService('1', 'api')).toBeUndefined();
+    expect(mgr.listServices(SESSION_ID)).toEqual([]);
+    expect(mgr.getService(SESSION_ID, 'api')).toBeUndefined();
   });
 
   it('runtime-pauses and unpauses the primary container without stopping it', async () => {
     const driver = new FakeDriver();
     const mgr = new SandboxManager({ driver, statsIntervalMs: 0 });
-    const sb = makeSandbox('1');
-    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set('1', sb);
+    const sb = makeSandbox(SESSION_ID);
+    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set(SESSION_ID, sb);
 
-    await mgr.pauseRuntimeContainer('1', 'main');
+    await mgr.pauseRuntimeContainer(SESSION_ID, 'main');
     expect(driver.calls).toContain('pauseContainer');
     expect(sb.runtimePaused).toBe(true);
     expect(sb.status).toBe('ready');
 
-    await mgr.unpauseRuntimeContainer('1', 'main');
+    await mgr.unpauseRuntimeContainer(SESSION_ID, 'main');
     expect(driver.calls).toContain('unpauseContainer');
     expect(sb.runtimePaused).toBe(false);
     expect(sb.status).toBe('ready');
@@ -382,14 +383,15 @@ describe('multi-service sandbox (migration 035)', () => {
   it('runtime-pauses and unpauses a secondary service container', async () => {
     const driver = new FakeDriver();
     const mgr = new SandboxManager({ driver, statsIntervalMs: 0 });
-    const sb = makeSandbox('1:api');
-    (mgr as unknown as { services: Map<string, Sandbox> }).services.set('1:api', sb);
+    const serviceKey = `${SESSION_ID}:api`;
+    const sb = makeSandbox(serviceKey);
+    (mgr as unknown as { services: Map<string, Sandbox> }).services.set(serviceKey, sb);
 
-    await mgr.pauseRuntimeContainer('1', 'api');
+    await mgr.pauseRuntimeContainer(SESSION_ID, 'api');
     expect(driver.calls).toContain('pauseContainer');
     expect(sb.runtimePaused).toBe(true);
 
-    await mgr.unpauseRuntimeContainer('1', 'api');
+    await mgr.unpauseRuntimeContainer(SESSION_ID, 'api');
     expect(driver.calls).toContain('unpauseContainer');
     expect(sb.runtimePaused).toBe(false);
   });
@@ -398,10 +400,10 @@ describe('multi-service sandbox (migration 035)', () => {
     const driver = new FakeDriver();
     driver.paused = true;
     const mgr = new SandboxManager({ driver, statsIntervalMs: 0 });
-    const sb = makeSandbox('1');
-    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set('1', sb);
+    const sb = makeSandbox(SESSION_ID);
+    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set(SESSION_ID, sb);
 
-    await mgr.pauseRuntimeContainer('1', 'main');
+    await mgr.pauseRuntimeContainer(SESSION_ID, 'main');
     expect(driver.calls).not.toContain('pauseContainer');
     expect(sb.runtimePaused).toBe(true);
     expect(sb.status).toBe('ready');
@@ -411,10 +413,10 @@ describe('multi-service sandbox (migration 035)', () => {
     const driver = new FakeDriver();
     driver.exists = false;
     const mgr = new SandboxManager({ driver, statsIntervalMs: 0 });
-    const sb = makeSandbox('1');
-    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set('1', sb);
+    const sb = makeSandbox(SESSION_ID);
+    (mgr as unknown as { sandboxes: Map<string, Sandbox> }).sandboxes.set(SESSION_ID, sb);
 
-    await expect(mgr.pauseRuntimeContainer('1', 'main')).rejects.toThrow(/no longer exists/);
+    await expect(mgr.pauseRuntimeContainer(SESSION_ID, 'main')).rejects.toThrow(/no longer exists/);
     expect(sb.runtimePaused).toBe(false);
   });
 });

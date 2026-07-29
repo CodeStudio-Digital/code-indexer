@@ -26,10 +26,28 @@ interface ArchivedSample {
 
 interface ArchivedFreeze {
   at: number;
-  source: 'handler' | 'background' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
+  source:
+    | 'handler'
+    | 'background'
+    | 'event-loop'
+    | 'renderer'
+    | 'starved'
+    | 'offloop'
+    | 'gc'
+    | 'sync'
+    | 'unattributed';
   channel?: string;
   durationMs: number;
   detail?: string;
+  /** Measured synchronous main-thread ms in the window. */
+  busyMs?: number;
+  gcMs?: number;
+  /** Longest instrumented sync section — the exact blocker, when known. */
+  topSyncLabel?: string;
+  rssMB?: number;
+  /** Rows sharing this id are re-reports of ONE stall; collapse with max(). */
+  hangId?: string;
+  suspects?: Array<{ channel: string; startedAt: number; kind?: 'handler' | 'background' }>;
 }
 
 interface ArchivedRendererFreeze {
@@ -149,20 +167,48 @@ export function PersistentDiagnosticsPanel() {
     () => [...(detail?.samples ?? [])].sort((a, b) => b.main.loopP99Ms - a.main.loopP99Ms).slice(0, 8),
     [detail],
   );
-  const archivedFreezes = useMemo(() => [
-    ...(detail?.freezes ?? []).map((event) => ({
+  const archivedFreezes = useMemo(() => {
+    interface FreezeRow {
+      at: number;
+      source: string;
+      durationMs: number;
+      culprit: string;
+      busyMs?: number;
+      gcMs?: number;
+      rssMB?: number;
+      suspects?: string;
+    }
+    const rows: FreezeRow[] = [];
+    // Rows sharing a hangId are re-reports of ONE ongoing stall. Collapse to the
+    // longest, or the list shows a single 30s hang as three separate freezes.
+    const byHang = new Map<string, FreezeRow>();
+    for (const event of detail?.freezes ?? []) {
+      const row = {
+        at: event.at,
+        source: event.source,
+        durationMs: event.durationMs,
+        // `topSyncLabel` names the exact blocking section; `channel` the handler.
+        culprit: event.channel ?? event.topSyncLabel ?? event.detail ?? '—',
+        busyMs: event.busyMs,
+        gcMs: event.gcMs,
+        rssMB: event.rssMB,
+        suspects: event.suspects?.map((s) => s.channel).join(', ') || undefined,
+      };
+      if (!event.hangId) {
+        rows.push(row);
+        continue;
+      }
+      const seen = byHang.get(event.hangId);
+      if (!seen || row.durationMs > seen.durationMs) byHang.set(event.hangId, row);
+    }
+    const rendererRows: FreezeRow[] = (detail?.rendererFreezes ?? []).map((event) => ({
       at: event.at,
-      source: event.source,
-      durationMs: event.durationMs,
-      culprit: event.channel ?? event.detail ?? '—',
-    })),
-    ...(detail?.rendererFreezes ?? []).map((event) => ({
-      at: event.at,
-      source: 'renderer' as const,
+      source: 'renderer',
       durationMs: event.durationMs,
       culprit: event.script ?? event.name,
-    })),
-  ].sort((a, b) => b.at - a.at).slice(0, 15), [detail]);
+    }));
+    return [...rows, ...byHang.values(), ...rendererRows].sort((a, b) => b.at - a.at).slice(0, 15);
+  }, [detail]);
 
   const statusLabel = (status: RunSummary['status']) => {
     if (status === 'current') return t('perf.journal.statusCurrent');
@@ -285,6 +331,8 @@ export function PersistentDiagnosticsPanel() {
                   <th className="px-2 py-1.5 text-left">{t('perf.tools.when')}</th>
                   <th className="px-2 text-left">{t('perf.tools.source')}</th>
                   <th className="px-2 text-right">{t('perf.tools.durationMs')}</th>
+                  <th className="px-2 text-right">{t('perf.tools.busyMs')}</th>
+                  <th className="px-2 text-right">{t('perf.tools.gcMs')}</th>
                   <th className="px-2 text-left">{t('perf.tools.culprit')}</th>
                 </tr></thead>
                 <tbody className="divide-y">
@@ -292,9 +340,11 @@ export function PersistentDiagnosticsPanel() {
                     <td className="whitespace-nowrap px-2 py-1">{new Date(event.at).toLocaleTimeString()}</td>
                     <td className="px-2">{event.source}</td>
                     <td className="px-2 text-right tabular-nums">{event.durationMs}</td>
-                    <td className="px-2 font-mono break-all">{event.culprit}</td>
+                    <td className="px-2 text-right tabular-nums">{event.busyMs ?? '—'}</td>
+                    <td className="px-2 text-right tabular-nums">{event.gcMs ?? '—'}</td>
+                    <td className="px-2 font-mono break-all" title={event.suspects}>{event.culprit}</td>
                   </tr>)}
-                  {archivedFreezes.length === 0 && <tr><td colSpan={4} className="px-2 py-2 text-muted-foreground">{t('perf.journal.noFreezes')}</td></tr>}
+                  {archivedFreezes.length === 0 && <tr><td colSpan={6} className="px-2 py-2 text-muted-foreground">{t('perf.journal.noFreezes')}</td></tr>}
                 </tbody>
               </table>
             </div>

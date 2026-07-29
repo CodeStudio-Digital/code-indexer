@@ -1,4 +1,5 @@
 import type { SandboxBinding } from '@mcp/company/types.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 import type { SandboxService } from '../services/SandboxService.js';
 
 export interface SandboxPeer {
@@ -15,7 +16,7 @@ export interface SandboxPeer {
  */
 export function getSandboxBinding(
   sandboxService: SandboxService,
-  _parentSessionId: number | null,
+  _parentSessionId: CompanySessionId | null,
 ): SandboxBinding | null {
   // SandboxService is keyed by SessionContext.effectiveSessionId, so a child
   // worker reconciles the root's persisted container into its own serializable
@@ -32,7 +33,7 @@ export function getSandboxBinding(
  */
 export function getSandboxServiceBinding(
   sandboxService: SandboxService,
-  _parentSessionId: number | null,
+  _parentSessionId: CompanySessionId | null,
   serviceId: string,
 ): SandboxBinding | null {
   return sandboxService.getServiceBinding(serviceId);
@@ -49,7 +50,7 @@ export function getSandboxServiceBinding(
  */
 export function listSandboxPeers(
   sandboxService: SandboxService,
-  _parentSessionId: number | null,
+  _parentSessionId: CompanySessionId | null,
   selfServiceId?: string | null,
 ): SandboxPeer[] {
   const devPort = Number(process.env.MCP_SANDBOX_DEV_PORT ?? 5173);
@@ -86,7 +87,7 @@ export function listSandboxPeers(
  */
 export async function provisionSandboxIfNeeded(
   sandboxService: SandboxService,
-  _parentSessionId: number | null,
+  _parentSessionId: CompanySessionId | null,
   signal?: AbortSignal,
 ): Promise<SandboxBinding | null> {
   return await sandboxService.provisionIfNeeded({ signal });

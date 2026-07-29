@@ -16,7 +16,8 @@ function tool(overrides: Partial<CoderTool> & { name: string; source: CoderTool[
   } as CoderTool;
 }
 
-const RUN = 'agent-run:1' as AgentRunId;
+const RUN =
+  '11111111-1111-4111-8111-111111111111' as AgentRunId;
 
 describe('deriveCapabilityDescriptor', () => {
   it('maps a native read tool to a non-mutating, locally-trusted descriptor', () => {

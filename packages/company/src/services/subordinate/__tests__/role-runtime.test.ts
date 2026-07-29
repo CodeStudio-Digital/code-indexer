@@ -59,7 +59,7 @@ describe('parseMasterConfigFromDb', () => {
     }), [
       { role: 'backend', provider: 'openai-chatgpt', model: 'gpt-5.4-mini', tier: 'bootstrap' },
       { role: 'stale', provider: 'p', model: 'm', tier: 'navigate' },
-    ], 1);
+    ], '00000000-0000-4000-8000-000000000001');
 
     expect(parsed.roleConfigs).toEqual([
       { role: 'backend', provider: 'openai-chatgpt', model: 'gpt-5.6-terra', tier: 'full' },

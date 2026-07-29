@@ -30,7 +30,7 @@ const TABS: Array<{ id: DriveTab; icon: typeof Compass; labelKey: string; fallba
   { id: 'plans', icon: Compass, labelKey: 'drive.tabPlans', fallback: 'Plans' },
 ];
 
-export function SessionDriveView({ sessionId, active }: { sessionId: number; active: boolean }) {
+export function SessionDriveView({ sessionId, active }: { sessionId: string; active: boolean }) {
   const { t } = useTranslation('chat');
   const [tab, setTab] = useState<DriveTab>('map');
   const [data, setData] = useState<DriveAggregate | null>(null);
@@ -63,7 +63,7 @@ export function SessionDriveView({ sessionId, active }: { sessionId: number; act
   useEffect(() => {
     if (!active) return;
     const onChanged = (e: Event): void => {
-      const detail = (e as CustomEvent).detail as { sessionId?: number } | undefined;
+      const detail = (e as CustomEvent).detail as { sessionId?: string } | undefined;
       if (detail?.sessionId === sessionId) setTick((n) => n + 1);
     };
     window.addEventListener('coder:drive_changed', onChanged);

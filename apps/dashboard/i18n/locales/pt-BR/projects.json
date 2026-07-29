@@ -603,5 +603,21 @@
   "toolbar.gitBranch": "Branch do Git",
   "toolbar.loadingBranch": "Carregando branch",
   "rail.projectTools": "Janelas de ferramentas do projeto",
-  "rail.contextTools": "Janelas de ferramentas de contexto"
+  "rail.contextTools": "Janelas de ferramentas de contexto",
+  "cardsView": "Grade de cartões",
+  "compactView": "Lista compacta",
+  "switchToCardsView": "Mudar para grade de cartões",
+  "switchToCompactView": "Mudar para lista compacta",
+  "contextMenu.open": "Abrir",
+  "contextMenu.openInNewWindow": "Abrir em nova janela",
+  "contextMenu.copyPath": "Copiar caminho",
+  "contextMenu.edit": "Editar",
+  "contextMenu.copied": "Copiado",
+  "snapshots.tabs.view": "Visualização",
+  "snapshots.tabs.raw": "Texto original",
+  "snapshots.tabs.history": "Histórico",
+  "snapshots.noHistory": "Nenhuma versão anterior.",
+  "snapshots.editSnapshot": "Editar snapshot",
+  "snapshots.formDescription": "Use Markdown — a aba Visualização no painel de detalhes renderiza o conteúdo.",
+  "snapshots.noMatch": "Nenhum snapshot corresponde a esta busca."
 }

@@ -1498,14 +1498,42 @@ export class SemanticStore {
     return row ? hydrateJob(row) : null;
   }
 
-  listJobs(filter: { namespace?: string; status?: SemanticJobStatus } = {}): SemanticJobRow[] {
-    const where: string[] = [];
-    const params: unknown[] = [];
-    if (filter.namespace) { where.push('namespace = ?'); params.push(filter.namespace); }
-    if (filter.status) { where.push('status = ?'); params.push(filter.status); }
-    const sql = `SELECT * FROM semantic_jobs${where.length ? ` WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY priority DESC, id`;
-    return (this.db.prepare(sql).all(...params) as JsonJobRow[]).map(hydrateJob);
+  /**
+   * `namespaces` restricts to a known set in SQL. Callers that only care about
+   * specific namespaces used to pull the WHOLE table and filter in JS — an
+   * unbounded `SELECT *` plus a `JSON.parse` per row (see `hydrateJob`) that
+   * grows with job history and runs synchronously on the Electron main thread.
+   * Chunked because SQLite caps bound parameters.
+   */
+  listJobs(
+    filter: { namespace?: string; status?: SemanticJobStatus; namespaces?: readonly string[] } = {},
+  ): SemanticJobRow[] {
+    const base: string[] = [];
+    const baseParams: unknown[] = [];
+    if (filter.namespace) { base.push('namespace = ?'); baseParams.push(filter.namespace); }
+    if (filter.status) { base.push('status = ?'); baseParams.push(filter.status); }
+    const order = 'ORDER BY priority DESC, id';
+    const run = (where: string[], params: unknown[]): JsonJobRow[] =>
+      this.db
+        .prepare(`SELECT * FROM semantic_jobs${where.length ? ` WHERE ${where.join(' AND ')}` : ''}\n      ${order}`)
+        .all(...params) as JsonJobRow[];
+
+    if (!filter.namespaces) return run(base, baseParams).map(hydrateJob);
+
+    const unique = [...new Set(filter.namespaces)];
+    if (unique.length === 0) return [];
+    const rows: JsonJobRow[] = [];
+    for (let i = 0; i < unique.length; i += 900) {
+      const chunk = unique.slice(i, i + 900);
+      rows.push(...run(
+        [...base, `namespace IN (${chunk.map(() => '?').join(',')})`],
+        [...baseParams, ...chunk],
+      ));
+    }
+    // Chunking loses the global ordering the single-query form guarantees.
+    return rows
+      .sort((a, b) => (b.priority - a.priority) || (a.id - b.id))
+      .map(hydrateJob);
   }
 
   /** True when an open namespace job represents an unbounded/unknown delta.

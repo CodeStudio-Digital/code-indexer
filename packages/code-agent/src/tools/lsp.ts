@@ -2,7 +2,8 @@ import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { getTsServiceForFile, isTsFile } from '@mcp/code-agent/lsp/ts-service.js';
 import { getGlobalAgentLspBackend, type AgentLspLocation } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
-import { resolveProjectFile as resolveProjectFilePath } from '@mcp/code-agent/tools/paths.js';
+import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
+import { existsSync } from 'node:fs';
 
 /**
  * LSP tools — multi-language.
@@ -21,14 +22,18 @@ import { resolveProjectFile as resolveProjectFilePath } from '@mcp/code-agent/to
 
 function viaBackend(
   op: 'definition' | 'references' | 'hover',
-  rel: string,
-  ctx: ToolContext,
+  file: { rel: string; rootPath: string; projectName: string },
   line: number,
   column: number,
 ): Promise<AgentLspLocation[] | { contents: string } | null> | null {
   const backend = getGlobalAgentLspBackend();
   if (!backend) return null;
-  const input = { root: ctx.cwd, projectName: ctx.projectName, file: rel, position: { line, column } };
+  const input = {
+    root: file.rootPath,
+    projectName: file.projectName,
+    file: file.rel,
+    position: { line, column },
+  };
   return backend[op](input) as Promise<AgentLspLocation[] | { contents: string } | null>;
 }
 
@@ -43,8 +48,18 @@ function formatLocations(kind: string, locs: AgentLspLocation[], origin: string)
   return lines.join('\n');
 }
 
-function resolveProjectFile(filePath: string, ctx: ToolContext): { abs: string; rel: string } | null {
-  return resolveProjectFilePath(filePath, ctx.cwd);
+function resolveProjectFile(
+  filePath: string,
+  ctx: ToolContext,
+): { abs: string; rel: string; rootPath: string; projectName: string } | null {
+  const resolved = resolveWorkspacePath(filePath, ctx, 'read');
+  if (!resolved.ok || resolved.external || !existsSync(resolved.abs)) return null;
+  return {
+    abs: resolved.abs,
+    rel: resolved.relativePath,
+    rootPath: resolved.rootPath,
+    projectName: resolved.projectName,
+  };
 }
 
 function formatPosition(p: { file: string; line: number; column: number }): string {
@@ -65,7 +80,7 @@ const lspDefinition: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      file_path: { type: 'string', description: 'Project-relative path to a .ts/.tsx/.js/.jsx file.' },
+      file_path: { type: 'string', description: 'Project-relative source path; use "<project-slug>/..." in a global session.' },
       line: { type: 'number', description: '1-based line number of the symbol to resolve.' },
       column: { type: 'number', description: '1-based column number of the symbol to resolve.' },
     },
@@ -82,7 +97,7 @@ const lspDefinition: CoderTool = {
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
     if (!isTsFile(file)) {
-      const call = viaBackend('definition', resolved.rel, ctx, line, column);
+      const call = viaBackend('definition', resolved, line, column);
       if (!call) return err(`lsp_definition: no multi-language backend wired in this context — use mcp__find_references for ${file}`);
       const locs = (await call) as AgentLspLocation[] | null;
       if (!locs || locs.length === 0) return ok(`No definition found at ${resolved.rel}:${line}:${column}`);
@@ -116,7 +131,7 @@ const lspReferences: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      file_path: { type: 'string', description: 'Project-relative path to a .ts/.tsx/.js/.jsx file.' },
+      file_path: { type: 'string', description: 'Project-relative source path; use "<project-slug>/..." in a global session.' },
       line: { type: 'number', description: '1-based line number.' },
       column: { type: 'number', description: '1-based column number.' },
     },
@@ -133,7 +148,7 @@ const lspReferences: CoderTool = {
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
     if (!isTsFile(file)) {
-      const call = viaBackend('references', resolved.rel, ctx, line, column);
+      const call = viaBackend('references', resolved, line, column);
       if (!call) return err(`lsp_references: no multi-language backend wired in this context — use mcp__find_references for ${file}`);
       const locs = (await call) as AgentLspLocation[] | null;
       if (!locs || locs.length === 0) return ok(`No references found for symbol at ${resolved.rel}:${line}:${column}`);
@@ -172,7 +187,7 @@ const lspHover: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      file_path: { type: 'string', description: 'Project-relative path to a .ts/.tsx/.js/.jsx file.' },
+      file_path: { type: 'string', description: 'Project-relative source path; use "<project-slug>/..." in a global session.' },
       line: { type: 'number', description: '1-based line number.' },
       column: { type: 'number', description: '1-based column number.' },
     },
@@ -189,7 +204,7 @@ const lspHover: CoderTool = {
     const resolved = resolveProjectFile(file, ctx);
     if (!resolved) return err(`file not found or outside project root: ${file}`);
     if (!isTsFile(file)) {
-      const call = viaBackend('hover', resolved.rel, ctx, line, column);
+      const call = viaBackend('hover', resolved, line, column);
       if (!call) return err(`lsp_hover: no multi-language backend wired in this context — use mcp__get_symbol_body for ${file}`);
       const hover = (await call) as { contents: string } | null;
       if (!hover?.contents) return ok(`No symbol info at ${resolved.rel}:${line}:${column}`);
@@ -225,7 +240,7 @@ const lspDiagnostics: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      file_path: { type: 'string', description: 'Project-relative path to a .ts/.tsx/.js/.jsx file.' },
+      file_path: { type: 'string', description: 'Project-relative source path; use "<project-slug>/..." in a global session.' },
     },
     required: ['file_path'],
     additionalProperties: false,

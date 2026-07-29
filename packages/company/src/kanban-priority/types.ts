@@ -15,15 +15,15 @@ export type KanbanColumn = 'backlog' | 'todo' | 'in_progress' | 'review' | 'done
 export type KanbanTag = 'bug' | 'feature' | 'refactor' | 'documentation' | null;
 
 export interface KanbanCardInput {
-  id: number;
+  id: string;
   title: string;
   description: string;
   column: KanbanColumn;
   tag: KanbanTag;
   /** Cards that this one blocks (their ids). */
-  blocks?: number[];
+  blocks?: string[];
   /** Cards that block this one (their ids). */
-  blockedBy?: number[];
+  blockedBy?: string[];
   /** Roles currently assigned to this card. */
   assignedRoles?: string[];
   createdAtMs?: number;

@@ -12,21 +12,21 @@ import { transparentImage } from '@mcp/sprite-studio/processing/composite.js';
 import type { NamedFrame } from '@mcp/sprite-studio/export/index.js';
 import type { AtlasAnimation, ExportMeta } from '@mcp/sprite-studio/export/atlas-types.js';
 import { resolveInsideSpriteDir } from '@mcp/sprite-studio/repo/paths.js';
-import type { SpriteAssetRow } from '@mcp/store/sprite-studio/types.js';
 import type { ServerDeps } from '../../deps.js';
+import type { SpriteAssetFileRow } from '../../sprite-files.js';
 import { resolveAnim } from './animation-helpers.js';
 import { resolveCompositeColumns } from './composite-helpers.js';
 
 /** Hero frame (current version) of each asset; assets without one are skipped. */
-export function resolveAssetFrames(
+export async function resolveAssetFrames(
   deps: ServerDeps,
   root: string,
-  assets: SpriteAssetRow[],
-): NamedFrame[] {
+  assets: SpriteAssetFileRow[],
+): Promise<NamedFrame[]> {
   const out: NamedFrame[] = [];
   for (const asset of [...assets].sort((a, b) => a.slug.localeCompare(b.slug))) {
     if (asset.current_version_id == null) continue;
-    const version = deps.spriteAssetsStore.getVersion(asset.current_version_id);
+    const version = await deps.spriteFileStore.getVersion(asset.current_version_id);
     if (!version) continue;
     const png = fs.readFileSync(resolveInsideSpriteDir(root, version.file_rel_path));
     out.push({ name: asset.slug, img: decodeImage(png) });
@@ -38,14 +38,14 @@ export function resolveAssetFrames(
  * One animation's frames as composited columns (visible tracks). Empty
  * columns render transparent at the grid size — timing holds are real frames.
  */
-export function resolveAnimationFrames(
+export async function resolveAnimationFrames(
   deps: ServerDeps,
-  animationId: number,
+  animationId: string,
   slug: string,
-): { frames: NamedFrame[]; name: string; anim: AtlasAnimation } | null {
-  const ctx = resolveAnim(deps, animationId);
+): Promise<{ frames: NamedFrame[]; name: string; anim: AtlasAnimation } | null> {
+  const ctx = await resolveAnim(deps, animationId);
   if (!ctx || !ctx.root) return null;
-  const columns = resolveCompositeColumns(deps, ctx);
+  const columns = await resolveCompositeColumns(deps, ctx);
   if (columns.length === 0) return null;
   const ref = columns.find((c) => c.image != null)?.image;
   if (!ref) return null;

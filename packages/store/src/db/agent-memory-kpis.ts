@@ -1,10 +1,10 @@
 import type { DB } from './types.js';
 
 /**
- * Memory-effectiveness KPIs (100% SQL, no LLM) — the measurable loop behind
- * "is the agent actually getting better over time?". Rendered as chips on the
- * AgentMemoryHealthCard; window is the last 30 days. Every query is
- * best-effort (a trimmed per-project DB may lack the session/tool tables).
+ * Memory-effectiveness KPIs (no LLM) — the measurable loop behind "is the
+ * agent actually getting better over time?". Session-owned counters are
+ * injected from filesystem bundles; SQLite is read only for the shared
+ * Agent Memory catalog and its global recall events.
  *
  *  K1 learningRate  — % of sessions that produced ≥1 memory (created+merged)
  *  K2 recallHitRate — % of proactive/explicit recalls that injected ≥1 memory
@@ -26,32 +26,43 @@ export interface AgentMemoryKpis {
   explicitCalls: Record<string, number>;
 }
 
-const WINDOW_DAYS = 30;
-const WINDOW = `-${WINDOW_DAYS} days`;
+export interface SessionMemoryKpis {
+  windowDays: number;
+  sessionsInWindow: number;
+  learnedSessions: number;
+  explicitCalls: Readonly<Record<string, number>>;
+}
 
-export function getMemoryEffectivenessKpis(db: DB, projectId: number): AgentMemoryKpis {
+function safeCount(value: number): number {
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+export function getMemoryEffectivenessKpis(
+  db: DB,
+  projectId: number,
+  session: SessionMemoryKpis,
+): AgentMemoryKpis {
+  const windowDays = Math.max(1, safeCount(session.windowDays));
+  const window = `-${windowDays} days`;
+  const sessionsInWindow = safeCount(session.sessionsInWindow);
+  const learnedSessions = Math.min(
+    sessionsInWindow,
+    safeCount(session.learnedSessions),
+  );
+  const explicitCalls: Record<string, number> = {};
+  for (const [name, count] of Object.entries(session.explicitCalls)) {
+    const safe = safeCount(count);
+    if (safe > 0) explicitCalls[name] = safe;
+  }
   const kpis: AgentMemoryKpis = {
-    windowDays: WINDOW_DAYS,
-    learningRate: null, sessionsInWindow: 0,
+    windowDays,
+    learningRate:
+      sessionsInWindow > 0 ? learnedSessions / sessionsInWindow : null,
+    sessionsInWindow,
     recallHitRate: null, recallsInWindow: 0,
     usageCoverage: null, liveStock: 0, goldStock: 0,
-    explicitCalls: {},
+    explicitCalls,
   };
-
-  try {
-    const row = db.prepare(`
-      SELECT COUNT(*) AS sessions,
-             SUM(CASE WHEN learned > 0 THEN 1 ELSE 0 END) AS learnedSessions
-      FROM (
-        SELECT s.id,
-               (SELECT COALESCE(SUM(l.created + l.merged), 0)
-                  FROM memory_distill_log l WHERE l.session_id = s.id) AS learned
-        FROM coder_sessions s
-        WHERE s.project_id = ? AND s.created_at >= datetime('now', ?)
-      )`).get(projectId, WINDOW) as { sessions: number; learnedSessions: number | null };
-    kpis.sessionsInWindow = row.sessions;
-    if (row.sessions > 0) kpis.learningRate = (row.learnedSessions ?? 0) / row.sessions;
-  } catch { /* central tables absent on trimmed DBs */ }
 
   try {
     const row = db.prepare(`
@@ -59,7 +70,7 @@ export function getMemoryEffectivenessKpis(db: DB, projectId: number): AgentMemo
              COALESCE(SUM(CASE WHEN kept > 0 THEN 1 ELSE 0 END), 0) AS hits
       FROM agent_memory_events
       WHERE event_type = 'recall' AND project_id = ? AND created_at >= datetime('now', ?)
-      `).get(projectId, WINDOW) as { recalls: number; hits: number };
+      `).get(projectId, window) as { recalls: number; hits: number };
     kpis.recallsInWindow = row.recalls;
     if (row.recalls > 0) kpis.recallHitRate = row.hits / row.recalls;
   } catch { /* best-effort */ }
@@ -70,7 +81,7 @@ export function getMemoryEffectivenessKpis(db: DB, projectId: number): AgentMemo
              COALESCE(SUM(CASE WHEN last_accessed_at >= datetime('now', ?) THEN 1 ELSE 0 END), 0) AS accessed
       FROM agent_memory
       WHERE scope = 'project' AND project_id = ? AND archived_at IS NULL
-      `).get(WINDOW, projectId) as { live: number; accessed: number };
+      `).get(window, projectId) as { live: number; accessed: number };
     kpis.liveStock = row.live;
     if (row.live > 0) kpis.usageCoverage = row.accessed / row.live;
   } catch { /* best-effort */ }
@@ -82,20 +93,6 @@ export function getMemoryEffectivenessKpis(db: DB, projectId: number): AgentMemo
         AND (scope = 'user' OR (scope = 'project' AND project_id = ?))
       `).get(projectId) as { c: number };
     kpis.goldStock = row.c;
-  } catch { /* best-effort */ }
-
-  try {
-    const rows = db.prepare(`
-      SELECT tc.tool_name AS name, COUNT(*) AS c
-      FROM coder_tool_calls tc
-      JOIN coder_messages cm ON cm.id = tc.message_id
-      JOIN coder_sessions s ON s.id = cm.session_id
-      WHERE s.project_id = ?
-        AND tc.tool_name IN ('recall_memory', 'remember', 'forget_memory')
-        AND tc.created_at >= datetime('now', ?)
-      GROUP BY tc.tool_name
-      `).all(projectId, WINDOW) as Array<{ name: string; c: number }>;
-    for (const r of rows) kpis.explicitCalls[r.name] = r.c;
   } catch { /* best-effort */ }
 
   return kpis;

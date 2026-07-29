@@ -5,7 +5,7 @@
  * `parent_session_id` pointing to the root session. This hook drives
  * the tab bar:
  *   - `parent` is the root (the "Main" tab is the parent itself).
- *   - `children` are the active sub-sessions, ordered by id.
+ *   - `children` are active sub-sessions ordered by creation time.
  *   - `activeSessionId` is the URL's `:frontId` segment.
  *
  * Phase 1b: selection is the URL's source of truth. `setActiveSessionId`
@@ -28,12 +28,12 @@ export interface SubSessionsState {
   children: CompanySession[];
   loading: boolean;
   /** URL-derived active tab id; defaults to the parent's id (Main). */
-  activeSessionId: number | null;
+  activeSessionId: string | null;
 }
 
-const STORAGE_KEY = (rootId: number) => `company-active-subsession:${rootId}`;
+const STORAGE_KEY = (rootId: string) => `company-active-subsession:${rootId}`;
 
-function readPersistedOnce(rootId: number): number | null {
+function readPersistedOnce(rootId: string): string | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY(rootId));
@@ -41,13 +41,13 @@ function readPersistedOnce(rootId: number): number | null {
     // Drain the legacy entry — Phase 1b makes the URL authoritative; this
     // value only seeds the URL once for users mid-session.
     window.localStorage.removeItem(STORAGE_KEY(rootId));
-    return Number(raw);
+    return raw;
   } catch {
     return null;
   }
 }
 
-export function useCompanySiblings(rootSessionId: number | null) {
+export function useCompanySiblings(rootSessionId: string | null) {
   const navigate = useNavigate();
   const routeParams = useParams<{
     rootId?: string;
@@ -70,7 +70,7 @@ export function useCompanySiblings(rootSessionId: number | null) {
 
   // ─── Navigate helper that preserves zone+tab ────────────────
   const navigateToFront = useCallback(
-    (frontId: number | 'main') => {
+    (frontId: string | 'main') => {
       if (rootSessionId == null) return;
       const zone: Zone = route?.zone ?? 'work';
       const tab = route?.tab ?? DEFAULT_TAB_FOR_ZONE[zone];
@@ -122,7 +122,7 @@ export function useCompanySiblings(rootSessionId: number | null) {
   }, [refresh]);
 
   const setActiveSessionId = useCallback(
-    (sessionId: number | null) => {
+    (sessionId: string | null) => {
       if (rootSessionId == null || sessionId == null) return;
       navigateToFront(sessionId);
     },
@@ -156,7 +156,7 @@ export function useCompanySiblings(rootSessionId: number | null) {
   );
 
   const renameChild = useCallback(
-    async (sessionId: number, name: string): Promise<boolean> => {
+    async (sessionId: string, name: string): Promise<boolean> => {
       if (rootSessionId == null) return false;
       const parentId = state.parent?.id ?? rootSessionId;
       // Parent renames hit `PATCH /sessions/:id` (the session CRUD endpoint).
@@ -194,7 +194,7 @@ export function useCompanySiblings(rootSessionId: number | null) {
   );
 
   const archiveChild = useCallback(
-    async (childId: number): Promise<boolean> => {
+    async (childId: string): Promise<boolean> => {
       if (rootSessionId == null) return false;
       const parentId = state.parent?.id ?? rootSessionId;
       const res = await fetch(`/api/company/sessions/${parentId}/children/${childId}`, {

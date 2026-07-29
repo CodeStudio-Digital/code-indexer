@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package codestudio.agent.v1;
+
+enum ArtifactCompression {
+  ARTIFACT_COMPRESSION_UNSPECIFIED = 0;
+  ARTIFACT_COMPRESSION_NONE = 1;
+  ARTIFACT_COMPRESSION_GZIP = 2;
+  ARTIFACT_COMPRESSION_ZSTD = 3;
+}
+
+enum ArtifactPrivacyClass {
+  ARTIFACT_PRIVACY_CLASS_UNSPECIFIED = 0;
+  ARTIFACT_PRIVACY_CLASS_PUBLIC = 1;
+  ARTIFACT_PRIVACY_CLASS_INTERNAL = 2;
+  ARTIFACT_PRIVACY_CLASS_CONFIDENTIAL = 3;
+  ARTIFACT_PRIVACY_CLASS_RESTRICTED = 4;
+}
+
+// A content-addressed payload handle. The random artifact_id plus owner scope
+// authorizes access; the content hash alone is never a credential.
+message ArtifactRef {
+  string artifact_id = 1;
+  string kind = 2;
+  bytes content_sha256 = 3;
+  string media_type = 4;
+  uint64 byte_length = 5;
+  ArtifactCompression compression = 6;
+  ArtifactPrivacyClass privacy_class = 7;
+  string redaction_policy_version = 8;
+  string owner_session_id = 9;
+}

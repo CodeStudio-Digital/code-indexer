@@ -1,7 +1,13 @@
-import type { ProviderSpec, ProviderDefinition } from '@mcp/provider-sdk';
+import {
+  parseRuntimeModelRef,
+  selectRuntimeModelMetadata,
+  type ProviderSpec,
+  type ProviderDefinition,
+} from '@mcp/provider-sdk';
 import {
   ANTHROPIC_EXTENDED_CACHE_TTL_BETA,
   AnthropicChatProvider,
+  resolveAnthropicRequestModel,
 } from '@mcp/code-agent/providers/anthropic.js';
 import { buildClaudeCode } from './claude-code.js';
 
@@ -22,16 +28,26 @@ export function buildAnthropic(spec: ProviderSpec): WireParts {
   if (spec.wireOpts?.claudeCode) return buildClaudeCode(spec);
 
   return {
-    createCoder: (creds, model) =>
-      new AnthropicChatProvider({
+    createCoder: (creds, model, opts) => {
+      const selectedModel =
+        model ?? spec.defaultModel ?? spec.defaultModels[0] ?? 'claude-sonnet-5';
+      const wireModel = parseRuntimeModelRef(selectedModel).id;
+      return new AnthropicChatProvider({
         apiKey: creds.apiKey,
         baseURL: creds.baseURL,
-        model: model ?? spec.defaultModel,
+        model: wireModel,
         defaultThinking: spec.wireOpts?.defaultThinking,
         defaultBetas: [ANTHROPIC_EXTENDED_CACHE_TTL_BETA],
         useBetaMessages: true,
         cacheMessages: true,
         promptCacheTtl: '1h',
-      }),
+        resolveModel: (activeModel, req) =>
+          resolveAnthropicRequestModel(
+            parseRuntimeModelRef(activeModel).id,
+            req,
+            selectRuntimeModelMetadata(opts?.providerModels, activeModel),
+          ),
+      });
+    },
   };
 }

@@ -5,10 +5,10 @@
  * Usage in a runner:
  *
  *   const key = cache.buildKey({ prompt, projectIds, recentMutations, agentType: 'Explore' });
- *   const hit = cache.tryRead(key, { sessionId });
+ *   const hit = cache.tryRead(key);
  *   if (hit) return hit.result;
  *   const result = await runSubAgentForReal(...);
- *   cache.write(key, result, { sessionId });
+ *   cache.write(key, result);
  *   return result;
  *
  * TTL defaults follow the plan:
@@ -90,7 +90,7 @@ export class SubAgentResultCache {
   }
 
   /** Returns the cached result if a fresh (non-expired) row exists. */
-  tryRead<T>(key: SubAgentKey, _opts: { sessionId?: number | null } = {}): SubAgentReadResult<T> | null {
+  tryRead<T>(key: SubAgentKey): SubAgentReadResult<T> | null {
     const row = this.store.lookup({
       prompt_hash: key.promptHash,
       context_digest: key.contextDigest,
@@ -116,25 +116,15 @@ export class SubAgentResultCache {
   }
 
   /** Write a fresh row, replacing any expired one for the same key. */
-  write<T>(
-    key: SubAgentKey,
-    result: T,
-    opts: { sessionId?: number | null } = {},
-  ): void {
+  write<T>(key: SubAgentKey, result: T): void {
     const ttl = this.cfg.ttlSeconds[key.agentType] ?? this.cfg.defaultTtlSeconds;
     this.store.upsert({
-      session_id: opts.sessionId ?? null,
       prompt_hash: key.promptHash,
       context_digest: key.contextDigest,
       agent_type: key.agentType,
       result_json: JSON.stringify(result),
       ttl_seconds: ttl,
     });
-  }
-
-  /** Drop all entries for a session — call when working tree resets. */
-  invalidateSession(sessionId: number): number {
-    return this.store.invalidateSession(sessionId);
   }
 
   /** Sweeper for expired rows; expected to run periodically. */

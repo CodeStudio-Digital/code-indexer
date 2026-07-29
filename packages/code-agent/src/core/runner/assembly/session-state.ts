@@ -145,7 +145,7 @@ export function renderMemoryIndex(
  * `recall_conversation` tool so prompt cost remains bounded as the session grows.
  */
 export function renderConversationChapterIndex(
-  entries: ReadonlyArray<{ id: number; ordinal: number; title: string; source?: string }>,
+  entries: ReadonlyArray<{ id: string; ordinal: number; title: string; source?: string }>,
   total: number,
   maxChars: number,
 ): string | null {

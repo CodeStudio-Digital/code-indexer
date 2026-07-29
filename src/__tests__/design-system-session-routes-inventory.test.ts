@@ -9,6 +9,9 @@ import {
   mountDesignSystemSessionRoutes,
 } from '@apps/http-api/server/routes/design-system/sessions.js';
 
+const DESIGN_SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000020';
+
 describe('design-system session routes source inventory', () => {
   let dir: string;
 
@@ -39,8 +42,8 @@ describe('design-system session routes source inventory', () => {
 
   function createDeps(projectRootProvider: () => string | null, sessionOverride?: Record<string, unknown>) {
     const dsSession = {
-      id: 1,
-      company_session_id: 20,
+      id: DESIGN_SESSION_ID,
+      company_session_id: COMPANY_SESSION_ID,
       name: 'Corporate UI',
       package_name: '@acme/corporate-ui',
       stack: 'react-ts',
@@ -68,10 +71,24 @@ describe('design-system session routes source inventory', () => {
         raw: vi.fn(),
       },
       companyStore: {
-        createCompanySession: vi.fn(() => ({ id: 20 })),
+        createCompanySession: vi.fn(() => ({ id: COMPANY_SESSION_ID })),
         addProjectToCompanySession: vi.fn(),
         listCompanySessionProjects: vi.fn(() => [{ project_id: 10 }]),
-        getCompanySession: vi.fn(() => ({ id: 20, status: 'idle' })),
+        getCompanySession: vi.fn(() => ({ id: COMPANY_SESSION_ID, status: 'idle' })),
+      },
+      sessionStore: {
+        ensureCatalog: vi.fn(async () => {}),
+        catalog: {
+          get: vi.fn((id: string) => id === COMPANY_SESSION_ID
+            ? {
+                session: {
+                  kind: 'company',
+                  linked_projects: [{ project_id: 10 }],
+                },
+                state: { status: 'idle' },
+              }
+            : undefined),
+        },
       },
       designSystemStore: {
         createSession: vi.fn(() => dsSession),
@@ -122,9 +139,12 @@ describe('design-system session routes source inventory', () => {
     const app = new Hono();
     mountDesignSystemSessionRoutes(app, deps);
 
-    const response = await app.request('/api/design-system/sessions/1/re-extract', {
+    const response = await app.request(
+      `/api/design-system/sessions/${DESIGN_SESSION_ID}/re-extract`,
+      {
       method: 'POST',
-    });
+      },
+    );
     const body = await response.json() as { ok: boolean; inventory: unknown };
 
     expect(response.status).toBe(200);
@@ -147,9 +167,12 @@ describe('design-system session routes source inventory', () => {
     const app = new Hono();
     mountDesignSystemSessionRoutes(app, deps);
 
-    const response = await app.request('/api/design-system/sessions/1/re-extract', {
+    const response = await app.request(
+      `/api/design-system/sessions/${DESIGN_SESSION_ID}/re-extract`,
+      {
       method: 'POST',
-    });
+      },
+    );
     const body = await response.json() as { inventory: { html_pages: number; component_candidates: number } };
 
     expect(response.status).toBe(200);

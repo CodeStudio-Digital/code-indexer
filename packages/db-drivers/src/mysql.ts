@@ -39,7 +39,20 @@ const SYSTEM_DBS = new Set(['information_schema', 'mysql', 'performance_schema',
 
 function buildPoolConfig(config: DbConnectConfig): Record<string, unknown> {
   const opts = config.options ?? {};
-  const extra: Record<string, unknown> = { connectionLimit: 3 };
+  const extra: Record<string, unknown> = {
+    connectionLimit: 3,
+    // Both default to false in mysql2, but a URL-mode DSN can turn them on via
+    // query parameters — and these are spread AFTER `uri`, so they win.
+    //   localInfile: the server, not the client, decides when a LOCAL INFILE
+    //     transfer happens. With it enabled, a malicious or compromised server
+    //     answers any query with a file request and mysql2 uploads that path
+    //     from the user's machine.
+    //   multipleStatements: turns a single injected `;` anywhere in the app
+    //     into arbitrary statement execution, and defeats the read-only
+    //     classifier, which vets one statement at a time.
+    localInfile: false,
+    multipleStatements: false,
+  };
   if (typeof opts.connectTimeoutMs === 'number') extra.connectTimeout = opts.connectTimeoutMs;
   if (config.connectionString) return { uri: config.connectionString, ...extra };
   return {

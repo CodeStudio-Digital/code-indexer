@@ -8,7 +8,6 @@
  *     cache,
  *     { prompt, projectIds, agentType: 'Explore' },
  *     async () => runActualSubAgent(...),
- *     { sessionId },
  *   );
  *
  * On cache hit, `runFn` is never called. On miss, `runFn` runs and the
@@ -23,7 +22,6 @@ import type {
 } from './sub-agent-result-cache.js';
 
 export interface WithCacheOptions {
-  sessionId?: number | null;
   /** Skip the cache read (always re-run). Useful for forced refreshes. */
   bypassRead?: boolean;
   /** Skip the cache write (e.g. when the result is known-to-be-unstable). */
@@ -57,7 +55,7 @@ export async function withSubAgentCache<T>(
 ): Promise<CachedRunResult<T>> {
   const key = cache.buildKey(keyInput);
   if (!options.bypassRead) {
-    const hit = cache.tryRead<T>(key, { sessionId: options.sessionId });
+    const hit = cache.tryRead<T>(key);
     if (hit) {
       options.onCacheEvent?.('hit', { agentType: keyInput.agentType, ageMs: hit.ageMs });
       return {
@@ -71,7 +69,7 @@ export async function withSubAgentCache<T>(
   options.onCacheEvent?.('miss', { agentType: keyInput.agentType });
   const result = await runFn();
   if (!options.bypassWrite) {
-    cache.write(key, result, { sessionId: options.sessionId });
+    cache.write(key, result);
     options.onCacheEvent?.('write', { agentType: keyInput.agentType });
   }
   return { result, cached: false, ageMs: 0, hitCount: 1 };

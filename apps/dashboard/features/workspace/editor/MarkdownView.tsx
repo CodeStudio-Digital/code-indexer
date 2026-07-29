@@ -198,7 +198,11 @@ function MarkdownRender({ source }: { source: string }) {
   );
 
   return (
-    <div className="overflow-y-auto px-6 py-5">
+    // `h-full min-h-0` is what makes `overflow-y-auto` mean anything: without a
+    // bounded height the div just grows with the document, so no scrollbar ever
+    // appears and the parent (overflow-hidden) clips everything past the fold.
+    // Same pairing as SvgView's canvas and the builder's file tree.
+    <div className="h-full min-h-0 overflow-y-auto px-6 py-5">
       <div className="prose prose-sm dark:prose-invert max-w-3xl mx-auto prose-headings:tracking-tight prose-headings:font-semibold prose-h1:text-2xl prose-h2:text-xl prose-h3:text-base prose-p:leading-relaxed prose-li:my-0.5">
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
           {source}

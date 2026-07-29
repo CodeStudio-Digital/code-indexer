@@ -25,6 +25,16 @@ export interface VerificationGateOptions {
   maxNudges?: number;
 }
 
+export type GoalCompletionHealth =
+  | 'verified'
+  | 'unverified'
+  | 'completed_with_warnings';
+
+export interface GoalCompletionAdvisory {
+  health: GoalCompletionHealth;
+  text: string;
+}
+
 function currentRunEntries(ctx: RunContext): ToolCallLedgerEntry[] {
   return ctx.opts.toolContext.toolCallLedger?.snapshot(ctx.verification.ledgerStartSeq) ?? [];
 }
@@ -70,7 +80,9 @@ function persistedReadiness(
   return { ...base, status: 'fresh' };
 }
 
-export function evaluateVerificationReadinessAtFinish(ctx: RunContext): VerificationReadiness {
+export async function evaluateVerificationReadinessAtFinish(
+  ctx: RunContext,
+): Promise<VerificationReadiness> {
   const entries = currentRunEntries(ctx);
   const writes = entries.filter((entry) => isWriteEntry(ctx, entry));
   const validations = entries.filter((entry) => !!entry.validationSignal);
@@ -124,7 +136,7 @@ export function evaluateVerificationReadinessAtFinish(ctx: RunContext): Verifica
 
   let persisted: VerifyEvidence | null = null;
   try {
-    persisted = ctx.opts.collectVerifyEvidence?.() ?? null;
+    persisted = (await ctx.opts.collectVerifyEvidence?.()) ?? null;
   } catch {
     persisted = null;
   }
@@ -153,48 +165,43 @@ export function formatVerificationReadiness(readiness: VerificationReadiness): s
   }
 }
 
-export function maybeVerificationNudge(
-  ctx: RunContext,
+/**
+ * Classify completion evidence without granting it execution authority.
+ * `update_goal(status="complete")` persists first; this health is then shown
+ * in the tool result and written to the session audit trail.
+ */
+export function buildGoalCompletionAdvisory(
   readiness: VerificationReadiness,
-  options: VerificationGateOptions = {},
-): string | null {
-  if (readiness.status === 'not_applicable' || readiness.status === 'fresh') return null;
-  const maxNudges = options.maxNudges ?? 1;
-  if (ctx.verification.nudges >= maxNudges) return null;
-  ctx.verification.nudges += 1;
-  return (
-    '<system-reminder>Completion evidence is not fresh. ' +
-    formatVerificationReadiness(readiness) +
-    ' Before saying the work is done, run the applicable project validation. ' +
-    'If no executable oracle applies (for example a prose-only change), state that limitation explicitly in the final summary.</system-reminder>'
-  );
+): GoalCompletionAdvisory {
+  const health: GoalCompletionHealth =
+    readiness.status === 'fresh'
+      ? 'verified'
+      : readiness.status === 'not_applicable'
+        ? 'unverified'
+        : 'completed_with_warnings';
+  return {
+    health,
+    text:
+      `[goal-advisory] Completion health: ${health}. ` +
+      formatVerificationReadiness(readiness) +
+      ' Goal completion was persisted; verification evidence is advisory and cannot block it.',
+  };
 }
 
 /**
- * Apply the same bounded evidence policy before update_goal persists a
- * completion. Without this dispatch boundary, an early completion can strand
- * the following validation behind the goal gate because the durable goal is
- * already complete. This is intentionally reversible after the shared nudge
- * budget, matching the text-finish gate for work with no executable oracle.
+ * @deprecated Verification no longer intercepts a clean finish.
  */
-export function maybeVerificationCompletionRefusal(ctx: RunContext): string | null {
-  let goal: ReturnType<NonNullable<typeof ctx.opts.toolContext.getGoalState>>;
-  try {
-    goal = ctx.opts.toolContext.getGoalState?.() ?? null;
-  } catch {
-    // Goal persistence owns its own precise read error. Do not mask it with a
-    // secondary verification refusal.
-    return null;
-  }
-  if (goal?.status !== 'in_progress') return null;
+export function maybeVerificationNudge(
+  _ctx: RunContext,
+  _readiness: VerificationReadiness,
+  _options: VerificationGateOptions = {},
+): string | null {
+  return null;
+}
 
-  const readiness = evaluateVerificationReadinessAtFinish(ctx);
-  const nudge = maybeVerificationNudge(ctx, readiness);
-  if (!nudge) return null;
-  return (
-    '[verification-evidence] Refused `update_goal`: completion evidence is not fresh. ' +
-    formatVerificationReadiness(readiness) +
-    ' Run the applicable validation, then retry update_goal. If no executable oracle applies, ' +
-    'retry once and state that limitation explicitly in the final summary.'
-  );
+/**
+ * @deprecated Verification no longer refuses update_goal completion.
+ */
+export function maybeVerificationCompletionRefusal(_ctx: RunContext): string | null {
+  return null;
 }

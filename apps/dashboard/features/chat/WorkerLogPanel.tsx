@@ -30,7 +30,7 @@ import { exportWorkerLogs } from './worker-log-export.js';
 
 interface WorkerLogPanelProps {
   onClose: () => void;
-  sessionId?: number | null;
+  sessionId?: string | null;
   kind?: 'coder' | 'company';
   /** When true, drops the panel's own header chrome (the host provides one). */
   embedded?: boolean;

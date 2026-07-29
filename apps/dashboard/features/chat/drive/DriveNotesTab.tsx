@@ -23,7 +23,7 @@ export function DriveNotesTab({
   memory,
   onChanged,
 }: {
-  sessionId: number;
+  sessionId: string;
   memory: DriveMemory[];
   onChanged: () => void;
 }) {
@@ -54,7 +54,7 @@ export function DriveNotesTab({
 
   const togglePin = async (m: DriveMemory) => {
     await apiPatch(`${base}/${m.id}`, { pinned: !m.pinned });
-    if (selected?.id === m.id) setSelected({ ...m, pinned: m.pinned ? 0 : 1 });
+    if (selected?.id === m.id) setSelected({ ...m, pinned: !m.pinned });
     onChanged();
   };
 

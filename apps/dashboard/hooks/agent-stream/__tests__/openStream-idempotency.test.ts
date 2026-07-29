@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { openStream, type OpenStreamDeps } from '../openStream.js';
 
 const enc = new TextEncoder();
+const SESSION_ID = '22222222-2222-4222-8222-222222222222';
 
 function sseDone(): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -50,7 +51,11 @@ describe('openStream idempotency key', () => {
       return sseDone();
     }));
 
-    const p = openStream(1, { url: '/api/coder/sessions/1/messages', method: 'POST', body: { content: 'hi' } }, deps());
+    const p = openStream(SESSION_ID, {
+      url: `/api/coder/sessions/${SESSION_ID}/messages`,
+      method: 'POST',
+      body: { content: 'hi' },
+    }, deps());
     // First fetch rejected → ReconnectingSSEClient is in its 1s backoff.
     await vi.advanceTimersByTimeAsync(1100);
     await p;
@@ -69,7 +74,11 @@ describe('openStream idempotency key', () => {
       return sseDone();
     }));
 
-    const p = openStream(1, { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true }, deps());
+    const p = openStream(SESSION_ID, {
+      url: `/api/coder/sessions/${SESSION_ID}/attach`,
+      method: 'GET',
+      reattach: true,
+    }, deps());
     await vi.advanceTimersByTimeAsync(10);
     await p;
 

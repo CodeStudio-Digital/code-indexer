@@ -12,10 +12,14 @@
 import { ApiError } from '@mcp/api-bus';
 import { installDsPackage, uninstallDsPackage } from '@mcp/services/host-scaffold/index.js';
 import { tryGetVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
-import type { DesignSystemSession, DesignSystemVersion } from '@mcp/store/design-system-store.js';
+import type {
+  DesignSystemSession,
+  DesignSystemSessionId,
+  DesignSystemVersion,
+} from '@mcp/store/design-system-store.js';
 
 export interface DsConsumerLink {
-  sessionId: number;
+  sessionId: DesignSystemSessionId;
   packageName: string;
   semver: string;
   linkedAt: string;
@@ -27,9 +31,14 @@ type UninstallRunCmd = Parameters<typeof uninstallDsPackage>[0]['runCmd'];
 
 /** Structural slices — ServerDeps satisfies them; tests pass fakes. */
 export interface DsLinkStore {
-  getSession(id: number): DesignSystemSession | null;
-  getLatestPublishedVersion(sessionId: number): DesignSystemVersion | null;
-  getVersionBySemver(sessionId: number, semver: string): DesignSystemVersion | null;
+  getSession(id: DesignSystemSessionId): Promise<DesignSystemSession | null>;
+  getLatestPublishedVersion(
+    sessionId: DesignSystemSessionId,
+  ): Promise<DesignSystemVersion | null>;
+  getVersionBySemver(
+    sessionId: DesignSystemSessionId,
+    semver: string,
+  ): Promise<DesignSystemVersion | null>;
 }
 export interface DsLinkDeps {
   db: {
@@ -49,11 +58,15 @@ export interface VerdaccioLike {
   enable(): Promise<{ status: string; loopbackUrl: string; lastError: string | null }>;
 }
 
-export function resolveDsForLink(
+export async function resolveDsForLink(
   store: DsLinkStore,
-  input: { dsSessionId: number; semver?: string; targetStack: string },
-): { session: DesignSystemSession; version: DesignSystemVersion } {
-  const session = store.getSession(input.dsSessionId);
+  input: {
+    dsSessionId: DesignSystemSessionId;
+    semver?: string;
+    targetStack: string;
+  },
+): Promise<{ session: DesignSystemSession; version: DesignSystemVersion }> {
+  const session = await store.getSession(input.dsSessionId);
   if (!session) throw new ApiError('not_found', 404, 'design system session not found');
   if (session.stack !== input.targetStack) {
     throw new ApiError(
@@ -64,8 +77,8 @@ export function resolveDsForLink(
     );
   }
   const version = input.semver
-    ? store.getVersionBySemver(session.id, input.semver)
-    : store.getLatestPublishedVersion(session.id);
+    ? await store.getVersionBySemver(session.id, input.semver)
+    : await store.getLatestPublishedVersion(session.id);
   if (!version || version.status !== 'published') {
     throw new ApiError(
       'no_published_version',
@@ -101,7 +114,7 @@ export async function ensureVerdaccioRunning(verdaccio?: VerdaccioLike | null): 
 
 export interface LinkDsToDirInput {
   targetDir: string;
-  dsSessionId: number;
+  dsSessionId: DesignSystemSessionId;
   /** Stack of the consuming project (builder_json.stack). */
   targetStack: string;
   semver?: string;
@@ -113,7 +126,10 @@ export interface LinkDsToDirInput {
 }
 
 export async function linkDsToDir(deps: DsLinkDeps, input: LinkDsToDirInput): Promise<DsConsumerLink> {
-  const { session, version } = resolveDsForLink(deps.designSystemStore, input);
+  const { session, version } = await resolveDsForLink(
+    deps.designSystemStore,
+    input,
+  );
   const registryUrl = await ensureVerdaccioRunning(input.verdaccio);
   const result = await installDsPackage({
     dir: input.targetDir,
@@ -150,7 +166,11 @@ function parseBuilderJson(project: { builder_json?: string | null }): Record<str
 
 export async function linkDesignSystem(
   deps: DsLinkDeps,
-  input: { projectId: number; dsSessionId: number; semver?: string },
+  input: {
+    projectId: number;
+    dsSessionId: DesignSystemSessionId;
+    semver?: string;
+  },
   signal?: AbortSignal,
   seams?: { verdaccio?: VerdaccioLike | null; runCmd?: LinkDsToDirInput['runCmd'] },
 ): Promise<{ ok: true; link: DsConsumerLink }> {

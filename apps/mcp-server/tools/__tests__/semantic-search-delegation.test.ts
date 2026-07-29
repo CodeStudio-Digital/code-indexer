@@ -52,10 +52,35 @@ describe('mcp search semantic delegation', () => {
     const output = await tool.handler({ project_name: 'demo', query: 'vector routing', mode: 'hybrid' }, h.ctx);
 
     expect(h.searchProject).toHaveBeenCalledWith(7, 'vector routing', {
-      mode: 'hybrid', type: 'all', limit: 20,
+      mode: 'hybrid',
+      type: 'all',
+      limit: 20,
+      consumer: 'agent',
+      sessionId: undefined,
+      companySessionId: undefined,
     });
     expect(h.searchWithDiag).not.toHaveBeenCalled();
     expect(output).toContain('src/router.ts');
+  });
+
+  it('forwards the hidden bridge session scope to the semantic owner', async () => {
+    const h = context(true);
+    await tool.handler({
+      project_name: 'demo',
+      query: 'vector routing',
+      __mcp_session_id: 'session-7',
+      __mcp_company_session_id: 'company-3',
+    }, h.ctx);
+
+    expect(h.searchProject).toHaveBeenCalledWith(
+      7,
+      'vector routing',
+      expect.objectContaining({
+        consumer: 'agent',
+        sessionId: 'session-7',
+        companySessionId: 'company-3',
+      }),
+    );
   });
 
   it('falls back to local FTS and reports the degradation when the owner is offline', async () => {

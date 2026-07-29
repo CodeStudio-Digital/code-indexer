@@ -5,6 +5,12 @@ import '@fontsource-variable/jetbrains-mono/wght.css';
 import App from './App.js';
 import './index.css';
 import { installFetchBase, isElectronRenderer } from './lib/install-fetch-base.js';
+// Side-effect import: snapshots the document base used to build `public/` asset
+// URLs. It has to happen while `location` is still index.html — once the router
+// mounts, `file://` history collapses it to the drive root. Anchored here (not
+// left to whichever component imports it first) so making a component lazy
+// cannot silently move the snapshot past that point. See lib/public-asset.ts.
+import './lib/public-asset.js';
 import { startUserTimingBufferGuard } from './lib/perf/user-timing-guard.js';
 import { ensureRendererVitals } from './features/admin/perf/renderer-vitals.js';
 

@@ -25,7 +25,7 @@ export interface PipelineSummary {
 }
 
 interface PipelinePickerProps {
-  sessionId: number | null;
+  sessionId: string | null;
   selectedPipelineId: number | null;
   onChange: (pipelineId: number | null) => void;
   /**

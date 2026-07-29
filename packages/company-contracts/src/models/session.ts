@@ -8,7 +8,7 @@ export type CompanyRuntimeKind = 'company' | 'app_studio';
  */
 export interface CompanySessionCapabilities {
   runtimeKind: CompanyRuntimeKind;
-  appStudioSessionId: number | null;
+  appStudioSessionId: string | null;
   promptProfile: 'company' | 'app_studio';
   toolProfile: 'company' | 'app_studio';
   autonomyPolicy: 'company' | 'controlled_app_work';
@@ -22,13 +22,13 @@ export interface CompanySessionCapabilities {
 }
 
 export interface CompanySession {
-  id: number;
+  id: string;
   template_id: number | null;
   /** Selects the server-owned orchestration capability for this session. */
   runtime_kind: CompanyRuntimeKind;
   name: string;
   status: CompanySessionStatus;
-  master_session_id: number | null;
+  master_session_id: string | null;
   config_json: string;
   /**
    * Multi-front via sub-sessions (migration 067): when set, this row is
@@ -36,7 +36,7 @@ export interface CompanySession {
    * sandbox/projects/kanban/pipelines with the parent. NULL = root
    * session (a parent or a standalone single-tab session).
    */
-  parent_session_id: number | null;
+  parent_session_id: string | null;
   /**
    * Soft-delete timestamp (migration 087). Set when a sub-session
    * ("front") is archived from `FrontTabsBar`; `listChildSessions`
@@ -57,14 +57,14 @@ export interface CompanySession {
 }
 
 export interface CompanySessionProject {
-  company_session_id: number;
+  company_session_id: string;
   project_id: number;
   label: string | null;
 }
 
 export interface CompanySessionArchive {
-  id: number;
-  company_session_id: number;
+  id: string;
+  company_session_id: string;
   archived_at: string;
   reason: string | null;
   included_kanban: boolean;

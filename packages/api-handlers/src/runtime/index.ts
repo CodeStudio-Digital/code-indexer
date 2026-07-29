@@ -9,12 +9,10 @@
 
 import { ensureDataDir } from '@mcp/shared/utils/config.js';
 import { ApiError } from '@mcp/api-bus';
-import type { InstallProgress, Runtime, RuntimeApi, RuntimeKind, RuntimeRelease, RuntimeTarget } from '@mcp/api-bus';
+import type { InstallProgress, RuntimeApi, RuntimeKind, RuntimeRelease, RuntimeTarget } from '@mcp/api-bus';
 import { getLspServerManager } from '@mcp/services/lsp/lsp-server-manager.js';
 import type { HandlerDeps } from '../types.js';
-import { detectNodeRuntimes } from './detect-node.js';
-import { detectJavaRuntimes } from './detect-java.js';
-import { detectDotnetRuntimes } from './detect-dotnet.js';
+import { detectRuntimes } from './detect-runner.js';
 import * as nodeManager from './node-manager.js';
 import * as phpManager from './php-manager.js';
 import * as pythonManager from './python-manager.js';
@@ -28,15 +26,6 @@ import { refreshAfterSuccessfulPhpExtensionInstall, refreshRunningIntelephense }
 
 export function createRuntimeHandlers(deps: HandlerDeps): RuntimeApi {
   const dir = (): string => ensureDataDir();
-
-  function listFor(kind: RuntimeKind): Runtime[] {
-    if (kind === 'node') return detectNodeRuntimes(dir());
-    if (kind === 'php') return phpManager.detect(dir());
-    if (kind === 'python') return pythonManager.detect(dir());
-    if (kind === 'java') return detectJavaRuntimes(dir());
-    if (kind === 'dotnet') return detectDotnetRuntimes(dir());
-    throw new ApiError('unsupported', 400, `unknown runtime kind: ${kind}`);
-  }
 
   function releasesFor(kind: RuntimeKind): Promise<RuntimeRelease[]> {
     if (kind === 'node') return nodeManager.listAvailable();
@@ -73,7 +62,7 @@ export function createRuntimeHandlers(deps: HandlerDeps): RuntimeApi {
   return {
     async list({ kind, target }) {
       const distro = wslDistro(target);
-      return distro ? detectWslRuntimes(kind, distro) : listFor(kind);
+      return distro ? detectWslRuntimes(kind, distro) : detectRuntimes(kind, dir());
     },
     async listReleases({ kind, target }) {
       const distro = wslDistro(target);

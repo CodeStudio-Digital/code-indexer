@@ -65,7 +65,7 @@ function autoKindOf(key: string): EnvAutoKind {
  * defaults — a session without a sandbox just yields an empty list and
  * the selector collapses to the "all services" chip.
  */
-function useSessionServices(sessionId: number): EnvServiceOption[] {
+function useSessionServices(sessionId: string): EnvServiceOption[] {
   const [services, setServices] = useState<EnvServiceOption[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -94,7 +94,7 @@ function useSessionServices(sessionId: number): EnvServiceOption[] {
 }
 
 interface EnvTabProps {
-  companySessionId: number;
+  companySessionId: string;
 }
 
 export default function EnvTab({ companySessionId }: EnvTabProps) {
@@ -204,7 +204,7 @@ function EnvGroupedList({
   onReload,
 }: {
   envs: EnvRow[];
-  sessionId: number;
+  sessionId: string;
   services: EnvServiceOption[];
   onDelete: (key: string) => Promise<void>;
   onReload: () => Promise<void>;
@@ -265,7 +265,7 @@ function AddEnvForm({
   onSaved,
   onError,
 }: {
-  sessionId: number;
+  sessionId: string;
   services: EnvServiceOption[];
   onSaved: () => Promise<void>;
   onError: (msg: string | null) => void;

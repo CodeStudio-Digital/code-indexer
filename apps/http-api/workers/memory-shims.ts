@@ -23,6 +23,10 @@ import {
   type MessageBridge,
 } from '../../../packages/orchestrator-host/src/index.js';
 import type { InvestigationSemanticIndexPort } from '../../../packages/code-agent/src/tools/investigation-embedder.js';
+import type {
+  CompanySessionId,
+  SessionId,
+} from '../../../packages/session-storage/src/index.js';
 
 /** Mirrors the structural `RunCoderOptions.memoryRetriever` item shape. */
 export interface ShimRetrievedMemory {
@@ -43,7 +47,7 @@ export interface ShimRunEndInput {
   succeeded?: boolean;
   /** Distill moment for the diagnostics log (compaction | manual_clear | idle). */
   trigger?: string;
-  sessionId?: number;
+  sessionId?: SessionId | CompanySessionId;
   /** Durable session notes promoted to project-memory candidates. */
   sessionNotes?: Array<{ title: string; body: string; kind: string; pinned: boolean }>;
 }
@@ -341,7 +345,7 @@ export function buildWorkerMemoryShims(bridge: MessageBridge): WorkerMemoryShims
       },
       search: async (input) => {
         try {
-          return await bridge.request<number[]>('investigationSearch', input, { timeoutMs: 10_000 });
+          return await bridge.request<string[]>('investigationSearch', input, { timeoutMs: 10_000 });
         } catch {
           return [];
         }

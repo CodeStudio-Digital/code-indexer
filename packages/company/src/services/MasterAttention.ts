@@ -50,7 +50,7 @@ export type AttentionKind =
 
 export interface AttentionEvent {
   kind: AttentionKind;
-  agentRunId: number;
+  agentRunId: string | null;
   role: string;
 }
 

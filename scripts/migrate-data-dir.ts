@@ -11,8 +11,8 @@
  * Idempotent: re-running after a partial move only moves what's left and
  * only rewrites rows still pointing at the old base. Folders that hold
  * DB-referenced absolute paths (virtual-projects, design-system-uploads,
- * design-system-mcp) get their rows rewritten; packages/ and sandboxes/
- * are recomputed by the app, so a plain move suffices.
+ * design-system-mcp) get their rows rewritten. packages/ remains a global
+ * catalog; legacy sandboxes/ is moved only as input for sessions:fs-migrate.
  *
  * `mcp.db` and `external/` are reported but NOT deleted — they have no
  * code references (stale leftovers); the operator removes them by hand.
@@ -25,10 +25,10 @@ import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import {
   designSystemMcpDir,
   designSystemUploadsDir,
-  sandboxArchiveDir,
   verdaccioStorageDir,
   virtualProjectsBaseDir,
 } from '@mcp/shared/utils/data-paths.js';
+import { legacySandboxArchiveDir } from './sessions-fs-migrate/legacy-paths.js';
 
 type DB = Database.Database;
 
@@ -203,7 +203,7 @@ function main(): void {
 
   moveTree(join(OLD_DATA, 'virtual-projects'), virtualProjectsBaseDir());
   moveTree(join(OLD_DATA, 'packages'), verdaccioStorageDir());
-  moveTree(join(OLD_DATA, 'sandboxes'), sandboxArchiveDir());
+  moveTree(join(OLD_DATA, 'sandboxes'), legacySandboxArchiveDir(mcpDataDir()));
   moveTree(join(OLD_DATA, 'design-system-uploads'), designSystemUploadsDir());
   moveTree(join(OLD_DATA, 'design-system-mcp'), designSystemMcpDir());
 

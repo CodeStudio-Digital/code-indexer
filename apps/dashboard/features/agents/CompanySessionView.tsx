@@ -42,7 +42,7 @@ import { WorkbenchResizeHandle, WorkbenchSurface } from '../../components/workbe
 import type { CompanySessionWorkbenchSlots } from './company-workbench-slots.js';
 
 interface CompanySessionViewProps {
-  sessionId: number;
+  sessionId: string;
   sessionName: string;
   sessionStatus: string;
   /**
@@ -55,12 +55,12 @@ interface CompanySessionViewProps {
   onToggleSessionsList?: () => void;
   workbenchSlots?: CompanySessionWorkbenchSlots;
   runtimeKind?: 'company' | 'app_studio';
-  appSessionId?: number | null;
+  appSessionId?: string | null;
 }
 
 interface SessionFullData {
   session: {
-    id: number;
+    id: string;
     name: string;
     status: string;
     config_json: string;
@@ -73,12 +73,13 @@ interface SessionFullData {
   projects: SessionProject[];
   agentRuns: PersistedAgentRun[];
   recentBoard: Array<{
-    id: number;
+    id: string;
+    seq: number;
     author_role: string;
-    agent_run_id: number | null;
+    agent_run_id: string | null;
     kind: string;
     content: string;
-    mentions_json: string;
+    mentions: string[];
     created_at: string;
   }>;
   /**
@@ -157,7 +158,7 @@ export function CompanySessionView({
   // to the new recovery session's front.
   const [reestablishMasterOpen, setReestablishMasterOpen] = useState(false);
   const handleReestablishSpawned = useCallback(
-    ({ masterCoderSessionId: _id }: { masterCoderSessionId: number }) => {
+    ({ masterCoderSessionId: _id }: { masterCoderSessionId: string }) => {
       // The new master is the master of THIS company session — its tab is
       // the Main tab (frontId = 'main' / company sessionId). Navigate
       // there so the user lands on the new master view; the SSE stream
@@ -245,7 +246,7 @@ export function CompanySessionView({
     );
   }, [activeFrontId, navigate, persistBottom, routeParams.tab, routeParams.zone, runtimeKind, sessionId]);
   const [modalSession, setModalSession] = useState<{
-    coderSessionId: number;
+    coderSessionId: string;
     role: string;
     status: string;
   } | null>(null);
@@ -405,7 +406,7 @@ export function CompanySessionView({
     }
   }
 
-  function openAgentRun(agentRunId: number, role: string, status: string) {
+  function openAgentRun(agentRunId: string, role: string, status: string) {
     // Resolve the coder session id from the merged live agent first (a
     // freshly-spawned subordinate carries it via the spawn `agent_status`
     // before the REST snapshot is refreshed), then the persisted run, then
@@ -422,7 +423,7 @@ export function CompanySessionView({
     }
   }
 
-  function openPersistedRun(coderSessionId: number, role: string, status: string) {
+  function openPersistedRun(coderSessionId: string, role: string, status: string) {
     setModalSession({ coderSessionId, role, status });
   }
 
@@ -434,11 +435,12 @@ export function CompanySessionView({
       mergeBoardMessages(
         (sessionData?.recentBoard ?? []).map((b) => ({
           id: b.id,
+          seq: b.seq,
           author_role: b.author_role,
           agent_run_id: b.agent_run_id,
           kind: b.kind,
           content: b.content,
-          mentions: JSON.parse(b.mentions_json || '[]'),
+          mentions: b.mentions,
           created_at: b.created_at,
         })),
         stream.boardMessages,

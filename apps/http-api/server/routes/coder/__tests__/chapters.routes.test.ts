@@ -1,16 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
-import type { ServerDeps } from '../../../deps.js';
-import { mountCoderChapterRoutes } from '../chapters.js';
+import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
+import {
+  mountCoderChapterRoutes,
+  type RebuildConversationChaptersInput,
+} from '../chapters.js';
 
-function setup(options: { rebuild?: (sessionId: number, input: { scope?: string }) => Promise<unknown> } = {}) {
+const SESSION_ID = asSessionId('018f0f5e-7b2d-7a45-8c11-0123456789ab');
+const OTHER_SESSION_ID = asSessionId('018f0f5e-7b2d-7a45-8c11-0123456789ac');
+const CHAPTER_ID = '018f0f5e-7b2d-7a45-8c11-0123456789ad';
+const MISSING_CHAPTER_ID = '018f0f5e-7b2d-7a45-8c11-0123456789ae';
+
+function setup(options: {
+  rebuild?: (sessionId: SessionId, input: RebuildConversationChaptersInput) => Promise<unknown>;
+} = {}) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const row = {
-    id: 7,
-    session_id: 1,
+    id: CHAPTER_ID,
+    seq: 3,
+    revision: 1,
+    session_id: SESSION_ID,
     ordinal: 3,
-    start_message_id: 10,
-    end_message_id: 20,
+    start_message_seq: 10,
+    end_message_seq: 20,
     source: 'auto',
     trigger: 'threshold',
     title: 'A useful chapter',
@@ -24,29 +36,29 @@ function setup(options: { rebuild?: (sessionId: number, input: { scope?: string 
     superseded_at: null,
   };
   const sessionStore = {
-    getSession: (id: number) => id === 1 ? { id } : null,
-    getConversationChapterStatus: () => ({
-      state: 'healthy', boundary_id: 20, unsummarized_messages: 4, chapter_count: 1,
+    getSession: async (id: SessionId) => id === SESSION_ID ? { id } : null,
+    getConversationChapterStatus: async () => ({
+      state: 'healthy', boundary_seq: 20, unsummarized_messages: 4, chapter_count: 1,
     }),
-    listConversationChapters: (...args: unknown[]) => {
+    listConversationChapters: async (...args: unknown[]) => {
       calls.push({ method: 'list', args });
-      return { items: [row], next_cursor: '2' };
+      return { items: [row], next_cursor: 'chapter:2' };
     },
-    searchConversationChapters: (...args: unknown[]) => {
+    searchConversationChapters: async (...args: unknown[]) => {
       calls.push({ method: 'search', args });
       return { items: [row], next_cursor: null };
     },
-    getConversationChapter: (sessionId: number, chapterId: number) =>
-      sessionId === 1 && chapterId === 7 ? row : null,
-    listConversationChapterSource: (...args: unknown[]) => {
+    getConversationChapter: async (sessionId: SessionId, chapterId: string) =>
+      sessionId === SESSION_ID && chapterId === CHAPTER_ID ? row : null,
+    listConversationChapterSource: async (...args: unknown[]) => {
       calls.push({ method: 'source', args });
-      return { items: [{ id: 10, role: 'user', content_json: '[]' }], next_cursor: '10' };
+      return { items: [{ seq: 10, role: 'user', content: [] }], next_cursor: 'message:10' };
     },
   };
   const app = new Hono();
   mountCoderChapterRoutes(
     app,
-    { sessionStore } as unknown as ServerDeps,
+    { sessionStore },
     options.rebuild ? { rebuild: options.rebuild } : undefined,
   );
   return { app, calls };
@@ -55,57 +67,73 @@ function setup(options: { rebuild?: (sessionId: number, input: { scope?: string 
 describe('coder conversation chapter routes', () => {
   it('lists and searches chapters with bounded cursor pagination', async () => {
     const { app, calls } = setup();
-    const list = await app.request('/api/coder/sessions/1/chapters?limit=999&cursor=3');
+    const list = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters?limit=999&cursor=chapter:3`);
     expect(list.status).toBe(200);
     const listBody = await list.json() as { next_cursor: string; status: { state: string } };
-    expect(listBody.next_cursor).toBe('2');
+    expect(listBody.next_cursor).toBe('chapter:2');
     expect(listBody.status.state).toBe('healthy');
-    expect(calls[0]).toEqual({ method: 'list', args: [1, { limit: 50, cursor: '3' }] });
+    expect(calls[0]).toEqual({
+      method: 'list',
+      args: [SESSION_ID, { limit: 50, cursor: 'chapter:3' }],
+    });
 
-    const search = await app.request('/api/coder/sessions/1/chapters?q=first%20decision&limit=5');
+    const search = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters?q=first%20decision&limit=5`);
     expect(search.status).toBe(200);
-    expect(calls[1]).toEqual({ method: 'search', args: [1, 'first decision', { limit: 5, cursor: undefined }] });
+    expect(calls[1]).toEqual({
+      method: 'search',
+      args: [SESSION_ID, 'first decision', { limit: 5, cursor: undefined }],
+    });
   });
 
   it('gets a session-scoped chapter and its paginated source messages', async () => {
     const { app, calls } = setup();
-    const detail = await app.request('/api/coder/sessions/1/chapters/7');
+    const detail = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters/${CHAPTER_ID}`);
     expect(detail.status).toBe(200);
-    expect((await detail.json() as { id: number }).id).toBe(7);
+    expect((await detail.json() as { id: string }).id).toBe(CHAPTER_ID);
 
-    const source = await app.request('/api/coder/sessions/1/chapters/7/messages?limit=20&cursor=9');
+    const source = await app.request(
+      `/api/coder/sessions/${SESSION_ID}/chapters/${CHAPTER_ID}/messages?limit=20&cursor=message:9`,
+    );
     expect(source.status).toBe(200);
     expect(calls.find((call) => call.method === 'source')).toEqual({
       method: 'source',
-      args: [1, 7, { limit: 20, cursor: '9' }],
+      args: [SESSION_ID, CHAPTER_ID, { limit: 20, cursor: 'message:9' }],
     });
   });
 
   it('returns 404 across sessions and rejects malformed chapter ids', async () => {
     const { app } = setup();
-    expect((await app.request('/api/coder/sessions/2/chapters')).status).toBe(404);
-    expect((await app.request('/api/coder/sessions/1/chapters/99')).status).toBe(404);
-    expect((await app.request('/api/coder/sessions/1/chapters/nope')).status).toBe(400);
+    expect((await app.request(`/api/coder/sessions/${OTHER_SESSION_ID}/chapters`)).status).toBe(404);
+    expect((await app.request(`/api/coder/sessions/${SESSION_ID}/chapters/${MISSING_CHAPTER_ID}`)).status).toBe(404);
+    expect((await app.request(`/api/coder/sessions/${SESSION_ID}/chapters/nope`)).status).toBe(400);
+    expect((await app.request('/api/coder/sessions/1/chapters')).status).toBe(400);
+  });
+
+  it('rejects a cursor from the wrong sequence domain', async () => {
+    const { app } = setup();
+    expect((await app.request(
+      `/api/coder/sessions/${SESSION_ID}/chapters?cursor=message:3`,
+    )).status).toBe(400);
   });
 
   it('keeps rebuild disabled until the compaction service supplies an orchestrator', async () => {
     const { app } = setup();
-    const response = await app.request('/api/coder/sessions/1/chapters/rebuild', { method: 'POST' });
+    const response = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters/rebuild`, { method: 'POST' });
     expect(response.status).toBe(501);
   });
 
   it('accepts an injected rebuild orchestrator without coupling it to the store', async () => {
-    const seen: Array<{ sessionId: number; scope?: string }> = [];
+    const seen: Array<{ sessionId: SessionId; scope?: string }> = [];
     const { app } = setup({ rebuild: async (sessionId, input) => {
       seen.push({ sessionId, scope: input.scope });
       return { queued: true };
     } });
-    const response = await app.request('/api/coder/sessions/1/chapters/rebuild', {
+    const response = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters/rebuild`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scope: 'all' }),
     });
     expect(response.status).toBe(202);
-    expect(seen).toEqual([{ sessionId: 1, scope: 'all' }]);
+    expect(seen).toEqual([{ sessionId: SESSION_ID, scope: 'all' }]);
   });
 });

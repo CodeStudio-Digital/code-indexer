@@ -14,7 +14,10 @@
  * Registered per worker spawn by `CoderWorkerPool` / `WorkerOrchestratorPool`
  * next to the memory/vision handlers.
  */
-import { getMainSecretDecryptor } from '../server/secret-decrypt-port.js';
+import {
+  getMainSecretDecryptor,
+  getMainSecretEncryptor,
+} from '../server/secret-decrypt-port.js';
 
 /** Minimal structural slice of MessageBridge used here (test-friendly). */
 interface BridgeLike {
@@ -28,10 +31,17 @@ interface BridgeLike {
 export function registerWorkerSecretsHandlers(bridge: BridgeLike): () => void {
   const offDecrypt = bridge.handle('secretsDecrypt', async (payload) => {
     const { blob } = payload as { blob: string };
-    return getMainSecretDecryptor()(blob);
+    // await, not return: the decryptor may be an out-of-process RPC once the
+    // backend no longer shares an address space with safeStorage.
+    return await getMainSecretDecryptor()(blob);
+  });
+  const offEncrypt = bridge.handle('secretsEncrypt', async (payload) => {
+    const { plaintext } = payload as { plaintext: string };
+    return await getMainSecretEncryptor()(plaintext);
   });
 
   return (): void => {
     try { offDecrypt(); } catch { /* best-effort */ }
+    try { offEncrypt(); } catch { /* best-effort */ }
   };
 }

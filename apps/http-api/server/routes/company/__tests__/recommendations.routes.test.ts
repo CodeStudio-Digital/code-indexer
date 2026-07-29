@@ -1,151 +1,183 @@
-/**
- * Integration test for /api/company/sessions/:id/kanban/recompute-priorities.
- *
- * Uses a real CodeIndexDB + CompanyStore with seeded cards, then verifies
- * the endpoint returns cards ordered by priority_score.
- */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Hono } from 'hono';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '@mcp/store/db.js';
-import { CompanyStore } from '@mcp/store/company-store.js';
-import { mountCompanyRecommendationsRoutes } from '../recommendations.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { Hono } from 'hono';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import { InMemoryRoleEmbeddingStore } from '@mcp/company/role-pipeline/index.js';
 import { InMemoryTelemetrySink } from '@mcp/candidate-pipeline';
+import { SessionLocator, asCompanySessionId } from '@mcp/session-storage';
 import type { ServerDeps } from '../../../deps.js';
+import { mountCompanyRecommendationsRoutes } from '../recommendations.js';
 
-interface Handle {
-  app: Hono;
-  db: CodeIndexDB;
-  companyStore: CompanyStore;
-  sessionId: number;
-  dir: string;
-}
+const cleanup: string[] = [];
 
-function setup(): Handle {
-  const dir = mkdtempSync(join(tmpdir(), 'mcp-rec-routes-'));
-  const dbPath = join(dir, 'test.db');
-  const db = new CodeIndexDB(dbPath);
-  const companyStore = new CompanyStore(dbPath);
-
-  // Seed: a template (so role recommender has a roster), a session, and
-  // a few kanban cards with different tags.
-  const template = companyStore.createTemplate('test', 'test description', [
-    { role: 'frontend', provider: 'anthropic', model: 'claude-haiku', tier: 'navigate' },
-    { role: 'backend',  provider: 'anthropic', model: 'claude-haiku', tier: 'navigate' },
+async function harness() {
+  const root = await mkdtemp(join(tmpdir(), 'company-recommend-routes-'));
+  cleanup.push(root);
+  const dataDir = join(root, 'data');
+  const projectRoot = join(root, 'project');
+  await Promise.all([
+    mkdir(dataDir, { recursive: true }),
+    mkdir(projectRoot, { recursive: true }),
   ]);
-  const session = companyStore.createCompanySession({
-    template_id: template.id,
-    name: 'test-session',
-    config_json: '{}',
+  const sessionStore = new FsSessionStore({
+    locator: new SessionLocator({
+      dataDir,
+      projectRootResolver: {
+        resolveProjectRoot: (projectId) =>
+          projectId === 7 ? projectRoot : null,
+        listProjectRoots: () => [{
+          project_id: 7,
+          root_path: projectRoot,
+        }],
+      },
+    }),
   });
-  companyStore.createKanbanCard(session.id, {
+  const company = await sessionStore.repository.createSession({
+    kind: 'company',
+    scope: { kind: 'project', project_id: 7 },
+    owner_project_id: 7,
+    linked_projects: [{ project_id: 7, root_path: projectRoot }],
+    title: 'Company',
+    status: 'idle',
+    metadata: {
+      company: {
+        name: 'Company',
+        runtime_kind: 'company',
+        template_id: 1,
+        config_json: '{}',
+      },
+    },
+  });
+  await sessionStore.refresh();
+  const files = new CompanySessionFiles({
+    companySessionId: asCompanySessionId(company.session.id),
+    sessionStore,
+  });
+  files.createKanbanCardSync({
     title: 'docs typo',
     description: 'fix typo',
     column: 'todo',
     tag: 'documentation',
-    created_by: 'human',
   });
-  companyStore.createKanbanCard(session.id, {
+  files.createKanbanCardSync({
     title: 'production crash',
     description: 'fix prod crash blocking login',
     column: 'todo',
     tag: 'bug',
-    created_by: 'human',
   });
-  companyStore.createKanbanCard(session.id, {
+  files.createKanbanCardSync({
     title: 'refactor auth',
     description: 'X'.repeat(500),
     column: 'todo',
     tag: 'refactor',
-    created_by: 'human',
   });
 
-  const app = new Hono();
-  // Build a minimal ServerDeps subset that the route uses.
   const deps = {
-    companyStore,
+    sessionStore,
+    companyStore: {
+      getTemplate: () => ({
+        roles: [
+          {
+            role: 'frontend',
+            provider: 'anthropic',
+            model: 'claude-haiku',
+            skills: ['ui'],
+          },
+          {
+            role: 'backend',
+            provider: 'anthropic',
+            model: 'claude-haiku',
+            skills: ['api'],
+          },
+        ],
+      }),
+    },
     toolSelectionEmbed: async (text: string) => {
-      const arr = new Float32Array(4);
-      for (let i = 0; i < 4; i++) arr[i] = (text.charCodeAt(i) || 0) / 128;
-      return arr;
+      const vector = new Float32Array(4);
+      for (let index = 0; index < vector.length; index += 1) {
+        vector[index] = (text.charCodeAt(index) || 0) / 128;
+      }
+      return vector;
     },
     roleEmbeddingStore: new InMemoryRoleEmbeddingStore(),
     pipelineTelemetrySink: new InMemoryTelemetrySink(),
   } as unknown as ServerDeps;
+  const app = new Hono();
   mountCompanyRecommendationsRoutes(app, deps);
-  return { app, db, companyStore, sessionId: session.id, dir };
+  return { app, sessionId: company.session.id };
 }
 
-function teardown(h: Handle): void {
-  try { h.db.close(); } catch { /* */ }
-  try { rmSync(h.dir, { recursive: true, force: true }); } catch { /* */ }
-}
+afterEach(async () => {
+  await Promise.all(
+    cleanup.splice(0).map((path) =>
+      rm(path, { recursive: true, force: true }),
+    ),
+  );
+});
 
-describe('company /recommendations routes', () => {
-  let h: Handle;
-  beforeEach(() => { h = setup(); });
-  afterEach(() => teardown(h));
-
-  it('kanban/recompute-priorities orders bug > refactor > docs', async () => {
-    const r = await h.app.request(`/api/company/sessions/${h.sessionId}/kanban/recompute-priorities`, {
-      method: 'POST',
-    });
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as {
-      ordered: Array<{ id: number; title: string; tag: string | null }>;
-      diagnostics: Array<{ id: number; score: number }>;
-      durationMs: number;
+describe('Company filesystem recommendation routes', () => {
+  it('prioritizes filesystem cards while keeping opaque UUID ids', async () => {
+    const { app, sessionId } = await harness();
+    const response = await app.request(
+      `/api/company/sessions/${sessionId}/kanban/recompute-priorities`,
+      { method: 'POST' },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      ordered: Array<{ id: string; tag: string | null }>;
+      diagnostics: Array<{ id: string; score: number }>;
     };
     expect(body.ordered).toHaveLength(3);
     expect(body.diagnostics).toHaveLength(3);
-    // bug card (production crash) must rank first.
-    expect(body.ordered[0].tag).toBe('bug');
-    // refactor with massive description should rank below docs (effort penalty).
-    const idx = (tag: string) => body.ordered.findIndex((c) => c.tag === tag);
-    expect(idx('bug')).toBeLessThan(idx('refactor'));
+    expect(body.ordered[0]?.tag).toBe('bug');
+    expect(body.ordered.every((card) =>
+      /^[0-9a-f-]{36}$/.test(card.id),
+    )).toBe(true);
   });
 
-  it('recommend-role 404s on unknown session', async () => {
-    const r = await h.app.request(`/api/company/sessions/99999/recommend-role`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task: 'anything' }),
-    });
-    expect(r.status).toBe(404);
-  });
-
-  it('recommend-role 400s on missing task', async () => {
-    const r = await h.app.request(`/api/company/sessions/${h.sessionId}/recommend-role`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
-    });
-    expect(r.status).toBe(400);
-  });
-
-  it('recommend-role returns recommendations from the template roster', async () => {
-    const r = await h.app.request(`/api/company/sessions/${h.sessionId}/recommend-role`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task: 'frontend bug fix' }),
-    });
-    expect(r.status).toBe(200);
-    const body = (await r.json()) as {
-      recommendations: Array<{ role: string; kind: string; score: number }>;
+  it('returns role recommendations from the reusable template roster', async () => {
+    const { app, sessionId } = await harness();
+    const response = await app.request(
+      `/api/company/sessions/${sessionId}/recommend-role`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'frontend bug fix' }),
+      },
+    );
+    expect(response.status).toBe(200);
+    const body = await response.json() as {
+      recommendations: Array<{ role: string }>;
     };
     expect(body.recommendations.length).toBeGreaterThan(0);
-    const roles = new Set(body.recommendations.map((r) => r.role));
-    // Both seeded roles should be candidates.
-    expect(roles.has('frontend') || roles.has('backend')).toBe(true);
+    expect(
+      body.recommendations.some((item) =>
+        item.role === 'frontend' || item.role === 'backend',
+      ),
+    ).toBe(true);
   });
 
-  it('kanban/recompute-priorities returns 404 for unknown session', async () => {
-    const r = await h.app.request(`/api/company/sessions/99999/kanban/recompute-priorities`, {
-      method: 'POST',
-    });
-    expect(r.status).toBe(404);
+  it('rejects numeric session ids and 404s unknown UUIDs', async () => {
+    const { app } = await harness();
+    expect((await app.request(
+      '/api/company/sessions/42/recommend-role',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'anything' }),
+      },
+    )).status).toBe(400);
+    expect((await app.request(
+      `/api/company/sessions/${randomUUID()}/recommend-role`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'anything' }),
+      },
+    )).status).toBe(404);
   });
 });

@@ -1,5 +1,39 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { ControlPlaneDivergenceStore, ControlPlaneStore } from '@mcp/store/control-plane/index.js';
+import { setSqlCallSink, sqlLabel } from '@mcp/store/db/sql-timing.js';
+import { noteSyncLeaf } from './perf/stall-evidence.js';
+import { recordSlowCall } from './perf/slow-ipc.js';
+
+/** Statements at or above this land in the slow-call table (matches slow-ipc). */
+const SLOW_SQL_MS = 50;
+
+/** Default busy ceiling for the Electron-main handle, ms. */
+const DEFAULT_MAIN_BUSY_TIMEOUT_MS = 250;
+
+/**
+ * Busy-wait ceiling for the shared main-process connection.
+ *
+ * The process-wide default is 5000ms, chosen so writer-vs-writer contention
+ * becomes a short wait instead of SQLITE_BUSY. That reasoning holds inside a
+ * worker. It does NOT hold here: better-sqlite3 waits inside a synchronous
+ * native call, and this connection lives on the Electron main thread, so a
+ * contended statement freezes every window for the full ceiling — several per
+ * turn is how a 30s hang is built out of "short" waits.
+ *
+ * 250ms sits above the p99 of a WAL writer transaction on local storage (so
+ * nothing that succeeds today starts failing) while capping one contended call
+ * near FREEZE_THRESHOLD_MS — meaning if it does bite, the watchdog records it
+ * instead of it being invisible. Writes that genuinely must wait re-raise the
+ * ceiling per operation with `withBusyTimeout`.
+ */
+function mainBusyTimeoutMs(): number {
+  const raw = Number(process.env.MCP_SQLITE_MAIN_BUSY_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw >= 0 ? Math.trunc(raw) : DEFAULT_MAIN_BUSY_TIMEOUT_MS;
+}
+import { resolveTuningMmapBytes } from '@mcp/store/db/pragmas.js';
+import {
+  FileControlPlaneStore,
+  type ControlPlaneAuthority,
+} from '../file-control-plane-store.js';
 import { registerShutdownTask } from './shutdown-tasks.js';
 import {
   canResolveDbMaintenanceWorker,
@@ -11,7 +45,11 @@ import {
 import { getMemoryLedger } from './perf/memory-ledger.js';
 import { createProjectFeatureStoreResolver } from './project-feature-store.js';
 import { SqliteWriteQueue, isSqliteBusyError } from './sqlite-write-queue.js';
-import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
+import {
+  loadConfig,
+  mcpDataDir,
+  type IndexerConfig,
+} from '@mcp/shared/utils/config.js';
 import type { ManagedGitClient } from '@mcp/shared/git/managed-git.js';
 import { projectMemoryNamespace } from '@mcp/shared/vector-namespace.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
@@ -42,7 +80,16 @@ import {
   type RerankerTarget,
 } from '@mcp/store/semantic-store.js';
 import { LocalVectorRouter } from '@mcp/store/local-vector-router.js';
-import { SessionStore, type RunCoderOptions } from '@mcp/code-agent/index.js';
+import { SessionStore } from '@mcp/code-agent/index.js';
+import {
+  FsPipelineTelemetrySink,
+  requireSessionProjectAuthority,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
+import {
+  peekCoderWorkerPool,
+  setCoderWorkerSessionRuntimeResolver,
+  setCoderWorkerSessionWriterHandoff,
+} from '../sse/coderWorkerPoolSingleton.js';
 import {
   setInvestigationSemanticIndex,
   type InvestigationSemanticIndexPort,
@@ -53,6 +100,10 @@ import { CompanySandboxServicesStore } from '@mcp/store/company-sandbox-services
 import { CompanyServiceTransitionsStore } from '@mcp/store/company-service-transitions-store.js';
 import { CompanyServiceLogsStore } from '@mcp/store/company-service-logs-store.js';
 import { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
+import {
+  getMainSecretDecryptor,
+  getMainSecretEncryptor,
+} from './secret-decrypt-port.js';
 import { CompanyLocalProjectStore } from '@mcp/store/company-local-project-store.js';
 import { FileLocalHistoryStore } from '@mcp/store/file-local-history-store.js';
 import { SkillStore } from '@mcp/store/skill-store.js';
@@ -64,23 +115,19 @@ import { AppStudioStore } from '@mcp/store/app-studio-store.js';
 import { ApiClientStore } from '@mcp/store/api-client-store.js';
 import { SshStore } from '@mcp/store/ssh-store.js';
 import { DbClientStore } from '@mcp/store/db-client-store.js';
-import { SpriteProjectsStore } from '@mcp/store/sprite-studio/sprite-projects-store.js';
-import { SpriteAssetsStore } from '@mcp/store/sprite-studio/sprite-assets-store.js';
-import { SpriteAnimationsStore } from '@mcp/store/sprite-studio/sprite-animations-store.js';
-import { SpriteJobsStore } from '@mcp/store/sprite-studio/sprite-jobs-store.js';
 import { sharedDbConnectionManager } from '@mcp/db-drivers';
 import { VerdaccioStore } from '@mcp/store/verdaccio-store.js';
 import { PipelineTelemetryStore } from '@mcp/store/pipeline-telemetry-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PipelineProviderResolver, generalDefaultAsFallback } from '@mcp/services/pipelines/index.js';
 import { TaskPreflightService } from '@mcp/services/services/task-preflight/index.js';
+import { setSandboxArchiveBundleResolver } from '@mcp/services/sandbox/archive.js';
 import { getAllKnownToolsMeta } from '@mcp/code-agent/tools/tiers.js';
 import {
   buildPreflightToolCatalog,
   buildPreflightSkillCatalog,
 } from './preflight-capability-catalog.js';
 import { createGitHubAppManagedGitClient } from './github-app-managed-git/client.js';
-import { NoopTelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
 import {
   InMemoryToolEmbeddingStore,
@@ -145,6 +192,7 @@ import {
 } from '@mcp/indexer/bootstrap/index.js';
 import { SemanticProfileRuntime } from '@mcp/indexer/search/semantic-profile-runtime.js';
 import { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
+import { FileSemanticSearchTelemetryStore } from '@mcp/indexer/search/search-telemetry.js';
 import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-recent-files.js';
 import { setBuilderCheckpointDeps } from '../sse/builder-checkpoint.js';
 import { SemanticVectorWorkerClient } from '../sse/SemanticVectorWorkerClient.js';
@@ -158,6 +206,8 @@ import {
   type SemanticMutationSink,
 } from '@mcp/services/semantic-mutation-sink.js';
 import { randomUUID } from 'node:crypto';
+import { OperationalSessionFiles } from './operational-session-files.js';
+import { SpriteFileStore } from './sprite-files.js';
 
 /**
  * Late-bound ChromeService reference shared with the doc indexer's
@@ -191,6 +241,14 @@ export interface CoreDeps {
    * by `server/perf/perf-sampler.ts`, so the late assignment is safe.
    */
   processMetricsProvider?: () => import('./perf/perf-sampler.js').ProcessMetricLike[];
+  /**
+   * Electron-only: the desktop child registry (terminal PTYs, dev-http, …) as
+   * task-manager inventory entries. Injected after `createApp()` exactly like
+   * `processMetricsProvider`, so it must always be read through a closure —
+   * capturing the field at boot freezes it as undefined forever.
+   */
+  processInventoryProvider?: () =>
+  import('./perf/process-inventory.js').ProcessInventoryEntry[];
 }
 
 export interface ProviderDeps {
@@ -296,8 +354,7 @@ export interface CoderDeps {
    * idempotency authority; AgentRun and runtime-journal projections are
    * independently feature-gated.
    */
-  controlPlaneStore: ControlPlaneStore;
-  controlPlaneDivergenceStore: ControlPlaneDivergenceStore;
+  controlPlaneStore: ControlPlaneAuthority;
   /**
    * Resolver for OAuth bearer tokens of external MCP servers. Set by
    * `server.ts` after composing the MCP client auth bundle; `runCoder`
@@ -311,6 +368,15 @@ export interface CoderDeps {
    * handle avoids SQLite WAL contention on heavy boots.
    */
   skillStore: SkillStore;
+}
+
+export interface OperationalSessionDeps {
+  /**
+   * Filesystem authority for Company/App Studio/control-plane/Sprite runtime
+   * state. It can read the essential project catalog but has no SQLite
+   * session store or fallback.
+   */
+  operationalSessionFiles: OperationalSessionFiles;
 }
 
 export interface QaDeps {
@@ -379,19 +445,8 @@ export interface ApiClientDeps {
 }
 
 export interface SpriteStudioDeps {
-  /**
-   * Sprite Studio (migration 196) — CENTRAL-DB stores on purpose: the job
-   * ledger (costs) crosses into admin metering and churn is low. The repo
-   * files under `<root>/.sprite-studio/` are the source of truth; these
-   * stores hold the queryable operational mirror + the job/cost ledger.
-   */
-  spriteProjectsStore: SpriteProjectsStore;
-  /** Assets, immutable versions and reference images of a sprite project. */
-  spriteAssetsStore: SpriteAssetsStore;
-  /** Animations + ordered frame pointers into asset versions (F2). */
-  spriteAnimationsStore: SpriteAnimationsStore;
-  /** Append-only generation-job ledger (status, effective provider/model, cost). */
-  spriteJobsStore: SpriteJobsStore;
+  /** Filesystem-only operational authority for every Sprite record. */
+  spriteFileStore: SpriteFileStore;
 }
 
 export interface PipelineDeps {
@@ -498,9 +553,9 @@ export interface PipelineDeps {
    */
   lshIndexingSink: LshIndexingSink;
   /**
-   * Counterfactual feedback collector. Calls observe(...) when the
-   * runtime sees a real outcome (tool actually called, role spawned,
-   * card moved to done) so the shadow analytics get backfilled.
+   * Global/offline counterfactual feedback collector. Session runtime hooks
+   * must use the filesystem telemetry sink instead of this SQLite-backed
+   * collector.
    */
   feedbackCollector: FeedbackCollector;
   /**
@@ -516,23 +571,27 @@ export interface PipelineDeps {
       taskText: string;
       recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
       protectedToolNames?: ReadonlySet<string>;
+      sessionId?: import('@mcp/session-storage').SessionId;
     },
   ) => Promise<ThinTool[]>);
   /**
-   * Companion to `buildToolSelectionFilter` — the runtime calls this
-   * with the recently-invoked tool names so the FeedbackCollector can
-   * backfill `true_outcome_json` on shadow rows. Safe to call when the
-   * feature is off (no-op).
+   * Companion to `buildToolSelectionFilter`. Session outcomes are appended to
+   * the owning bundle; an unscoped runtime observation is deliberately
+   * dropped instead of falling back to global SQLite.
    */
-  observeToolSelectionOutcome: (taskText: string, toolsCalled: ReadonlyArray<string>) => void;
+  observeToolSelectionOutcome: (
+    taskText: string,
+    toolsCalled: ReadonlyArray<string>,
+    sessionId?: import('@mcp/session-storage').SessionId,
+  ) => void;
   /** Default-off Agent Decision Engine runtime flags forwarded to runCoder. */
-  buildAgentDecisionRuntimeOptions: () => Pick<RunCoderOptions,
-    | 'agentDecisionTelemetryEnabled'
-    | 'agentDecisionGuidanceEnabled'
-    | 'agentDecisionSoftGuardrail'
-    | 'agentDecisionSoftGuardrailMinConfidence'
-    | 'agentDecisionAskBeforeSwitch'
-  >;
+  buildAgentDecisionRuntimeOptions: () => {
+    agentDecisionTelemetryEnabled?: boolean;
+    agentDecisionGuidanceEnabled?: boolean;
+    agentDecisionSoftGuardrail?: boolean;
+    agentDecisionSoftGuardrailMinConfidence?: number;
+    agentDecisionAskBeforeSwitch?: boolean;
+  };
 }
 
 export interface DocCorpusDeps {
@@ -618,6 +677,7 @@ export type ServerDeps = CoreDeps
   & CostingDeps
   & ProjectServiceDeps
   & CoderDeps
+  & OperationalSessionDeps
   & CompanyDeps
   & QaDeps
   & ChromeServiceDeps
@@ -643,6 +703,7 @@ export function createDeps(): ServerDeps {
     checkpointOwner: true,
     externalCheckpointer: dbMaintenanceEnabled,
     projectDbCheckpoint: dbMaintenanceEnabled ? scheduleProjectDbCheckpoint : undefined,
+    busyTimeoutMs: mainBusyTimeoutMs(),
   });
   if (dbMaintenanceEnabled) {
     startDbMaintenanceWorker(config.dbPath, {
@@ -651,6 +712,17 @@ export function createDeps(): ServerDeps {
     });
     registerShutdownTask('db-maintenance-worker', () => stopDbMaintenanceWorker());
   }
+  // Time every synchronous statement THIS process runs. better-sqlite3 blocks
+  // the caller, and here the caller is the Electron main thread — so a slow or
+  // lock-contended statement is a whole-app freeze. Feeding the sync accountant
+  // lets the freeze journal name the exact SQL instead of reporting an
+  // unattributed stall; anything over the slow-call threshold also lands in the
+  // existing "slow calls" table with no new UI.
+  setSqlCallSink((sql, ms) => {
+    const label = sqlLabel(sql);
+    noteSyncLeaf(`sql:${label}`, ms);
+    if (ms >= SLOW_SQL_MS) recordSlowCall(`sql:${label}`, ms);
+  });
   const costTracker = new CostTracker(db);
   const exportService = new ExportService(db);
   const webhookDispatcher = new WebhookDispatcher(db);
@@ -773,11 +845,15 @@ export function createDeps(): ServerDeps {
   // bundle so HyDE has the same single source of truth as other pipelines.
   const pipelineBindingsStore = new PipelineProviderBindingsStore(db.raw());
   const pipelineProviderResolver = new PipelineProviderResolver(pipelineBindingsStore, providerStore);
-  // Pipeline telemetry is disabled — a no-op sink drops every event so the
-  // LLM-backed search pipelines stop hammering
-  // `pipeline_telemetry` (the dashboard tab that read it was removed). The
-  // store is kept only so the (now dead) admin routes still typecheck.
-  const pipelineTelemetrySink = new NoopTelemetrySink();
+  // Pipelines are assembled before the filesystem session store. Keep one
+  // stable late-bound sink object so every already-constructed pipeline starts
+  // routing scoped events into its bundle as soon as the store is ready.
+  // Unscoped/global events remain dropped; no telemetry hot path hits SQLite.
+  let filesystemPipelineTelemetrySink: FsPipelineTelemetrySink | null = null;
+  const pipelineTelemetrySink: TelemetrySink = {
+    emit: (event) => filesystemPipelineTelemetrySink?.emit(event),
+    flush: () => filesystemPipelineTelemetrySink?.flush(),
+  };
   const semanticProfileRuntime = new SemanticProfileRuntime(
     semanticStore,
     providerStore,
@@ -809,6 +885,10 @@ export function createDeps(): ServerDeps {
   // worker entry is unavailable, keep structural/FTS search alive and let
   // semantic jobs pause visibly until the worker can be restored.
   const vectorOverride = semanticVectorWorker ?? new NullVectorStore();
+  const semanticSearchTelemetry = new FileSemanticSearchTelemetryStore((projectId) => {
+    const project = db.getProject(projectId);
+    return project && !project.is_synthetic ? project.root_path : null;
+  });
   const { embeddingService, vectorStore, searchableVectorStore, hybridSearch } =
     createSearchBundle(
       db,
@@ -821,7 +901,9 @@ export function createDeps(): ServerDeps {
       memoryQueryEmbeddingService,
       pipelineProviderResolver,
       memoryReranker,
+      semanticSearchTelemetry,
     );
+  registerShutdownTask('semantic-search-telemetry', () => semanticSearchTelemetry.flush());
   registerShutdownTask('semantic-runtime-dispose', () => semanticProfileRuntime.dispose());
   registerShutdownTask('semantic-vector-worker', () =>
     semanticVectorWorker ? semanticVectorWorker.dispose() : localVectorRouter.drainAndClose());
@@ -835,10 +917,6 @@ export function createDeps(): ServerDeps {
   const findFileStmt = db
     .raw()
     .prepare(`SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1`);
-  // Builder checkpoints — run-end hook deps (worker pool + in-process
-  // stream both notify through the builder-checkpoint module global).
-  setBuilderCheckpointDeps({ db });
-
   setGlobalRecentFilesTouchSink((event) => {
     try {
       const absolutePath = pathResolveNode(event.absolutePath);
@@ -962,37 +1040,159 @@ export function createDeps(): ServerDeps {
       return rows;
     },
   };
-  // Share the same underlying better-sqlite3 handle that CodeIndexDB
-  // opened — re-opening the file (the old `new XStore(config.dbPath)`) added
-  // extra writers on the central file and serialized every session/company
-  // read behind WAL lock contention, blocking the main-thread event loop
-  // (and thus IPC for all windows). These two were the last stragglers; the
-  // sibling stores below already shared the handle.
-  const sessionStore = new SessionStore(db.raw(), semanticMutationSink);
-  const controlPlaneStore = new ControlPlaneStore(db.raw(), {
+  // Session authority is filesystem-only. SQLite remains the project catalog
+  // used by the injected locator; it never stores or resolves session rows.
+  const sessionStore = SessionStore.fromRoots({
+    dataDir: mcpDataDir(),
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) => {
+        const project = db.getProject(projectId);
+        return project && !project.is_synthetic
+          ? project.root_path
+          : undefined;
+      },
+      listProjectRoots: () =>
+        db
+          .listProjectsForGlobalPicker()
+          .filter(
+            (project) =>
+              !project.is_synthetic
+              && project.root_path.trim().length > 0,
+          )
+          .map((project) => ({
+            project_id: project.id,
+            root_path: project.root_path,
+          })),
+    },
+    projectInfoResolver: (projectId) => {
+      const project = db.getProject(projectId);
+      return project && !project.is_synthetic
+        ? {
+            project_id: project.id,
+            name: project.name,
+            root_path: project.root_path,
+          }
+        : null;
+    },
+  });
+  filesystemPipelineTelemetrySink = new FsPipelineTelemetrySink(sessionStore);
+  // Builder checkpoints — run-end hook deps (worker pool + in-process
+  // stream both notify through the builder-checkpoint module global).
+  setBuilderCheckpointDeps({ db, sessionStore });
+  setCoderWorkerSessionRuntimeResolver(async (sessionId) => {
+    const session = await sessionStore.getSession(sessionId);
+    if (!session) {
+      throw new Error(`Unknown filesystem session ${sessionId}`);
+    }
+    const location = sessionStore.locator.locate(
+      session.storage_scope,
+      session.id,
+    );
+    await sessionStore.locator.assertSafeLocation(location, {
+      mustExist: true,
+    });
+    const projectAuthority = requireSessionProjectAuthority(
+      session,
+      (projectId) => {
+        const project = db.getProject(projectId);
+        return project && !project.is_synthetic
+          ? {
+              project_id: project.id,
+              name: project.name,
+              root_path: project.root_path,
+            }
+          : null;
+      },
+    );
+    return {
+      sessionId: session.id,
+      projectId: projectAuthority.primary.project_id,
+      projectRoot: projectAuthority.primary.root_path,
+      bundlePath: location.bundle_path,
+    };
+  });
+  setCoderWorkerSessionWriterHandoff(async (context) => {
+    const location = await sessionStore.getSessionLocation(context.sessionId);
+    if (!location || location.bundle_path !== context.bundlePath) {
+      throw new Error(
+        `Filesystem session ${context.sessionId} moved before writer handoff`,
+      );
+    }
+    await sessionStore.repository.closeSession(location);
+  });
+  setSandboxArchiveBundleResolver({
+    resolveBundle: async (sessionId) => {
+      const location = await sessionStore.getSessionLocation(sessionId);
+      return location
+        ? {
+            sessionRoot: location.session_root,
+            bundlePath: location.bundle_path,
+          }
+        : null;
+    },
+  });
+  registerShutdownTask('filesystem-session-store', async () => {
+    setCoderWorkerSessionRuntimeResolver(null);
+    setCoderWorkerSessionWriterHandoff(null);
+    setSandboxArchiveBundleResolver(null);
+    await filesystemPipelineTelemetrySink?.flush();
+    filesystemPipelineTelemetrySink = null;
+    await sessionStore.close();
+  });
+  const operationalSessionFiles = new OperationalSessionFiles({
+    repository: sessionStore.repository,
+    catalog: sessionStore.catalog,
+    locator: sessionStore.locator,
+    projects: {
+      getProject: (projectId) => {
+        const project = db.getProject(projectId);
+        return project
+          ? {
+              id: project.id,
+              name: project.name,
+              root_path: project.root_path,
+            }
+          : null;
+      },
+    },
+  });
+  const spriteFileStore = new SpriteFileStore(operationalSessionFiles);
+  const controlPlaneStore = new FileControlPlaneStore(sessionStore, {
     journalEnabled: process.env.CODER_RUNTIME_JOURNAL_SHADOW === '1',
   });
-  const controlPlaneDivergenceStore = new ControlPlaneDivergenceStore(db.raw());
   const investigationSemanticIndex = new InvestigationSemanticIndex(
     { listProject: (projectId) => sessionStore.listInvestigationsForSemanticIndex(projectId) },
     memoryEmbeddingService,
     searchableVectorStore,
     memoryQueryEmbeddingService,
   );
-  const companyStore = new CompanyStore(db.raw());
-  const companySandboxStore = new CompanySandboxStore(db.raw());
-  const companySandboxServicesStore = new CompanySandboxServicesStore(db.raw());
-  const companyServiceTransitionsStore = new CompanyServiceTransitionsStore(db.raw());
-  const companyServiceLogsStore = new CompanyServiceLogsStore(db.raw());
-  const companySessionEnvStore = new CompanySessionEnvStore(db.raw());
-  const companyLocalProjectStore = new CompanyLocalProjectStore(db.raw());
+  const companyStore = new CompanyStore(db.raw(), sessionStore);
+  const companySandboxStore = new CompanySandboxStore(sessionStore);
+  const companySandboxServicesStore = new CompanySandboxServicesStore(sessionStore);
+  const companyServiceTransitionsStore = new CompanyServiceTransitionsStore(sessionStore);
+  const companyServiceLogsStore = new CompanyServiceLogsStore(sessionStore);
+  const companySessionEnvStore = new CompanySessionEnvStore(sessionStore, {
+    encrypt: (plaintext) => getMainSecretEncryptor()(plaintext),
+    decrypt: (ciphertext) => getMainSecretDecryptor()(ciphertext),
+  });
+  const companyLocalProjectStore = new CompanyLocalProjectStore(sessionStore);
   const fileLocalHistoryStore = new FileLocalHistoryStore(db.raw());
   const skillStore = new SkillStore(db.raw());
-  const qaTestRunStore = new QaTestRunStore(db.raw());
-  const qaTestResultStore = new QaTestResultStore(db.raw());
+  const qaTestRunStore = new QaTestRunStore(sessionStore);
+  const qaTestResultStore = new QaTestResultStore(sessionStore);
   const chromeServiceStore = new ChromeServiceStore(db.raw());
-  const designSystemStore = new DesignSystemStore(db.raw());
-  const appStudioStore = new AppStudioStore(db.raw());
+  const designSystemStore = new DesignSystemStore(sessionStore);
+  const appStudioStore = new AppStudioStore({
+    repository: sessionStore.repository,
+    catalog: sessionStore.catalog,
+    locator: sessionStore.locator,
+    getProject: (projectId) => {
+      const project = db.getProject(projectId);
+      return project
+        ? { id: project.id, root_path: project.root_path }
+        : null;
+    },
+  });
   const apiClientStore = new ApiClientStore(db.raw());
   // R1 — per-project feature stores. The ProjectDbPool caches the live SQLite
   // connection; wrappers must be recreated on access because an idle/LRU
@@ -1014,12 +1214,6 @@ export function createDeps(): ServerDeps {
     dbClientStore,
     (handle) => new DbClientStore(handle),
   );
-  // Sprite Studio (migration 196) — central DB, same shared handle as the
-  // sibling stores above (jobs/costs feed admin metering; churn is low).
-  const spriteProjectsStore = new SpriteProjectsStore(db.raw());
-  const spriteAssetsStore = new SpriteAssetsStore(db.raw());
-  const spriteAnimationsStore = new SpriteAnimationsStore(db.raw());
-  const spriteJobsStore = new SpriteJobsStore(db.raw());
   const verdaccioStore = new VerdaccioStore(db.raw());
   // I1 — pipelineTelemetryStore + pipelineTelemetrySink are declared
   // EARLIER (before createSearchBundle) so the V2 search path can emit
@@ -1036,8 +1230,13 @@ export function createDeps(): ServerDeps {
     resolver: pipelineProviderResolver,
     getFallbackDefault: () => generalDefaultAsFallback(providerStore),
     getToolCatalog: () => buildPreflightToolCatalog(config.dbPath, nativeToolMeta()),
-    getSkillCatalog: (sessionId, projectId, projectRoot) =>
-      buildPreflightSkillCatalog(skillStore, sessionId, projectId, projectRoot),
+    getSkillCatalog: (_sessionId, projectId, projectRoot, activeSkillIds) =>
+      buildPreflightSkillCatalog(
+        skillStore,
+        projectId,
+        activeSkillIds,
+        projectRoot,
+      ),
     getMemoryIndex: (projectId) => {
       try {
         if (!db.getProjectMemoryEnabled(projectId)) return [];
@@ -1082,12 +1281,39 @@ export function createDeps(): ServerDeps {
     search: new AgentMemoryDedupeSearch(agentMemoryService),
     resolver: pipelineProviderResolver,
     getFallbackDefault: () => generalDefaultAsFallback(providerStore),
-    // Memory-health diagnostics (migration 136) — every pass lands a row so
-    // the project Memory tab can show when/what was learned (or why not).
+    // Session-owned memory-health diagnostics live with the session. Project
+    // memory itself remains shared, but this execution telemetry never emits
+    // SQL and has no central fallback.
     distillLog: (projectId, entry) => {
-      try {
-        db.withBusyTimeout(0, () => db.insertMemoryDistillLog(projectId, entry));
-      } catch { /* best-effort */ }
+      const sessionId = entry.sessionId;
+      if (!sessionId) return;
+      const payload = JSON.parse(JSON.stringify({
+        ...entry,
+        projectId,
+      })) as Record<string, unknown>;
+      void (async () => {
+        const workerPool = peekCoderWorkerPool();
+        if (
+          workerPool
+          && await workerPool.appendSessionEvent(
+            sessionId,
+            'memory_distill',
+            payload,
+          )
+        ) {
+          return;
+        }
+        await sessionStore.appendSessionEvent(
+          sessionId,
+          'memory_distill',
+          payload,
+        );
+      })()
+        .catch((error) => {
+          console.warn(
+            `[memory] could not persist distill event for session ${sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
     },
     // Style-profile fold (opt-in): the positive distiller maintains ONE
     // "Project style profile" memory per project — same LLM call, replace-
@@ -1315,8 +1541,8 @@ export function createDeps(): ServerDeps {
   // The tool registry is supplied lazily via a mutable ref so the runtime
   // integration can install it once the code-agent runner is wired up.
   // Until then, `getAllToolsRef` returns an empty list and the variants
-  // emit empty selections — harmless for shadow but visible in counterfactual
-  // logs as a signal that the integration isn't done yet.
+  // emit empty selections — harmless for shadow and visible in the scoped
+  // bundle telemetry once a session UUID is present.
   const shadowSampleRate = parseFloat(process.env.MCP_SHADOW_TOOL_SELECTION_RATE ?? '0') || 0;
   let getAllToolsRef: () => CoderTool[] = () => [];
   const toolSelectionShadowVariants = buildToolSelectionShadowVariants({
@@ -1333,8 +1559,8 @@ export function createDeps(): ServerDeps {
     telemetry: pipelineTelemetrySink,
   });
   // Setter the future runtime integration calls once during boot. Until
-  // then, shadow runs see an empty tool registry — harmless, visible as
-  // empty rows in counterfactual_logs so the gap is obvious.
+  // then, scoped shadow runs see an empty tool registry — harmless and visible
+  // in the session bundle telemetry so the gap is obvious.
   const setToolSelectionRegistry = (fn: () => CoderTool[]): void => {
     getAllToolsRef = fn;
   };
@@ -1403,7 +1629,7 @@ export function createDeps(): ServerDeps {
       scheduleMutationDrain();
     },
     search: async ({ sessionId, query, limit }) => {
-      const projectId = sessionStore.investigationProjectId(sessionId);
+      const projectId = await sessionStore.investigationProjectId(sessionId);
       return projectId == null
         ? []
         : investigationSemanticIndex.search(projectId, query, limit);
@@ -1440,9 +1666,9 @@ export function createDeps(): ServerDeps {
   });
   semanticCoordinator.recoverInterruptedJobsPassively();
 
-  // Counterfactual feedback collector — registers a matcher per known
-  // shadow pipeline. Runtime hooks call collector.observe(...) when they
-  // see a real outcome (master spawned X, agent called tool Y, …).
+  // Global/offline counterfactual feedback collector. It remains available to
+  // explicit experiments and admin analysis, but session runtime hooks never
+  // call it after the filesystem cutover.
   const feedbackCollector = new FeedbackCollector({
     store: counterfactualLogStore,
     matchers: [
@@ -1514,6 +1740,7 @@ export function createDeps(): ServerDeps {
       taskText: string;
       recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
       protectedToolNames?: ReadonlySet<string>;
+      sessionId?: import('@mcp/session-storage').SessionId;
     },
   ) => Promise<ThinTool[]>) => {
     if (!toolSelectionFilterEnabled) return undefined;
@@ -1543,19 +1770,25 @@ export function createDeps(): ServerDeps {
       // and the task hash falls inside the sample. Off-path via setImmediate.
       try {
         const queryHash = toolSelectionQueryHash(ctx.taskText);
-        toolSelectionShadowRunner.recordAndShadow(
-          {
-            queryHash,
-            payload: {
-              queryId: `tool-selection-${queryHash}`,
-              taskText: ctx.taskText,
-              recentToolEvents: ctx.recentToolCalls,
-              k: toolSelectionK,
-              agentDecision,
+        // A real turn is never flattened into the global SQLite experiment
+        // table. With a UUID, ShadowTrafficRunner emits only bundle telemetry;
+        // without one, runtime shadowing is skipped.
+        if (ctx.sessionId != null) {
+          toolSelectionShadowRunner.recordAndShadow(
+            {
+              queryHash,
+              sessionId: ctx.sessionId,
+              payload: {
+                queryId: `tool-selection-${queryHash}`,
+                taskText: ctx.taskText,
+                recentToolEvents: ctx.recentToolCalls,
+                k: toolSelectionK,
+                agentDecision,
+              },
             },
-          },
-          { toolNames: selected.map((t) => t.name), agentDecision },
-        );
+            { toolNames: selected.map((t) => t.name), agentDecision },
+          );
+        }
       } catch {
         // Shadow traffic must never affect production.
       }
@@ -1564,20 +1797,39 @@ export function createDeps(): ServerDeps {
   };
 
   /**
-   * Outcome observer: the runtime calls this with the task text that
-   * triggered the selection and the names of tools the agent actually
-   * called afterwards. The feedback collector matches by query_hash
-   * and fills `true_outcome_json` on the corresponding shadow rows.
+   * Outcome observer: append the actual tool choice to the owning bundle.
+   * Missing session scope is dropped; there is no SQLite fallback.
    */
-  const observeToolSelectionOutcome = (taskText: string, toolsCalled: ReadonlyArray<string>): void => {
-    if (!toolSelectionFilterEnabled || toolsCalled.length === 0) return;
+  const observeToolSelectionOutcome = (
+    taskText: string,
+    toolsCalled: ReadonlyArray<string>,
+    sessionId?: import('@mcp/session-storage').SessionId,
+  ): void => {
+    if (
+      !toolSelectionFilterEnabled ||
+      toolsCalled.length === 0 ||
+      sessionId == null
+    ) {
+      return;
+    }
     try {
-      feedbackCollector.observe('tool_selection', {
-        queryHash: toolSelectionQueryHash(taskText),
-        toolsCalled: [...toolsCalled],
-        agentDecision: agentDecisionTelemetryEnabled
-          ? decisionTelemetryForTask(taskText)
-          : undefined,
+      const queryHash = toolSelectionQueryHash(taskText);
+      pipelineTelemetrySink.emit({
+        queryId: `tool-selection-${queryHash}`,
+        pipelineName: 'tool_selection',
+        stage: 'side_effect',
+        component: 'shadow/outcome',
+        durationMs: 0,
+        durationBucket: '0-10ms',
+        candidatesOut: toolsCalled.length,
+        sessionId,
+        diag: {
+          query_hash: queryHash,
+          tools_called: [...toolsCalled],
+          agent_decision: agentDecisionTelemetryEnabled
+            ? decisionTelemetryForTask(taskText)
+            : null,
+        },
       });
     } catch {
       // Best-effort.
@@ -1617,6 +1869,31 @@ export function createDeps(): ServerDeps {
       count: recentFilesSource.size(),
       detail: 'cache de arquivos recentes (Mem A)',
     }));
+    // Páginas mmap do SQLite são page cache RECLAMÁVEL, não alocação dura —
+    // mas contam no working set do processo que segura o handle, e um working
+    // set grande no processo que desenha a janela vira freeze `starved`
+    // (loop ocioso, relógio pulou) quando o Windows apara/pagina esse processo.
+    // Sem esta entrada tudo isso cai em `unattributedRssMB`.
+    ledger.register('sqlite.mmap', () => {
+      const perConn = resolveTuningMmapBytes();
+      // Conexões tuned DESTA thread: index.db central + cada handle do pool.
+      // SemanticStore não aplica as tuning pragmas (mmap 0), e o router de
+      // vetores vive no semantic worker — os números dele chegam por
+      // `perf:memStats`, não por este ledger.
+      const conns = 1 + db.projectPoolStats.open;
+      return {
+        count: conns,
+        bytes: conns * perConn,
+        detail: `${conns} conexões × ${Math.round(perConn / 1024 / 1024)} MB de orçamento mmap (MCP_SQLITE_MMAP_MB=0 desliga)`,
+      };
+    });
+    ledger.register('sqlite.projectPool', () => {
+      const { open, maxOpen } = db.projectPoolStats;
+      return {
+        count: open,
+        detail: `handles de project DB abertos (cap MCP_PROJECT_DB_MAX_OPEN=${maxOpen})`,
+      };
+    });
   }
 
   return {
@@ -1647,8 +1924,9 @@ export function createDeps(): ServerDeps {
     projectMemory,
     recentFilesSource,
     sessionStore,
+    operationalSessionFiles,
+    spriteFileStore,
     controlPlaneStore,
-  controlPlaneDivergenceStore,
     companyStore,
     companySandboxStore,
     companySandboxServicesStore,
@@ -1669,10 +1947,6 @@ export function createDeps(): ServerDeps {
     sshStoreFor,
     dbClientStore,
     dbClientFor,
-    spriteProjectsStore,
-    spriteAssetsStore,
-    spriteAnimationsStore,
-    spriteJobsStore,
     verdaccioStore,
     pipelineTelemetryStore,
     pipelineBindingsStore,

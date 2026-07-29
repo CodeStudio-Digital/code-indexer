@@ -186,7 +186,12 @@ const DEFAULT_CONFIG: IndexerConfig = {
   },
   dashboard: {
     port: 7333,
-    host: '0.0.0.0',
+    // Loopback by DEFAULT. This listener serves the whole IDE API — projects,
+    // files, git, and the SSH host/secret tables — with no authentication of
+    // its own, so binding it to every interface handed the LAN a copy of the
+    // user's machine. Opt in explicitly with MCP_INDEX_HOST=0.0.0.0 (that is
+    // what a container needs to publish a port).
+    host: '127.0.0.1',
   },
   mcp: {
     http: {
@@ -229,6 +234,10 @@ function applyEnvOverrides(config: IndexerConfig): void {
   }
   if (process.env.MCP_INDEX_PORT) {
     config.dashboard.port = parseInt(process.env.MCP_INDEX_PORT, 10);
+  }
+  // Escape hatch for containers / deliberate LAN exposure. See the default above.
+  if (process.env.MCP_INDEX_HOST) {
+    config.dashboard.host = process.env.MCP_INDEX_HOST.trim();
   }
   if (process.env.MCP_INDEX_CONCURRENCY) {
     config.concurrency = parseInt(process.env.MCP_INDEX_CONCURRENCY, 10);

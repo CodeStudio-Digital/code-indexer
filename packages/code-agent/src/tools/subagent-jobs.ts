@@ -15,6 +15,7 @@
  */
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ResearchDepth } from '@mcp/code-agent/tools/subagent-research-policy.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export type JobStatus = 'running' | 'done' | 'aborted';
 export type JobDelivery = 'none' | 'notified' | 'collected';
@@ -42,7 +43,7 @@ export interface BackgroundAgentSlot {
 export interface SubagentJob {
   jobId: string;
   groupId: string;
-  sessionId: number;
+  sessionId: SessionId;
   provider: string;
   model: string;
   createdAt: number;
@@ -77,7 +78,7 @@ function collectedTtlMs(): number {
 }
 
 export interface CreateJobArgs {
-  sessionId: number;
+  sessionId: SessionId;
   jobId: string;
   groupId: string;
   provider: string;
@@ -86,8 +87,8 @@ export interface CreateJobArgs {
 }
 
 export class SubagentJobManager {
-  private readonly bySession = new Map<number, Map<string, SubagentJob>>();
-  private readonly activityCbs = new Set<(sessionId: number, active: number) => void>();
+  private readonly bySession = new Map<SessionId, Map<string, SubagentJob>>();
+  private readonly activityCbs = new Set<(sessionId: SessionId, active: number) => void>();
 
   create(args: CreateJobArgs): SubagentJob | { error: string } {
     this.sweep(args.sessionId);
@@ -119,12 +120,12 @@ export class SubagentJobManager {
     return job;
   }
 
-  get(sessionId: number, jobId: string): SubagentJob | null {
+  get(sessionId: SessionId, jobId: string): SubagentJob | null {
     this.sweep(sessionId);
     return this.bySession.get(sessionId)?.get(jobId) ?? null;
   }
 
-  list(sessionId: number): SubagentJob[] {
+  list(sessionId: SessionId): SubagentJob[] {
     this.sweep(sessionId);
     return [...(this.bySession.get(sessionId)?.values() ?? [])];
   }
@@ -151,7 +152,7 @@ export class SubagentJobManager {
     if (rank[delivery] > rank[job.delivery]) job.delivery = delivery;
   }
 
-  hasActiveJobs(sessionId: number): boolean {
+  hasActiveJobs(sessionId: SessionId): boolean {
     return this.activeCount(sessionId) > 0;
   }
 
@@ -160,7 +161,7 @@ export class SubagentJobManager {
    * compact reminder does not contain the full findings. Goal completion must
    * remain fenced until collect_agents has delivered the terminal payload.
    */
-  hasUncollectedTerminalJobs(sessionId: number): boolean {
+  hasUncollectedTerminalJobs(sessionId: SessionId): boolean {
     this.sweep(sessionId);
     for (const job of this.bySession.get(sessionId)?.values() ?? []) {
       if (job.status !== 'running' && job.delivery !== 'collected') return true;
@@ -168,20 +169,20 @@ export class SubagentJobManager {
     return false;
   }
 
-  activeCount(sessionId: number): number {
+  activeCount(sessionId: SessionId): number {
     let n = 0;
     for (const j of this.bySession.get(sessionId)?.values() ?? []) if (j.status === 'running') n++;
     return n;
   }
 
-  abortJob(sessionId: number, jobId: string, reason: string): boolean {
+  abortJob(sessionId: SessionId, jobId: string, reason: string): boolean {
     const job = this.bySession.get(sessionId)?.get(jobId);
     if (!job || job.status !== 'running') return false;
     try { job.abort.abort(new Error(reason)); } catch { /* ignore */ }
     return true;
   }
 
-  abortSession(sessionId: number, reason: string): void {
+  abortSession(sessionId: SessionId, reason: string): void {
     for (const j of this.bySession.get(sessionId)?.values() ?? []) {
       if (j.status === 'running') { try { j.abort.abort(new Error(reason)); } catch { /* ignore */ } }
     }
@@ -199,7 +200,7 @@ export class SubagentJobManager {
    * result.
    */
   async waitAny(
-    sessionId: number,
+    sessionId: SessionId,
     jobIds: string[] | null,
     signal: AbortSignal | undefined,
     timeoutMs: number,
@@ -230,17 +231,17 @@ export class SubagentJobManager {
   }
 
   /** Register a keep-alive/activity observer (worker pool eviction guard). */
-  onActivity(cb: (sessionId: number, active: number) => void): () => void {
+  onActivity(cb: (sessionId: SessionId, active: number) => void): () => void {
     this.activityCbs.add(cb);
     return () => this.activityCbs.delete(cb);
   }
 
-  private notifyActivity(sessionId: number): void {
+  private notifyActivity(sessionId: SessionId): void {
     const active = this.activeCount(sessionId);
     for (const cb of this.activityCbs) { try { cb(sessionId, active); } catch { /* ignore */ } }
   }
 
-  private sweep(sessionId: number): void {
+  private sweep(sessionId: SessionId): void {
     const groups = this.bySession.get(sessionId);
     if (!groups) return;
     const now = Date.now();

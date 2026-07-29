@@ -3,7 +3,7 @@ import { GitBranch, Loader2 } from 'lucide-react';
 import { workspaceApi, type GitStatusResponse } from '../api.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   onInitialized: (status: GitStatusResponse) => void;
 }

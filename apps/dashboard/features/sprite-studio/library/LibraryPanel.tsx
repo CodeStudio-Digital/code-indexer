@@ -36,10 +36,10 @@ export function LibraryPanel({
   onCategory: (id: CategoryGroupId | 'all') => void;
   query: string;
   onQuery: (q: string) => void;
-  activeAssetId: number | null;
-  onSelect: (id: number) => void;
+  activeAssetId: string | null;
+  onSelect: (id: string) => void;
   /** Double-click on a card — opens the asset in the editor (M3). */
-  onOpen?: (id: number) => void;
+  onOpen?: (id: string) => void;
   defaultSize?: { width: number; height: number };
   onCreate: (input: { name: string; category: SpriteCategory; width: number; height: number }) => Promise<void>;
 }) {

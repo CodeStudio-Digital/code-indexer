@@ -53,6 +53,40 @@ export function listCollectionsForProject(db: DB, projectId: number): DocCollect
   return rows.map(mapCollection);
 }
 
+/**
+ * Batched form of `listCollectionsForProject`. Admin surfaces ask for every
+ * project at once (`GET /api/projects/semantic/status`), and calling the
+ * single-project query in a loop puts N synchronous SQLite round-trips on the
+ * Electron main thread in one burst. One query, grouped in JS instead.
+ *
+ * Chunked because SQLite caps bound parameters (999 on older builds) and the
+ * project count is caller-controlled.
+ */
+export function listCollectionsForProjects(
+  db: DB,
+  projectIds: readonly number[],
+): Map<number, DocCollection[]> {
+  const out = new Map<number, DocCollection[]>();
+  for (const id of projectIds) out.set(id, []);
+  const unique = [...new Set(projectIds)];
+  for (let i = 0; i < unique.length; i += 900) {
+    const chunk = unique.slice(i, i + 900);
+    const rows = db
+      .prepare(
+        `SELECT c.*, pdc.project_id AS __project_id
+           FROM doc_collections c
+           JOIN project_doc_collections pdc ON pdc.collection_id = c.id
+          WHERE pdc.project_id IN (${chunk.map(() => '?').join(',')})
+          ORDER BY c.name`,
+      )
+      .all(...chunk) as Array<Record<string, unknown>>;
+    for (const row of rows) {
+      out.get(Number(row.__project_id))?.push(mapCollection(row));
+    }
+  }
+  return out;
+}
+
 export function listProjectsForCollection(db: DB, collectionId: number): DocProjectLink[] {
   const rows = db
     .prepare(

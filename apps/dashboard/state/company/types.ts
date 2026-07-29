@@ -22,8 +22,9 @@ import type { StreamActivityBlock } from '../../hooks/agent-stream/types.js';
 
 export interface AgentStreamState {
   role: string;
-  agentRunId: number;
-  coderSessionId?: number;
+  /** Null only for the synthetic idle master before its persisted run is known. */
+  agentRunId: string | null;
+  coderSessionId?: string;
   textChunks: string[];
   toolCalls: ToolCallState[];
   status: AgentRunStatus;
@@ -69,9 +70,10 @@ export interface AgentUsage {
 // ─── Board ────────────────────────────────────────────────────
 
 export interface BoardMessage {
-  id: number;
+  id: string;
+  seq: number;
   author_role: string;
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   kind: string;
   content: string;
   mentions: string[];
@@ -94,9 +96,9 @@ export interface StreamState {
   connected: boolean;
   started: boolean;
   masterState: AgentStreamState | null;
-  subordinateStates: Map<number, AgentStreamState>;
+  subordinateStates: Map<string, AgentStreamState>;
   boardMessages: BoardMessage[];
-  masterPrompts: Map<number, MasterPrompt>;
+  masterPrompts: Map<string, MasterPrompt>;
   fallbackNotices: FallbackNotice[];
   error: string | null;
   userMessage: string | null;
@@ -158,7 +160,7 @@ export interface SiblingState {
    * keep working. Phase 1 moves selection to the URL and this field
    * becomes derived from `useParams`.
    */
-  activeSessionId: number | null;
+  activeSessionId: string | null;
 }
 
 export const INITIAL_SIBLING_STATE: SiblingState = {
@@ -171,7 +173,7 @@ export const INITIAL_SIBLING_STATE: SiblingState = {
 // ─── Kanban slice state ───────────────────────────────────────
 
 export interface KanbanState {
-  cards: Map<number, KanbanCardFull>;
+  cards: Map<string, KanbanCardFull>;
   loading: boolean;
   error: string | null;
   /** True once the initial REST fetch landed; SSE-only after that. */

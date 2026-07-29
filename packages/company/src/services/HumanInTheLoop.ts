@@ -36,7 +36,7 @@ import {
 import type { MasterPrompt } from '@mcp/company/types.js';
 
 interface PendingPlan {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   planText: string;
   toolUseId: string;
@@ -44,7 +44,7 @@ interface PendingPlan {
 }
 
 interface PendingQuestion {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   question: string;
   options?: Array<{ label: string; value: string }>;
@@ -53,7 +53,7 @@ interface PendingQuestion {
 }
 
 interface PendingTasks {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   summary: string;
   tasks: unknown[];
@@ -61,9 +61,9 @@ interface PendingTasks {
 }
 
 export class HumanInTheLoop {
-  private readonly pendingPlans = new Map<number, PendingPlan>();
-  private readonly pendingQuestions = new Map<number, PendingQuestion>();
-  private readonly pendingTasks = new Map<number, PendingTasks>();
+  private readonly pendingPlans = new Map<string, PendingPlan>();
+  private readonly pendingQuestions = new Map<string, PendingQuestion>();
+  private readonly pendingTasks = new Map<string, PendingTasks>();
 
   /**
    * B7 — agentRunId → latest plan approval. Fed by BOTH approval paths
@@ -73,7 +73,7 @@ export class HumanInTheLoop {
    * gate (`qa_start_run` refuses to create a run without an entry).
    * Cleared in `clearForAgent` / `clearAll` (abort, pause, finalize).
    */
-  private readonly approvedPlans = new Map<number, { at: number; auto: boolean }>();
+  private readonly approvedPlans = new Map<string, { at: number; auto: boolean }>();
 
   /**
    * C4 — batches the master notification when SEVERAL plans are pending at
@@ -95,8 +95,8 @@ export class HumanInTheLoop {
    * across reconnect/replay) and so we know which prompt to mark on
    * `respondTo*` when the caller doesn't supply an id.
    */
-  private currentMasterPlanPromptId: number | null = null;
-  private currentMasterQuestionPromptId: number | null = null;
+  private currentMasterPlanPromptId: string | null = null;
+  private currentMasterQuestionPromptId: string | null = null;
   constructor(
     private readonly bus: IMetaBusPublisher,
     private readonly board: IBoardPoster,
@@ -119,15 +119,20 @@ export class HumanInTheLoop {
       if (this.master.agentRunId != null) {
         this.status.setStatus(this.master.agentRunId, 'waiting_plan');
       }
-      const prompt = this.ctx.companyStore.createMasterPrompt({
-        company_session_id: this.ctx.companySessionId,
+      void this.ctx.companyFiles.createMasterPrompt({
         agent_run_id: this.master.agentRunId,
         kind: 'plan',
         body: block.plan,
         allow_freeform: true,
+      }).then((prompt) => {
+        this.currentMasterPlanPromptId = prompt.id;
+        this.bus.publish('master_plan_posted', { prompt });
+      }).catch((error) => {
+        console.error(
+          `[company s=${this.ctx.companySessionId}] failed to persist Master plan prompt:`,
+          error,
+        );
       });
-      this.currentMasterPlanPromptId = prompt.id;
-      this.bus.publish('master_plan_posted', { prompt });
     });
   }
 
@@ -141,17 +146,22 @@ export class HumanInTheLoop {
       if (this.master.agentRunId != null) {
         this.status.setStatus(this.master.agentRunId, 'waiting_question');
       }
-      const prompt = this.ctx.companyStore.createMasterPrompt({
-        company_session_id: this.ctx.companySessionId,
+      void this.ctx.companyFiles.createMasterPrompt({
         agent_run_id: this.master.agentRunId,
         kind: 'question',
         runner_block_id: block.id,
         body: block.question,
         options: block.options ?? null,
         allow_freeform: block.allowFreeform !== false,
+      }).then((prompt) => {
+        this.currentMasterQuestionPromptId = prompt.id;
+        this.bus.publish('master_question_posted', { prompt });
+      }).catch((error) => {
+        console.error(
+          `[company s=${this.ctx.companySessionId}] failed to persist Master question prompt:`,
+          error,
+        );
       });
-      this.currentMasterQuestionPromptId = prompt.id;
-      this.bus.publish('master_question_posted', { prompt });
     });
   }
 
@@ -162,25 +172,24 @@ export class HumanInTheLoop {
    * the prompt is not pending (already answered/cancelled — race with
    * shutdown) or the master runner is gone.
    */
-  respondToMasterPlan(
+  async respondToMasterPlan(
     approved: boolean,
     feedback?: string,
-    promptId?: number,
+    promptId?: string,
     deliveryOpts?: { retryOutcomeUnknown?: boolean },
-  ): MasterPrompt | null {
+  ): Promise<MasterPrompt | null> {
     const handle = this.master.handle;
     if (!handle) return null;
 
     const targetId = promptId
       ?? this.currentMasterPlanPromptId
-      ?? this.ctx.companyStore.getPendingMasterPrompt(this.ctx.companySessionId, 'plan')?.id
+      ?? (await this.ctx.companyFiles.getPendingMasterPrompt('plan'))?.id
       ?? null;
     if (targetId == null) return null;
     const response = JSON.stringify({ approved, feedback: feedback ?? '' });
     const deliveryToken = randomUUID();
-    const claim = this.ctx.companyStore.claimMasterPromptDelivery(
+    const claim = await this.ctx.companyFiles.claimMasterPromptDelivery(
       targetId,
-      this.ctx.companySessionId,
       'plan',
       deliveryToken,
       hashControlPlanePayload({
@@ -209,7 +218,7 @@ export class HumanInTheLoop {
     try {
       delivered = handle.runner.provideUserInput(response);
     } catch (error) {
-      this.markOutcomeUnknown(targetId, deliveryToken);
+      await this.markOutcomeUnknown(targetId, deliveryToken);
       throw this.outcomeUnknownError(
         targetId,
         'plan',
@@ -221,20 +230,20 @@ export class HumanInTheLoop {
     if (!delivered) {
       // `false` is an authoritative pre-effect refusal. Leave the durable
       // prompt pending so the caller can safely retry once the runner waits.
-      if (!this.ctx.companyStore.releaseMasterPromptDelivery(targetId, deliveryToken)) {
+      if (!await this.ctx.companyFiles.releaseMasterPromptDelivery(targetId, deliveryToken)) {
         throw this.outcomeUnknownError(targetId, 'plan', 'the delivery reservation could not be released');
       }
       return null;
     }
 
     try {
-      updated = this.ctx.companyStore.completeMasterPromptDelivery(
+      updated = await this.ctx.companyFiles.completeMasterPromptDelivery(
         targetId,
         deliveryToken,
         { kind: 'plan', approved, feedback },
       );
     } catch (error) {
-      this.markOutcomeUnknown(targetId, deliveryToken);
+      await this.markOutcomeUnknown(targetId, deliveryToken);
       throw this.outcomeUnknownError(
         targetId,
         'plan',
@@ -242,7 +251,7 @@ export class HumanInTheLoop {
       );
     }
     if (!updated) {
-      this.markOutcomeUnknown(targetId, deliveryToken);
+      await this.markOutcomeUnknown(targetId, deliveryToken);
       throw this.outcomeUnknownError(targetId, 'plan', 'durable compare-and-set was rejected');
     }
     if (this.currentMasterPlanPromptId === targetId) this.currentMasterPlanPromptId = null;
@@ -258,24 +267,23 @@ export class HumanInTheLoop {
     return updated;
   }
 
-  respondToMasterQuestion(
+  async respondToMasterQuestion(
     answer: string,
-    promptId?: number,
+    promptId?: string,
     deliveryOpts?: { retryOutcomeUnknown?: boolean },
-  ): MasterPrompt | null {
+  ): Promise<MasterPrompt | null> {
     const handle = this.master.handle;
     if (!handle) return null;
 
     const targetId = promptId
       ?? this.currentMasterQuestionPromptId
-      ?? this.ctx.companyStore.getPendingMasterPrompt(this.ctx.companySessionId, 'question')?.id
+      ?? (await this.ctx.companyFiles.getPendingMasterPrompt('question'))?.id
       ?? null;
     if (targetId == null) return null;
     const response = JSON.stringify({ answer });
     const deliveryToken = randomUUID();
-    const claim = this.ctx.companyStore.claimMasterPromptDelivery(
+    const claim = await this.ctx.companyFiles.claimMasterPromptDelivery(
       targetId,
-      this.ctx.companySessionId,
       'question',
       deliveryToken,
       hashControlPlanePayload({ kind: 'question', answer }),
@@ -300,7 +308,7 @@ export class HumanInTheLoop {
     try {
       delivered = handle.runner.provideUserInput(response);
     } catch (error) {
-      this.markOutcomeUnknown(targetId, deliveryToken);
+      await this.markOutcomeUnknown(targetId, deliveryToken);
       throw this.outcomeUnknownError(
         targetId,
         'question',
@@ -310,7 +318,7 @@ export class HumanInTheLoop {
       );
     }
     if (!delivered) {
-      if (!this.ctx.companyStore.releaseMasterPromptDelivery(targetId, deliveryToken)) {
+      if (!await this.ctx.companyFiles.releaseMasterPromptDelivery(targetId, deliveryToken)) {
         throw this.outcomeUnknownError(
           targetId,
           'question',
@@ -321,13 +329,13 @@ export class HumanInTheLoop {
     }
 
     try {
-      updated = this.ctx.companyStore.completeMasterPromptDelivery(
+      updated = await this.ctx.companyFiles.completeMasterPromptDelivery(
         targetId,
         deliveryToken,
         { kind: 'question', answer },
       );
     } catch (error) {
-      this.markOutcomeUnknown(targetId, deliveryToken);
+      await this.markOutcomeUnknown(targetId, deliveryToken);
       throw this.outcomeUnknownError(
         targetId,
         'question',
@@ -335,7 +343,7 @@ export class HumanInTheLoop {
       );
     }
     if (!updated) {
-      this.markOutcomeUnknown(targetId, deliveryToken);
+      await this.markOutcomeUnknown(targetId, deliveryToken);
       throw this.outcomeUnknownError(targetId, 'question', 'durable compare-and-set was rejected');
     }
     if (this.currentMasterQuestionPromptId === targetId) {
@@ -352,9 +360,12 @@ export class HumanInTheLoop {
     return updated;
   }
 
-  private markOutcomeUnknown(promptId: number, deliveryToken: string): void {
+  private async markOutcomeUnknown(promptId: string, deliveryToken: string): Promise<void> {
     try {
-      this.ctx.companyStore.markMasterPromptDeliveryOutcomeUnknown(promptId, deliveryToken);
+      await this.ctx.companyFiles.markMasterPromptDeliveryOutcomeUnknown(
+        promptId,
+        deliveryToken,
+      );
     } catch {
       // The original post-effect failure remains OUTCOME_UNKNOWN. A failed
       // secondary write must never turn into an automatic replay decision.
@@ -362,7 +373,7 @@ export class HumanInTheLoop {
   }
 
   private deliveryPayloadConflictError(
-    promptId: number,
+    promptId: string,
     kind: 'plan' | 'question',
   ): Error {
     const error = new Error(
@@ -374,7 +385,7 @@ export class HumanInTheLoop {
   }
 
   private outcomeUnknownError(
-    promptId: number,
+    promptId: string,
     kind: 'plan' | 'question',
     detail: string,
   ): Error {
@@ -391,10 +402,8 @@ export class HumanInTheLoop {
    * `master_prompt_cancelled` events. Called on session abort / master end
    * so dashboards can transition cards from "pending" to "cancelled".
    */
-  cancelPendingMasterPrompts(): MasterPrompt[] {
-    const cancelled = this.ctx.companyStore.cancelPendingMasterPrompts(
-      this.ctx.companySessionId,
-    );
+  async cancelPendingMasterPrompts(): Promise<MasterPrompt[]> {
+    const cancelled = await this.ctx.companyFiles.cancelPendingMasterPrompts();
     for (const p of cancelled) {
       this.bus.publish('master_prompt_cancelled', { prompt: p });
     }
@@ -437,7 +446,7 @@ export class HumanInTheLoop {
     return Array.isArray(cfg.autoApproveRoles) && cfg.autoApproveRoles.includes(role);
   }
 
-  wireSubordinatePlan(handle: RunCoderHandle, agentRunId: number, role: string): void {
+  wireSubordinatePlan(handle: RunCoderHandle, agentRunId: string, role: string): void {
     handle.runner.on('plan_posted', (block: { plan: string; toolUseId?: string }) => {
       // B7 — a new plan supersedes any previous approval: until this one
       // is resolved, the agent has NO approved plan (QA gate blocks).
@@ -493,7 +502,7 @@ export class HumanInTheLoop {
   }
 
   /** The classic one-plan `[SYSTEM]` notification (immediate path + flush fallback). */
-  private buildSinglePlanNotice(agentRunId: number, role: string, plan: string): string {
+  private buildSinglePlanNotice(agentRunId: string, role: string, plan: string): string {
     return (
       `[SYSTEM] @${role} (agent_run_id=${agentRunId}) submitted a plan for approval and is BLOCKED.\n` +
       `Plan:\n${plan}\n` +
@@ -525,7 +534,7 @@ export class HumanInTheLoop {
     }
   }
 
-  wireSubordinateQuestion(handle: RunCoderHandle, agentRunId: number, role: string): void {
+  wireSubordinateQuestion(handle: RunCoderHandle, agentRunId: string, role: string): void {
     handle.runner.on('question_posted', (block: {
       id: string;
       question: string;
@@ -570,7 +579,7 @@ export class HumanInTheLoop {
     });
   }
 
-  wireSubordinateTasks(handle: RunCoderHandle, agentRunId: number, role: string): void {
+  wireSubordinateTasks(handle: RunCoderHandle, agentRunId: string, role: string): void {
     handle.runner.on('tasks_posted', (block: {
       tool_use_id?: string;
       summary?: string;
@@ -605,7 +614,7 @@ export class HumanInTheLoop {
 
   // ─── Resolvers ──────────────────────────────────────────────────
 
-  resolvePlan(agentRunId: number, approved: boolean, feedback?: string): boolean {
+  resolvePlan(agentRunId: string, approved: boolean, feedback?: string): boolean {
     const pending = this.pendingPlans.get(agentRunId);
     if (!pending) return false;
 
@@ -621,7 +630,7 @@ export class HumanInTheLoop {
     return true;
   }
 
-  resolveQuestion(agentRunId: number, answer: string): boolean {
+  resolveQuestion(agentRunId: string, answer: string): boolean {
     const pending = this.pendingQuestions.get(agentRunId);
     if (!pending) return false;
 
@@ -635,7 +644,7 @@ export class HumanInTheLoop {
   }
 
   resolveTasks(
-    agentRunId: number,
+    agentRunId: string,
     approved: boolean,
     feedback?: string,
     executionMode?: string,
@@ -658,9 +667,9 @@ export class HumanInTheLoop {
 
   // ─── Queries ────────────────────────────────────────────────────
 
-  hasPendingPlan(agentRunId: number): boolean { return this.pendingPlans.has(agentRunId); }
-  hasPendingQuestion(agentRunId: number): boolean { return this.pendingQuestions.has(agentRunId); }
-  hasPendingTasks(agentRunId: number): boolean { return this.pendingTasks.has(agentRunId); }
+  hasPendingPlan(agentRunId: string): boolean { return this.pendingPlans.has(agentRunId); }
+  hasPendingQuestion(agentRunId: string): boolean { return this.pendingQuestions.has(agentRunId); }
+  hasPendingTasks(agentRunId: string): boolean { return this.pendingTasks.has(agentRunId); }
 
   /**
    * B7 — latest plan approval for this agent run, or null when the agent
@@ -669,13 +678,13 @@ export class HumanInTheLoop {
    * was approved (fast-path autonomy vs. explicit master/human decision)
    * so `qa_start_run` can persist `plan_gate='auto' | 'approved'`.
    */
-  hasApprovedPlan(agentRunId: number): { approved: boolean; auto: boolean } | null {
+  hasApprovedPlan(agentRunId: string): { approved: boolean; auto: boolean } | null {
     const entry = this.approvedPlans.get(agentRunId);
     return entry ? { approved: true, auto: entry.auto } : null;
   }
 
   /** Clear all pending entries for a given agent (used on abort). */
-  clearForAgent(agentRunId: number): void {
+  clearForAgent(agentRunId: string): void {
     this.pendingPlans.delete(agentRunId);
     this.pendingQuestions.delete(agentRunId);
     this.pendingTasks.delete(agentRunId);

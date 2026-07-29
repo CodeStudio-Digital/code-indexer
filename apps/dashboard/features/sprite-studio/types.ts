@@ -106,19 +106,19 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
 /** Canvas size presets offered by the new-asset dialog / settings. */
 export const CANVAS_PRESETS: readonly number[] = [16, 24, 32, 48, 64, 96, 128, 256];
 
-// ─── Domain rows (frontend mirror of the DB index / repo manifests) ─────
+// ─── Domain records (frontend mirror of per-session filesystem entities) ─
 export type SpriteAssetStatus = 'draft' | 'approved' | 'archived' | 'missing';
 export type VersionSource = 'generated' | 'imported' | 'edited' | 'processed';
 
 export interface SpriteAsset {
-  id: number;
-  spriteProjectId: number;
+  id: string;
+  spriteProjectId: string;
   slug: string;
   name: string;
   category: SpriteCategory;
   tags: string[];
   status: SpriteAssetStatus;
-  currentVersionId: number | null;
+  currentVersionId: string | null;
   width: number;
   height: number;
   /** Thumb of the current version; null while the asset has no version. */
@@ -129,8 +129,8 @@ export interface SpriteAsset {
 
 /** Immutable version row (full provenance lives on the backend manifest). */
 export interface AssetVersion {
-  id: number;
-  assetId: number;
+  id: string;
+  assetId: string;
   version: number;
   fileUrl?: string | null;
   thumbUrl?: string | null;
@@ -138,8 +138,8 @@ export interface AssetVersion {
   height: number;
   source: VersionSource;
   prompt: string | null;
-  parentVersionId: number | null;
-  jobId: number | null;
+  parentVersionId: string | null;
+  jobId: string | null;
   /** SHA256 of the file — in-place overwrites keep the id, change the hash
    *  (thumb/file URL cache-bust handle). */
   contentHash?: string | null;
@@ -148,7 +148,7 @@ export interface AssetVersion {
 
 /** One sprite project per repo (MVP). */
 export interface SpriteProjectInfo {
-  id: number;
+  id: string;
   projectId: number;
   name: string;
   settings: StudioSettings;

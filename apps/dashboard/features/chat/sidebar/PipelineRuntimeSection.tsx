@@ -11,7 +11,7 @@ import type { PipelineRuntimeState } from '../../../hooks/agent-stream/types.js'
 import type { PipelineExecution, PipelineNodeExecution } from '@mcp/company/types.js';
 
 interface PipelineRuntimeSectionProps {
-  sessionId: number;
+  sessionId: string;
   /** Live SSE state when available; null after a reload/restart with no executor. */
   pipelineRuntime: PipelineRuntimeState | null;
 }

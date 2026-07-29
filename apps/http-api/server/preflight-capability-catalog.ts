@@ -8,6 +8,7 @@
  */
 import { enumerateExternalTools } from '../admin/mcp-servers.routes.js';
 import { deriveSkillNamespace } from '@mcp/code-agent/skills/namespace.js';
+import { resolveActiveWorkspaceSkills } from '@mcp/code-agent/skills/workspace-skills.js';
 import type { SkillStore } from '@mcp/store/skill-store.js';
 import type {
   PreflightSkillMeta,
@@ -57,8 +58,8 @@ export function buildPreflightToolCatalog(
  */
 export function buildPreflightSkillCatalog(
   skillStore: SkillStore,
-  sessionId: number,
   projectId: number,
+  activeSkillIds?: readonly string[] | null,
   projectRoot?: string,
 ): PreflightSkillMeta[] {
   try {
@@ -73,8 +74,11 @@ export function buildPreflightSkillCatalog(
         }
       } catch { /* non-Node projects simply have no package evidence */ }
     }
-    return skillStore
-      .resolveActiveSkills(sessionId, projectId)
+    return resolveActiveWorkspaceSkills(
+      skillStore,
+      [projectId],
+      activeSkillIds,
+    )
       .slice(0, envInt('CODER_PREFLIGHT_SKILLS_MAX', DEFAULT_SKILLS_MAX))
       .map((s) => {
         const definition = typeof (skillStore as SkillStore & { getSkill?: unknown }).getSkill === 'function'

@@ -8,8 +8,8 @@ export interface PlantedConversationFact {
 
 export interface RecallEvalCase {
   query: string;
-  expectedChapterId: number;
-  rankedChapterIds: readonly number[];
+  expectedChapterId: string;
+  rankedChapterIds: readonly string[];
 }
 
 export interface ConversationCompactionEvalResult {

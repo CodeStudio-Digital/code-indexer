@@ -16,29 +16,29 @@ import type { MasterAttention, AttentionEvent } from '@mcp/company/services/Mast
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 import { renderNodeTask } from '@mcp/company/services/PipelineService.js';
 import { readFinalAssistantText } from '@mcp/company/services/finalText.js';
-import type { PipelineNode } from '@mcp/company/types.js';
+import type { PipelineId, PipelineNode } from '@mcp/company/types.js';
 
 const DEFAULT_BRANCH_MAX_ATTEMPTS = 3;
 
 interface ResolvedBranch { role: string; projectId?: number; taskTemplate: string; label: string }
 interface BranchState {
   branch: ResolvedBranch;
-  cardId: number;
-  rowId: number;
+  cardId: string;
+  rowId: string;
   attempt: number;
-  coderSessionId: number;
+  coderSessionId: string | null;
   output: string;
   ok: boolean;
 }
 
 export interface FanOutBarrier {
-  executionId: number;
+  executionId: string;
   node: PipelineNode;
   initialInput: string;
   previousOutput: string;
   spawning: boolean;
-  pending: Set<number>;
-  byAgent: Map<number, BranchState>;
+  pending: Set<string>;
+  byAgent: Map<string, BranchState>;
   results: BranchState[];
   unsubscribe: () => void;
 }
@@ -50,21 +50,21 @@ export interface FanOutRunnerDeps {
   attention: MasterAttention;
   publisher: IMetaBusPublisher;
   /** Shared with the executor so pause/abort can iterate in-flight branches. */
-  barriers: Map<number, FanOutBarrier>;
-  pipelineNameFor: (pipelineId: number) => Promise<string>;
-  onJoin: (executionId: number, node: PipelineNode, aggregated: string, initialInput: string) => void;
-  failExecution: (executionId: number, pipelineId: number, message: string) => void;
+  barriers: Map<string, FanOutBarrier>;
+  pipelineNameFor: (pipelineId: PipelineId) => Promise<string>;
+  onJoin: (executionId: string, node: PipelineNode, aggregated: string, initialInput: string) => void | Promise<void>;
+  failExecution: (executionId: string, pipelineId: PipelineId, message: string) => void | Promise<void>;
 }
 
 export class FanOutRunner {
   constructor(private readonly d: FanOutRunnerDeps) {}
 
-  async run(executionId: number, node: PipelineNode, initialInput: string, previousOutput: string): Promise<void> {
-    const exec = this.d.ctx.companyStore.getPipelineExecution(executionId);
+  async run(executionId: string, node: PipelineNode, initialInput: string, previousOutput: string): Promise<void> {
+    const exec = await this.d.ctx.companyStore.getPipelineExecution(executionId);
     if (!exec || exec.status !== 'running') return;
     const branches = this.resolveBranches(node);
     if (branches.length === 0) {
-      this.d.failExecution(executionId, exec.pipeline_id, `Fan-out node "${node.id}" resolved zero branches.`);
+      await this.d.failExecution(executionId, exec.pipeline_id, `Fan-out node "${node.id}" resolved zero branches.`);
       return;
     }
     const pipelineName = await this.d.pipelineNameFor(exec.pipeline_id);
@@ -74,7 +74,11 @@ export class FanOutRunner {
     };
     this.d.barriers.set(executionId, barrier);
     barrier.unsubscribe = this.d.attention.on((ev: AttentionEvent) => {
-      if (ev.kind !== 'finished' || !barrier.pending.has(ev.agentRunId)) return;
+      if (
+        ev.kind !== 'finished' ||
+        ev.agentRunId == null ||
+        !barrier.pending.has(ev.agentRunId)
+      ) return;
       void this.onBranchFinished(executionId, ev.agentRunId);
     });
 
@@ -116,10 +120,10 @@ export class FanOutRunner {
   }
 
   private async spawnBranch(
-    executionId: number, pipelineName: string, node: PipelineNode,
+    executionId: string, pipelineName: string, node: PipelineNode,
     branch: ResolvedBranch, attempt: number, barrier: FanOutBarrier,
   ): Promise<void> {
-    const exec = this.d.ctx.companyStore.getPipelineExecution(executionId);
+    const exec = await this.d.ctx.companyStore.getPipelineExecution(executionId);
     const renderedTask = renderNodeTask({
       template: branch.taskTemplate,
       initialInput: barrier.initialInput,
@@ -130,11 +134,11 @@ export class FanOutRunner {
       title: `[Pipeline:${pipelineName}] ${node.label} · ${branch.label}`,
       description: renderedTask, column: 'todo', tag: node.kanbanTag ?? null, created_by: 'pipeline',
     });
-    const row = this.d.ctx.companyStore.createPipelineNodeExecution({
+    const row = await this.d.ctx.companyStore.createPipelineNodeExecution({
       executionId, nodeId: node.id, nodeLabel: `${node.label} · ${branch.label}`,
       role: branch.role, inputText: renderedTask, attempt, kanbanCardId: card.id,
     });
-    let spawn: { agentRunId: number; coderSessionId: number };
+    let spawn: { agentRunId: string; coderSessionId: string };
     try {
       spawn = await this.d.subordinates.spawn({
         role: branch.role,
@@ -145,48 +149,57 @@ export class FanOutRunner {
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      this.d.ctx.companyStore.updatePipelineNodeExecution(row.id, { status: 'failed', finishedAt: nowIso(), errorMessage: msg });
-      barrier.results.push({ branch, cardId: card.id, rowId: row.id, attempt, coderSessionId: 0, output: `(spawn failed: ${msg})`, ok: false });
+      await this.d.ctx.companyStore.updatePipelineNodeExecution(row.id, { status: 'failed', finishedAt: nowIso(), errorMessage: msg });
+      barrier.results.push({ branch, cardId: card.id, rowId: row.id, attempt, coderSessionId: null, output: `(spawn failed: ${msg})`, ok: false });
       return;
     }
     try { this.d.kanban.assignAgent(card.id, spawn.agentRunId, branch.role); this.d.kanban.moveCard(card.id, 'in_progress'); } catch { /* best-effort */ }
-    this.d.ctx.companyStore.updatePipelineNodeExecution(row.id, { agentRunId: spawn.agentRunId });
+    await this.d.ctx.companyStore.updatePipelineNodeExecution(row.id, { agentRunId: spawn.agentRunId });
     barrier.pending.add(spawn.agentRunId);
     barrier.byAgent.set(spawn.agentRunId, { branch, cardId: card.id, rowId: row.id, attempt, coderSessionId: spawn.coderSessionId, output: '', ok: false });
   }
 
-  private async onBranchFinished(executionId: number, agentRunId: number): Promise<void> {
+  private async onBranchFinished(executionId: string, agentRunId: string): Promise<void> {
     const barrier = this.d.barriers.get(executionId);
     if (!barrier) return;
     const state = barrier.byAgent.get(agentRunId);
     if (!state) return;
     barrier.byAgent.delete(agentRunId);
-    barrier.pending.delete(agentRunId);
 
     const status = this.d.subordinates.statusOf(agentRunId);
     const ok = status === 'completed';
-    const output = readFinalAssistantText(state.coderSessionId) ?? '';
+    const output = state.coderSessionId
+      ? await readFinalAssistantText(
+          this.d.ctx.companyFiles.sessionStore,
+          state.coderSessionId,
+        ) ?? ''
+      : '';
     const maxAttempts = Math.max(1, barrier.node.maxAttempts ?? DEFAULT_BRANCH_MAX_ATTEMPTS);
 
     if (!ok && state.attempt < maxAttempts) {
-      this.d.ctx.companyStore.updatePipelineNodeExecution(state.rowId, {
+      await this.d.ctx.companyStore.updatePipelineNodeExecution(state.rowId, {
         status: 'aborted', finishedAt: nowIso(), errorMessage: `attempt ${state.attempt} failed (${status ?? 'unknown'}); retrying`,
       });
-      const pipelineName = await this.d.pipelineNameFor(this.pipelineIdFor(executionId));
+      const pipelineName = await this.d.pipelineNameFor(await this.pipelineIdFor(executionId));
+      barrier.pending.delete(agentRunId);
       await this.spawnBranch(executionId, pipelineName, barrier.node, state.branch, state.attempt + 1, barrier);
       this.maybeJoin(executionId);
       return;
     }
 
-    this.d.ctx.companyStore.updatePipelineNodeExecution(state.rowId, {
+    await this.d.ctx.companyStore.updatePipelineNodeExecution(state.rowId, {
       status: ok ? 'completed' : 'failed', outputText: output, finishedAt: nowIso(),
       errorMessage: ok ? null : `branch failed (${status ?? 'unknown'})`,
     });
     barrier.results.push({ ...state, output, ok });
+    // Keep the branch pending until its output and terminal node record are
+    // committed. Concurrent completion callbacks must not drain the barrier
+    // while another branch is still awaiting filesystem persistence.
+    barrier.pending.delete(agentRunId);
     this.maybeJoin(executionId);
   }
 
-  private maybeJoin(executionId: number): void {
+  private maybeJoin(executionId: string): void {
     const barrier = this.d.barriers.get(executionId);
     if (!barrier || barrier.spawning || barrier.pending.size > 0) return;
     barrier.unsubscribe();
@@ -194,11 +207,11 @@ export class FanOutRunner {
     const aggregated = barrier.results
       .map((r) => `### ${r.branch.label} [${r.ok ? 'ok' : 'FALHOU'}]\n${r.output || '(sem saída)'}`)
       .join('\n\n');
-    this.d.onJoin(executionId, barrier.node, aggregated, barrier.initialInput);
+    void this.d.onJoin(executionId, barrier.node, aggregated, barrier.initialInput);
   }
 
-  private pipelineIdFor(executionId: number): number {
-    return this.d.ctx.companyStore.getPipelineExecution(executionId)?.pipeline_id ?? 0;
+  private async pipelineIdFor(executionId: string): Promise<PipelineId> {
+    return (await this.d.ctx.companyStore.getPipelineExecution(executionId))?.pipeline_id ?? 0;
   }
 }
 

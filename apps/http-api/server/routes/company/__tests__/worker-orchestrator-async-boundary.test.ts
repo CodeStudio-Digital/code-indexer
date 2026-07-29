@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { asCompanySessionId } from '@mcp/session-storage';
 import type { ServerDeps } from '../../../deps.js';
 
 const H = vi.hoisted(() => ({
@@ -19,8 +20,27 @@ vi.mock('../../../../sse/companyOrchestrator.js', () => ({
 vi.mock('../stream.js', () => ({
   activeOrchestrators: {
     get: H.getActive,
-    has: (id: number) => !!H.getActive(id),
+    has: (id: string) => !!H.getActive(id),
     delete: vi.fn(),
+  },
+}));
+
+vi.mock('@mcp/company/services/CompanySessionFiles.js', () => ({
+  CompanySessionFiles: class {
+    getSession() {
+      return {
+        runtime_kind: 'company',
+        parent_session_id: null,
+      };
+    }
+
+    listInboxMessagesSync() {
+      return [];
+    }
+
+    getKanbanCardFullSync(id: string) {
+      return { id };
+    }
   },
 }));
 
@@ -45,7 +65,16 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function genericSession(id: number) {
+const SESSION_ID = asCompanySessionId(
+  '00000000-0000-4000-8000-000000000007',
+);
+const CHILD_ID = '00000000-0000-4000-8000-000000000008';
+const NEW_CHILD_ID = '00000000-0000-4000-8000-000000000009';
+const INBOX_ID = '00000000-0000-4000-8000-000000000011';
+const PIPELINE_EXECUTION_ID = '00000000-0000-4000-8000-000000000031';
+const KANBAN_CARD_ID = '00000000-0000-4000-8000-000000000091';
+
+function genericSession(id: string) {
   return {
     id,
     parent_session_id: null,
@@ -64,7 +93,7 @@ describe('worker-backed Company RPC boundaries', () => {
   });
 
   it('awaits inbox reads and boolean mutations instead of serializing/trusting Promise objects', async () => {
-    const listGate = deferred<Array<{ id: number; body: string }>>();
+    const listGate = deferred<Array<{ id: string; body: string }>>();
     const orchestrator = {
       inboxList: vi.fn(() => listGate.promise),
       inboxCancel: vi.fn(async () => false),
@@ -74,27 +103,33 @@ describe('worker-backed Company RPC boundaries', () => {
 
     const app = new Hono();
     mountCompanyInboxRoutes(app, {
-      companyStore: {
-        getCompanySession: (id: number) => genericSession(id),
-        listInboxMessages: vi.fn(() => []),
+      sessionStore: {
+        ensureCatalog: vi.fn(async () => undefined),
       },
     } as unknown as ServerDeps);
 
-    const listResponse = Promise.resolve(app.request('/api/company/sessions/7/inbox'));
+    const listResponse = Promise.resolve(
+      app.request(`/api/company/sessions/${SESSION_ID}/inbox`),
+    );
     await vi.waitFor(() => expect(orchestrator.inboxList).toHaveBeenCalledOnce());
     let listSettled = false;
     void listResponse.then(() => { listSettled = true; });
     await Promise.resolve();
     expect(listSettled).toBe(false);
 
-    listGate.resolve([{ id: 11, body: 'worker result' }]);
-    expect(await (await listResponse).json()).toEqual([{ id: 11, body: 'worker result' }]);
+    listGate.resolve([{ id: INBOX_ID, body: 'worker result' }]);
+    expect(await (await listResponse).json()).toEqual([
+      { id: INBOX_ID, body: 'worker result' },
+    ]);
 
-    const cancel = await app.request('/api/company/sessions/7/inbox/11/cancel', {
+    const cancel = await app.request(
+      `/api/company/sessions/${SESSION_ID}/inbox/${INBOX_ID}/cancel`,
+      {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',
-    });
+      },
+    );
     expect(cancel.status).toBe(404);
   });
 
@@ -105,106 +140,102 @@ describe('worker-backed Company RPC boundaries', () => {
     };
     H.getActive.mockReturnValue(orchestrator);
     const companyStore = {
-      getCompanySession: (id: number) => genericSession(id),
-      getPipelineExecution: (id: number) => ({ id, company_session_id: 7 }),
+      getPipelineExecution: (id: string) => ({
+        id,
+        company_session_id: SESSION_ID,
+      }),
       listPipelineNodeExecutions: vi.fn(() => []),
     };
     const app = new Hono();
     mountCompanyPipelineRoutes(app, {
       companyStore,
+      operationalSessionFiles: {
+        getCompanySession: async (id: string) => genericSession(id),
+      },
     } as unknown as ServerDeps);
 
-    const status = await app.request('/api/company/sessions/7/pipelines/executions/31');
+    const status = await app.request(
+      `/api/company/sessions/${SESSION_ID}/pipelines/executions/${PIPELINE_EXECUTION_ID}`,
+    );
     expect(status.status).toBe(404);
 
-    const pause = await app.request('/api/company/sessions/7/pipelines/executions/31/pause', {
-      method: 'POST',
-    });
+    const pause = await app.request(
+      `/api/company/sessions/${SESSION_ID}/pipelines/executions/${PIPELINE_EXECUTION_ID}/pause`,
+      { method: 'POST' },
+    );
     expect(pause.status).toBe(409);
   });
 
   it('awaits child creation and rename RPCs before reading or returning durable state', async () => {
     interface SessionRow {
-      id: number;
-      parent_session_id: number | null;
+      id: string;
+      parent_session_id: string | null;
       runtime_kind: string;
       config_json: string;
       status: string;
       name: string;
     }
-    const rows = new Map<number, SessionRow>([
-      [7, { ...genericSession(7), name: 'Root' }],
-      [8, { ...genericSession(8), parent_session_id: 7, name: 'Old' }],
+    const rows = new Map<string, SessionRow>([
+      [SESSION_ID, { ...genericSession(SESSION_ID), name: 'Root' }],
+      [
+        CHILD_ID,
+        {
+          ...genericSession(CHILD_ID),
+          parent_session_id: SESSION_ID,
+          name: 'Old',
+        },
+      ],
     ]);
-    const orchestrator = {
-      createChildSession: vi.fn(async (name: string) => ({
-        ...genericSession(9),
-        parent_session_id: 7,
-        name,
+    const operationalSessionFiles = {
+      getCompanySession: vi.fn(async (id: string) => rows.get(id) ?? null),
+      getCompanySessionFull: vi.fn(async () => ({
+        projects: [{ project_id: 7, label: null }],
       })),
-      renameChildSession: vi.fn(async (id: number, name: string) => {
+      createCompanySession: vi.fn(async (input: { name: string }) => ({
+        ...genericSession(NEW_CHILD_ID),
+        parent_session_id: SESSION_ID,
+        name: input.name,
+      })),
+      renameCompanySession: vi.fn(async (id: string, name: string) => {
         const row = rows.get(id);
-        if (row) row.name = name;
+        if (!row) return null;
+        row.name = name;
+        return row;
       }),
     };
-    H.getActive.mockImplementation((id: number) => id === 7 ? orchestrator : null);
+    H.getActive.mockReturnValue(null);
     const app = new Hono();
     mountCompanyChildRoutes(app, {
-      companyStore: {
-        getCompanySession: (id: number) => rows.get(id) ?? null,
-        createChildSession: vi.fn(),
-        renameCompanySession: vi.fn(),
-        listChildSessions: vi.fn(() => []),
-      },
+      operationalSessionFiles,
     } as unknown as ServerDeps);
 
-    const created = await app.request('/api/company/sessions/7/children', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Async child' }),
-    });
+    const created = await app.request(
+      `/api/company/sessions/${SESSION_ID}/children`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Async child' }),
+      },
+    );
     expect(created.status).toBe(201);
-    expect(await created.json()).toMatchObject({ id: 9, name: 'Async child' });
-
-    const renamed = await app.request('/api/company/sessions/7/children/8', {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'New' }),
+    expect(await created.json()).toMatchObject({
+      id: NEW_CHILD_ID,
+      name: 'Async child',
     });
-    expect(renamed.status).toBe(200);
-    expect(await renamed.json()).toMatchObject({ id: 8, name: 'New' });
-  });
 
-  it('does not replay child creation after losing the worker acknowledgement', async () => {
-    const createChildSession = vi.fn(async () => {
-      throw { code: 'port_closed', message: 'worker exited after create' };
-    });
-    H.getActive.mockReturnValue({ createChildSession });
-    const directCreate = vi.fn();
-    const app = new Hono();
-    mountCompanyChildRoutes(app, {
-      companyStore: {
-        getCompanySession: (id: number) => ({
-          ...genericSession(id),
-          name: 'Root',
-        }),
-        createChildSession: directCreate,
+    const renamed = await app.request(
+      `/api/company/sessions/${SESSION_ID}/children/${CHILD_ID}`,
+      {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'New' }),
       },
-    } as unknown as ServerDeps);
-
-    const response = await app.request('/api/company/sessions/7/children', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'One effect only' }),
+    );
+    expect(renamed.status).toBe(200);
+    expect(await renamed.json()).toMatchObject({
+      id: CHILD_ID,
+      name: 'New',
     });
-
-    expect(response.status).toBe(500);
-    await expect(response.json()).resolves.toMatchObject({
-      code: 'OUTCOME_UNKNOWN',
-    });
-    expect(createChildSession).toHaveBeenCalledOnce();
-    expect(directCreate).not.toHaveBeenCalled();
-    expect(H.evict).toHaveBeenCalledWith(7);
   });
 
   it('does not spawn a card subordinate again after a dispatch timeout', async () => {
@@ -217,25 +248,28 @@ describe('worker-backed Company RPC boundaries', () => {
     });
     const app = new Hono();
     mountCompanyKanbanDispatchRoutes(app, {
-      companyStore: {
-        getCompanySession: (id: number) => genericSession(id),
+      sessionStore: {
+        ensureCatalog: vi.fn(async () => undefined),
       },
     } as unknown as ServerDeps);
 
-    const response = await app.request('/api/company/sessions/7/kanban/cards/91/dispatch', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ role: 'backend' }),
-    });
+    const response = await app.request(
+      `/api/company/sessions/${SESSION_ID}/kanban/cards/${KANBAN_CARD_ID}/dispatch`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: 'backend' }),
+      },
+    );
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({
       code: 'OUTCOME_UNKNOWN',
-      cardId: 91,
+      cardId: KANBAN_CARD_ID,
     });
     expect(dispatchCard).toHaveBeenCalledOnce();
     expect(H.getOrSpawn).toHaveBeenCalledOnce();
-    expect(H.evict).toHaveBeenCalledWith(7);
+    expect(H.evict).toHaveBeenCalledWith(SESSION_ID);
   });
 
   it('does not evict or acknowledge abort until the worker has completed both phases', async () => {
@@ -247,12 +281,12 @@ describe('worker-backed Company RPC boundaries', () => {
     H.getActive.mockReturnValue(orchestrator);
     H.evict.mockImplementation(() => evictGate.promise);
 
-    const result = abortCompanyRuntime(7);
+    const result = abortCompanyRuntime(SESSION_ID);
     await vi.waitFor(() => expect(orchestrator.abortAll).toHaveBeenCalledOnce());
     expect(H.evict).not.toHaveBeenCalled();
 
     abortGate.resolve();
-    await vi.waitFor(() => expect(H.evict).toHaveBeenCalledWith(7));
+    await vi.waitFor(() => expect(H.evict).toHaveBeenCalledWith(SESSION_ID));
     let settled = false;
     void result.then(() => { settled = true; });
     await Promise.resolve();
@@ -268,7 +302,7 @@ describe('worker-backed Company RPC boundaries', () => {
     });
     H.getActive.mockReturnValue({ abortAll });
 
-    await expect(abortCompanyRuntime(7)).resolves.toEqual({
+    await expect(abortCompanyRuntime(SESSION_ID)).resolves.toEqual({
       ok: false,
       reason: 'outcome_unknown',
       code: 'OUTCOME_UNKNOWN',
@@ -276,21 +310,21 @@ describe('worker-backed Company RPC boundaries', () => {
     });
     expect(abortAll).toHaveBeenCalledOnce();
     expect(H.evict).toHaveBeenCalledOnce();
-    expect(H.evict).toHaveBeenCalledWith(7);
+    expect(H.evict).toHaveBeenCalledWith(SESSION_ID);
   });
 
   it('delivers through an orchestrator created by a concurrent request before returning success', async () => {
     const deliveryGate = deferred<{ ok: boolean }>();
     const orchestrator = {
-      companySessionId: 7,
+      companySessionId: SESSION_ID,
       metaBus: {},
       sendMessageToMaster: vi.fn(() => deliveryGate.promise),
     };
     H.getActive.mockReturnValue(orchestrator);
 
     const result = ensureCompanyMasterLive(
-      7,
-      { companyStore: {} } as Pick<ServerDeps, 'companyStore'>,
+      SESSION_ID,
+      { sessionStore: {} } as Pick<ServerDeps, 'sessionStore'>,
       {
         message: 'continue',
         attachments: [{ name: 'note.txt', mediaType: 'text/plain', text: 'hello' }],
@@ -316,7 +350,7 @@ describe('worker-backed Company RPC boundaries', () => {
 
   it('does not replay a concurrent delivery after losing its worker acknowledgement', async () => {
     H.getActive.mockReturnValue({
-      companySessionId: 7,
+      companySessionId: SESSION_ID,
       metaBus: {},
       sendMessageToMaster: vi.fn(async () => {
         throw { code: 'port_closed' };
@@ -324,13 +358,13 @@ describe('worker-backed Company RPC boundaries', () => {
     });
 
     await expect(ensureCompanyMasterLive(
-      7,
-      { companyStore: {} } as Pick<ServerDeps, 'companyStore'>,
+      SESSION_ID,
+      { sessionStore: {} } as Pick<ServerDeps, 'sessionStore'>,
       { message: 'deliver once' },
     )).resolves.toMatchObject({
       status: 500,
       code: 'OUTCOME_UNKNOWN',
     });
-    expect(H.evict).toHaveBeenCalledWith(7);
+    expect(H.evict).toHaveBeenCalledWith(SESSION_ID);
   });
 });

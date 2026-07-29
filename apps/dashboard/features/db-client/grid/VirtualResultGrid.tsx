@@ -4,16 +4,19 @@
  * Only the visible rows render so 10k+ result sets stay smooth.
  *
  *   - Click a header to sort (server-side via `onSort`, else client-side).
- *   - Drag a header's right edge to resize.
+ *   - Drag a header's right edge to resize; double-click it to auto-fit.
  *   - READ-ONLY cell: click → value viewer. EDITABLE cell: click → inline edit,
- *     double-click → value viewer. Edited cells amber, new rows green, deleted
- *     struck-through; all go through the `useGridEdits` changeset.
- *   - Export/copy from the toolbar.
+ *     double-click → value viewer. Arrows/Tab/Enter move the cursor, so a row
+ *     can be filled without touching the mouse.
+ *   - Edited cells amber, new rows green, deleted struck-through; all go through
+ *     the `useGridEdits` changeset.
+ *   - The row-number column is sticky, so wide tables keep their anchor while
+ *     scrolling sideways.
  */
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ChevronUp, ChevronDown, Download, Copy, Trash2, Undo2, Ban, Pencil, Link2 } from 'lucide-react';
+import { ChevronUp, ChevronDown, Download, Copy, Trash2, Undo2, Pencil, Link2 } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { copyText } from '../../../lib/clipboard.js';
 import { downloadBlob } from '../../api-client/download.js';
@@ -21,9 +24,11 @@ import { toast } from '../../../components/ui/prompt-dialog.js';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem,
 } from '../../../components/ui/dropdown-menu.js';
-import { columnNames, cellText } from './grid-utils.js';
+import { columnNames, cellText, isBinaryValue } from './grid-utils.js';
 import { CellValuePanel } from './CellValuePanel.js';
 import { RowEditorDialog } from './RowEditorDialog.js';
+import { GridBodyCell, type CellCommitMove } from './GridBodyCell.js';
+import { editorSpecForColumn, type ColumnEditorSpec } from './column-editor.js';
 import { toCsv, toJson, toInsertSql, cellToCopy } from './grid-export.js';
 import { rowKeyOf, type GridEdits } from './use-grid-edits.js';
 import type { DbColumn, DbQueryResult, DbTableSort } from '../types.js';
@@ -31,23 +36,22 @@ import type { DbColumn, DbQueryResult, DbTableSort } from '../types.js';
 const ROW_H = 24;
 const ROWNUM_W = 52;
 const DEFAULT_COL_W = 168;
+const MIN_COL_W = 60;
+const MAX_AUTOFIT_W = 520;
 
 type SortState = { col: string; dir: 'asc' | 'desc' } | null;
+type Cursor = { row: number; col: number };
 
 function cmp(a: unknown, b: unknown): number {
   if (a == null && b == null) return 0;
   if (a == null) return -1;
   if (b == null) return 1;
   if (typeof a === 'number' && typeof b === 'number') return a - b;
+  if (a instanceof Date && b instanceof Date) return a.getTime() - b.getTime();
   return String(a).localeCompare(String(b));
 }
 
-/** A drag-to-select gesture ends with a click in Chromium. Do not turn that
- * click into an edit/view action when the user was selecting a cell value. */
-function hasActiveTextSelection(): boolean {
-  const selection = window.getSelection();
-  return !!selection && !selection.isCollapsed && selection.toString().length > 0;
-}
+const TEXT_SPEC: ColumnEditorSpec = { kind: 'text', enumValues: [] };
 
 export const VirtualResultGrid = memo(function VirtualResultGrid({
   result,
@@ -79,14 +83,15 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
   onRowOpen?: (row: Record<string, unknown>) => void;
   /** Relational navigation — open rows connected through foreign keys. */
   onRelatedRows?: (row: Record<string, unknown>) => void;
-  /** Introspected relational metadata; enables the shared typed row editor. */
+  /** Introspected relational metadata; enables typed editing + the row editor. */
   columnMeta?: DbColumn[];
 }) {
   const { t } = useTranslation('dbClient');
   const [internalSort, setInternalSort] = useState<SortState>(null);
   const [widths, setWidths] = useState<Record<string, number>>({});
   const [cellView, setCellView] = useState<{ col: string; value: unknown } | null>(null);
-  const [active, setActive] = useState<string | null>(null); // `${rowId}:${col}`
+  const [cursor, setCursor] = useState<Cursor | null>(null);
+  const [editing, setEditing] = useState(false);
   const [rowEdit, setRowEdit] = useState<
     | { kind: 'existing'; rowKey: string; row: Record<string, unknown> }
     | { kind: 'new'; tempId: string; row: Record<string, unknown> }
@@ -99,15 +104,24 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
     () => (result ? columnNames(result) : []).filter((column) => !hiddenColumns?.has(column)),
     [hiddenColumns, result],
   );
-  const editorColumns = useMemo<DbColumn[]>(() => {
-    const byName = new Map((columnMeta ?? []).map((column) => [column.name, column]));
-    return columns.map((name) => byName.get(name) ?? {
+  const metaByName = useMemo(() => new Map((columnMeta ?? []).map((column) => [column.name, column])), [columnMeta]);
+  const editorColumns = useMemo<DbColumn[]>(
+    () => columns.map((name) => metaByName.get(name) ?? {
       name,
       dataType: 'text',
       nullable: true,
       isPrimaryKey: pkCols?.includes(name) ?? false,
-    });
-  }, [columnMeta, columns, pkCols]);
+    }),
+    [columns, metaByName, pkCols],
+  );
+  // One spec per visible column — the inline editor coerces through it.
+  const specs = useMemo(
+    () => columns.map((name) => {
+      const meta = metaByName.get(name);
+      return meta ? editorSpecForColumn(meta) : TEXT_SPEC;
+    }),
+    [columns, metaByName],
+  );
 
   // Server-sorted when controlled; otherwise sort the page client-side.
   const baseRows = useMemo(() => {
@@ -127,12 +141,133 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
     overscan: 16,
   });
 
-  const colW = (c: string): number => widths[c] ?? DEFAULT_COL_W;
+  const colW = useCallback((c: string): number => widths[c] ?? DEFAULT_COL_W, [widths]);
   const rowActionCount = (onRelatedRows ? 1 : 0) + (editable ? 2 : onRowOpen ? 1 : 0);
   const rowNumW = Math.max(ROWNUM_W, 28 + rowActionCount * 20);
   const totalW = rowNumW + columns.reduce((w, c) => w + colW(c), 0);
   const sortCol = onSort ? sort?.column : internalSort?.col;
   const sortDir = onSort ? sort?.dir : internalSort?.dir;
+
+  /** Move the cursor, wrapping across row boundaries, and scroll it into view. */
+  const moveCursor = useCallback((from: Cursor, dRow: number, dCol: number): Cursor | null => {
+    let { row, col } = { row: from.row + dRow, col: from.col + dCol };
+    if (col < 0) {
+      col = columns.length - 1;
+      row -= 1;
+    } else if (col >= columns.length) {
+      col = 0;
+      row += 1;
+    }
+    if (row < 0 || row >= total || col < 0) return null;
+    virtualizer.scrollToIndex(row, { align: 'auto' });
+    return { row, col };
+  }, [columns.length, total, virtualizer]);
+
+  const cellIsEditable = useCallback((rowIndex: number, colIndex: number): boolean => {
+    if (!editable) return false;
+    const name = columns[colIndex];
+    if (rowIndex >= baseRows.length) return !isBinaryValue(newRows[rowIndex - baseRows.length]?.values[name]);
+    const row = baseRows[rowIndex];
+    if (!row) return false;
+    if (edits!.deleted.has(rowKeyOf(row, pkCols!))) return false;
+    return !isBinaryValue(row[name]);
+  }, [baseRows, columns, editable, edits, newRows, pkCols]);
+
+  /** Apply a committed cell value, then park the cursor where the key asked. */
+  const commitCell = useCallback((rowIndex: number, colIndex: number, value: unknown, move: CellCommitMove) => {
+    const name = columns[colIndex];
+    // The row can be gone: the unmount flush in GridBodyCell fires while a page
+    // reload is swapping `result`, and a new row can be removed under the cursor.
+    const newRow = rowIndex >= baseRows.length ? newRows[rowIndex - baseRows.length] : null;
+    const row = newRow ? null : baseRows[rowIndex];
+    if (!newRow && !row) {
+      setEditing(false);
+      return;
+    }
+    if (newRow) edits!.setNewCell(newRow.tempId, name, value);
+    else edits!.setCell(rowKeyOf(row!, pkCols!), name, value, row![name]);
+    if (move === 'none') {
+      setEditing(false);
+      return;
+    }
+    const next = moveCursor({ row: rowIndex, col: colIndex }, move === 'down' ? 1 : 0, move === 'right' ? 1 : move === 'left' ? -1 : 0);
+    if (!next) {
+      setEditing(false);
+      return;
+    }
+    setCursor(next);
+    setEditing(cellIsEditable(next.row, next.col));
+  }, [baseRows, cellIsEditable, columns, edits, moveCursor, newRows, pkCols]);
+
+  const onGridKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (editing || !cursor) return;
+    const step = (dRow: number, dCol: number): void => {
+      event.preventDefault();
+      const next = moveCursor(cursor, dRow, dCol);
+      if (next) setCursor(next);
+    };
+    switch (event.key) {
+      case 'ArrowDown': return step(1, 0);
+      case 'ArrowUp': return step(-1, 0);
+      case 'ArrowRight': return step(0, 1);
+      case 'ArrowLeft': return step(0, -1);
+      case 'Tab': return step(0, event.shiftKey ? -1 : 1);
+      case 'Enter':
+        event.preventDefault();
+        if (cellIsEditable(cursor.row, cursor.col)) setEditing(true);
+        return;
+      case 'Escape':
+        // Release the cursor so Tab leaves the grid again (keyboard users).
+        setCursor(null);
+        return;
+      case 'c':
+      case 'C': {
+        if (!event.ctrlKey && !event.metaKey) return;
+        event.preventDefault();
+        const name = columns[cursor.col];
+        const value = cursor.row >= baseRows.length
+          ? newRows[cursor.row - baseRows.length]?.values[name]
+          : baseRows[cursor.row]?.[name];
+        void copyText(cellToCopy(value));
+        return;
+      }
+      default:
+    }
+  }, [baseRows, cellIsEditable, columns, cursor, editing, moveCursor, newRows]);
+
+  const header = useCallback((col: string): void => {
+    if (onSort) onSort(col);
+    else setInternalSort((s) => (s?.col !== col ? { col, dir: 'asc' } : s.dir === 'asc' ? { col, dir: 'desc' } : null));
+  }, [onSort]);
+
+  function startResize(col: string, e: React.MouseEvent): void {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = colW(col);
+    const onMove = (ev: MouseEvent): void => setWidths((w) => ({ ...w, [col]: Math.max(MIN_COL_W, startW + ev.clientX - startX) }));
+    const onUp = (): void => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  /** Double-click the resize handle → widen to the longest value on screen. */
+  function autoFit(col: string): void {
+    let longest = col.length;
+    for (const row of baseRows) longest = Math.max(longest, cellText(row[col]).length);
+    setWidths((w) => ({ ...w, [col]: Math.min(MAX_AUTOFIT_W, Math.max(MIN_COL_W, longest * 7 + 24)) }));
+  }
+
+  async function exportAs(kind: 'csv' | 'json' | 'sql' | 'copy'): Promise<void> {
+    const base = tableName || 'result';
+    if (kind === 'csv') downloadBlob(`${base}.csv`, new Blob([toCsv(columns, baseRows)], { type: 'text/csv' }));
+    else if (kind === 'json') downloadBlob(`${base}.json`, new Blob([toJson(columns, baseRows)], { type: 'application/json' }));
+    else if (kind === 'sql') downloadBlob(`${base}.sql`, new Blob([toInsertSql(base, columns, baseRows)], { type: 'text/plain' }));
+    else if (await copyText(toCsv(columns, baseRows))) toast.success(t('grid.copied'));
+  }
 
   if (error) {
     return <div className="m-2 rounded border border-red-500/40 bg-red-500/10 p-2 text-xs text-red-400">{error}</div>;
@@ -146,36 +281,18 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
     );
   }
 
-  function header(col: string): void {
-    if (onSort) onSort(col);
-    else setInternalSort((s) => (s?.col !== col ? { col, dir: 'asc' } : s.dir === 'asc' ? { col, dir: 'desc' } : null));
-  }
-
-  function startResize(col: string, e: React.MouseEvent): void {
-    e.preventDefault();
-    e.stopPropagation();
-    const startX = e.clientX;
-    const startW = colW(col);
-    const onMove = (ev: MouseEvent): void => setWidths((w) => ({ ...w, [col]: Math.max(60, startW + ev.clientX - startX) }));
-    const onUp = (): void => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }
-
-  async function exportAs(kind: 'csv' | 'json' | 'sql' | 'copy'): Promise<void> {
-    const base = tableName || 'result';
-    if (kind === 'csv') downloadBlob(`${base}.csv`, new Blob([toCsv(columns, baseRows)], { type: 'text/csv' }));
-    else if (kind === 'json') downloadBlob(`${base}.json`, new Blob([toJson(columns, baseRows)], { type: 'application/json' }));
-    else if (kind === 'sql') downloadBlob(`${base}.sql`, new Blob([toInsertSql(base, columns, baseRows)], { type: 'text/plain' }));
-    else if (await copyText(toCsv(columns, baseRows))) toast.success(t('grid.copied'));
-  }
-
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-end border-b px-2 py-0.5">
+      <div className="flex items-center gap-2 border-b px-2 py-0.5">
+        <span className="tabular-nums text-[11px] text-muted-foreground">
+          {t('grid.rowsShown', { n: baseRows.length })}
+        </span>
+        {result.truncated && (
+          <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 text-[10px] text-amber-400" title={t('grid.truncatedHint')}>
+            {t('grid.truncated')}
+          </span>
+        )}
+        <div className="flex-1" />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground" title={t('grid.export')}>
@@ -195,11 +312,20 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
         </DropdownMenu>
       </div>
 
-      <div ref={scrollRef} data-text-selectable className="flex-1 overflow-auto text-xs">
+      <div
+        ref={scrollRef}
+        data-text-selectable
+        tabIndex={0}
+        onKeyDown={onGridKeyDown}
+        className="flex-1 overflow-auto text-xs outline-none"
+      >
         <div style={{ width: totalW, position: 'relative' }}>
           {/* Sticky header */}
-          <div className="sticky top-0 z-10 flex bg-card" style={{ width: totalW }}>
-            <div className="shrink-0 border-b border-r px-2 py-1 text-right text-muted-foreground/50" style={{ width: rowNumW }}>
+          <div className="sticky top-0 z-20 flex bg-card" style={{ width: totalW }}>
+            <div
+              className="sticky left-0 z-10 shrink-0 border-b border-r bg-card px-2 py-1 text-right text-muted-foreground/50"
+              style={{ width: rowNumW }}
+            >
               #
             </div>
             {columns.map((c) => (
@@ -208,7 +334,7 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
                 className="group/h relative flex shrink-0 cursor-pointer items-center gap-1 border-b border-r px-2 py-1 font-medium text-muted-foreground hover:bg-muted/40"
                 style={{ width: colW(c) }}
                 onClick={() => header(c)}
-                title={c}
+                title={metaByName.get(c)?.dataType ? `${c} · ${metaByName.get(c)!.dataType}` : c}
               >
                 <span className="min-w-0 flex-1 truncate">{c}</span>
                 {pkCols?.includes(c) && <span className="shrink-0 text-amber-400">★</span>}
@@ -217,6 +343,7 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
                   className="absolute right-0 top-0 h-full w-1 cursor-col-resize bg-transparent hover:bg-primary/40"
                   onMouseDown={(e) => startResize(c, e)}
                   onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => { e.stopPropagation(); autoFit(c); }}
                 />
               </div>
             ))}
@@ -226,19 +353,20 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
           <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
             {virtualizer.getVirtualItems().map((v) => {
               const isNew = v.index >= baseRows.length;
+              // Positioned with `top`, not `transform`: a transformed ancestor
+              // creates a containing block that breaks the sticky row-number
+              // column. Rows are absolutely positioned, so this stays cheap.
               const style: React.CSSProperties = {
-                top: 0,
-                transform: `translateY(${v.start}px)`,
+                top: v.start,
                 height: v.size,
                 width: totalW,
-                contain: 'strict',
               };
 
               if (isNew) {
                 const nr = newRows[v.index - baseRows.length];
                 return (
-                  <div key={nr.tempId} className="absolute left-0 flex bg-emerald-500/5" style={style}>
-                    <div className="flex shrink-0 items-center justify-end gap-1 overflow-hidden border-b border-r px-1" style={{ width: rowNumW }}>
+                  <div key={nr.tempId} className="group absolute left-0 flex bg-emerald-500/5" style={style}>
+                    <div className="sticky left-0 z-10 flex shrink-0 items-center justify-end gap-1 overflow-hidden border-b border-r bg-card px-1" style={{ width: rowNumW }}>
                       <span className="mr-auto min-w-4 text-center text-emerald-500">+</span>
                       <button type="button" className="rounded p-0.5 text-muted-foreground hover:text-primary" title={t('edit.editRow')} onClick={() => setRowEdit({ kind: 'new', tempId: nr.tempId, row: nr.values })}>
                         <Pencil className="h-3 w-3" />
@@ -247,21 +375,25 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
                         <Trash2 className="h-3 w-3" />
                       </button>
                     </div>
-                    {columns.map((c) => (
-                      <BodyCell
+                    {columns.map((c, colIndex) => (
+                      <GridBodyCell
                         key={c}
                         cellId={`${nr.tempId}:${c}`}
-                        value={nr.values[c]}
+                        value={nr.values[c] ?? null}
                         width={colW(c)}
+                        spec={specs[colIndex]}
                         edited={c in nr.values}
-                        active={active === `${nr.tempId}:${c}`}
+                        unset={!(c in nr.values)}
+                        selected={cursor?.row === v.index && cursor.col === colIndex}
+                        editing={editing && cursor?.row === v.index && cursor.col === colIndex}
                         editable
-                        onActivate={() => setActive(`${nr.tempId}:${c}`)}
-                        onCommit={(val) => { edits!.setNewCell(nr.tempId, c, val); setActive(null); }}
-                        onCancel={() => setActive(null)}
-                        onNull={() => { edits!.setNewCell(nr.tempId, c, null); setActive(null); }}
+                        onSelect={() => setCursor({ row: v.index, col: colIndex })}
+                        onStartEdit={() => { setCursor({ row: v.index, col: colIndex }); setEditing(true); }}
+                        onCommit={(value, move) => commitCell(v.index, colIndex, value, move)}
+                        onCancel={() => setEditing(false)}
+                        onNull={() => { edits!.setNewCell(nr.tempId, c, null); setEditing(false); }}
                         onView={() => setCellView({ col: c, value: nr.values[c] })}
-                        t={t}
+                        nullLabel={t('edit.setNull')}
                       />
                     ))}
                   </div>
@@ -273,7 +405,7 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
               const isDeleted = editable && edits!.deleted.has(rk);
               return (
                 <div key={rk} className={cn('group absolute left-0 flex hover:bg-muted/30', isDeleted && 'opacity-50')} style={style}>
-                  <div className="flex shrink-0 items-center justify-end gap-1 overflow-hidden border-b border-r px-1 text-right text-muted-foreground tabular-nums" style={{ width: rowNumW }}>
+                  <div className="sticky left-0 z-10 flex shrink-0 items-center justify-end gap-1 overflow-hidden border-b border-r bg-card px-1 text-right text-muted-foreground tabular-nums group-hover:bg-muted/60" style={{ width: rowNumW }}>
                     <span className="mr-auto min-w-4 text-right text-muted-foreground/60">{v.index + 1}</span>
                     {onRelatedRows && (
                       <button
@@ -317,24 +449,29 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
                       </button>
                     ) : null}
                   </div>
-                  {columns.map((c) => {
+                  {columns.map((c, colIndex) => {
                     const value = editable ? edits!.cellValue(rk, c, row[c]) : row[c];
+                    const binary = isBinaryValue(value);
                     return (
-                      <BodyCell
+                      <GridBodyCell
                         key={c}
                         cellId={`${rk}:${c}`}
                         value={value}
                         width={colW(c)}
+                        spec={specs[colIndex]}
                         edited={editable && edits!.isEdited(rk, c)}
                         deleted={isDeleted}
-                        active={active === `${rk}:${c}`}
+                        selected={cursor?.row === v.index && cursor.col === colIndex}
+                        editing={editing && cursor?.row === v.index && cursor.col === colIndex}
                         editable={editable && !isDeleted}
-                        onActivate={() => editable && !isDeleted && setActive(`${rk}:${c}`)}
-                        onCommit={(val) => { edits!.setCell(rk, c, val); setActive(null); }}
-                        onCancel={() => setActive(null)}
-                        onNull={() => { edits!.setCell(rk, c, null); setActive(null); }}
+                        binary={binary}
+                        onSelect={() => setCursor({ row: v.index, col: colIndex })}
+                        onStartEdit={() => { setCursor({ row: v.index, col: colIndex }); setEditing(true); }}
+                        onCommit={(next, move) => commitCell(v.index, colIndex, next, move)}
+                        onCancel={() => setEditing(false)}
+                        onNull={() => { edits!.setCell(rk, c, null, row[c]); setEditing(false); }}
                         onView={() => setCellView({ col: c, value })}
-                        t={t}
+                        nullLabel={t('edit.setNull')}
                       />
                     );
                   })}
@@ -357,9 +494,7 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
             if (rowEdit.kind === 'new') {
               Object.entries(values).forEach(([column, value]) => edits!.setNewCell(rowEdit.tempId, column, value));
             } else {
-              Object.entries(values).forEach(([column, value]) => {
-                if (!sameGridValue(value, rowEdit.row[column])) edits!.setCell(rowEdit.rowKey, column, value);
-              });
+              Object.entries(values).forEach(([column, value]) => edits!.setCell(rowEdit.rowKey, column, value, rowEdit.row[column]));
             }
             setRowEdit(null);
           }}
@@ -368,109 +503,3 @@ export const VirtualResultGrid = memo(function VirtualResultGrid({
     </div>
   );
 });
-
-function sameGridValue(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (a && b && typeof a === 'object' && typeof b === 'object') {
-    try {
-      return JSON.stringify(a) === JSON.stringify(b);
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-/** One body cell — read-only (click → view) or editable (click → inline edit, dbl-click → view). */
-interface BodyCellProps {
-  cellId: string;
-  value: unknown;
-  width: number;
-  edited?: boolean;
-  deleted?: boolean;
-  active: boolean;
-  editable?: boolean;
-  onActivate: () => void;
-  onCommit: (v: string) => void;
-  onCancel: () => void;
-  onNull: () => void;
-  onView: () => void;
-  t: (k: string) => string;
-}
-
-function BodyCellImpl({
-  cellId, value, width, edited, deleted, active, editable, onActivate, onCommit, onCancel, onNull, onView, t,
-}: BodyCellProps) {
-  const isNull = value == null; // treat undefined (unset new-row cell) like null
-  const text = useMemo(() => (isNull ? '' : cellText(value)), [isNull, value]);
-  const initial = text;
-  // Only record an edit when the text actually changed.
-  const commit = (raw: string): void => (raw === initial ? onCancel() : onCommit(raw));
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  // Commit the in-flight value if the cell is torn down while editing (the
-  // virtualizer unmounts rows scrolled out of view, which wouldn't fire blur).
-  useEffect(() => {
-    if (!active) return;
-    return () => {
-      const el = inputRef.current;
-      if (el && el.value !== initial) onCommit(el.value);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active]);
-
-  if (active) {
-    return (
-      <div className="flex shrink-0 items-center border-b border-r p-0" style={{ width }} data-cell={cellId}>
-        <input
-          ref={inputRef}
-          autoFocus
-          defaultValue={initial}
-          className="min-w-0 flex-1 bg-background px-2 py-0.5 font-mono text-xs outline-none ring-1 ring-primary"
-          onBlur={(e) => commit(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') commit((e.target as HTMLInputElement).value);
-            else if (e.key === 'Escape') onCancel();
-          }}
-        />
-        <button type="button" className="shrink-0 px-1 text-muted-foreground hover:text-amber-400" title={t('edit.setNull')} onMouseDown={(e) => { e.preventDefault(); onNull(); }}>
-          <Ban className="h-3 w-3" />
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      data-cell={cellId}
-      className={cn(
-        'shrink-0 cursor-text truncate border-b border-r px-2 py-0.5 font-mono',
-        deleted && 'line-through',
-        edited && 'bg-amber-500/15',
-        isNull && 'italic text-muted-foreground/50',
-      )}
-      style={{ width, contentVisibility: 'auto', containIntrinsicSize: `${width}px ${ROW_H}px` }}
-      title={text}
-      onClick={() => {
-        if (hasActiveTextSelection()) return;
-        if (editable) onActivate();
-        else onView();
-      }}
-      onDoubleClick={editable ? onView : undefined}
-    >
-      {isNull ? '∅' : text}
-    </div>
-  );
-}
-
-const BodyCell = memo(BodyCellImpl, (previous, next) => (
-  previous.cellId === next.cellId
-  && Object.is(previous.value, next.value)
-  && previous.width === next.width
-  && previous.edited === next.edited
-  && previous.deleted === next.deleted
-  && previous.active === next.active
-  && previous.editable === next.editable
-  && previous.t === next.t
-));
-
-export { cellToCopy };

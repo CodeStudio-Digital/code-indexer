@@ -19,7 +19,7 @@ import { useQaDiagnostics } from './useQaDiagnostics.js';
 import type { QaDiagnostics } from '../shared/types.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   serviceId?: string;
 }
 

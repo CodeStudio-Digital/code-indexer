@@ -32,28 +32,28 @@ export interface IMetaBusPublisher {
 export interface IBoardPoster {
   post(
     authorRole: string,
-    agentRunId: number | null,
+    agentRunId: string | null,
     kind: BoardKind,
     content: string,
     mentions?: string[],
   ): void;
-  read(opts?: { sinceId?: number; limit?: number; mentionsRole?: string }): BoardEntry[];
-  /** Watermark: last id the master is known to have seen. */
-  readonly lastMasterSeenId: number;
-  advanceMasterWatermark(entryId: number): void;
+  read(opts?: { sinceSeq?: number; limit?: number; mentionsRole?: string }): BoardEntry[];
+  /** Watermark: last sequence the master is known to have seen. */
+  readonly lastMasterSeenSeq: number;
+  advanceMasterWatermark(entrySeq: number): void;
 }
 
 /** Minimal kanban surface for auto-comments/auto-moves. */
 export interface IKanbanNotifier {
-  findCardForAgent(agentRunId: number): number | null;
-  addComment(cardId: number, role: string, agentRunId: number | null, content: string): void;
-  moveCard(cardId: number, column: KanbanColumn): void;
-  getCard(cardId: number): KanbanCardFull | null;
+  findCardForAgent(agentRunId: string): string | null;
+  addComment(cardId: string, role: string, agentRunId: string | null, content: string): void;
+  moveCard(cardId: string, column: KanbanColumn): void;
+  getCard(cardId: string): KanbanCardFull | null;
 }
 
-/** Centralised `company_agent_runs.status` writes + dashboard events. */
+/** Centralised agent-run entity status writes + dashboard events. */
 export interface IAgentStatusUpdater {
-  setStatus(agentRunId: number, status: AgentRunStatus, message?: string): void;
+  setStatus(agentRunId: string, status: AgentRunStatus, message?: string): void;
   /**
    * Write the status AND publish an `agent_status` event (no board post).
    * `opts.coderSessionId` rides along so the dashboard can open the agent's
@@ -61,10 +61,10 @@ export interface IAgentStatusUpdater {
    * UI needs to learn about the status change live.
    */
   publishStatus(
-    agentRunId: number,
+    agentRunId: string,
     role: string,
     status: AgentRunStatus,
-    opts?: { message?: string; coderSessionId?: number },
+    opts?: { message?: string; coderSessionId?: string },
   ): void;
 }
 
@@ -77,13 +77,13 @@ export interface IMasterNotifier {
   readonly endedWithError: string | null;
   setShouldContinue(value: boolean): void;
   readonly handle: RunCoderHandle | null;
-  readonly agentRunId: number | null;
+  readonly agentRunId: string | null;
 }
 
 /** Read-only subordinate counters (for idle controller). */
 export interface ISubordinateQuery {
   readonly runningCount: number;
-  isRunning(agentRunId: number): boolean;
+  isRunning(agentRunId: string): boolean;
 }
 
 /** Idle/pause lifecycle hooks. */
@@ -102,7 +102,7 @@ export interface IIdleController {
 
 /** Wire runner events (text/tool/done/...) to the meta-bus. */
 export interface IMetaBusWirer {
-  wire(handle: RunCoderHandle, role: string, agentRunId: number): void;
+  wire(handle: RunCoderHandle, role: string, agentRunId: string): void;
 }
 
 /** Snapshot of whether the session is aborted / bus ended. */

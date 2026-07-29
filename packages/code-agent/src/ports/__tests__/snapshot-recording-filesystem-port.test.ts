@@ -9,7 +9,12 @@ import {
   SnapshotRecorder,
   SnapshotRecordingFilesystemPort,
 } from '../snapshot-recording-filesystem-port.js';
-import type { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
+import type { SessionSnapshotStorePort } from '@mcp/services/services/session-snapshot-port.js';
+import {
+  asSessionId,
+  newSessionId,
+  type SessionId,
+} from '@mcp/session-storage';
 
 class MemoryFilesystem implements IFilesystemPort {
   readonly files = new Map<string, string>();
@@ -54,22 +59,23 @@ class MemoryFilesystem implements IFilesystemPort {
 }
 
 function harness(secondaryRoots?: ReadonlyArray<{ projectId: number; rootPath: string }>) {
-  let nextBaselineId = 1;
-  let nextRoundId = 100;
+  const sessionId = asSessionId('00000000-0000-4000-8000-000000000001');
+  const baselineId = newSessionId();
+  const roundSnapshotId = newSessionId();
   const recordBaselineAndEdit = vi.fn(() => ({
-    baseline: { id: nextBaselineId++ },
+    baseline: { id: baselineId },
     created: true,
   }));
-  const recordRoundSnapshotMutation = vi.fn(() => ({ id: nextRoundId++ }));
+  const recordRoundSnapshotMutation = vi.fn(() => ({ id: roundSnapshotId }));
   const store = {
     recordBaselineAndEdit,
     recordRoundSnapshotMutation,
-  } as unknown as SessionFileSnapshotStore;
+  } as unknown as SessionSnapshotStorePort<SessionId, string>;
   const onRecorded = vi.fn();
   const inner = new MemoryFilesystem();
   const recorder = new SnapshotRecorder({
     sessionKind: 'coder',
-    sessionId: 1,
+    sessionId,
     projectId: 10,
     projectRoot: 'C:\\repo',
     secondaryRoots,
@@ -79,29 +85,44 @@ function harness(secondaryRoots?: ReadonlyArray<{ projectId: number; rootPath: s
     onRecorded,
   });
   const fs = new SnapshotRecordingFilesystemPort(inner, recorder);
-  return { fs, inner, recordBaselineAndEdit, recordRoundSnapshotMutation, onRecorded };
+  return {
+    fs,
+    inner,
+    recordBaselineAndEdit,
+    recordRoundSnapshotMutation,
+    onRecorded,
+    baselineId,
+    roundSnapshotId,
+  };
 }
 
 describe('SnapshotRecordingFilesystemPort round snapshots', () => {
   it('commits the round envelope and emits all snapshot identities after a successful write', async () => {
-    const { fs, inner, recordRoundSnapshotMutation, onRecorded } = harness();
+    const {
+      fs,
+      inner,
+      recordRoundSnapshotMutation,
+      onRecorded,
+      baselineId,
+      roundSnapshotId,
+    } = harness();
     inner.files.set('C:\\repo\\a.ts', 'before\n');
 
     await fs.writeFile('C:\\repo\\a.ts', 'after\n');
 
     expect(recordRoundSnapshotMutation).toHaveBeenCalledWith(expect.objectContaining({
       round_message_id: 42,
-      global_baseline_id: 1,
+      global_baseline_id: baselineId,
       project_id: 10,
       file_path: 'a.ts',
       content_before: 'before\n',
       content_after: 'after\n',
     }));
     expect(onRecorded).toHaveBeenCalledWith({
-      baselineId: 1,
-      globalBaselineId: 1,
+      baselineId,
+      globalBaselineId: baselineId,
       roundMessageId: 42,
-      roundSnapshotId: 100,
+      roundSnapshotId,
       filePath: 'a.ts',
     });
   });
@@ -145,6 +166,15 @@ describe('SnapshotRecordingFilesystemPort round snapshots', () => {
       expect.objectContaining({ project_id: -7, file_path: 'src/a.ts' }),
       expect.anything(),
     );
+  });
+
+  it('does not treat a sibling path sharing the root prefix as project-owned', async () => {
+    const { fs, inner, recordBaselineAndEdit } = harness();
+    inner.files.set('C:\\repository\\a.ts', 'before\n');
+
+    await fs.writeFile('C:\\repository\\a.ts', 'after\n');
+
+    expect(recordBaselineAndEdit).not.toHaveBeenCalled();
   });
 
   it('commits both sides of a rename only after the rename succeeds', async () => {

@@ -9,7 +9,7 @@ import type {
 type Payload = Record<string, unknown> | null | undefined;
 
 export function notifyCoderStreamEvent(
-  sessionId: number,
+  sessionId: string,
   eventName: string,
   data: Payload,
   context?: NotificationSourceContext,
@@ -81,7 +81,7 @@ export function notifyCoderStreamEvent(
 }
 
 export function notifyPipelineStreamEvent(
-  sessionId: number,
+  sessionId: string,
   eventName: string,
   data: Payload,
   context?: NotificationSourceContext,
@@ -89,7 +89,7 @@ export function notifyPipelineStreamEvent(
   if (!context?.target) return;
   const target = context.pipelineTarget ?? context.target;
   const label = target.label ?? context.target.label ?? `Session #${sessionId}`;
-  const executionId = readNumber(data, 'executionId') ?? readString(data, 'executionId') ?? 'unknown';
+  const executionId = readString(data, 'executionId') ?? 'unknown';
   const publish = (event: AppNotificationEvent) => emit(event, context.dedupeKey);
 
   if (eventName === 'pipeline_paused' && readBoolean(data, 'awaitingConfirmation')) {
@@ -141,7 +141,7 @@ export function notifyPipelineStreamEvent(
 }
 
 export function notifyCompanyStreamEvent(
-  companySessionId: number,
+  companySessionId: string,
   eventName: string,
   data: Payload,
   context?: NotificationSourceContext,

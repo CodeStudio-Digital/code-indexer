@@ -10,7 +10,6 @@ import { join } from 'node:path';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { FileScanner } from '../scanner.js';
 import { hashContent } from '../content-hash.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 
 let dir: string;
 let root: string;
@@ -137,53 +136,4 @@ describe('FileScanner stat-first', () => {
     expect(res.toRemove).toEqual(['c.ts']);
   });
 
-  it('scans synthetic projects through DB-authorized real roots with slug prefixes', async () => {
-    const backend = join(dir, 'backend');
-    const intranet = join(dir, 'intranet');
-    mkdirSync(backend);
-    mkdirSync(intranet);
-    writeFileSync(join(backend, 'api.php'), '<?php echo "api";');
-    writeFileSync(join(intranet, 'screen.ts'), 'export const screen = true;');
-    const backendProject = db.createProject('POA Backend', backend);
-    const intranetProject = db.createProject('POA Intranet Angular', intranet);
-    const missingProject = db.createProject('Missing Project', join(dir, 'missing'));
-    const synthetic = db.createProject('__global_test', join(dir, 'union'));
-    db.setProjectSynthetic(synthetic.id, true);
-    const sessions = new SessionStore(db.raw());
-    sessions.createGlobalSession({
-      project_id: synthetic.id,
-      title: 'global',
-      provider: 'openai-chatgpt',
-      model: 'test',
-      realProjects: [
-        { projectId: backendProject.id, isPrimary: true },
-        { projectId: intranetProject.id, isPrimary: false },
-        { projectId: missingProject.id, isPrimary: false },
-      ],
-    });
-
-    const res = await new FileScanner(join(dir, 'union')).scan(db, synthetic.id);
-
-    expect(res.toIndex.map((file) => file.relativePath).sort()).toEqual([
-      'poa_backend/api.php',
-      'poa_intranet_angular/screen.ts',
-    ]);
-    expect(res.toIndex.every((file) => file.path.startsWith(dir))).toBe(true);
-
-    for (const file of res.toIndex) persist(file, synthetic.id);
-    const second = await new FileScanner(join(dir, 'union')).scan(db, synthetic.id);
-    expect(second.toIndex).toHaveLength(0);
-    expect(second.unchanged.sort()).toEqual([
-      'poa_backend/api.php',
-      'poa_intranet_angular/screen.ts',
-    ]);
-
-    writeFileSync(join(intranet, 'screen.ts'), 'export const screen = false;');
-    const future = new Date(Date.now() + 5_000);
-    utimesSync(join(intranet, 'screen.ts'), future, future);
-    const third = await new FileScanner(join(dir, 'union')).scan(db, synthetic.id);
-    expect(third.toIndex.map((file) => file.relativePath)).toEqual([
-      'poa_intranet_angular/screen.ts',
-    ]);
-  });
 });

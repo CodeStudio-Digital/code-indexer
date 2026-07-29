@@ -1,72 +1,118 @@
 /**
  * Idle memory sweeper — the "session went quiet" distill moment.
  *
- * The compaction harvest only learns when a session compacts; short sessions
- * (most of them) never do. This sweeper wakes every `intervalMs`, finds
- * sessions that have been idle for `idleAfterMs` with messages past their
- * `memory_distilled_message_id` mark, summarizes ONLY that span and feeds the
- * same distill pipeline (positive + gotcha + procedure + note promotion).
- *
- * Runs in the MAIN process (mirrors `coder-watchdog.ts`): worker timers die
- * with the worker pool, while the mark is a DB column — so the sweep survives
- * restarts and covers "user closed the app" for free.
- *
- * Failure semantics (migration 185): a FAILED pass (LLM error, timeout) keeps
- * the mark intact and bumps `memory_distill_attempts` — the span is retried
- * with linear backoff. Anti poison-pill lives in the RETRY CAP instead: after
- * `MAX_DISTILL_ATTEMPTS` failures the mark advances anyway (`retry_cap` in
- * the log) so one broken session can't wedge every sweep forever.
+ * Candidate discovery, transcript boundaries, retry state and diagnostics are
+ * filesystem-backed. Durable project memory itself remains an intentionally
+ * shared project/global catalog.
  */
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import { summarizeSpanV2 } from '@mcp/code-agent/core/summarizer.js';
 import { buildHarvestInput } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import type { RunEndMemory } from '@mcp/services/memory/run-end.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type {
+  FileSessionRepository,
+  SessionCatalog,
+  SessionId,
+} from '@mcp/session-storage';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
 
 const DEFAULT_INTERVAL_MS = Number(process.env.MCP_MEMORY_SWEEP_INTERVAL_MS ?? 5 * 60 * 1000);
 const DEFAULT_IDLE_AFTER_MS = Number(process.env.MCP_MEMORY_IDLE_AFTER_MS ?? 10 * 60 * 1000);
 const DEFAULT_MAX_PER_SWEEP = Number(process.env.MCP_MEMORY_SWEEP_MAX_SESSIONS ?? 2);
-/** Spans shorter than this aren't worth an LLM pass — mark them covered. */
 const MIN_SPAN_MESSAGES = 4;
 const STEP_TIMEOUT_MS = 60_000;
-/** Give up on a span after this many failed passes (poison-pill guard). */
 const MAX_DISTILL_ATTEMPTS = 3;
+
+interface MemorySweepCandidate {
+  session_id: SessionId;
+  project_id: number;
+  provider: string;
+  model: string;
+  distilled_mark: number;
+  attempts: number;
+  updated_at_ms: number;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value != null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function nonNegativeInteger(value: unknown): number {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? value as number
+    : 0;
+}
 
 export function memorySweeperEnabled(): boolean {
   const raw = process.env.MCP_MEMORY_SWEEPER;
   if (raw == null || raw === '') return true;
-  const v = raw.toLowerCase();
-  return v !== '0' && v !== 'false' && v !== 'off';
+  const value = raw.toLowerCase();
+  return value !== '0' && value !== 'false' && value !== 'off';
 }
 
 export interface MemorySweeperHandle {
   stop(): void;
-  /** One-shot sweep for tests; returns sessions distilled this pass. */
   runOnce(): Promise<number>;
   readonly intervalMs: number;
   readonly idleAfterMs: number;
 }
 
 export interface StartMemorySweeperArgs {
-  sessionStore: SessionStore;
+  sessionStore: MemorySweeperSessionStore;
   db: CodeIndexDB;
   runEndMemory: RunEndMemory;
   agentMemoryService?: AgentMemoryService;
   intervalMs?: number;
   idleAfterMs?: number;
   maxPerSweep?: number;
-  /** Test seam — replaces the real provider factory. */
   providerFactory?: typeof createCoderProvider;
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+export interface MemorySweeperSessionStore {
+  refresh(): Promise<void>;
+  readonly catalog: Pick<SessionCatalog, 'list'>;
+  readonly repository: Pick<FileSessionRepository, 'readStateSync'>;
+  maxMessageSeq(sessionId: SessionId): Promise<number>;
+  listMessagesAfter(
+    sessionId: SessionId,
+    afterSeq: number,
+  ): Promise<{
+    messages: Parameters<typeof summarizeSpanV2>[0];
+    maxSeq: number;
+  }>;
+  getCommandTrail(
+    sessionId: SessionId,
+  ): Promise<Array<{ command: string; isError: boolean }>>;
+  didRunSucceed(sessionId: SessionId): Promise<boolean>;
+  listSessionMemory(sessionId: SessionId): Promise<Array<{
+    title: string;
+    body: string;
+    kind: string;
+    pinned: boolean;
+  }>>;
+  setMemoryDistilledBoundary(
+    sessionId: SessionId,
+    seq: number,
+  ): Promise<void>;
+  resetMemoryDistillAttempts(sessionId: SessionId): Promise<void>;
+  bumpMemoryDistillAttempts(sessionId: SessionId): Promise<void>;
+  appendSessionEvent(
+    sessionId: SessionId,
+    type: string,
+    payload: unknown,
+    operationId?: string,
+  ): Promise<unknown>;
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
   return Promise.race([
-    p,
+    promise,
     new Promise<undefined>((resolve) => {
-      const t = setTimeout(() => resolve(undefined), ms);
-      (t as { unref?: () => void }).unref?.();
+      const timer = setTimeout(() => resolve(undefined), ms);
+      timer.unref?.();
     }),
   ]);
 }
@@ -81,82 +127,170 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
   let stopped = false;
   let inFlight = false;
 
-  /**
-   * Production supplies AgentMemoryService's shared fail-fast SQLite queue.
-   * The direct fallback keeps lightweight/test compositions compatible.
-   */
   const runRelationalWrite = async <T>(operation: () => T): Promise<T> =>
     agentMemoryService
       ? agentMemoryService.runRelationalWrite(operation)
       : operation();
 
-  /** Advance the mark and clear the failure streak — the span is settled. */
-  const settleSpan = async (sessionId: number, maxId: number): Promise<void> => {
-    try {
-      await runRelationalWrite(() => db.transaction(() => {
-        sessionStore.setMemoryDistilledBoundary(sessionId, maxId);
-        sessionStore.resetMemoryDistillAttempts(sessionId);
-      }));
-    } catch { /* best-effort */ }
-  };
-  /** Record one more failed pass — mark stays put so the span retries. */
-  const recordFailure = async (
-    cand: { session_id: number; project_id: number }, detail: string, msg: string,
+  const appendDistillEvent = async (
+    candidate: Pick<MemorySweepCandidate, 'session_id' | 'project_id'>,
+    status: 'error' | 'skipped',
+    detail: string,
+    error?: string,
   ): Promise<void> => {
-    try {
-      await runRelationalWrite(() => db.transaction(() => {
-        sessionStore.bumpMemoryDistillAttempts(cand.session_id);
-        db.insertMemoryDistillLog(cand.project_id, {
-          sessionId: cand.session_id, trigger: 'idle', status: 'error', detail, error: msg,
-        });
-      }));
-    } catch { /* diagnostics are best-effort */ }
+    await sessionStore.appendSessionEvent(
+      candidate.session_id,
+      'memory_distill',
+      {
+        trigger: 'idle',
+        status,
+        detail,
+        project_id: candidate.project_id,
+        error: error ?? null,
+        at: new Date().toISOString(),
+      },
+    );
   };
 
-  const sweepSession = async (cand: {
-    session_id: number; project_id: number; provider: string; model: string;
-    distilled_mark: number; attempts: number;
-  }): Promise<boolean> => {
-    const span = sessionStore.listMessagesAfter(cand.session_id, cand.distilled_mark);
-    if (span.messages.length === 0) return false;
-    if (cand.attempts >= MAX_DISTILL_ATTEMPTS) {
-      // Poison-pill guard: give up on this span so it can't wedge every sweep.
-      await settleSpan(cand.session_id, span.maxId);
+  const settleSpan = async (
+    sessionId: SessionId,
+    maxSeq: number,
+  ): Promise<void> => {
+    try {
+      await sessionStore.setMemoryDistilledBoundary(sessionId, maxSeq);
+      await sessionStore.resetMemoryDistillAttempts(sessionId);
+    } catch {
+      // The next sweep retries. Each state.json mutation is itself atomic.
+    }
+  };
+
+  const recordFailure = async (
+    candidate: MemorySweepCandidate,
+    detail: string,
+    message: string,
+  ): Promise<void> => {
+    try {
+      await sessionStore.bumpMemoryDistillAttempts(candidate.session_id);
+      await appendDistillEvent(candidate, 'error', detail, message);
+    } catch {
+      // Diagnostics must not abort the project-memory sweep.
+    }
+  };
+
+  const listCandidates = async (): Promise<MemorySweepCandidate[]> => {
+    await sessionStore.refresh();
+    const now = Date.now();
+    const candidates: MemorySweepCandidate[] = [];
+    for (const entry of sessionStore.catalog.list()) {
+      const state = entry.state
+        ?? sessionStore.repository.readStateSync(entry.location);
+      const projectId = entry.session.owner_project_id;
+      if (state.status !== 'idle' || projectId == null) continue;
       try {
-        await runRelationalWrite(() => {
-          db.insertMemoryDistillLog(cand.project_id, {
-            sessionId: cand.session_id, trigger: 'idle', status: 'skipped', detail: 'retry_cap',
-            error: `gave up after ${cand.attempts} failed distill attempts`,
-          });
-        });
-      } catch { /* diagnostics are best-effort */ }
+        if (!db.getProjectMemoryEnabled(projectId)) continue;
+      } catch {
+        continue;
+      }
+
+      const runtime = record(state.extra.runtime);
+      const attempts = nonNegativeInteger(runtime.memory_distill_attempts);
+      const updatedAtMs = Math.max(
+        Date.parse(entry.session.updated_at),
+        Date.parse(state.updated_at),
+      );
+      if (
+        !Number.isFinite(updatedAtMs)
+        || now - updatedAtMs < idleAfterMs * (1 + attempts)
+      ) {
+        continue;
+      }
+      candidates.push({
+        session_id: entry.session.id,
+        project_id: projectId,
+        provider: entry.session.provider ?? '',
+        model: entry.session.model ?? '',
+        distilled_mark: nonNegativeInteger(runtime.memory_distilled_seq),
+        attempts,
+        updated_at_ms: updatedAtMs,
+      });
+    }
+
+    candidates.sort((left, right) =>
+      left.updated_at_ms - right.updated_at_ms
+      || String(left.session_id).localeCompare(String(right.session_id)));
+    const pending: MemorySweepCandidate[] = [];
+    for (const candidate of candidates) {
+      if (
+        await sessionStore.maxMessageSeq(candidate.session_id)
+        <= candidate.distilled_mark
+      ) {
+        continue;
+      }
+      pending.push(candidate);
+      if (pending.length >= maxPerSweep) break;
+    }
+    return pending;
+  };
+
+  const sweepSession = async (
+    candidate: MemorySweepCandidate,
+  ): Promise<boolean> => {
+    const span = await sessionStore.listMessagesAfter(
+      candidate.session_id,
+      candidate.distilled_mark,
+    );
+    if (span.messages.length === 0) return false;
+    if (candidate.attempts >= MAX_DISTILL_ATTEMPTS) {
+      await settleSpan(candidate.session_id, span.maxSeq);
+      await appendDistillEvent(
+        candidate,
+        'skipped',
+        'retry_cap',
+        `gave up after ${candidate.attempts} failed distill attempts`,
+      ).catch(() => undefined);
       return false;
     }
     if (span.messages.length < MIN_SPAN_MESSAGES) {
-      // Not worth an LLM pass — mark covered so the candidate stops resurfacing.
-      await settleSpan(cand.session_id, span.maxId);
+      await settleSpan(candidate.session_id, span.maxSeq);
       return false;
     }
 
     try {
-      const provider = await makeProvider(cand.provider, cand.model);
-      const summary = await withTimeout(summarizeSpanV2(span.messages, provider), STEP_TIMEOUT_MS);
+      const provider = await makeProvider(candidate.provider, candidate.model);
+      const summary = await withTimeout(
+        summarizeSpanV2(span.messages, provider),
+        STEP_TIMEOUT_MS,
+      );
       if (!summary) {
-        await recordFailure(cand, 'summarizer_timeout', 'summarizer returned no result');
+        await recordFailure(
+          candidate,
+          'summarizer_timeout',
+          'summarizer returned no result',
+        );
         return false;
       }
+      const [trail, succeeded, notes] = await Promise.all([
+        sessionStore.getCommandTrail(candidate.session_id),
+        sessionStore.didRunSucceed(candidate.session_id),
+        sessionStore.listSessionMemory(candidate.session_id),
+      ]);
       const input = buildHarvestInput({
         summary,
-        trail: sessionStore.getCommandTrail(cand.session_id),
-        succeeded: sessionStore.didRunSucceed(cand.session_id),
-        notes: sessionStore.listSessionMemory(cand.session_id),
+        trail,
+        succeeded,
+        notes,
         trigger: 'idle',
-        sessionId: cand.session_id,
+        sessionId: candidate.session_id,
       });
-      const projectName = db.getProject(cand.project_id)?.name ?? '';
-      // extractAndPersist writes its own memory_distill_log entry.
+      const projectName = db.getProject(candidate.project_id)?.name ?? '';
       const persist = () =>
-        Promise.resolve(runEndMemory.extractAndPersist(cand.project_id, projectName, input));
+        Promise.resolve(
+          runEndMemory.extractAndPersist(
+            candidate.project_id,
+            projectName,
+            input,
+          ),
+        );
       const result = await withTimeout(
         agentMemoryService
           ? agentMemoryService.runMutationBatch(persist)
@@ -164,24 +298,27 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
         STEP_TIMEOUT_MS,
       );
       if (result === undefined) {
-        // Timed out mid-extract — run-end never logged; the span retries.
-        await recordFailure(cand, 'extract_timeout', `extract exceeded ${STEP_TIMEOUT_MS}ms`);
+        await recordFailure(
+          candidate,
+          'extract_timeout',
+          `extract exceeded ${STEP_TIMEOUT_MS}ms`,
+        );
         return false;
       }
-      if (result && result.hadError) {
-        // run-end already logged the error row with its diag — just keep the span.
-        try {
-          await runRelationalWrite(() =>
-            sessionStore.bumpMemoryDistillAttempts(cand.session_id));
-        } catch { /* best-effort */ }
+      if (result?.hadError) {
+        await sessionStore.bumpMemoryDistillAttempts(candidate.session_id)
+          .catch(() => undefined);
         return false;
       }
-      await settleSpan(cand.session_id, span.maxId);
+      await settleSpan(candidate.session_id, span.maxSeq);
       return true;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      console.warn(`[memory/sweeper] session ${cand.session_id} failed: ${msg}`);
-      await recordFailure(cand, 'sweep_error', msg);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[memory/sweeper] session ${candidate.session_id} failed: ${message}`,
+      );
+      await recordFailure(candidate, 'sweep_error', message);
       return false;
     }
   };
@@ -190,42 +327,46 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
     if (stopped || inFlight) return 0;
     inFlight = true;
     try {
-      const candidates = sessionStore.listMemoryDistillPending(
-        Math.floor(idleAfterMs / 1000), maxPerSweep,
-      );
+      const candidates = await listCandidates();
       if (candidates.length === 0) return 0;
-      if (!(await runEndMemory.isConfigured())) return 0; // logs its own skip reason
+      if (!(await runEndMemory.isConfigured())) return 0;
       let distilled = 0;
-      for (const cand of candidates) {
+      for (const candidate of candidates) {
         if (stopped) break;
-        if (await sweepSession(cand)) distilled++;
+        if (await sweepSession(candidate)) distilled += 1;
       }
       if (distilled > 0) {
-        console.log(`[memory/sweeper] swept — distilled=${distilled}/${candidates.length} idle session(s)`);
+        console.log(
+          `[memory/sweeper] swept — distilled=${distilled}/${candidates.length} idle session(s)`,
+        );
       }
-      // WS8 — background hygiene: collapse exact-duplicate memories (a safety net
-      // on top of write-time dedup) for the projects touched this sweep + the
-      // user scope, and prune the telemetry events table (retention). All
-      // deterministic + best-effort; never wedges a sweep.
+
+      // Project/user memory hygiene remains in the shared durable-memory
+      // catalog. It never reads or writes a session table.
       try {
-        const projects = new Set(candidates.map((c) => c.project_id));
+        const projects = new Set(
+          candidates.map((candidate) => candidate.project_id),
+        );
         let archived = 0;
         let decayed = 0;
-        for (const pid of projects) {
-          if (!db.hasAgentMemoryHygieneCandidates('project', pid)) continue;
+        for (const projectId of projects) {
+          if (!db.hasAgentMemoryHygieneCandidates('project', projectId)) {
+            continue;
+          }
           const hygiene = () => ({
-            consolidated: db.consolidateAgentMemory('project', pid).archived,
-            // Reversible decay of cold, never-accessed, low-importance `note`s
-            // (>60d) — project scope only; user-scope preferences never decay.
-            decayed: db.decayColdAgentMemoryNotes('project', pid),
+            consolidated:
+              db.consolidateAgentMemory('project', projectId).archived,
+            decayed: db.decayColdAgentMemoryNotes('project', projectId),
           });
           const result = agentMemoryService
-            ? await agentMemoryService.runScopeMutationAsync('project', pid, hygiene)
+            ? await agentMemoryService.runScopeMutationAsync(
+                'project',
+                projectId,
+                hygiene,
+              )
             : await runRelationalWrite(() => db.transaction(hygiene));
-          const consolidated = result.consolidated;
-          archived += consolidated;
-          const projectDecayed = result.decayed;
-          decayed += projectDecayed;
+          archived += result.consolidated;
+          decayed += result.decayed;
         }
         const userArchived = db.hasAgentMemoryHygieneCandidates('user', 0)
           ? agentMemoryService
@@ -234,28 +375,40 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
                 0,
                 () => db.consolidateAgentMemory('user', 0).archived,
               )
-            : await runRelationalWrite(() =>
-                db.consolidateAgentMemory('user', 0).archived)
+            : await runRelationalWrite(
+                () => db.consolidateAgentMemory('user', 0).archived,
+              )
           : 0;
         archived += userArchived;
-        const prunedEvents = await runRelationalWrite(() => db.pruneAgentMemoryEvents());
+        const prunedEvents = await runRelationalWrite(
+          () => db.pruneAgentMemoryEvents(),
+        );
         if (archived > 0 || decayed > 0 || prunedEvents > 0) {
-          console.log(`[memory/sweeper] hygiene — archived=${archived} dup memories, decayed=${decayed} cold notes, pruned=${prunedEvents} events`);
+          console.log(
+            `[memory/sweeper] hygiene — archived=${archived} dup memories, ` +
+            `decayed=${decayed} cold notes, pruned=${prunedEvents} events`,
+          );
         }
-      } catch (e) {
-        console.warn(`[memory/sweeper] hygiene failed: ${e instanceof Error ? e.message : String(e)}`);
+      } catch (error) {
+        console.warn(
+          `[memory/sweeper] hygiene failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       return distilled;
-    } catch (e) {
-      console.warn(`[memory/sweeper] sweep failed: ${e instanceof Error ? e.message : String(e)}`);
+    } catch (error) {
+      console.warn(
+        `[memory/sweeper] sweep failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
       return 0;
     } finally {
       inFlight = false;
     }
   };
 
-  const timer = setInterval(() => { void runOnce(); }, intervalMs);
-  if (typeof timer.unref === 'function') timer.unref();
+  const timer = setInterval(() => {
+    void runOnce();
+  }, intervalMs);
+  timer.unref?.();
 
   console.log(
     `[memory/sweeper] started — interval=${Math.round(intervalMs / 1000)}s ` +

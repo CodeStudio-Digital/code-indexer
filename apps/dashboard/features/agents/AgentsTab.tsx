@@ -45,12 +45,12 @@ import { CompanySessionView } from './CompanySessionView.js';
 import type { CompanyCatalogView, CompanySessionWorkbenchSlots } from './company-workbench-slots.js';
 
 interface CompanySession {
-  id: number;
+  id: string;
   name: string;
   status: string;
   template_id: number | null;
   runtime_kind?: 'company' | 'app_studio';
-  app_session_id?: number | null;
+  app_session_id?: string | null;
   created_at: string;
 }
 
@@ -64,7 +64,7 @@ export function AgentsTab() {
   const { data: templates } = useApi<Array<{ id: number }>>('/company/templates');
   // Selected session is URL-driven: the `:rootId` segment of
   // `/company/sessions/:rootId/...`. At `/agents` it's null.
-  const selectedSessionId = routeParams.rootId != null ? Number(routeParams.rootId) : null;
+  const selectedSessionId = routeParams.rootId?.trim() || null;
   const [showNewTemplate, setShowNewTemplate] = useState(false);
   const [showNewCompany, setShowNewCompany] = useState(false);
   const [sidebarView, setSidebarView] = useState<CompanyCatalogView>(() => {
@@ -108,18 +108,18 @@ export function AgentsTab() {
     setAgentsSidebarOpen(true);
   }, [sidebarView]);
 
-  function selectSession(id: number) {
+  function selectSession(id: string) {
     navigate(buildAgentsDefaultUrl(id));
     if (typeof window !== 'undefined' && window.innerWidth < 768) setAgentsSidebarOpen(false);
   }
 
-  async function handleDelete(e: React.MouseEvent, id: number) {
+  async function handleDelete(e: React.MouseEvent, id: string) {
     e.stopPropagation();
     const target = sessions?.find((s) => s.id === id) ?? null;
     if (target) setDeleteTarget(target);
   }
 
-  async function handleDuplicate(e: React.MouseEvent, id: number) {
+  async function handleDuplicate(e: React.MouseEvent, id: string) {
     e.stopPropagation();
     const res = await fetch(`/api/company/sessions/${id}/duplicate`, { method: 'POST' });
     if (!res.ok) return;
@@ -344,7 +344,7 @@ function CompanyHome({
   templateCount: number;
   onCreateCompany: () => void;
   onCreateTemplate: () => void;
-  onOpenSession: (id: number) => void;
+  onOpenSession: (id: string) => void;
 }) {
   const { t } = useTranslation('agents');
   const running = sessions.filter((session) => session.status === 'running').length;

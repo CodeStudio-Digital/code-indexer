@@ -19,6 +19,7 @@ import {
 } from '../pipelines/index.js';
 import { callConfiguredChat } from '../quality/binding-chat.js';
 import { callChatWithFailover } from '../quality/binding-failover.js';
+import type { Awaitable } from './session-snapshot-port.js';
 
 export type IntentObligationKind = 'behavior' | 'file_touch' | 'test' | 'migration' | 'doc';
 
@@ -43,17 +44,21 @@ export interface IntentObligation {
   polarity: IntentObligationPolarity;
 }
 
-/** Cache port (ReviewIntelStore implements it) — kept minimal on purpose. */
+/** Cache port implemented by the session bundle review repository. */
 export interface IntentContractCache {
-  getContract(sessionKind: string, sessionId: number, sourceHash: string): string | null;
+  getContract(
+    sessionKind: string,
+    sessionId: string,
+    sourceHash: string,
+  ): Awaitable<string | null>;
   saveContract(input: {
     session_kind: string;
-    session_id: number;
+    session_id: string;
     source_hash: string;
     obligations_json: string;
     provider_id?: string | null;
     model_id?: string | null;
-  }): void;
+  }): Awaitable<void>;
 }
 
 const PIPELINE_NAME = 'intent_contract';
@@ -130,7 +135,7 @@ export class IntentContractCompiler {
 
   async compile(input: {
     sessionKind: string;
-    sessionId: number;
+    sessionId: string;
     resolveContext: ResolveContext;
     /** Session intent text (buildSessionIntent output). */
     intentSource: string;
@@ -139,7 +144,11 @@ export class IntentContractCompiler {
     if (!source) return null;
     const hash = createHash('md5').update(source).digest('hex');
     try {
-      const cached = this.cache?.getContract(input.sessionKind, input.sessionId, hash);
+      const cached = await this.cache?.getContract(
+        input.sessionKind,
+        input.sessionId,
+        hash,
+      );
       if (cached) return parseObligations(cached);
     } catch {
       /* cache is best-effort */
@@ -164,7 +173,7 @@ export class IntentContractCompiler {
       const obligations = parseObligations(failover.result.content);
       if (obligations.length === 0) return null;
       try {
-        this.cache?.saveContract({
+        await this.cache?.saveContract({
           session_kind: input.sessionKind,
           session_id: input.sessionId,
           source_hash: hash,

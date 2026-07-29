@@ -21,12 +21,14 @@ import type {
   ProviderAttemptTelemetry,
 } from '../adapter.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+
 function request(overrides: Partial<ChatRequest> = {}): ChatRequest {
   return {
     system: 'system',
     messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
     tools: [],
-    sessionId: 42,
+    sessionId: SESSION_ID,
     ...overrides,
   };
 }
@@ -58,7 +60,7 @@ describe('OpenAIChatProvider — OpenRouter cache affinity and attempts', () => 
 
     expect(mocks.constructorOptions.at(-1)).toMatchObject({ maxRetries: 0 });
     expect(mocks.create.mock.calls[0]?.[0]).toMatchObject({
-      session_id: 'coder-session-42',
+      session_id: `coder-session-${SESSION_ID}`,
     });
     expect(mocks.create.mock.calls[0]?.[0]).not.toHaveProperty('prompt_cache_key');
   });
@@ -77,7 +79,7 @@ describe('OpenAIChatProvider — OpenRouter cache affinity and attempts', () => 
 
     expect(mocks.constructorOptions.at(-1)).toMatchObject({ maxRetries: 0 });
     expect(mocks.create.mock.calls[0]?.[0]).toMatchObject({
-      prompt_cache_key: 'coder-session-42',
+      prompt_cache_key: `coder-session-${SESSION_ID}`,
     });
     expect(mocks.create.mock.calls[0]?.[0]).not.toHaveProperty('session_id');
   });

@@ -20,11 +20,34 @@ export interface ElectronProfiler {
 }
 
 let impl: ElectronProfiler | null = null;
+let tracingCache = false;
 
 export function setElectronProfiler(p: ElectronProfiler | null): void {
   impl = p;
+  if (!p) tracingCache = false;
 }
 
 export function getElectronProfiler(): ElectronProfiler | null {
   return impl;
+}
+
+/**
+ * Push the tracing flag in from the owning process.
+ *
+ * `isTracing()` is the one SYNCHRONOUS method on this interface. Every other
+ * method returns a promise, so an out-of-process implementation can forward
+ * them over an RPC bridge — but a sync getter cannot be satisfied by an RPC.
+ * Rather than widen the signature (which would ripple into every caller for
+ * the sake of one boolean), the owner pushes the value on change and a
+ * forwarding shim answers `isTracing()` from this cache.
+ *
+ * No-op for the in-process host, where `impl.isTracing()` is already the truth.
+ */
+export function setElectronTracingFlag(tracing: boolean): void {
+  tracingCache = tracing;
+}
+
+/** Last value pushed via `setElectronTracingFlag`. For forwarding shims only. */
+export function getCachedElectronTracingFlag(): boolean {
+  return tracingCache;
 }

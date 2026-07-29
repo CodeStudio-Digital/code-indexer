@@ -14,10 +14,10 @@
  * Phase 5 of the coder hardening plan.
  */
 
-const sessionLocks = new Map<number, Promise<unknown>>();
+const sessionLocks = new Map<string, Promise<unknown>>();
 
 export async function withSessionLock<T>(
-  id: number,
+  id: string,
   fn: () => Promise<T>,
 ): Promise<T> {
   const prev = sessionLocks.get(id) ?? Promise.resolve();

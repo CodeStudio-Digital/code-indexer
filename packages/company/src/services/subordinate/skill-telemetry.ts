@@ -1,14 +1,12 @@
 /**
  * Skill telemetry — when a subordinate finishes (success/failure/abort),
- * log one `skill_usage_log` row per skill that was active during its
- * run. Powers the dashboard's `/api/admin/skills/:id/health` endpoint
- * (success_rate + per-skill error_code histogram).
+ * append one bundle-local event per skill that was active during its run.
+ * Global dashboards aggregate these immutable session events in memory.
  *
  * Best-effort: every failure path here is silenced. Observability must
  * never load-bear the completion handler.
  */
-import { SkillStore } from '@mcp/store/skill-store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 
 export type SkillOutcome = 'success' | 'failed' | 'aborted';
 
@@ -21,42 +19,37 @@ export type SkillOutcome = 'success' | 'failed' | 'aborted';
  * `semantic.X` — the codes the validation tools emit. Anything else
  * leaves `error_code` null.
  */
-export function logSkillOutcome(
-  sessionId: number,
-  agentRunId: number,
+export async function logSkillOutcome(
+  sessionStore: FsSessionStore,
+  sessionId: string,
+  agentRunId: string,
   outcome: SkillOutcome,
   errorMessage?: string,
-): void {
+): Promise<void> {
   try {
-    const config = loadConfig();
-    const skillStore = new SkillStore(config.dbPath);
-    try {
-      const overrides = skillStore.getSessionSkillConfig(sessionId);
-      const enabledIds = Array.from(overrides.entries())
-        .filter(([, enabled]) => enabled)
-        .map(([id]) => id);
-      if (enabledIds.length === 0) return;
+    const session = await sessionStore.getSession(sessionId);
+    const configured = session?.state.tools.active_skills;
+    const enabledIds = Array.isArray(configured)
+      ? configured.filter((id): id is string => typeof id === 'string')
+      : [];
+    if (enabledIds.length === 0) return;
 
-      let errorCode: string | undefined;
-      if (errorMessage) {
-        const match = /\b(vocab\.\w+|props\.\w+|css\.\w+|schema\.\w+|stories\.\w+|audit\.\w+|semantic\.\w+)\b/.exec(
-          errorMessage,
-        );
-        if (match) errorCode = match[1];
-      }
+    let errorCode: string | undefined;
+    if (errorMessage) {
+      const match = /\b(vocab\.\w+|props\.\w+|css\.\w+|schema\.\w+|stories\.\w+|audit\.\w+|semantic\.\w+)\b/.exec(
+        errorMessage,
+      );
+      if (match) errorCode = match[1];
+    }
 
-      for (const skillId of enabledIds) {
-        skillStore.logSkillUsage({
-          session_id: sessionId,
-          skill_id: skillId,
-          invoked_by: 'system',
-          outcome,
-          error_code: errorCode,
-          agent_run_id: agentRunId,
-        });
-      }
-    } finally {
-      skillStore.close();
+    for (const skillId of enabledIds) {
+      await sessionStore.appendSessionEvent(sessionId, 'skill_usage', {
+        skill_id: skillId,
+        invoked_by: 'system',
+        outcome,
+        error_code: errorCode ?? null,
+        agent_run_id: agentRunId,
+      });
     }
   } catch (e) {
     console.warn(

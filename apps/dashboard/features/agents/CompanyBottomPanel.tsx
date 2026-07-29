@@ -13,7 +13,7 @@ const CompanyRunnersTab = lazy(() =>
 export type CompanyBottomTab = 'terminal' | 'runners';
 
 interface CompanyBottomPanelProps {
-  companySessionId: number;
+  companySessionId: string;
   projects: SessionProject[];
   hasSandbox: boolean;
   activeTab: CompanyBottomTab;

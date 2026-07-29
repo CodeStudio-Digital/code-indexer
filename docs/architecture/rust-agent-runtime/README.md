@@ -1,8 +1,8 @@
 # Rust Agent Runtime — especificação normativa
 
 > **Status:** especificação final para implementação  
-> **Versão:** 1.0.0  
-> **Data-base:** 2026-07-24  
+> **Versão:** 1.5.0
+> **Data-base:** 2026-07-29
 > **Autoridade:** este diretório governa o novo runtime de agentes em Rust  
 > **Checklist executiva:** [IMPLEMENTATION-CHECKLIST.md](./IMPLEMENTATION-CHECKLIST.md)
 
@@ -31,7 +31,8 @@ O resultado pretendido é:
 | Fault/resource domain | Limite por attempt e orçamento agregado por run-tree |
 | Processo permanente | `agentd-supervisor`, sem transcript nem grafo de agente |
 | Control plane | TypeScript |
-| Escritor do SQLite central | Host TypeScript, único escritor |
+| Persistência de sessão | Rust `agent-session-store`: bundle filesystem single-writer por sessão |
+| SQLite não relacionado a sessão | Permanece fora do runtime Rust e com seus owners atuais |
 | Providers na primeira entrega | Provider Gateway TypeScript |
 | Tools nativas iniciais | filesystem, search, patch, Git, processo e HTTP |
 | `code_exec` | subprocesso descartável e limitado; nunca embutido no daemon |
@@ -39,6 +40,7 @@ O resultado pretendido é:
 | Estado grande | spool/checkpoint content-addressed fora do heap |
 | Rollout | replay/shadow, canário por run e fallback controlado |
 | Runtime legado | oracle temporário e fallback; sem programa de remendos |
+| Indexador e RAG docs | Trilho paralelo `indexd` em Rust, gated por benchmark (doc 09) |
 
 ## 3. Linguagem normativa
 
@@ -58,6 +60,8 @@ prova executada não conclui um item.
 | Documento | Conteúdo normativo |
 |---|---|
 | [DECISIONS.md](./DECISIONS.md) | Registro curto das decisões vinculantes e seu status |
+| [ADR-001-rust-session-filesystem-authority.md](./ADR-001-rust-session-filesystem-authority.md) | Rust como writer físico dos bundles de sessão |
+| [ADR-002-native-host-bridge.md](./ADR-002-native-host-bridge.md) | Núcleo Rust e wrapper Node-API do owner físico Host |
 | [00-scope-decisions.md](./00-scope-decisions.md) | Escopo, termos, ownership, decisões e não objetivos |
 | [01-runtime-supervisor-and-isolation.md](./01-runtime-supervisor-and-isolation.md) | Topologia de processos, lifecycle, budgets, reaper e isolamento por SO |
 | [02-host-agentd-protocol.md](./02-host-agentd-protocol.md) | IDL, transporte, mensagens, sequencing, cancelamento e compatibilidade |
@@ -66,6 +70,8 @@ prova executada não conclui um item.
 | [05-durability-events-and-observability.md](./05-durability-events-and-observability.md) | Checkpoints, spool, journal, replay, métricas, privacidade e recovery |
 | [06-rollout-gates-and-retirement.md](./06-rollout-gates-and-retirement.md) | Fases, benchmarks, canário, rollback e retirada do legado |
 | [07-risks-and-failure-modes.md](./07-risks-and-failure-modes.md) | Registro de riscos e respostas obrigatórias |
+| [08-surface-migration-and-post-cutover-cleanup.md](./08-surface-migration-and-post-cutover-cleanup.md) | Migração por superfície, compatibilidade, drain e limpeza pós-cutover |
+| [09-native-indexer-and-docs-rag.md](./09-native-indexer-and-docs-rag.md) | Indexador nativo (`indexd`): código, embeddings locais e RAG de documentos |
 | [IMPLEMENTATION-CHECKLIST.md](./IMPLEMENTATION-CHECKLIST.md) | Controle de execução e definição de conclusão |
 
 ## 5. Ordem de precedência
@@ -125,20 +131,49 @@ native/agent-runtime/
     agent-engine/
     agent-tools/
     agent-spool/
+    agent-session-bridge/
+    agent-session-store/
     agent-platform/
 
+native/index-runtime/
+  Cargo.toml
+  crates/
+    indexd/
+    index-core/
+    index-embed/
+    index-protocol/
+
 packages/agent-runtime-contracts/
-  proto/agent_runtime/v1/
+  proto/codestudio/agent/v1/
+  proto/codestudio/index/v1/
   src/generated/v1/
   src/adapters/
+
+packages/agent-runtime-host/
+  src/facade/
+  src/router/
+  src/adapters/
+  src/provider-gateway/
+  src/tool-host/
+  src/projectors/
+
+packages/agent-prompts/
+  src/
+  assets/
 ```
 
 Regras:
 
-- `proto/agent_runtime/v1` é a única fonte cross-language.
+- `proto/codestudio/agent/v1` é a única fonte cross-language.
 - Rust e TypeScript gerados não são editados manualmente.
 - adapters traduzem domínio local para tipos de wire.
-- supervisor não depende de provider, plugin, SQLite ou UI.
+- entry points de produto dependem de `agent-runtime-host`, não do runner.
+- prompts e assets compartilhados não pertencem ao package legado.
+- supervisor não depende de provider, plugin, storage de sessão, SQLite ou UI.
+- `agent-session-store` não depende de engine, runner, provider ou UI.
+- `agent-session-bridge` depende somente de protocolo/store, recebe roots apenas
+  no bootstrap Rust e nunca aceita path ou extension fornecido por TypeScript.
+- runners nunca recebem paths de bundle; commits passam por ports/IDL.
 - engine não importa bindings de Windows/Linux/macOS diretamente.
 - enforcement de plataforma pertence a `agent-platform`.
 
@@ -149,7 +184,7 @@ flowchart LR
     A["Spec e baseline"] --> B["IDL e supervisor"]
     B --> C["Runner mínimo e provider host"]
     C --> D["Tools nativas e policy"]
-    D --> E["Subagentes, checkpoint e spool"]
+    D --> E["Session store, subagentes, checkpoint e spool"]
     E --> F["Shadow e chaos"]
     F --> G["Canário"]
     G --> H["Default Rust"]
@@ -176,6 +211,13 @@ O programa só termina quando:
   duplicada;
 - processos, Jobs/resource groups, pipes e spools forem liberados após cada
   tentativa;
+- bundles `rust_fs_v1`, journal, métricas, artifacts e checkpoints possuírem
+  writer Rust único, recovery e quotas comprovados;
 - compatibilidade de provider, tools, approvals, subagentes, Company Mode,
   plugins, MCP, memória e `code_exec` estiver comprovada;
-- o runtime legado puder ser removido sem manter dual-write ou dual-execution.
+- o runtime legado puder ser removido sem manter dual-write ou dual-execution;
+- todas as superfícies A01–A20 tiverem passado pela fachada e pelo gate próprio;
+- o grafo externo de `packages/code-agent` estiver zerado e a build instalada
+  não contiver executor, worker ou launcher legado;
+- histórico e dados de produto permanecerem legíveis, com bridges/schema
+  classificados para contração separada e segura.

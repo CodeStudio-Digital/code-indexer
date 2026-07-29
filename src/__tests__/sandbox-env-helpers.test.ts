@@ -9,6 +9,8 @@ import {
 import { mcpDataDir } from '@mcp/shared/utils/config.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+
 // ─── parseDotEnv ────────────────────────────────────────────────
 
 describe('parseDotEnv', () => {
@@ -137,16 +139,16 @@ describe('resolveHostWorkdirMount', () => {
   it('returns a path under <mcpDataDir>/virtual-projects by default', () => {
     delete process.env.MCP_SANDBOX_BIND_MOUNT;
     delete process.env.MCP_SANDBOX_WORKDIR_HOST_DIR;
-    const out = resolveHostWorkdirMount('42');
+    const out = resolveHostWorkdirMount(SESSION_ID);
     expect(out).not.toBeNull();
     // No longer under the project-root `data/` — lives in the user data dir.
     expect(out!.startsWith(mcpDataDir())).toBe(true);
-    expect(out!.replace(/\\/g, '/')).toMatch(/virtual-projects\/42$/);
+    expect(out!.replace(/\\/g, '/')).toMatch(new RegExp(`virtual-projects/${SESSION_ID}$`));
   });
 
   it('returns null when MCP_SANDBOX_BIND_MOUNT=0', () => {
     process.env.MCP_SANDBOX_BIND_MOUNT = '0';
-    expect(resolveHostWorkdirMount('42')).toBeNull();
+    expect(resolveHostWorkdirMount(SESSION_ID)).toBeNull();
   });
 
   it('honours MCP_SANDBOX_WORKDIR_HOST_DIR override', () => {
@@ -154,8 +156,13 @@ describe('resolveHostWorkdirMount', () => {
     // Override is resolved to an absolute path (bind-mounts must be absolute).
     const override = process.platform === 'win32' ? 'D:\\custom\\sandbox-roots' : '/custom/sandbox-roots';
     process.env.MCP_SANDBOX_WORKDIR_HOST_DIR = override;
-    const out = resolveHostWorkdirMount('42');
-    expect(out).toBe(join(resolve(override), '42'));
+    const out = resolveHostWorkdirMount(SESSION_ID);
+    expect(out).toBe(join(resolve(override), SESSION_ID));
+  });
+
+  it('rejects a legacy numeric session id', () => {
+    delete process.env.MCP_SANDBOX_BIND_MOUNT;
+    expect(() => resolveHostWorkdirMount(42 as unknown as string)).toThrow(/canonical UUID/);
   });
 });
 
@@ -163,22 +170,14 @@ describe('resolveHostWorkdirMount', () => {
 
 describe('resolveSessionEnvs', () => {
   it('returns empty record when store is null', () => {
-    expect(resolveSessionEnvs(null, '42')).toEqual({});
+    expect(resolveSessionEnvs(null, SESSION_ID)).toEqual({});
   });
 
-  it('returns empty record when sessionId is not numeric', () => {
-    const store = {
-      asRecord: vi.fn().mockReturnValue({ FOO: 'bar' }),
-    } as unknown as CompanySessionEnvStore;
-    expect(resolveSessionEnvs(store, 'not-a-number')).toEqual({});
-    expect((store.asRecord as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
-  });
-
-  it('calls asRecord with the parsed numeric id', () => {
+  it('passes the opaque session UUID to the store unchanged', () => {
     const asRecord = vi.fn().mockReturnValue({ FOO: 'bar' });
     const store = { asRecord } as unknown as CompanySessionEnvStore;
-    expect(resolveSessionEnvs(store, '42')).toEqual({ FOO: 'bar' });
-    expect(asRecord).toHaveBeenCalledWith(42);
+    expect(resolveSessionEnvs(store, SESSION_ID)).toEqual({ FOO: 'bar' });
+    expect(asRecord).toHaveBeenCalledWith(SESSION_ID);
   });
 
   it('returns empty record when asRecord throws', () => {
@@ -187,6 +186,6 @@ describe('resolveSessionEnvs', () => {
         throw new Error('db unreachable');
       }),
     } as unknown as CompanySessionEnvStore;
-    expect(resolveSessionEnvs(store, '42')).toEqual({});
+    expect(resolveSessionEnvs(store, SESSION_ID)).toEqual({});
   });
 });

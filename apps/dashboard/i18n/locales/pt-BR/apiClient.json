@@ -310,12 +310,22 @@
     "tabBody": "Corpo",
     "tabCookies": "Cookies",
     "tabHeaders": "Cabeçalhos",
+    "tabJsonPath": "JSONPath",
     "tabTestResults": "Resultados dos Testes",
     "tabTiming": "Tempo",
     "verified": "Verificado"
   },
   "responseHeaders": {
     "copyAll": "Copiar tudo"
+  },
+  "jsonPath": {
+    "expressionAria": "Expressão JSONPath",
+    "label": "JSONPath",
+    "matchCount_one": "{{count}} correspondência",
+    "matchCount_other": "{{count}} correspondências",
+    "noMatches": "Nenhuma correspondência.",
+    "notJson": "O corpo da resposta não é JSON.",
+    "placeholder": "$.store.book[*].title"
   },
   "row": {
     "delete": "Excluir",

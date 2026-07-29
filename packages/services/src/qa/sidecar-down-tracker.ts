@@ -18,22 +18,22 @@
 
 export const SIDECAR_DOWN_THRESHOLD = 2;
 
-const counters = new Map<number, number>();
+const counters = new Map<string, number>();
 
 /** Record one sidecar-down failure; returns the consecutive count. */
-export function trackSidecarFailure(runId: number): number {
+export function trackSidecarFailure(runId: string): number {
   const next = (counters.get(runId) ?? 0) + 1;
   counters.set(runId, next);
   return next;
 }
 
 /** Reset the streak (a non-sidecar event arrived) without forgetting the run. */
-export function resetSidecarTracker(runId: number): void {
+export function resetSidecarTracker(runId: string): void {
   if (counters.has(runId)) counters.set(runId, 0);
 }
 
 /** Drop the run entirely (run completed / early-terminated). */
-export function clearSidecarTracker(runId: number): void {
+export function clearSidecarTracker(runId: string): void {
   counters.delete(runId);
 }
 

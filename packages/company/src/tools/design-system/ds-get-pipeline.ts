@@ -34,7 +34,7 @@ export function dsGetPipeline(binding: DsToolBinding): CoderTool {
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_get_pipeline: DesignSystemStore not wired.');
-        const session = binding.resolveDsSession(store);
+        const session = await binding.resolveDsSession(store);
         if (!session) return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
         const state = parsePipelineState(session.pipeline_json);
         if (!state) {
@@ -44,7 +44,7 @@ export function dsGetPipeline(binding: DsToolBinding): CoderTool {
           );
         }
 
-        const recorded = collectRecordedComponents(store, session.id);
+        const recorded = await collectRecordedComponents(store, session.id);
         const current = currentStage(state);
         const lines: string[] = [`Mode: ${session.mode}`, ''];
         for (const stage of state.stages) {

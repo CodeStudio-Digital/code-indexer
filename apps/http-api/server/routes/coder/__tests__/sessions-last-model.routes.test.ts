@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
@@ -12,15 +13,17 @@ vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
   }),
 }));
 
+const SESSION_ID = asSessionId('99999999-9999-4999-8999-999999999999');
+
 function setup(lastProviderEnabled = true) {
   const createSession = vi.fn((input: Record<string, unknown>) => ({
-    id: 41,
+    id: SESSION_ID,
     ...input,
   }));
   const sessionStore = {
     getLastUsedProviderModel: () => ({ provider: 'zai', model: 'glm-5.2' }),
     createSession,
-    getSession: (id: number) => id === 41 ? createSession.mock.results.at(-1)?.value : null,
+    getSession: (id: SessionId) => id === SESSION_ID ? createSession.mock.results.at(-1)?.value : null,
     listRecentSessionsGlobal: () => [],
     setSessionExecutionMode: vi.fn(),
     setSessionReasoningEffort: vi.fn(),

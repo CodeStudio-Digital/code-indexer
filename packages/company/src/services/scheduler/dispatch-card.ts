@@ -19,6 +19,7 @@
  * kanban_* events (assign/move/comment) already narrate them.
  */
 import type { KanbanCardFull } from '@mcp/company/types.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 import type { CompanyRecommendFn } from './recommend-shim.js';
 import type { SchedulerSpawn } from './CompanyScheduler.js';
 
@@ -27,19 +28,19 @@ const ROLE_HINT_RE = /\[role-hint:\s*@([A-Za-z0-9_-]+)\s*\]/;
 
 /** Minimal kanban surface dispatchCard needs (KanbanService satisfies it). */
 export interface DispatchCardKanban {
-  getCard(cardId: number): KanbanCardFull | null;
-  assignAgent(cardId: number, agentRunId: number, role: string): unknown;
-  moveCard(cardId: number, column: 'in_progress'): unknown;
+  getCard(cardId: string): KanbanCardFull | null;
+  assignAgent(cardId: string, agentRunId: string, role: string): unknown;
+  moveCard(cardId: string, column: 'in_progress'): unknown;
   addComment(
-    cardId: number,
+    cardId: string,
     authorRole: string,
-    agentRunId: number | null,
+    agentRunId: string | null,
     content: string,
   ): unknown;
 }
 
 export interface DispatchCardDeps {
-  sessionId: number;
+  sessionId: CompanySessionId;
   kanban: DispatchCardKanban;
   subordinates: SchedulerSpawn;
   /** Null tolerated: without a recommender an un-hinted card is skipped. */
@@ -63,9 +64,9 @@ export type DispatchSkipReason =
 
 export interface DispatchCardResult {
   ok: boolean;
-  cardId: number;
+  cardId: string;
   role?: string;
-  agentRunId?: number;
+  agentRunId?: string;
   reason?: DispatchSkipReason;
   error?: string;
 }
@@ -88,7 +89,7 @@ export function extractRoleHint(
 /** Dispatch one card. Never throws — every failure maps to a skip result. */
 export async function dispatchCard(
   deps: DispatchCardDeps,
-  cardId: number,
+  cardId: string,
   opts: DispatchCardOpts = {},
 ): Promise<DispatchCardResult> {
   const source = opts.source ?? 'scheduler';

@@ -21,7 +21,7 @@ export interface DsStudioCreateInput {
 export interface DsStudioCreated {
   project: { id: number; name: string; root_path: string };
   ds_session: DesignSystemSession;
-  coder_session_id: number;
+  coder_session_id: string;
 }
 
 export interface DsStudioProgressHandlers {

@@ -25,7 +25,7 @@
  */
 
 export interface SubordinateCompletionEvent {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   /** 'completed' for clean done; 'failed' for any non-completed reason. */
   outcome: 'completed' | 'failed';
@@ -44,7 +44,7 @@ export interface SubordinateCompletionEvent {
   /** Wall-clock duration in ms from spawn → completion. */
   durationMs?: number;
   /** Kanban card id when the subordinate owned one. */
-  kanbanCardId?: number | null;
+  kanbanCardId?: string | null;
   /** Wall-clock ms when the event fired. */
   emittedAtMs: number;
 }

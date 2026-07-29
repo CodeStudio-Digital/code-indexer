@@ -12,7 +12,7 @@
  * hazard.
  */
 import { create } from 'zustand';
-import type { WorkerLogEntry } from './types.js';
+import type { SessionId, WorkerLogEntry } from './types.js';
 import { MAX_SESSIONS } from './prune-sessions.js';
 
 /** LIFO cap per session — mirrors the old `SessionState.eventLog` bound. */
@@ -22,8 +22,8 @@ const EMPTY: readonly WorkerLogEntry[] = [];
 interface WorkerLogStore {
   /** Per-session committed entries. A new array reference per sid on change
    *  drives selector re-renders only for that session's subscriber. */
-  slots: Map<number, readonly WorkerLogEntry[]>;
-  _set: (slots: Map<number, readonly WorkerLogEntry[]>) => void;
+  slots: Map<SessionId, readonly WorkerLogEntry[]>;
+  _set: (slots: Map<SessionId, readonly WorkerLogEntry[]>) => void;
 }
 
 const useWorkerLogStore = create<WorkerLogStore>((set) => ({
@@ -32,10 +32,10 @@ const useWorkerLogStore = create<WorkerLogStore>((set) => ({
 }));
 
 // --- Writer-side coalescing (module-level, not React state) ----------------
-const pending = new Map<number, WorkerLogEntry[]>();
+const pending = new Map<SessionId, WorkerLogEntry[]>();
 // Monotonic touch counter for LRU eviction of idle slots.
 let touchSeq = 0;
-const touched = new Map<number, number>();
+const touched = new Map<SessionId, number>();
 
 // --- Per-sid seq dedup (module-level, survives remounts) -------------------
 // The SSE layer can legitimately re-deliver events the panel already has:
@@ -45,10 +45,10 @@ const touched = new Map<number, number>();
 // high-water mark would drop a new run's events — the mark is paired with
 // the bus id announced by the server's `bus_info` preamble and reset when
 // the bus changes.
-const dedup = new Map<number, { busKey: string | null; hwm: number }>();
+const dedup = new Map<SessionId, { busKey: string | null; hwm: number }>();
 
 /** Record which bus is serving `sid`. Returns true when it changed (hwm reset). */
-export function noteWorkerLogBus(sid: number, busKey: string): boolean {
+export function noteWorkerLogBus(sid: SessionId, busKey: string): boolean {
   const d = dedup.get(sid);
   if (d && d.busKey === busKey) return false;
   dedup.set(sid, { busKey, hwm: -1 });
@@ -79,7 +79,7 @@ function commitPending(): void {
 
 /** Bound the store independently of React: keep the most-recently-touched
  *  `MAX_SESSIONS` slots so a long work session opening many chats can't leak. */
-function evictIdle(slots: Map<number, readonly WorkerLogEntry[]>): void {
+function evictIdle(slots: Map<SessionId, readonly WorkerLogEntry[]>): void {
   if (slots.size <= MAX_SESSIONS) return;
   const byAge = [...slots.keys()].sort((a, b) => (touched.get(a) ?? 0) - (touched.get(b) ?? 0));
   for (const sid of byAge.slice(0, slots.size - MAX_SESSIONS)) {
@@ -106,7 +106,7 @@ function schedule(): void {
  *  `seq` is the SSE event id (bus seq); duplicates at or below the current
  *  high-water mark for the sid's bus are dropped. Entries without a seq are
  *  always accepted. */
-export function pushWorkerLog(sid: number, entry: WorkerLogEntry, seq?: number): void {
+export function pushWorkerLog(sid: SessionId, entry: WorkerLogEntry, seq?: number): void {
   if (seq !== undefined) {
     const d = dedup.get(sid);
     if (d) {
@@ -140,11 +140,11 @@ export function __resetWorkerLogForTests(): void {
 
 /** Subscribe to one session's entries. Only re-renders this subscriber when
  *  that session's array changes (coalesced ~1/frame). */
-export function useWorkerLog(sid: number | null): readonly WorkerLogEntry[] {
+export function useWorkerLog(sid: SessionId | null): readonly WorkerLogEntry[] {
   return useWorkerLogStore((s) => (sid == null ? EMPTY : s.slots.get(sid) ?? EMPTY));
 }
 
 /** Non-reactive snapshot of one session's committed entries (tests/debug). */
-export function peekWorkerLog(sid: number): readonly WorkerLogEntry[] {
+export function peekWorkerLog(sid: SessionId): readonly WorkerLogEntry[] {
   return useWorkerLogStore.getState().slots.get(sid) ?? EMPTY;
 }

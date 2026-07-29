@@ -13,7 +13,7 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../../deps.js';
-import { parseIdParam } from '../../_helpers.js';
+import { parseSessionIdParam } from '../../_helpers.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { restoreQaWorkspace } from '@mcp/services/qa/workspace-restore.js';
 
@@ -21,7 +21,7 @@ export function mountQaRestoreConfigRoute(app: Hono, deps: ServerDeps): void {
   void deps; // SandboxManager is the only dependency, accessed as a singleton.
 
   app.post('/api/company/sessions/:id/qa/restore-config', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     try {
       // Operator-triggered: don't wipe test-results / playwright-report
       // out from under them. v4.5 retention is only run from

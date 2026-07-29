@@ -6,6 +6,7 @@
  * and abortSession kills a running job.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { newSessionId, type SessionId } from '@mcp/session-storage';
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { StopReason } from '@mcp/code-agent/core/runner.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
@@ -33,17 +34,23 @@ let emit: ReturnType<typeof vi.fn>;
 let bump: ReturnType<typeof vi.fn>;
 let ctx: ToolContext;
 let deps: never;
-let SID = 900;
+let SID: SessionId;
 
 beforeEach(() => {
-  SID += 1;
+  SID = newSessionId();
   emit = vi.fn();
   bump = vi.fn();
   ctx = { cwd: '/tmp', runner: { sessionId: SID, agentLoopV2: false, emit } } as unknown as ToolContext;
   deps = {
     provider: { name: 'stub', model: 'm' },
     parentTools: [],
-    sessionStore: { bumpSessionUsage: bump, recordInvestigation: vi.fn(() => ({ id: 1 })), recordSessionInput: vi.fn() },
+    sessionStore: {
+      bumpSessionUsage: bump,
+      recordInvestigation: vi.fn(() => ({
+        id: '22222222-2222-4222-8222-222222222222',
+      })),
+      recordSessionInput: vi.fn(),
+    },
   } as never;
   runParallel.mockReset();
 });
@@ -113,7 +120,11 @@ describe('spawn_agent background + collect_agents', () => {
     expect(manager.hasUncollectedTerminalJobs(SID)).toBe(false);
     // Usage accounted exactly once, at settle.
     expect(bump).toHaveBeenCalledTimes(1);
-    expect(bump).toHaveBeenCalledWith(SID, usage);
+    expect(bump).toHaveBeenCalledWith(
+      SID,
+      usage,
+      `background-job:${jobId}`,
+    );
   });
 
   it('retains partial work before emitting one resumable group-end event', async () => {
@@ -123,7 +134,7 @@ describe('spawn_agent background + collect_agents', () => {
     const job = getSubagentJobManager().get(SID, jobId)!;
     await job.settled;
 
-    expect(getGroup(SID, job.groupId)?.agents[0].reason).toBe('tool_budget');
+    expect((await getGroup(SID, job.groupId))?.agents[0].reason).toBe('tool_budget');
     expect(job.resumableCount).toBe(1);
     const endEvents = emit.mock.calls.filter((call) => call[0] === 'agents_group_end');
     expect(endEvents).toHaveLength(1);
@@ -194,7 +205,7 @@ describe('spawn_agent background + collect_agents', () => {
 
   it('a bumpSessionUsage throw does NOT turn a successful job into a failure (H1)', async () => {
     mockResult('completed');
-    // DB hiccup at settle: bumpSessionUsage throws (worker DB tearing down).
+    // Bundle writer hiccup at settle: usage accounting throws.
     (deps as unknown as { sessionStore: { bumpSessionUsage: ReturnType<typeof vi.fn> } }).sessionStore.bumpSessionUsage =
       vi.fn(() => { throw new Error('SQLITE_BUSY'); });
     const spawn = await runBackgroundEphemeral(deps, [agent('scout')], ctx);

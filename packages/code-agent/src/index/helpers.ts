@@ -33,5 +33,5 @@ export function extractFilePathsFromText(text: string): string[] {
  */
 export function defaultModelFor(provider: string): string {
   const def = getDefinition(provider);
-  return def?.defaultModel ?? def?.defaultModels?.[0] ?? 'claude-sonnet-4-6';
+  return def?.defaultModel ?? def?.defaultModels?.[0] ?? 'claude-sonnet-5';
 }

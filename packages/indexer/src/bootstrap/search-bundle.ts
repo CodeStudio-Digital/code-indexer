@@ -7,6 +7,7 @@ import type { RerankerService } from '@mcp/indexer/search/reranker.js';
 import type { RecentFilesSource } from '@mcp/indexer/search/recent-files-source.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline';
 import type { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
+import type { SemanticSearchTelemetrySink } from '@mcp/indexer/search/search-telemetry.js';
 
 export interface SearchBundle {
   embeddingService: EmbeddingService;
@@ -48,6 +49,8 @@ export function createSearchBundle(
   hydeResolver?: PipelineProviderResolver | null,
   /** Reranker resolved from the Memory profile for snapshots. */
   memoryReranker?: RerankerService | null,
+  /** Privacy-safe, project-local request/outcome telemetry. */
+  searchTelemetry?: SemanticSearchTelemetrySink | null,
 ): SearchBundle {
   // Ownership is explicit: this compositor is incapable of constructing an
   // ONNX session or opening sqlite-vec. The desktop passes worker proxies; if
@@ -73,6 +76,7 @@ export function createSearchBundle(
     pipelineTelemetry,
     memoryQueryEmbeddingService,
     memoryReranker,
+    searchTelemetry,
   );
 
   return {

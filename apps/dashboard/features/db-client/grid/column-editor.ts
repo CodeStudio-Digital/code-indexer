@@ -63,3 +63,21 @@ export function coerceColumnValue(draft: string, spec: ColumnEditorSpec): unknow
   }
   return draft;
 }
+
+/**
+ * Inline-grid variant of `coerceColumnValue`.
+ *
+ * The grid has no per-field NULL toggle the way the row dialog does, so an
+ * emptied cell means NULL for every non-text column — `Number('')` is 0, which
+ * would silently write a zero where the user meant "clear this". Invalid JSON
+ * stays text so the engine reports the real parse error instead of the UI
+ * swallowing the keystroke.
+ */
+export function coerceCellInput(raw: string, spec: ColumnEditorSpec): unknown {
+  if (raw === '' && spec.kind !== 'text') return null;
+  try {
+    return coerceColumnValue(raw, spec);
+  } catch {
+    return raw;
+  }
+}

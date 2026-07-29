@@ -233,7 +233,7 @@ export async function runVerifyCompletionSubagent(
   // same pattern as the review/implement subagents.
   if (parent.sessionStore && parent.sessionId != null) {
     try {
-      parent.sessionStore.recordSessionInput({
+      await parent.sessionStore.recordSessionInput({
         session_id: parent.sessionId,
         kind: 'subagent_prompt',
         source_label: 'subagent:verify-completion',

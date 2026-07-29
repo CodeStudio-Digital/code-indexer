@@ -6,19 +6,22 @@
 import { describe, expect, it } from 'vitest';
 import { isAutoDispatched, kanbanRecomputeFingerprint } from '../kanban-card-flags.js';
 
+const uuid = (value: number): string =>
+  `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+
 const autoComment = {
-  id: 1, card_id: 7, author_role: 'scheduler', agent_run_id: 42,
-  content: '[AUTO] Scheduler dispatched @frontend (run=42) for this card while the master was idle.',
+  id: uuid(1), card_id: uuid(7), author_role: 'scheduler', agent_run_id: uuid(42),
+  content: `[AUTO] Scheduler dispatched @frontend (run=${uuid(42)}) for this card while the master was idle.`,
   created_at: '2026-07-01 10:00:00',
 };
 
 function card(over: Record<string, unknown> = {}) {
   return {
-    id: 7,
+    id: uuid(7),
     column: 'in_progress',
     title: 'Build login',
     tag: null,
-    blocked_by: [] as number[],
+    blocked_by: [] as string[],
     agents: [],
     comments: [] as unknown[],
     ...over,
@@ -53,7 +56,7 @@ describe('kanbanRecomputeFingerprint', () => {
   it('changes when a card moves column and when deps/assignments change', () => {
     const base = [card()];
     const moved = [card({ column: 'review' })];
-    const blocked = [card({ blocked_by: [3] })];
+    const blocked = [card({ blocked_by: [uuid(3)] })];
     const assigned = [card({ agents: [{ role: 'qa', unassigned_at: null }] })];
     const fp = kanbanRecomputeFingerprint(base as never);
     expect(kanbanRecomputeFingerprint(moved as never)).not.toBe(fp);
@@ -68,8 +71,8 @@ describe('kanbanRecomputeFingerprint', () => {
   });
 
   it('is order-insensitive and null-safe', () => {
-    const one = [card({ id: 1 }), card({ id: 2, column: 'todo' })];
-    const two = [card({ id: 2, column: 'todo' }), card({ id: 1 })];
+    const one = [card({ id: uuid(1) }), card({ id: uuid(2), column: 'todo' })];
+    const two = [card({ id: uuid(2), column: 'todo' }), card({ id: uuid(1) })];
     expect(kanbanRecomputeFingerprint(one as never)).toBe(kanbanRecomputeFingerprint(two as never));
     expect(kanbanRecomputeFingerprint(null)).toBe('');
   });

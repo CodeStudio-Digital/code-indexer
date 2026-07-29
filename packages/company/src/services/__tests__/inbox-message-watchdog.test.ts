@@ -18,16 +18,24 @@ import {
 import type { AgentInboxMessage } from '@mcp/company-contracts/models/inbox.js';
 import type { IMetaBusPublisher } from '../ports.js';
 
-function makeMessage(id: number, createdMs: number, status: 'pending' | 'delivered' = 'pending'): AgentInboxMessage {
+const sessionId = (value: number): string =>
+  `c0000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+const agentRunId = (value: number): string =>
+  `a0000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+const messageId = (value: number): string =>
+  `b0000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+
+function makeMessage(seq: number, createdMs: number, status: 'pending' | 'delivered' = 'pending'): AgentInboxMessage {
   return {
-    id,
-    company_session_id: 1,
-    from_agent_run_id: 99,
+    id: messageId(seq),
+    seq,
+    company_session_id: sessionId(1),
+    from_agent_run_id: agentRunId(99),
     from_role: 'sender',
     to_role: 'qa',
-    to_agent_run_id: 10,
+    to_agent_run_id: agentRunId(10),
     kind: 'notify',
-    body: `msg-${id}`,
+    body: `msg-${seq}`,
     status,
     answer: null,
     wait_token: null,
@@ -38,8 +46,8 @@ function makeMessage(id: number, createdMs: number, status: 'pending' | 'deliver
 }
 
 interface MockState {
-  sessions: number[];
-  messagesBySession: Map<number, AgentInboxMessage[]>;
+  sessions: string[];
+  messagesBySession: Map<string, AgentInboxMessage[]>;
   publishedEvents: Array<{ topic: string; payload: unknown }>;
   publishErrors?: Set<string>; // topics that should throw
 }
@@ -57,14 +65,13 @@ function makeDeps(state: MockState, now?: () => number): InboxWatchdogDeps {
     markEnded(): void {},
   } as unknown as IMetaBusPublisher;
   return {
-    companyStore: {
-      listSessionsWithPendingMasterInbox(): number[] {
-        return state.sessions;
+    source: {
+      listOpenMessages(): AgentInboxMessage[] {
+        return state.sessions.flatMap(
+          (id) => state.messagesBySession.get(id) ?? [],
+        );
       },
-      listInboxMessages(opts: { companySessionId: number }): AgentInboxMessage[] {
-        return state.messagesBySession.get(opts.companySessionId) ?? [];
-      },
-    } as unknown as InboxWatchdogDeps['companyStore'],
+    },
     publisher,
     now,
   };
@@ -96,16 +103,16 @@ describe('InboxMessageWatchdog', () => {
     const TEN_MIN_AGO = now - 10 * 60 * 1000;
     const ONE_MIN_AGO = now - 1 * 60 * 1000;
     const state: MockState = {
-      sessions: [1],
+      sessions: [sessionId(1)],
       messagesBySession: new Map([
-        [1, [makeMessage(10, TEN_MIN_AGO), makeMessage(11, ONE_MIN_AGO)]],
+        [sessionId(1), [makeMessage(10, TEN_MIN_AGO), makeMessage(11, ONE_MIN_AGO)]],
       ]),
       publishedEvents: [],
     };
     const wd = new InboxMessageWatchdog(makeDeps(state, () => now));
     const emitted = await wd.scanOnce();
     expect(emitted).toHaveLength(1);
-    expect(emitted[0].messageId).toBe(10);
+    expect(emitted[0].messageId).toBe(messageId(10));
     expect(emitted[0].ageMs).toBeCloseTo(10 * 60 * 1000, -2);
     expect(state.publishedEvents).toHaveLength(1);
     expect(state.publishedEvents[0].topic).toBe('inbox_message_stuck');
@@ -116,8 +123,8 @@ describe('InboxMessageWatchdog', () => {
     const now = 1000_000_000;
     const TWO_MIN_AGO = now - 2 * 60 * 1000;
     const state: MockState = {
-      sessions: [1],
-      messagesBySession: new Map([[1, [makeMessage(10, TWO_MIN_AGO)]]]),
+      sessions: [sessionId(1)],
+      messagesBySession: new Map([[sessionId(1), [makeMessage(10, TWO_MIN_AGO)]]]),
       publishedEvents: [],
     };
     const wd = new InboxMessageWatchdog(makeDeps(state, () => now));
@@ -129,8 +136,8 @@ describe('InboxMessageWatchdog', () => {
     const now = 1000_000_000;
     const OLD = now - 10 * 60 * 1000;
     const state: MockState = {
-      sessions: [1],
-      messagesBySession: new Map([[1, [makeMessage(10, OLD)]]]),
+      sessions: [sessionId(1)],
+      messagesBySession: new Map([[sessionId(1), [makeMessage(10, OLD)]]]),
       publishedEvents: [],
     };
     const wd = new InboxMessageWatchdog(makeDeps(state, () => now));
@@ -138,15 +145,15 @@ describe('InboxMessageWatchdog', () => {
     await wd.scanOnce();
     await wd.scanOnce();
     expect(state.publishedEvents).toHaveLength(1);
-    expect(wd.hasNotified(10)).toBe(true);
+    expect(wd.hasNotified(messageId(10))).toBe(true);
   });
 
   it('clearNotifiedIds() lets a stuck message re-notify', async () => {
     const now = 1000_000_000;
     const OLD = now - 10 * 60 * 1000;
     const state: MockState = {
-      sessions: [1],
-      messagesBySession: new Map([[1, [makeMessage(10, OLD)]]]),
+      sessions: [sessionId(1)],
+      messagesBySession: new Map([[sessionId(1), [makeMessage(10, OLD)]]]),
       publishedEvents: [],
     };
     const wd = new InboxMessageWatchdog(makeDeps(state, () => now));
@@ -160,8 +167,8 @@ describe('InboxMessageWatchdog', () => {
     const now = 1000_000_000;
     const OLD = now - 10 * 60 * 1000;
     const state: MockState = {
-      sessions: [1],
-      messagesBySession: new Map([[1, [makeMessage(10, OLD), makeMessage(11, OLD)]]]),
+      sessions: [sessionId(1)],
+      messagesBySession: new Map([[sessionId(1), [makeMessage(10, OLD), makeMessage(11, OLD)]]]),
       publishedEvents: [],
       publishErrors: new Set(['inbox_message_stuck']),
     };
@@ -176,9 +183,9 @@ describe('InboxMessageWatchdog', () => {
     const now = 1000_000_000;
     const OLD = now - 10 * 60 * 1000;
     const state: MockState = {
-      sessions: [1],
+      sessions: [sessionId(1)],
       messagesBySession: new Map([
-        [1, [makeMessage(10, OLD, 'delivered')]],
+        [sessionId(1), [makeMessage(10, OLD, 'delivered')]],
       ]),
       publishedEvents: [],
     };
@@ -193,8 +200,8 @@ describe('InboxMessageWatchdog', () => {
     const badMsg = makeMessage(10, 0);
     badMsg.created_at = 'not-a-date';
     const state: MockState = {
-      sessions: [1],
-      messagesBySession: new Map([[1, [badMsg]]]),
+      sessions: [sessionId(1)],
+      messagesBySession: new Map([[sessionId(1), [badMsg]]]),
       publishedEvents: [],
     };
     const wd = new InboxMessageWatchdog(makeDeps(state, () => now));

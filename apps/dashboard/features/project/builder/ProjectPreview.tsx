@@ -342,7 +342,7 @@ export function ProjectPreview({
           </>
         )}
         <ProblemsBadge
-          sessionId={projectId}
+          projectId={projectId}
           problems={problems}
           errorCount={errorCount}
           onDismiss={dismiss}
@@ -458,8 +458,8 @@ export function ProjectPreview({
       )}
       {(selectionEnabled || windowOpen) && (
         <div className="px-2 py-1 border-t empty:hidden">
-          <SelectionChip sessionId={projectId} projectId={projectId} />
-          <RegionShotChip sessionId={projectId} />
+          <SelectionChip projectId={projectId} />
+          <RegionShotChip projectId={projectId} />
         </div>
       )}
       {/* Two-way visual editing — stamped iframe only (loc write-back). */}

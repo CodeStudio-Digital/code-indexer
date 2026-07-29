@@ -101,8 +101,8 @@ export interface CompanyRoleConfig {
   /**
    * Skills to enable for this role. Either a flat list (legacy) or a
    * conditional/chain config (v2) — see `RoleSkillsConfig`. Resolved via
-   * `resolveRoleSkills` at spawn-time, then enforced as session-level
-   * skill overrides in `skill_session_config`.
+   * `resolveRoleSkills` at spawn-time, then persisted as a session-bundle
+   * skill projection.
    */
   skills?: RoleSkills;
   /** Tool names pinned into the role's visible catalog from turn one.

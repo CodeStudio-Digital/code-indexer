@@ -11,7 +11,12 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  parseJsonBody,
+  resolveCompanySessionContext,
+  notFound,
+} from '../_helpers.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import type { BuilderStack } from '@mcp/services/sandbox/types.js';
 import { rejectIfAttached as rejectIfAttachedShared } from './service-lifecycle.js';
@@ -22,25 +27,41 @@ import {
   startPrimarySandboxForSession,
 } from './service-helpers.js';
 import { recordOperatorTransition } from './service-transition-log.js';
+import type {
+  CompanySessionId,
+} from '@mcp/session-storage';
+import type {
+  CompanySessionFileSnapshot,
+} from '@mcp/company/services/CompanySessionFiles.js';
 
 export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db } = deps;
+  const { sessionStore, db } = deps;
 
   function rejectIfAttached(
-    id: number,
+    id: CompanySessionId,
     serviceId: string,
   ): { status: 409; error: string } | null {
     return rejectIfAttachedShared(deps, id, serviceId);
   }
 
+  const linkedProjects = (session: CompanySessionFileSnapshot) =>
+    session.project_ids.map((projectId) => ({
+      project_id: projectId,
+      label: session.project_labels[String(projectId)] ?? null,
+    }));
+
   // ─── Start a service container (primary or secondary) ───────────
 
   app.post('/api/company/sessions/:id/services/:serviceId/start', async (c) => {
-    const id = parseIdParam(c);
+    const resolved = await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
+    const session = resolved.root;
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
     const blocked = rejectIfAttached(id, serviceId);
     if (blocked) return c.json({ error: blocked.error }, blocked.status);
 
@@ -52,14 +73,14 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
     }
 
     const manager = getSandboxManager();
-    await manager.reconcileServiceFromDb(String(id), serviceId).catch(() => void 0);
-    const live = manager.getService(String(id), serviceId);
+    await manager.reconcileServiceFromDb(id, serviceId).catch(() => void 0);
+    const live = manager.getService(id, serviceId);
     if (live && live.status !== 'error') {
       try {
         const sb = live.runtimePaused
-          ? await manager.unpauseRuntimeContainer(String(id), serviceId)
+          ? await manager.unpauseRuntimeContainer(id, serviceId)
           : live.status === 'paused'
-            ? await manager.startServiceContainer(String(id), serviceId)
+            ? await manager.startServiceContainer(id, serviceId)
             : live;
         recordOperatorTransition(deps, id, serviceId, 'running', 'start route');
         return c.json(serviceStartPayload(serviceId, sb));
@@ -97,8 +118,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
       } catch { /* ignore malformed limits */ }
       hostWorkdirMount = row.host_workdir_mount || undefined;
       try {
-        const link = companyStore
-          .listCompanySessionProjects(id)
+        const link = linkedProjects(session)
           .find((p) => p.label === row.service_id);
         if (link) {
           const proj = db.getProject(link.project_id);
@@ -136,8 +156,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
         provisionSpec = {};
       }
     } else {
-      const link = companyStore
-        .listCompanySessionProjects(id)
+      const link = linkedProjects(session)
         .find((p) => p.label === serviceId);
       if (!link) {
         return c.json({ error: `Service '${serviceId}' not found` }, 404);
@@ -170,7 +189,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
 
     try {
       const sandbox = await manager.provisionAdditionalService({
-        sessionId: String(id),
+        sessionId: id,
         serviceId,
         stack: resolvedStack as BuilderStack,
         name: resolvedName,
@@ -189,11 +208,14 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
   // ─── Re-probe an attached external service ──────────────────────
 
   app.post('/api/company/sessions/:id/services/:serviceId/refresh', async (c) => {
-    const id = parseIdParam(c);
+    const resolved = await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
     const row = deps.companySandboxServicesStore.get(id, serviceId);
     if (!row || row.is_attached !== 1) {
       return c.json(
@@ -202,7 +224,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
       );
     }
     try {
-      const sandbox = await getSandboxManager().refreshAttachedService(String(id), serviceId);
+      const sandbox = await getSandboxManager().refreshAttachedService(id, serviceId);
       return c.json({
         service_id: serviceId,
         container_id: sandbox.containerId,
@@ -221,11 +243,15 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
   // ─── Retry a failed / orphaned service ──────────────────────────
 
   app.post('/api/company/sessions/:id/services/:serviceId/retry', async (c) => {
-    const id = parseIdParam(c);
+    const resolved = await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
+    const session = resolved.root;
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
     const blocked = rejectIfAttached(id, serviceId);
     if (blocked) return c.json({ error: blocked.error }, blocked.status);
 
@@ -272,8 +298,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
       // writing to.
       hostWorkdirMount = row.host_workdir_mount || undefined;
       try {
-        const link = companyStore
-          .listCompanySessionProjects(id)
+        const link = linkedProjects(session)
           .find((p) => p.label === row.service_id);
         if (link) {
           const proj = db.getProject(link.project_id);
@@ -318,8 +343,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
       }
     } else {
       // Historical orphan: no row, but a project link may exist.
-      const link = companyStore
-        .listCompanySessionProjects(id)
+      const link = linkedProjects(session)
         .find((p) => p.label === serviceId);
       if (!link) {
         return c.json({ error: `Service '${serviceId}' not found` }, 404);
@@ -354,7 +378,7 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
 
     try {
       const sandbox = await getSandboxManager().provisionAdditionalService({
-        sessionId: String(id),
+        sessionId: id,
         serviceId,
         stack: resolvedStack as BuilderStack,
         name: resolvedName,
@@ -377,11 +401,14 @@ export function mountCompanyServicesRuntimeRoutes(app: Hono, deps: ServerDeps): 
   // ─── Delete a service (container + project + workdir) ───────────
 
   app.delete('/api/company/sessions/:id/services/:serviceId', async (c) => {
-    const id = parseIdParam(c);
+    const resolved = await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
     try {
       await removeServiceAndProject(deps, id, serviceId);
     } catch (e) {

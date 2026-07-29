@@ -14,6 +14,7 @@ import { writeDeployStatus, type AppDeployStatusFile } from '@mcp/app-studio/sta
 import { getDatabaseProvisioner } from '@mcp/services/app-studio/index.js';
 import { runHostCommand } from '@mcp/services/host-scaffold/run-host-command.js';
 import type { HandlerDeps } from '../types.js';
+import type { SessionId } from '@mcp/session-storage';
 import { runWranglerWhoami } from './login-stream.js';
 
 const BUILD_TIMEOUT_MS = 300_000;
@@ -33,20 +34,20 @@ export type AppLaunchEvent =
 type Emit = (ev: AppLaunchEvent) => void;
 
 /** Uma launch por sessão por vez (o botão da UI também trava, mas o servidor manda). */
-const inflight = new Set<number>();
+const inflight = new Set<SessionId>();
 
 export async function runAppLaunchStream(
   deps: HandlerDeps,
-  sessionId: number,
+  sessionId: SessionId,
   emit: Emit,
   signal?: AbortSignal,
 ): Promise<void> {
-  const session = deps.appStudioStore.getSession(sessionId);
+  const session = await deps.appStudioStore.getSession(sessionId);
   if (!session) {
     emit({ event: 'error', data: { message: `App Studio session ${sessionId} not found.` } });
     return;
   }
-  const revision = deps.appStudioStore.getLatestPlanRevision(sessionId);
+  const revision = await deps.appStudioStore.getLatestPlanRevision(sessionId);
   const plan = parseAppPlan(revision?.plan_json ?? null);
   if (!revision || revision.status !== 'approved' || !plan) {
     emit({ event: 'error', data: { message: 'The current App plan must be approved before publishing.' } });
@@ -57,7 +58,9 @@ export async function runAppLaunchStream(
     emit({ event: 'error', data: { message: 'The current App plan is no longer ready to publish.' } });
     return;
   }
-  const work = deps.appStudioStore.listWorkItems(sessionId).filter((item) => item.plan_revision_id === revision.id);
+  const work = (await deps.appStudioStore.listWorkItems(sessionId)).filter(
+    (item) => item.plan_revision_id === revision.id,
+  );
   if (work.length === 0 || work.some((item) => item.status !== 'done')) {
     emit({ event: 'error', data: { message: 'All work and review cards for the approved plan must have current evidence.' } });
     return;
@@ -88,7 +91,7 @@ export async function runAppLaunchStream(
 
   try {
     emit({ event: 'start', data: { app_slug: session.app_slug } });
-    deps.appStudioStore.saveDeployment({
+    await deps.appStudioStore.saveDeployment({
       sessionId,
       planRevisionId: revision.id,
       status: 'publishing',
@@ -171,7 +174,7 @@ export async function runAppLaunchStream(
       account: who.email ?? who.accounts[0]?.name ?? null,
       deployed_at: new Date().toISOString(),
     };
-    deps.appStudioStore.saveDeployment({
+    await deps.appStudioStore.saveDeployment({
       sessionId,
       planRevisionId: revision.id,
       status: healthy ? 'live' : 'failed',
@@ -189,7 +192,7 @@ export async function runAppLaunchStream(
     emit({ event: 'done', data: { deploy: deployStatus } });
   } catch (err) {
     try {
-      deps.appStudioStore.saveDeployment({
+      await deps.appStudioStore.saveDeployment({
         sessionId,
         planRevisionId: revision.id,
         status: 'failed',

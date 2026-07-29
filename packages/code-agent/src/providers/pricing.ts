@@ -32,16 +32,17 @@ export interface ModelPricing {
  */
 export const MODEL_PRICING: Record<string, ModelPricing> = {
   // ── Anthropic ───────────────────────────────────────────────────────────
-  // opus-4-8 mirrors opus-4-7 list price. The [1m] row is the 1M-context
-  // premium tier (>200K input): ~2x input / ~1.5x output, matching the
-  // pattern Anthropic uses for its 1M beta. ESTIMATE — confirm against the
-  // published 1M-context price and pin via `manual` if it differs.
-  'claude-opus-4-8':            { input: 15.0, output: 75.0,  cacheRead: 1.5,  cacheWrite: 18.75 },
-  'claude-opus-4-8[1m]':        { input: 30.0, output: 112.5, cacheRead: 3.0,  cacheWrite: 37.5  },
-  'claude-opus-4-7':            { input: 15.0, output: 75.0,  cacheRead: 1.5,  cacheWrite: 18.75 },
-  'claude-opus-4-6':            { input: 15.0, output: 75.0,  cacheRead: 1.5,  cacheWrite: 18.75 },
-  'claude-sonnet-4-6':          { input: 3.0,  output: 15.0,  cacheRead: 0.3,  cacheWrite: 3.75  },
-  'claude-haiku-4-5':           { input: 0.8,  output: 4.0,   cacheRead: 0.08, cacheWrite: 1.0   },
+  // Anthropic wires use the one-hour prompt-cache policy. Cache reads are
+  // billed at 0.1x input and one-hour cache writes at 2x input.
+  'claude-fable-5':             { input: 10.0, output: 50.0, cacheRead: 1.0, cacheWrite: 20.0 },
+  'claude-opus-5':              { input: 5.0,  output: 25.0, cacheRead: 0.5, cacheWrite: 10.0 },
+  'claude-sonnet-5':            { input: 3.0,  output: 15.0, cacheRead: 0.3, cacheWrite: 6.0  },
+  'claude-opus-4-8':            { input: 5.0,  output: 25.0, cacheRead: 0.5, cacheWrite: 10.0 },
+  'claude-opus-4-8[1m]':        { input: 10.0, output: 37.5, cacheRead: 1.0, cacheWrite: 20.0 },
+  'claude-opus-4-7':            { input: 5.0,  output: 25.0, cacheRead: 0.5, cacheWrite: 10.0 },
+  'claude-opus-4-6':            { input: 5.0,  output: 25.0, cacheRead: 0.5, cacheWrite: 10.0 },
+  'claude-sonnet-4-6':          { input: 3.0,  output: 15.0, cacheRead: 0.3, cacheWrite: 6.0  },
+  'claude-haiku-4-5':           { input: 1.0,  output: 5.0,  cacheRead: 0.1, cacheWrite: 2.0  },
 
   // ── OpenAI ──────────────────────────────────────────────────────────────
   'gpt-5':                      { input: 1.25, output: 10.0, cacheRead: 0.125 },
@@ -89,13 +90,16 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
 
 const PREFIX_FALLBACKS: Array<[string, string]> = [
   // Most-specific first: opus-4-8 variants before the broad 'claude-opus'.
+  ['claude-fable-5',      'claude-fable-5'],
+  ['claude-opus-5',       'claude-opus-5'],
+  ['claude-sonnet-5',     'claude-sonnet-5'],
   ['claude-opus-4-8[1m]', 'claude-opus-4-8[1m]'],
   ['claude-opus-4-8',  'claude-opus-4-8'],
   ['claude-opus-4-7',  'claude-opus-4-7'],
   ['claude-opus-4-6',  'claude-opus-4-6'],
-  ['claude-opus',      'claude-opus-4-8'],
+  ['claude-opus',      'claude-opus-5'],
   ['claude-sonnet-4',  'claude-sonnet-4-6'],
-  ['claude-sonnet',    'claude-sonnet-4-6'],
+  ['claude-sonnet',    'claude-sonnet-5'],
   ['claude-haiku-4',   'claude-haiku-4-5'],
   ['claude-haiku',     'claude-haiku-4-5'],
   ['gpt-5.5',          'gpt-5.5'],

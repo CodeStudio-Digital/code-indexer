@@ -1598,18 +1598,13 @@ export function getTsService(projectRoot: string): TsLanguageService {
 
 export interface TsLinkedWorkspaceProject {
   slug: string;
+  rootPath: string;
 }
 
 /**
- * Select the configured TypeScript project that owns a file in a global
- * (multi-project) workspace.
- *
- * Global workspace roots contain one junction/symlink per real project, so
- * the synthetic root intentionally has neither a tsconfig nor node_modules.
- * Keying the language service by that synthetic root makes TypeScript fall
- * back to inferred compiler options. Routing to the owning link keeps paths
- * inside the union workspace while allowing normal tsconfig and node_modules
- * discovery below `<workspace>/<slug>`.
+ * Select the configured real TypeScript project that owns a file in a global
+ * session. `workspaceRoot` is the primary project; linked files may live
+ * elsewhere on disk and are matched against their explicit authorized roots.
  */
 export function getTsServiceForFile(
   workspaceRoot: string,
@@ -1625,7 +1620,7 @@ export function getTsServiceForFile(
   const comparableFile = ts.sys.useCaseSensitiveFileNames ? file : file.toLowerCase();
 
   for (const project of linkedProjects ?? []) {
-    const projectRoot = tsCanonical(resolve(workspaceRoot, project.slug));
+    const projectRoot = tsCanonical(project.rootPath);
     const comparableRoot = ts.sys.useCaseSensitiveFileNames
       ? projectRoot
       : projectRoot.toLowerCase();

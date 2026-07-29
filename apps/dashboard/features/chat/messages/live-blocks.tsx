@@ -8,18 +8,33 @@
 import { memo, useDeferredValue, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Brain, ChevronDown, ChevronRight } from 'lucide-react';
+import { useThrottledValue } from '../../../hooks/useThrottledValue.js';
 import { Markdown } from './Markdown.js';
 import { cleanThinkingMarkdown } from './thinking-text.js';
 
 /**
- * Live markdown. `useDeferredValue` lets React keep the previous parse on
- * screen while a newer one renders in the background, so a 50-token/s stream
- * doesn't re-run remark-gfm every frame. The final text the user keeps is the
- * persisted (non-deferred) history render — this only ever lags the transient
- * live bubble by a frame or two, and snaps current when the stream pauses.
+ * How often a live block re-parses its markdown. Two stages guard the parse:
+ *
+ *  - `useThrottledValue` bounds HOW MUCH work happens — react-markdown re-parses
+ *    the whole accumulator on every call, so at ~60 flushes/s a long answer was
+ *    re-parsed 60×/s. This caps that at ~12×/s.
+ *  - `useDeferredValue` keeps whatever work remains INTERRUPTIBLE, so a parse in
+ *    flight never blocks typing in the composer or a scroll.
+ *
+ * 80 ms is under the ~100 ms threshold where UI stops feeling instantaneous, and
+ * the trailing commit means the settled text is identical to the unthrottled
+ * render — only intermediate frames are skipped.
+ */
+const LIVE_MARKDOWN_INTERVAL_MS = 80;
+
+/**
+ * Live markdown. The final text the user keeps is the persisted (non-deferred)
+ * history render; this only ever lags the transient live bubble by a frame or
+ * two, and snaps current when the stream pauses.
  */
 export const LiveTextBlock = memo(function LiveTextBlock({ text }: { text: string }) {
-  const deferred = useDeferredValue(text);
+  const throttled = useThrottledValue(text, LIVE_MARKDOWN_INTERVAL_MS);
+  const deferred = useDeferredValue(throttled);
   return (
     <div className="text-[13px] leading-5 text-foreground/90">
       <Markdown text={deferred} />
@@ -35,7 +50,12 @@ export const LiveTextBlock = memo(function LiveTextBlock({ text }: { text: strin
 export const LiveThinkingBlock = memo(function LiveThinkingBlock({ text }: { text: string }) {
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(true);
-  const displayText = cleanThinkingMarkdown(text);
+  // Same throttle as the answer text: reasoning traces stream just as fast and
+  // `cleanThinkingMarkdown` walks the whole accumulator before the parse even
+  // starts. Collapsed blocks skip both — only the cheap header reconciles.
+  const throttled = useThrottledValue(text, LIVE_MARKDOWN_INTERVAL_MS);
+  const deferred = useDeferredValue(throttled);
+  const displayText = open ? cleanThinkingMarkdown(deferred) : '';
   return (
     <div className="my-1 rounded-md border border-dashed border-border/40 bg-muted/15">
       <button

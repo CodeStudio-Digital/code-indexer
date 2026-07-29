@@ -9,16 +9,20 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import { appendSharedFile, writeSharedFile } from '../shared-drive-tools.js';
 
+const COMPANY_SESSION_ID = 'c0000000-0000-4000-8000-000000000001';
+const AGENT_RUN_ID = 'a0000000-0000-4000-8000-000000000001';
+const SCOPE_KEY = `ses:${COMPANY_SESSION_ID}`;
+
 function fakeCtx() {
   const write = vi.fn().mockReturnValue({ path: 'specs/x.md', sizeBytes: 5 });
   const append = vi.fn().mockReturnValue({ path: 'specs/x.md', sizeBytes: 10 });
   const ctx = {
     companyContext: {
       agentRole: 'dev',
-      agentRunId: 1,
+      agentRunId: AGENT_RUN_ID,
       orchestrator: {
         driveStore: {
-          resolveScopeKey: () => 'ses:1',
+          resolveScopeKey: () => SCOPE_KEY,
           write,
           append,
         },
@@ -42,7 +46,10 @@ describe('write_shared_file docs-mirror guard', () => {
     const { ctx, write } = fakeCtx();
     const res = await writeSharedFile.handler({ path: 'specs/x.md', content: 'hello' }, ctx);
     expect(res.isError).toBeUndefined();
-    expect(write).toHaveBeenCalledWith('ses:1', 'specs/x.md', 'hello', { role: 'dev', agentRunId: 1 });
+    expect(write).toHaveBeenCalledWith(SCOPE_KEY, 'specs/x.md', 'hello', {
+      role: 'dev',
+      agentRunId: AGENT_RUN_ID,
+    });
   });
 });
 

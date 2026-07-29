@@ -3,6 +3,7 @@ import { Check, Copy, Maximize2, Minimize2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { useThrottledValue } from '../../../hooks/useThrottledValue.js';
 import { copyText } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
 import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
@@ -18,10 +19,16 @@ const baseClasses =
 const defaultClasses =
   'dark:prose-invert prose-pre:bg-card prose-pre:border prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-a:text-primary prose-strong:text-foreground';
 
+// Hoisted out of the render: react-markdown rebuilds its unified processor on
+// every render, and fresh plugin/component literals meant a new array + object
+// allocation per streamed frame on top of that. Module constants are free.
+const REMARK_PLUGINS = [remarkGfm];
+const MARKDOWN_COMPONENTS = { pre: CodeBlock };
+
 export const Markdown = memo(function Markdown({ text, className }: MarkdownProps) {
   return (
     <div data-text-selectable className={cn(baseClasses, !className && defaultClasses, className)}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
         {text}
       </ReactMarkdown>
     </div>
@@ -101,19 +108,36 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
+/** A code fence inside a streaming answer grows token by token. Re-tokenizing
+ *  the whole fence on every frame was the single most expensive thing in the
+ *  transcript, so the highlight input is rate-limited; the trailing commit
+ *  still highlights the final, complete code. */
+const HIGHLIGHT_INTERVAL_MS = 250;
+
+/** Highlight output paired with the exact source it was produced from, so a
+ *  render can tell whether the markup still describes the code on screen. */
+interface Highlight {
+  source: string;
+  html: string;
+}
+
 function HighlightedCode({ code, lang }: { code: string; lang: string }) {
   const dark = useIsDark();
   const theme = dark ? 'github-dark' : 'github-light';
-  const [html, setHtml] = useState<string | null>(null);
-  const tooLarge = code.length > MAX_HIGHLIGHT_BYTES;
+  const [highlight, setHighlight] = useState<Highlight | null>(null);
+  const throttledCode = useThrottledValue(code, HIGHLIGHT_INTERVAL_MS);
+  const tooLarge = throttledCode.length > MAX_HIGHLIGHT_BYTES;
 
   useEffect(() => {
     if (tooLarge || lang === 'text') {
-      setHtml(null);
+      setHighlight(null);
       return;
     }
     let cancelled = false;
-    setHtml(null);
+    // Deliberately NOT clearing the previous highlight here. Dropping to the
+    // plain <pre> while the next one computed made every streamed frame flash
+    // unstyled and forced two renders per update; the guard below decides
+    // whether the existing markup is still safe to show.
     void (async () => {
       try {
         // The highlighter is initialized only for language-tagged code fences,
@@ -122,18 +146,25 @@ function HighlightedCode({ code, lang }: { code: string; lang: string }) {
         const resolvedLang = await ensureLang(lang);
         if (resolvedLang === 'text') return;
         const highlighter = await getHighlighter();
-        const nextHtml = highlighter.codeToHtml(code, { lang: resolvedLang, theme });
-        if (!cancelled) setHtml(nextHtml);
+        const html = highlighter.codeToHtml(throttledCode, { lang: resolvedLang, theme });
+        if (!cancelled) setHighlight({ source: throttledCode, html });
       } catch {
-        if (!cancelled) setHtml(null);
+        if (!cancelled) setHighlight(null);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [code, lang, theme, tooLarge]);
+  }, [throttledCode, lang, theme, tooLarge]);
 
-  if (!html) {
+  // A streaming fence only ever grows, so markup built from a PREFIX of the
+  // current code is safe to keep on screen — it simply trails the newest tokens
+  // by up to one throttle window, which reads as normal streaming and avoids
+  // the plain/highlighted flicker. Anything else (the component reused for a
+  // different fence, or an edited block) is stale and must fall back to the
+  // plain <pre>, which always shows the exact current text.
+  const usable = highlight && code.startsWith(highlight.source);
+  if (!usable) {
     return (
       <pre className="m-0 overflow-auto p-3 font-mono text-[12px] leading-5 whitespace-pre">
         <code>{code}</code>
@@ -146,7 +177,7 @@ function HighlightedCode({ code, lang }: { code: string; lang: string }) {
       className="overflow-auto font-mono text-[12px] leading-5 [&_pre]:m-0 [&_pre]:min-w-full [&_pre]:p-3"
       // Shiki creates this HTML from the code text itself, escaping user input
       // while adding syntax-token spans and theme colors.
-      dangerouslySetInnerHTML={{ __html: html }}
+      dangerouslySetInnerHTML={{ __html: highlight.html }}
     />
   );
 }

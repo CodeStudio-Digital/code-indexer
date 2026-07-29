@@ -2,13 +2,14 @@ import type {
   AgentAttachment,
   ContentBlock,
   MessagePage,
+  SessionId,
   SessionData,
   ToolResultFallback,
 } from '../types.js';
 
 let optimisticMessageSequence = 0;
 
-/** Allocate an id that can never collide with SQLite's positive message ids. */
+/** Allocate a client-only negative sequence that cannot collide with persisted rows. */
 export function allocateOptimisticMessageId(): number {
   optimisticMessageSequence = (optimisticMessageSequence + 1) % 1000;
   return -(Date.now() * 1000 + optimisticMessageSequence);
@@ -45,7 +46,7 @@ function optimisticContent(text: string, attachments: readonly AgentAttachment[]
 export function appendOptimisticUserMessage(
   previous: SessionData,
   input: {
-    sessionId: number;
+    sessionId: SessionId;
     messageId: number;
     text: string;
     attachments?: readonly AgentAttachment[];
@@ -53,7 +54,7 @@ export function appendOptimisticUserMessage(
   },
 ): SessionData {
   if (previous.session.id !== input.sessionId) return previous;
-  if (previous.message_rows.some((row) => row.id === input.messageId)) return previous;
+  if (previous.message_rows.some((row) => row.seq === input.messageId)) return previous;
 
   return {
     ...previous,
@@ -70,7 +71,8 @@ export function appendOptimisticUserMessage(
     message_rows: [
       ...previous.message_rows,
       {
-        id: input.messageId,
+        id: `optimistic:${Math.abs(input.messageId)}`,
+        seq: input.messageId,
         input_tokens: 0,
         output_tokens: 0,
         optimistic: true,
@@ -126,7 +128,7 @@ export function normalizeSessionMessageData(data: SessionData): SessionData {
 /** Never render/cache a retained useApi payload under a different selection. */
 export function sessionDataForSelection(
   data: SessionData | null,
-  selectedSessionId: number | null,
+  selectedSessionId: SessionId | null,
 ): SessionData | null {
   if (!data || data.session.id !== selectedSessionId) return null;
   return normalizeSessionMessageData(data);
@@ -140,7 +142,7 @@ export function sessionDataForSelection(
 export function mergeEarlierMessagePage(
   previous: SessionData,
   page: MessagePage,
-  expectedSessionId: number,
+  expectedSessionId: SessionId,
 ): { data: SessionData; addedRows: number } {
   if (previous.session.id !== expectedSessionId) {
     return { data: previous, addedRows: 0 };
@@ -170,7 +172,7 @@ export function mergeEarlierMessagePage(
       ...current,
       messages: [...earlierMessages, ...current.messages],
       message_rows: [...earlierRows, ...current.message_rows],
-      preceding_user_message_id: page.preceding_user_message_id,
+      preceding_user_seq: page.preceding_user_seq,
       tool_results: toolResults,
     },
     addedRows: earlierRows.length,

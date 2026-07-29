@@ -27,7 +27,7 @@ function makeCtx(opts: { binding?: SandboxBinding | null; cwd?: string } = {}): 
   const binding = opts.binding ?? makeBinding();
   const companyContext = {
     orchestrator: {} as unknown as CompanyContext['orchestrator'],
-    companySessionId: 1,
+    companySessionId: '00000000-0000-4000-8000-000000000001',
     agentRole: 'design-system-master',
     agentRunId: null,
     allowedProjectIds: [],

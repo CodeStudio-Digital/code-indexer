@@ -14,11 +14,15 @@
  *
  * Phase 8 part 2.2: extracted from `sessions.ts` mega-file.
  */
-import type { Hono } from 'hono';
+import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { ServiceRestartError } from '@mcp/services/sandbox/manager/dev-lifecycle.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  resolveCompanySessionContext,
+  notFound,
+} from '../_helpers.js';
 import { recordOperatorTransition } from './service-transition-log.js';
 
 /**
@@ -29,7 +33,7 @@ import { recordOperatorTransition } from './service-transition-log.js';
  */
 export function rejectIfAttached(
   deps: ServerDeps,
-  id: number,
+  id: string,
   serviceId: string,
 ): { status: 409; error: string } | null {
   const row = deps.companySandboxServicesStore.get(id, serviceId);
@@ -44,18 +48,23 @@ export function rejectIfAttached(
 }
 
 export function mountCompanyServiceLifecycleRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore } = deps;
+  const resolveRootId = async (c: Context) =>
+    (
+      await resolveCompanySessionContext(
+        deps.sessionStore,
+        parseCompanySessionIdParam(c),
+      )
+    )?.rootId ?? null;
 
   app.post('/api/company/sessions/:id/services/:serviceId/pause', async (c) => {
-    const id = parseIdParam(c);
+    const id = await resolveRootId(c);
+    if (!id) return notFound(c);
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
     const blocked = rejectIfAttached(deps, id, serviceId);
     if (blocked) return c.json({ error: blocked.error }, blocked.status);
     try {
-      const sb = await getSandboxManager().pauseRuntimeContainer(String(id), serviceId);
+      const sb = await getSandboxManager().pauseRuntimeContainer(id, serviceId);
       recordOperatorTransition(deps, id, serviceId, 'paused', 'pause route');
       return c.json({
         ok: true,
@@ -77,15 +86,14 @@ export function mountCompanyServiceLifecycleRoutes(app: Hono, deps: ServerDeps):
   });
 
   app.post('/api/company/sessions/:id/services/:serviceId/unpause', async (c) => {
-    const id = parseIdParam(c);
+    const id = await resolveRootId(c);
+    if (!id) return notFound(c);
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
     const blocked = rejectIfAttached(deps, id, serviceId);
     if (blocked) return c.json({ error: blocked.error }, blocked.status);
     try {
-      const sb = await getSandboxManager().unpauseRuntimeContainer(String(id), serviceId);
+      const sb = await getSandboxManager().unpauseRuntimeContainer(id, serviceId);
       recordOperatorTransition(deps, id, serviceId, 'running', 'unpause route');
       return c.json({
         ok: true,
@@ -117,10 +125,11 @@ export function mountCompanyServiceLifecycleRoutes(app: Hono, deps: ServerDeps):
    * Query: `?lines=200` (default 200, max 2000)
    */
   app.get('/api/company/sessions/:id/services/:serviceId/logs', async (c) => {
-    const id = parseIdParam(c);
+    const id = await resolveRootId(c);
+    if (!id) return notFound(c);
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
-    const svc = getSandboxManager().getService(String(id), serviceId);
+    const svc = getSandboxManager().getService(id, serviceId);
     if (!svc || !svc.containerId) {
       return c.json({ error: `service '${serviceId}' not running` }, 404);
     }
@@ -167,13 +176,14 @@ export function mountCompanyServiceLifecycleRoutes(app: Hono, deps: ServerDeps):
   // reuses the scaffolder/external-node relaunch paths instead of the
   // hardcoded command this route used to synthesize inline.
   app.post('/api/company/sessions/:id/services/:serviceId/restart-dev', async (c) => {
-    const id = parseIdParam(c);
+    const id = await resolveRootId(c);
+    if (!id) return notFound(c);
     const serviceId = c.req.param('serviceId');
     if (!serviceId) return c.json({ error: 'serviceId required' }, 400);
     const blocked = rejectIfAttached(deps, id, serviceId);
     if (blocked) return c.json({ error: blocked.error }, blocked.status);
     try {
-      await getSandboxManager().restartService(String(id), serviceId);
+      await getSandboxManager().restartService(id, serviceId);
       recordOperatorTransition(deps, id, serviceId, 'restarted', 'restart-dev route');
       return c.json({ ok: true });
     } catch (e) {

@@ -19,6 +19,7 @@ import { formatPlanResult } from '@mcp/code-agent/tools/plan.js';
 import { validateTasksInput } from '@mcp/code-agent/tools/tasks.js';
 import type { CoderTask, TaskExecutionMode, TasksState } from '@mcp/code-agent/sessions/types.js';
 import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
+import { isUuid } from '@mcp/session-storage';
 import { submitSpecificationToMaster } from './subordinate/submit-specification.js';
 import { awaitMasterDecision } from './subordinate/await-master.js';
 
@@ -347,8 +348,8 @@ export const sendToAgent: CoderTool = {
         description: 'Recipient role (e.g. "backend"). The inbox picks the run with the smallest backlog.',
       },
       target_agent_run_id: {
-        type: 'number',
-        description: 'Optional: pin to a specific agent run id when several agents share a role.',
+        type: 'string',
+        description: 'Optional: pin to a specific agent run UUID when several agents share a role.',
       },
       question: {
         type: 'string',
@@ -379,12 +380,12 @@ export const sendToAgent: CoderTool = {
     const wait = args.wait == null ? kind === 'question' : Boolean(args.wait);
     const priority = (args.priority as 'low' | 'normal' | 'urgent' | undefined) ?? 'normal';
     const targetRole = args.target_role as string | undefined;
-    const targetAgentRunId = args.target_agent_run_id as number | undefined;
+    const targetAgentRunId = args.target_agent_run_id as string | undefined;
 
     const company = ctx.companyContext;
     if (!company) return err('send_to_agent requires a company orchestrator context');
     if (company.agentRunId == null) return err('send_to_agent requires the caller to be a registered subordinate');
-    if (!targetRole && typeof targetAgentRunId !== 'number') {
+    if (!targetRole && typeof targetAgentRunId !== 'string') {
       return err('Provide either target_role or target_agent_run_id');
     }
 
@@ -507,16 +508,16 @@ export const respondToInbox: CoderTool = {
   parameters: {
     type: 'object',
     properties: {
-      message_id: { type: 'number', description: 'Id of the inbox message to answer (printed in the [INBOX ...] header).' },
+      message_id: { type: 'string', description: 'UUID of the inbox message to answer (printed in the [INBOX ...] header).' },
       answer: { type: 'string', description: 'Your answer. Plain text — keep it focused.' },
     },
     required: ['message_id', 'answer'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const messageId = Number(args.message_id);
+    const messageId = String(args.message_id ?? '').trim();
     const answer = String(args.answer ?? '').trim();
-    if (!Number.isFinite(messageId)) return err('message_id must be a number');
+    if (!isUuid(messageId)) return err('message_id must be a canonical UUID');
     if (!answer) return err('answer cannot be empty');
     const company = ctx.companyContext;
     if (!company) return err('respond_to_inbox requires a company orchestrator context');
@@ -606,17 +607,17 @@ export const checkInboxAnswer: CoderTool = {
     type: 'object',
     properties: {
       message_id: {
-        type: 'number',
-        description: 'The message id returned by `send_to_agent` (printed in the tool result as `Message <id>`).',
+        type: 'string',
+        description: 'The message UUID returned by `send_to_agent` (printed in the tool result as `Message <id>`).',
       },
     },
     required: ['message_id'],
     additionalProperties: false,
   },
   handler: async (args, ctx): Promise<ToolResult> => {
-    const messageId = Number(args.message_id);
-    if (!Number.isFinite(messageId) || messageId <= 0) {
-      return err('message_id must be a positive number');
+    const messageId = String(args.message_id ?? '').trim();
+    if (!isUuid(messageId)) {
+      return err('message_id must be a canonical UUID');
     }
     const company = ctx.companyContext;
     if (!company) return err('check_inbox_answer requires a company orchestrator context');

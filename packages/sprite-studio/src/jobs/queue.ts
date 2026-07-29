@@ -9,16 +9,16 @@
  */
 
 interface PendingJob {
-  projectId: number;
-  jobId: number;
+  projectId: string;
+  jobId: string;
   run: (signal: AbortSignal) => Promise<void>;
 }
 
 export class SpriteJobQueue {
   /** Global FIFO; per-project ordering falls out of scan-from-front + busyProjects. */
   private pending: PendingJob[] = [];
-  private runningCtrls = new Map<number, AbortController>();
-  private busyProjects = new Set<number>();
+  private runningCtrls = new Map<string, AbortController>();
+  private busyProjects = new Set<string>();
 
   constructor(private readonly concurrency: number = 2) {}
 
@@ -28,8 +28,8 @@ export class SpriteJobQueue {
    * queue only sequences execution.
    */
   enqueue(
-    spriteProjectId: number,
-    jobId: number,
+    spriteProjectId: string,
+    jobId: string,
     run: (signal: AbortSignal) => Promise<void>,
   ): void {
     if (this.isActive(jobId)) {
@@ -44,7 +44,7 @@ export class SpriteJobQueue {
    * starts. Returns false when the queue doesn't know the job (already
    * finished or never enqueued) — the caller decides how to mark the row.
    */
-  cancel(jobId: number): boolean {
+  cancel(jobId: string): boolean {
     const ctrl = this.runningCtrls.get(jobId);
     if (ctrl) {
       ctrl.abort();
@@ -57,7 +57,7 @@ export class SpriteJobQueue {
   }
 
   /** True while the job is queued OR running (i.e. cancel() would find it). */
-  isActive(jobId: number): boolean {
+  isActive(jobId: string): boolean {
     return this.runningCtrls.has(jobId) || this.pending.some((p) => p.jobId === jobId);
   }
 

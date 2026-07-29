@@ -54,9 +54,9 @@ export function DsStudioView({
   initialCoderSessionId,
   onBack,
 }: {
-  dsSessionId: number;
+  dsSessionId: string;
   /** Setado logo após a criação para abrir a sessão de chat recém-criada. */
-  initialCoderSessionId?: number;
+  initialCoderSessionId?: string;
   onBack: () => void;
 }) {
   const { t } = useTranslation('designSystems');

@@ -15,7 +15,7 @@ const ApiClientTab = lazy(() =>
 );
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projects: SessionProject[];
 }
 

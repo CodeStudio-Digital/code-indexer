@@ -8,13 +8,12 @@ import {
 } from '../control-plane-shadow.js';
 
 const context = {
-  sessionId: 'session:coder:1',
-  legacySessionId: 1,
-  commandId: 'command:1',
-  correlationId: 'correlation:1',
+  sessionId: '00000000-0000-4000-8000-000000000001',
+  commandId: '00000000-0000-4000-8000-000000000002',
+  correlationId: '00000000-0000-4000-8000-000000000003',
   actor: { actorId: 'u', actorType: 'user', source: 'http' },
-  agentRunId: 'agent-run:1',
-  attemptId: 'attempt:1',
+  agentRunId: '00000000-0000-4000-8000-000000000004',
+  attemptId: '00000000-0000-4000-8000-000000000005',
   executorOwnerId: 'worker:1',
   fencingEpoch: 1,
 } as never;

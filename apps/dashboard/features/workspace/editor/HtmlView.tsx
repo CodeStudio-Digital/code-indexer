@@ -1,4 +1,5 @@
 import { Suspense, lazy, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import {
   Eye,
   FileCode2,
@@ -47,6 +48,7 @@ function saveMode(filePath: string, mode: HtmlMode): void {
 }
 
 export function HtmlView({ file }: { file: OpenFile }) {
+  const { t } = useTranslation('workspace');
   const [mode, setMode] = useState<HtmlMode>(() => loadMode(file.path));
   const [scriptsEnabled, setScriptsEnabled] = useState(false);
   const [previewRevision, setPreviewRevision] = useState(0);
@@ -61,25 +63,25 @@ export function HtmlView({ file }: { file: OpenFile }) {
   return (
     <div className="h-full min-h-0 flex flex-col">
       <div className="h-7 shrink-0 border-b bg-card/40 flex items-center px-2 gap-0.5 text-[10.5px]">
-        <ModeButton icon={FileEdit} label="Edit" active={mode === 'edit'} onClick={() => changeMode('edit')} />
-        <ModeButton icon={Eye} label="Preview" active={mode === 'preview'} onClick={() => changeMode('preview')} />
-        <ModeButton icon={LayoutPanelLeft} label="Split" active={mode === 'split'} onClick={() => changeMode('split')} />
+        <ModeButton icon={FileEdit} label={t('editorPreview.edit')} active={mode === 'edit'} onClick={() => changeMode('edit')} />
+        <ModeButton icon={Eye} label={t('editorPreview.preview')} active={mode === 'preview'} onClick={() => changeMode('preview')} />
+        <ModeButton icon={LayoutPanelLeft} label={t('editorPreview.split')} active={mode === 'split'} onClick={() => changeMode('split')} />
         {previewVisible && (
           <>
             <span className="mx-1 h-3.5 w-px bg-border" />
             <button
               type="button"
               onClick={() => setPreviewRevision((revision) => revision + 1)}
-              title="Return to the opened page"
+              title={t('editorPreview.returnHome')}
               className="h-5 inline-flex items-center gap-1 px-1.5 rounded text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <Home className="h-3 w-3" />
-              <span>Home</span>
+              <span>{t('editorPreview.home')}</span>
             </button>
             <button
               type="button"
               onClick={() => setScriptsEnabled((enabled) => !enabled)}
-              title={scriptsEnabled ? 'Disable JavaScript in preview' : 'Enable JavaScript in the isolated preview'}
+              title={scriptsEnabled ? t('editorPreview.disableScripts') : t('editorPreview.enableScripts')}
               className={cn(
                 'h-5 inline-flex items-center gap-1 px-1.5 rounded transition-colors',
                 scriptsEnabled
@@ -88,7 +90,7 @@ export function HtmlView({ file }: { file: OpenFile }) {
               )}
             >
               {scriptsEnabled ? <ShieldAlert className="h-3 w-3" /> : <ShieldCheck className="h-3 w-3" />}
-              <span>Scripts {scriptsEnabled ? 'on' : 'off'}</span>
+              <span>{t(scriptsEnabled ? 'editorPreview.scriptsOn' : 'editorPreview.scriptsOff')}</span>
             </button>
           </>
         )}
@@ -123,13 +125,14 @@ export function HtmlView({ file }: { file: OpenFile }) {
 }
 
 function HtmlEditorSurface({ file }: { file: OpenFile }) {
+  const { t } = useTranslation('workspace');
   return (
     <div className="relative h-full min-w-0 min-h-0 overflow-hidden">
       <Suspense
         fallback={
           <div className="absolute inset-0 grid place-items-center text-[11px] text-muted-foreground gap-1">
             <Loader2 className="h-3 w-3 animate-spin" />
-            Loading editor…
+            {t('editorPreview.loadingEditor')}
           </div>
         }
       >
@@ -148,6 +151,7 @@ function HtmlPreview({
   scriptsEnabled: boolean;
   revision: number;
 }) {
+  const { t } = useTranslation('workspace');
   const document = useMemo(
     () => file.content === null ? null : buildHtmlPreviewDocument(
       file.content,
@@ -161,7 +165,7 @@ function HtmlPreview({
     return (
       <div className="h-full grid place-items-center text-xs text-muted-foreground gap-2">
         <Loader2 className="h-4 w-4 animate-spin" />
-        Loading HTML…
+        {t('editorPreview.loadingHtml')}
       </div>
     );
   }
@@ -170,7 +174,7 @@ function HtmlPreview({
     <iframe
       key={`${file.projectId}:${file.path}:${revision}:${scriptsEnabled ? 'scripts' : 'static'}`}
       srcDoc={document}
-      title={`HTML preview: ${file.path}`}
+      title={t('editorPreview.htmlFrameTitle', { path: file.path })}
       sandbox={scriptsEnabled ? 'allow-scripts' : ''}
       referrerPolicy="no-referrer"
       className="h-full w-full border-0 bg-white"

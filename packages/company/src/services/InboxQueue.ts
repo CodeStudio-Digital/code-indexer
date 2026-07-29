@@ -39,6 +39,7 @@ import type {
 import { MASTER_INBOX_SENTINEL } from '@mcp/company/services/MasterInboxRouter.js';
 import { raceWithTimeout, isMutexTimeout } from '@mcp/company/services/utils/promiseMutex.js';
 import type { AgentInboxMessage, InboxKind, InboxPriority, InboxStatus } from '@mcp/company/types.js';
+import { randomUUID } from 'node:crypto';
 
 /**
  * Default ceiling for `wait=true` senders waiting on an inbox answer.
@@ -81,10 +82,10 @@ export interface InboxQueueDeps {
 }
 
 export interface SendArgs {
-  fromAgentRunId: number;
+  fromAgentRunId: string;
   fromRole: string;
   toRole?: string;
-  toAgentRunId?: number;
+  toAgentRunId?: string;
   kind: InboxKind;
   body: string;
   /** When true the caller must follow up with `waitForAnswer(token)`. */
@@ -101,9 +102,9 @@ export interface SendArgs {
   /** Delivery priority — 'urgent' claims before 'normal'/'low'. Default 'normal'. */
   priority?: InboxPriority;
   /** Conversation this belongs to. Omit → the new message roots its own thread. */
-  threadId?: number | null;
+  threadId?: string | null;
   /** The message this one replies to / continues. */
-  replyToMessageId?: number | null;
+  replyToMessageId?: string | null;
   /** Small structured context payload (card_id/decision_id/file refs) as JSON. */
   contextJson?: string | null;
 }
@@ -179,7 +180,7 @@ export class InboxQueue {
   /** Per-token resolvers for `wait=true` senders. */
   private readonly waiters = new Map<string, PendingWaiter>();
   /** Per-`agentRunId` async mutex. Stored as a chain of promises. */
-  private readonly drainMutexes = new Map<number, Promise<void>>();
+  private readonly drainMutexes = new Map<string, Promise<void>>();
   /**
    * Late-bound MasterInboxRouter. Set by the orchestrator after both
    * services exist (router needs MasterLifecycle, which is built before
@@ -219,7 +220,7 @@ export class InboxQueue {
   // ─── Send ─────────────────────────────────────────────────────
 
   send(args: SendArgs): SendResult {
-    if (!args.toRole && typeof args.toAgentRunId !== 'number') {
+    if (!args.toRole && !args.toAgentRunId) {
       throw new Error('send_to_agent: pass either target_role or target_agent_run_id.');
     }
 
@@ -275,7 +276,7 @@ export class InboxQueue {
       process.env.MCP_COMPANY_INBOX_DEADLETTER === '1' &&
       args.toRole &&
       args.toRole !== MASTER_INBOX_SENTINEL &&
-      typeof args.toAgentRunId !== 'number' &&
+      !args.toAgentRunId &&
       this.masterRouter
     ) {
       const health = this.assessTargetHealth({ toRole: args.toRole, toAgentRunId: args.toAgentRunId });
@@ -332,10 +333,9 @@ export class InboxQueue {
     // genuine runaway, independent of the opt-in fail-fast health check.
     const hardCapRaw = Number(process.env.MCP_COMPANY_INBOX_HARD_CAP);
     const hardCap = Number.isFinite(hardCapRaw) && hardCapRaw > 0 ? hardCapRaw : 50;
-    if (args.toRole || typeof args.toAgentRunId === 'number') {
-      const pending = this.deps.ctx.companyStore.listInboxMessages({
-        companySessionId: this.deps.ctx.companySessionId,
-        ...(typeof args.toAgentRunId === 'number'
+    if (args.toRole || args.toAgentRunId) {
+      const pending = this.deps.ctx.companyFiles.listInboxMessagesSync({
+        ...(args.toAgentRunId
           ? { toAgentRunId: args.toAgentRunId }
           : { toRole: args.toRole }),
         status: ['pending', 'delivered'],
@@ -349,8 +349,7 @@ export class InboxQueue {
     }
 
     const waitToken = args.wait ? makeToken() : undefined;
-    const message = this.deps.ctx.companyStore.createInboxMessage({
-      companySessionId: this.deps.ctx.companySessionId,
+    const message = this.deps.ctx.companyFiles.createInboxMessageSync({
       fromAgentRunId: args.fromAgentRunId,
       fromRole: args.fromRole,
       toRole: args.toRole ?? null,
@@ -404,9 +403,9 @@ export class InboxQueue {
     // when the target finishes its current task) picks it up.
     const targetRunId = this.resolveTargetRunId(message);
     if (targetRunId != null) {
-      const targetStatus = this.deps.ctx.companyStore.getAgentRun(targetRunId)?.status;
+      const targetStatus = this.deps.ctx.companyFiles.getAgentRunSync(targetRunId)?.status;
       if (targetStatus && isIdleStatus(targetStatus)) {
-        const role = this.deps.ctx.companyStore.getAgentRun(targetRunId)?.role ?? args.toRole ?? '';
+        const role = this.deps.ctx.companyFiles.getAgentRunSync(targetRunId)?.role ?? args.toRole ?? '';
         // Fire-and-forget: any failure stays a pending row that gets
         // delivered next time the target actually goes idle.
         void this.drainOnIdle(targetRunId, role);
@@ -426,7 +425,7 @@ export class InboxQueue {
    */
   private shouldBroadcastToMaster(): boolean {
     try {
-      const row = this.deps.ctx.companyStore.getCompanySession(this.deps.ctx.companySessionId);
+      const row = this.deps.ctx.companyFiles.getSession();
       if (!row?.config_json) return false;
       const cfg = JSON.parse(row.config_json) as { master_broadcast_subscribe?: unknown };
       return cfg.master_broadcast_subscribe === true;
@@ -462,7 +461,7 @@ export class InboxQueue {
         this.waiters.delete(token);
         const msg = this.findMessageByWaitToken(token);
         if (msg && (msg.status === 'pending' || msg.status === 'delivered')) {
-          this.deps.ctx.companyStore.setInboxStatus(msg.id, 'expired', {
+          this.deps.ctx.companyFiles.setInboxStatusSync(msg.id, 'expired', {
             answer: '(no response from target before timeout)',
           });
           this.deps.publisher.publish('inbox_message_expired', { messageId: msg.id });
@@ -490,13 +489,13 @@ export class InboxQueue {
    * already-populated timestamps. Returns null when the id doesn't
    * exist. Pure read, no waiting.
    */
-  getMessageStatus(messageId: number): {
+  getMessageStatus(messageId: string): {
     status: InboxStatus;
     answer: string | null;
     deliveredAt: string | null;
     answeredAt: string | null;
   } | null {
-    const msg = this.deps.ctx.companyStore.getInboxMessage(messageId);
+    const msg = this.deps.ctx.companyFiles.getInboxMessageSync(messageId);
     if (!msg) return null;
     return {
       status: msg.status,
@@ -517,9 +516,9 @@ export class InboxQueue {
    * later reactivates the runner via this subscription.
    */
   onMessageAnswered(
-    messageId: number,
+    messageId: string,
     callback: (event: {
-      messageId: number;
+      messageId: string;
       status: 'answered' | 'expired' | 'cancelled';
       answer: string | null;
     }) => void,
@@ -579,11 +578,11 @@ export class InboxQueue {
 
   // ─── Respond ──────────────────────────────────────────────────
 
-  respond(messageId: number, answer: string): boolean {
-    const msg = this.deps.ctx.companyStore.getInboxMessage(messageId);
+  respond(messageId: string, answer: string): boolean {
+    const msg = this.deps.ctx.companyFiles.getInboxMessageSync(messageId);
     if (!msg) return false;
     if (msg.status !== 'pending' && msg.status !== 'delivered') return false;
-    const updated = this.deps.ctx.companyStore.answerInboxMessage(messageId, answer);
+    const updated = this.deps.ctx.companyFiles.answerInboxMessageSync(messageId, answer);
     if (!updated) return false;
 
     this.deps.publisher.publish('inbox_message_answered', {
@@ -605,11 +604,13 @@ export class InboxQueue {
     return true;
   }
 
-  cancel(messageId: number, reason: string): boolean {
-    const msg = this.deps.ctx.companyStore.getInboxMessage(messageId);
+  cancel(messageId: string, reason: string): boolean {
+    const msg = this.deps.ctx.companyFiles.getInboxMessageSync(messageId);
     if (!msg) return false;
     if (msg.status === 'answered' || msg.status === 'cancelled' || msg.status === 'expired') return false;
-    this.deps.ctx.companyStore.setInboxStatus(messageId, 'cancelled', { answer: `(cancelled: ${reason})` });
+    this.deps.ctx.companyFiles.setInboxStatusSync(messageId, 'cancelled', {
+      answer: `(cancelled: ${reason})`,
+    });
     this.deps.publisher.publish('inbox_message_cancelled', { messageId, reason });
     if (msg.wait_token) {
       // Unblock the sender — propagate the cancellation as a normal
@@ -630,14 +631,11 @@ export class InboxQueue {
   list(opts: {
     status?: InboxStatus | InboxStatus[];
     toRole?: string;
-    toAgentRunId?: number;
-    fromAgentRunId?: number;
+    toAgentRunId?: string;
+    fromAgentRunId?: string;
     limit?: number;
   }): AgentInboxMessage[] {
-    return this.deps.ctx.companyStore.listInboxMessages({
-      companySessionId: this.deps.ctx.companySessionId,
-      ...opts,
-    });
+    return this.deps.ctx.companyFiles.listInboxMessagesSync(opts);
   }
 
   /**
@@ -648,14 +646,14 @@ export class InboxQueue {
    * already holds a message back at `from`, we treat it as a cycle.
    */
   detectCycle(args: {
-    fromAgentRunId: number;
+    fromAgentRunId: string;
     toRole?: string;
-    toAgentRunId?: number;
+    toAgentRunId?: string;
   }): boolean {
     const seeds = this.resolveCycleSeeds(args.toRole, args.toAgentRunId);
     if (seeds.length === 0) return false;
 
-    const visited = new Set<number>();
+    const visited = new Set<string>();
     const queue = [...seeds];
 
     while (queue.length > 0) {
@@ -666,8 +664,7 @@ export class InboxQueue {
 
       // Find every open message where `current` is the sender — those
       // run-ids it's waiting on become the next BFS frontier.
-      const outgoing = this.deps.ctx.companyStore.listInboxMessages({
-        companySessionId: this.deps.ctx.companySessionId,
+      const outgoing = this.deps.ctx.companyFiles.listInboxMessagesSync({
         status: ['pending', 'delivered'],
         fromAgentRunId: current,
       });
@@ -687,7 +684,7 @@ export class InboxQueue {
    * and reactivates the runner with it. No-op when the agent is gone
    * or there is nothing to drain.
    */
-  async drainOnIdle(agentRunId: number, role: string): Promise<void> {
+  async drainOnIdle(agentRunId: string, role: string): Promise<void> {
     const previous = this.drainMutexes.get(agentRunId) ?? Promise.resolve();
     let release!: () => void;
     const next = new Promise<void>((res) => { release = res; });
@@ -713,8 +710,7 @@ export class InboxQueue {
           throw e;
         }
       }
-      const message = this.deps.ctx.companyStore.claimNextInboxForAgent({
-        companySessionId: this.deps.ctx.companySessionId,
+      const message = this.deps.ctx.companyFiles.claimNextInboxForAgentSync({
         agentRunId,
         role,
       });
@@ -734,7 +730,7 @@ export class InboxQueue {
         // the next idle transition tries again. This keeps the
         // `delivered_at` audit timestamp on the row but reopens the
         // claim window.
-        this.deps.ctx.companyStore.setInboxStatus(message.id, 'pending');
+        this.deps.ctx.companyFiles.setInboxStatusSync(message.id, 'pending');
       }
     } finally {
       release();
@@ -768,23 +764,22 @@ export class InboxQueue {
    */
   assessTargetHealth(args: {
     toRole?: string;
-    toAgentRunId?: number;
+    toAgentRunId?: string;
   }): TargetHealthAssessment {
     // Resolve a target run (reuse logic similar to resolveTargetRunId).
-    let targetRunId: number | null = null;
-    let alternativeRunIds: number[] = [];
-    if (typeof args.toAgentRunId === 'number') {
+    let targetRunId: string | null = null;
+    let alternativeRunIds: string[] = [];
+    if (args.toAgentRunId) {
       targetRunId = args.toAgentRunId;
     } else if (args.toRole) {
-      const runs = this.deps.ctx.companyStore
-        .listAgentRuns(this.deps.ctx.companySessionId)
+      const runs = this.deps.ctx.companyFiles
+        .listAgentRunsSync()
         .filter((r) => r.role === args.toRole && r.role !== 'master');
       if (runs.length > 0) {
         // Same load-balancing as resolveTargetRunId: smallest backlog.
-        let best: { id: number; backlog: number } | null = null;
+        let best: { id: string; backlog: number } | null = null;
         for (const r of runs) {
-          const backlog = this.deps.ctx.companyStore.listInboxMessages({
-            companySessionId: this.deps.ctx.companySessionId,
+          const backlog = this.deps.ctx.companyFiles.listInboxMessagesSync({
             toAgentRunId: r.id,
             status: ['pending', 'delivered'],
           }).length;
@@ -805,7 +800,7 @@ export class InboxQueue {
       };
     }
 
-    const run = this.deps.ctx.companyStore.getAgentRun(targetRunId);
+    const run = this.deps.ctx.companyFiles.getAgentRunSync(targetRunId);
     if (!run) {
       // Explicit toAgentRunId passed but the run row doesn't exist —
       // treat as no_target_run rather than silently assuming healthy.
@@ -833,8 +828,7 @@ export class InboxQueue {
       };
     }
 
-    const pending = this.deps.ctx.companyStore.listInboxMessages({
-      companySessionId: this.deps.ctx.companySessionId,
+    const pending = this.deps.ctx.companyFiles.listInboxMessagesSync({
       toAgentRunId: targetRunId,
       status: ['pending', 'delivered'],
     });
@@ -884,7 +878,7 @@ export class InboxQueue {
    * fallback targets when the requested role is unhealthy.
    */
   private findAlternativeRoles(excludeRole: string | undefined): string[] {
-    const runs = this.deps.ctx.companyStore.listAgentRuns(this.deps.ctx.companySessionId);
+    const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
     const seen = new Set<string>();
     const alternatives: string[] = [];
     for (const r of runs) {
@@ -900,18 +894,17 @@ export class InboxQueue {
 
   // ─── Helpers ──────────────────────────────────────────────────
 
-  private resolveTargetRunId(msg: AgentInboxMessage): number | null {
+  private resolveTargetRunId(msg: AgentInboxMessage): string | null {
     if (msg.to_agent_run_id != null) return msg.to_agent_run_id;
     if (!msg.to_role) return null;
-    const candidates = this.deps.ctx.companyStore.listAgentRuns(this.deps.ctx.companySessionId)
+    const candidates = this.deps.ctx.companyFiles.listAgentRunsSync()
       .filter((r) => r.role === msg.to_role && r.role !== 'master');
     if (candidates.length === 0) return null;
     // Prefer the run with the smallest pending backlog so messages
     // load-balance across multiple agents playing the same role.
-    let best: { id: number; backlog: number } | null = null;
+    let best: { id: string; backlog: number } | null = null;
     for (const r of candidates) {
-      const backlog = this.deps.ctx.companyStore.listInboxMessages({
-        companySessionId: this.deps.ctx.companySessionId,
+      const backlog = this.deps.ctx.companyFiles.listInboxMessagesSync({
         toAgentRunId: r.id,
         status: ['pending', 'delivered'],
       }).length;
@@ -921,10 +914,10 @@ export class InboxQueue {
   }
 
   /** Resolve potential target run ids for cycle detection. */
-  private resolveCycleSeeds(toRole?: string, toAgentRunId?: number): number[] {
-    if (typeof toAgentRunId === 'number') return [toAgentRunId];
+  private resolveCycleSeeds(toRole?: string, toAgentRunId?: string): string[] {
+    if (toAgentRunId) return [toAgentRunId];
     if (!toRole) return [];
-    return this.deps.ctx.companyStore.listAgentRuns(this.deps.ctx.companySessionId)
+    return this.deps.ctx.companyFiles.listAgentRunsSync()
       .filter((r) => r.role === toRole && r.role !== 'master')
       .map((r) => r.id);
   }
@@ -934,10 +927,7 @@ export class InboxQueue {
     // silently returned null once a session accumulated >200 messages and the
     // answered row aged out of the window — stranding the blocked sender until
     // its 20-min timeout. `wait_token` is unique per session.
-    return this.deps.ctx.companyStore.getInboxMessageByWaitToken(
-      this.deps.ctx.companySessionId,
-      token,
-    );
+    return this.deps.ctx.companyFiles.getInboxMessageByWaitTokenSync(token);
   }
 }
 
@@ -960,7 +950,7 @@ function isIdleStatus(status: string): boolean {
 }
 
 function makeToken(): string {
-  return `inbox_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return randomUUID();
 }
 
 /**
@@ -986,8 +976,8 @@ export function formatInboxPrompt(msg: AgentInboxMessage): string {
  * the transcript panel.
  */
 function formatBroadcastBody(
-  args: { fromAgentRunId: number; fromRole: string; toRole?: string; toAgentRunId?: number; kind: InboxKind; body: string },
-  originalMessageId: number,
+  args: { fromAgentRunId: string; fromRole: string; toRole?: string; toAgentRunId?: string; kind: InboxKind; body: string },
+  originalMessageId: string,
 ): string {
   const target = args.toRole
     ? `@${args.toRole}`

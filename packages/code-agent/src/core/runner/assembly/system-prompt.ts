@@ -100,7 +100,6 @@
 // 2026-07-16.1 bump — prompt-driven subagent research depth, completion
 // criteria, and soft synthesis checkpoints. Static prefix changed so cached
 // runs cannot retain the previous unbounded-research framing.
-// 2026-07-23.1 bump — explicit first-batch goal lifecycle, create_goal catalog-
-// cap survival, and bounded runtime finish gate. Static prefix changed so
-// cached runs cannot skip create_goal.
-export const SYSTEM_PROMPT_VERSION = '20260723.1';
+// 2026-07-24.1 bump — goal state is optional telemetry; completion evidence
+// and independent review are advisory instead of execution gates.
+export const SYSTEM_PROMPT_VERSION = '20260724.1';

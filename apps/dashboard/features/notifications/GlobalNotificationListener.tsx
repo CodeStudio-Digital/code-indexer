@@ -9,15 +9,17 @@ import {
 } from './stream-events.js';
 import type { NotificationSourceContext } from './types.js';
 
-interface GlobalNotificationEnvelope {
+interface GlobalNotificationEnvelopeBase {
   id: number;
   ts: number;
-  kind: 'coder' | 'company';
-  sessionId: number;
   event: string;
   data: unknown;
   context: NotificationSourceContext;
 }
+
+type GlobalNotificationEnvelope =
+  | (GlobalNotificationEnvelopeBase & { kind: 'coder'; sessionId: string })
+  | (GlobalNotificationEnvelopeBase & { kind: 'company'; sessionId: string });
 
 const CURSOR_KEY = 'mcp.notification-stream.cursor';
 let lastEventId = -1;

@@ -23,7 +23,7 @@ export function VersionMiniThumb({
   projectId: number;
   version: AssetVersion;
   isCurrent: boolean;
-  onClick: (id: number, e: React.MouseEvent) => void;
+  onClick: (id: string, e: React.MouseEvent) => void;
 }) {
   const selected = useAnimateSession((s) => s.selected.has(version.id));
   const selectMode = useAnimateSession((s) => s.selectMode);

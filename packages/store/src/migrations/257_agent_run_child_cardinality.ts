@@ -32,6 +32,14 @@ export const agentRunChildCardinality257: Migration = {
   name: 'agent_run_child_cardinality',
   outsideTransaction: true,
   up(db: DB): void {
+    // `agent_runs` ∈ CENTRAL_DROP_TABLES — a per-project DB runs this central
+    // migration lineage but trims the control plane away, so the rebuild below
+    // would throw `no such table` (see project-db/trim/drop-list.ts, migration 175).
+    const present = db.prepare(`
+      SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_runs'
+    `).get();
+    if (!present) return;
+
     // Idempotency guard: this index only exists after the rebuild completed.
     const alreadyApplied = db.prepare(`
       SELECT 1 FROM sqlite_master

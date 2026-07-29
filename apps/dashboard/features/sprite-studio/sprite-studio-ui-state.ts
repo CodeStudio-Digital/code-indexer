@@ -10,7 +10,7 @@ import type { StudioMode } from './types.js';
 /** The generation the panel was last driving — restored on remount so
  *  navigating away never "loses" an in-flight/unpicked batch. */
 export interface LastGenJob {
-  jobId: number;
+  jobId: string;
   prompt: string;
   n: number;
   rawPrompt: boolean;
@@ -70,7 +70,7 @@ export function loadSpriteStudioUi(projectId: number): SpriteStudioUiState | nul
         ? (o.lastMode as StudioMode)
         : null,
       lastGenJob:
-        g && typeof g.jobId === 'number' && typeof g.prompt === 'string'
+        g && typeof g.jobId === 'string' && g.jobId.length > 0 && typeof g.prompt === 'string'
           ? {
               jobId: g.jobId,
               prompt: g.prompt,

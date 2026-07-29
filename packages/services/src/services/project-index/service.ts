@@ -758,6 +758,7 @@ export class ProjectIndexService {
       maxFiles: s.maxFiles,
       allowEmptyWipe: manual,
       onProgress: (p) => this.publishStructuralProgress(projectId, p),
+      onChanges: (events) => this.semanticCatchup?.noteDelta(projectId, events),
     });
     if (result.aborted === 'too_large') {
       this.status.setPhase(projectId, 'too_large');
@@ -770,12 +771,6 @@ export class ProjectIndexService {
         'scan found 0 files — check the project root path and .gitignore/.mcpindexignore; a manual reindex overrides',
       );
       return false;
-    }
-    if (result.indexed > 0 || result.removed > 0) {
-      // The stat-first scanner found changes that happened while the project
-      // was closed. It does not expose their individual paths, so one wildcard
-      // invalidation asks the semantic coordinator to compare item hashes.
-      this.semanticCatchup?.noteDelta(projectId, [{ path: '*', kind: 'upsert' }]);
     }
     return true;
   }

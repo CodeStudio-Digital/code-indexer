@@ -25,13 +25,13 @@ export function dsGetSessionInfo(binding: DsToolBinding): CoderTool {
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_get_session_info: DesignSystemStore not wired.');
-        const session = binding.resolveDsSession(store);
+        const session = await binding.resolveDsSession(store);
         if (!session) {
           return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
         }
-        const draft = store.getLatestVersionAny(session.id);
-        const published = store.getLatestPublishedVersion(session.id);
-        const componentCount = draft ? store.listComponents(draft.id).length : 0;
+        const draft = await store.getLatestVersionAny(session.id);
+        const published = await store.getLatestPublishedVersion(session.id);
+        const componentCount = draft ? (await store.listComponents(draft.id)).length : 0;
         const lines = [
           `name: ${session.name}`,
           `package_name: ${session.package_name}`,

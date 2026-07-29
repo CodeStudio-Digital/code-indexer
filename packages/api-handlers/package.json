@@ -12,6 +12,7 @@
     "./plugins": "./src/plugins/index.ts",
     "./context": "./src/context.ts",
     "./types": "./src/types.ts",
+    "./builder/checkpoints.js": null,
     "./*": "./src/*"
   }
 }

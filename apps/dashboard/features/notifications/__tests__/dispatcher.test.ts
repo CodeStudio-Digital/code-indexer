@@ -6,24 +6,29 @@ import {
 } from '../dispatcher.js';
 import type { AppNotificationEvent, NotificationRouteTarget } from '../types.js';
 
+const PROJECT_SESSION_ID = '55555555-5555-4555-8555-555555555555';
+const OTHER_PROJECT_SESSION_ID = '66666666-6666-4666-8666-666666666666';
+const GLOBAL_SESSION_ID = '77777777-7777-4777-8777-777777777777';
+const COMPANY_SESSION_ID = '88888888-8888-4888-8888-888888888888';
+
 describe('notification route visibility', () => {
   it('matches project routes by project id and session query', () => {
     const target: NotificationRouteTarget = {
       kind: 'project',
-      route: '/projects/42?session=7',
+      route: `/projects/42?session=${PROJECT_SESSION_ID}`,
       scopeId: 42,
-      sessionId: 7,
+      sessionId: PROJECT_SESSION_ID,
     };
 
     expect(isNotificationRouteVisibleForLocation(target, {
       pathname: '/projects/42',
-      search: '?session=7&tab=chat',
+      search: `?session=${PROJECT_SESSION_ID}&tab=chat`,
       visibilityState: 'visible',
     })).toBe(true);
 
     expect(isNotificationRouteVisibleForLocation(target, {
       pathname: '/projects/42',
-      search: '?session=8',
+      search: `?session=${OTHER_PROJECT_SESSION_ID}`,
       visibilityState: 'visible',
     })).toBe(false);
   });
@@ -31,13 +36,13 @@ describe('notification route visibility', () => {
   it('matches global routes by session query', () => {
     const target: NotificationRouteTarget = {
       kind: 'global',
-      route: '/global?session=12',
-      sessionId: 12,
+      route: `/global?session=${GLOBAL_SESSION_ID}`,
+      sessionId: GLOBAL_SESSION_ID,
     };
 
     expect(isNotificationRouteVisibleForLocation(target, {
       pathname: '/global',
-      search: '?session=12',
+      search: `?session=${GLOBAL_SESSION_ID}`,
       visibilityState: 'visible',
     })).toBe(true);
   });
@@ -45,18 +50,18 @@ describe('notification route visibility', () => {
   it('matches company routes by canonical board or pipeline path', () => {
     const board: NotificationRouteTarget = {
       kind: 'company',
-      route: '/company/sessions/5/main/work/board',
-      scopeId: 5,
-      sessionId: 5,
+      route: `/company/sessions/${COMPANY_SESSION_ID}/main/work/board`,
+      scopeId: COMPANY_SESSION_ID,
+      sessionId: COMPANY_SESSION_ID,
     };
 
     expect(isNotificationRouteVisibleForLocation(board, {
-      pathname: '/company/sessions/5/main/work/board',
+      pathname: `/company/sessions/${COMPANY_SESSION_ID}/main/work/board`,
       visibilityState: 'visible',
     })).toBe(true);
 
     expect(isNotificationRouteVisibleForLocation(board, {
-      pathname: '/company/sessions/5/main/work/pipelines',
+      pathname: `/company/sessions/${COMPANY_SESSION_ID}/main/work/pipelines`,
       visibilityState: 'visible',
     })).toBe(false);
   });
@@ -64,11 +69,11 @@ describe('notification route visibility', () => {
   it('never treats hidden documents as visible', () => {
     expect(isNotificationRouteVisibleForLocation({
       kind: 'global',
-      route: '/global?session=1',
-      sessionId: 1,
+      route: `/global?session=${GLOBAL_SESSION_ID}`,
+      sessionId: GLOBAL_SESSION_ID,
     }, {
       pathname: '/global',
-      search: '?session=1',
+      search: `?session=${GLOBAL_SESSION_ID}`,
       visibilityState: 'hidden',
     })).toBe(false);
   });
@@ -94,24 +99,34 @@ describe('notification settings and dedupe keys', () => {
       kind: 'human_action_required',
       target: {
         kind: 'project',
-        route: '/projects/2?session=9',
+        route: `/projects/2?session=${PROJECT_SESSION_ID}`,
         scopeId: 2,
-        sessionId: 9,
+        sessionId: PROJECT_SESSION_ID,
       },
       id: 'tool_approval_request:abc',
       title: 'Action required',
       body: 'Waiting for approval.',
     };
 
-    expect(buildNotificationKey(event)).toBe(
-      'mcp.desktop-notification:human_action_required:project:2:9:tool_approval_request:abc',
-    );
+    expect(buildNotificationKey(event)).toBe([
+      'mcp.desktop-notification',
+      'human_action_required',
+      'project',
+      '2',
+      PROJECT_SESSION_ID,
+      'tool_approval_request:abc',
+    ].join(':'));
   });
 
   it('uses the runtime identity so repeated semantic outcomes remain distinct runs', () => {
     const base: AppNotificationEvent = {
       kind: 'session_finished',
-      target: { kind: 'project', route: '/projects/2?session=9', scopeId: 2, sessionId: 9 },
+      target: {
+        kind: 'project',
+        route: `/projects/2?session=${PROJECT_SESSION_ID}`,
+        scopeId: 2,
+        sessionId: PROJECT_SESSION_ID,
+      },
       id: 'done:completed:',
       title: 'Finished',
       body: 'Done.',

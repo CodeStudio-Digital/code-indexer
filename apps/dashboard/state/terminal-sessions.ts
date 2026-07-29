@@ -31,7 +31,7 @@ import { create } from 'zustand';
 export type TerminalSpawnTarget =
   | { kind: 'host' }
   | { kind: 'project'; projectId: number }
-  | { kind: 'sandbox'; sessionId: number };
+  | { kind: 'sandbox'; sessionId: string };
 
 export interface TerminalSession {
   /** Backend `terminalId` from `terminal.spawn`. */
@@ -94,7 +94,7 @@ export function projectScope(projectId: number): string {
   return `project:${projectId}`;
 }
 
-export function companyScope(companySessionId: number): string {
+export function companyScope(companySessionId: string): string {
   return `company:${companySessionId}`;
 }
 

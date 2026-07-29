@@ -15,13 +15,13 @@
 import type { StateCreator } from 'zustand';
 
 export interface DriveFileMeta {
-  id: number;
+  id: string;
   scopeKey: string;
   path: string;
   sizeBytes: number;
   mime: string;
   ownerRole: string | null;
-  ownerAgentRunId: number | null;
+  ownerAgentRunId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -46,23 +46,23 @@ export const INITIAL_DRIVE_STATE: DriveState = {
 };
 
 export interface DriveSlice {
-  drive: Map<number, DriveState>;
-  driveEnsure: (sessionId: number) => void;
-  driveSetLoading: (sessionId: number, loading: boolean) => void;
-  driveSetError: (sessionId: number, error: string | null) => void;
+  drive: Map<string, DriveState>;
+  driveEnsure: (sessionId: string) => void;
+  driveSetLoading: (sessionId: string, loading: boolean) => void;
+  driveSetError: (sessionId: string, error: string | null) => void;
   /** Replace the entire file map (initial REST load). */
-  driveHydrate: (sessionId: number, scope: string, files: DriveFileMeta[]) => void;
-  driveApplyAdded: (sessionId: number, meta: DriveFileMeta) => void;
-  driveApplyUpdated: (sessionId: number, meta: DriveFileMeta) => void;
-  driveApplyDeleted: (sessionId: number, path: string) => void;
-  driveReset: (sessionId: number) => void;
+  driveHydrate: (sessionId: string, scope: string, files: DriveFileMeta[]) => void;
+  driveApplyAdded: (sessionId: string, meta: DriveFileMeta) => void;
+  driveApplyUpdated: (sessionId: string, meta: DriveFileMeta) => void;
+  driveApplyDeleted: (sessionId: string, path: string) => void;
+  driveReset: (sessionId: string) => void;
 }
 
 function withSlot(
-  prev: Map<number, DriveState>,
-  sessionId: number,
+  prev: Map<string, DriveState>,
+  sessionId: string,
   patch: (slot: DriveState) => DriveState,
-): Map<number, DriveState> {
+): Map<string, DriveState> {
   const next = new Map(prev);
   const current = next.get(sessionId) ?? INITIAL_DRIVE_STATE;
   next.set(sessionId, patch(current));
@@ -70,10 +70,10 @@ function withSlot(
 }
 
 function withFiles(
-  prev: Map<number, DriveState>,
-  sessionId: number,
+  prev: Map<string, DriveState>,
+  sessionId: string,
   patch: (files: Map<string, DriveFileMeta>) => Map<string, DriveFileMeta>,
-): Map<number, DriveState> {
+): Map<string, DriveState> {
   return withSlot(prev, sessionId, (slot) => ({ ...slot, files: patch(slot.files) }));
 }
 

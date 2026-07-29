@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package codestudio.agent.v1;
+
+import "codestudio/agent/v1/common.proto";
+import "codestudio/agent/v1/supervisor.proto";
+
+// Private, single-use supervisor-runner bootstrap contract. These messages are
+// never members of the permanent host-supervisor ManagementPayload.
+enum RunnerEndpointProvisioning {
+  RUNNER_ENDPOINT_PROVISIONING_UNSPECIFIED = 0;
+  RUNNER_ENDPOINT_PROVISIONING_WINDOWS_CREATE_NAMED_PIPE = 1;
+  RUNNER_ENDPOINT_PROVISIONING_UNIX_RECEIVE_BOUND_SOCKET = 2;
+}
+
+// Logical SCM_RIGHTS slot. Raw HANDLE/FD values never cross the wire.
+// Windows creates all three listeners inside the contained runner and therefore
+// uses UNSPECIFIED for every listener slot.
+enum RunnerListenerSlot {
+  RUNNER_LISTENER_SLOT_UNSPECIFIED = 0;
+  RUNNER_LISTENER_SLOT_CONTROL = 1;
+  RUNNER_LISTENER_SLOT_DATA = 2;
+  RUNNER_LISTENER_SLOT_RUNNER_PULSE = 3;
+}
+
+enum RunnerExpectedPeerRole {
+  RUNNER_EXPECTED_PEER_ROLE_UNSPECIFIED = 0;
+  RUNNER_EXPECTED_PEER_ROLE_HOST = 1;
+  RUNNER_EXPECTED_PEER_ROLE_SUPERVISOR = 2;
+}
+
+message RunnerExpectedLocalPeer {
+  uint32 process_id = 1;
+  optional uint32 unix_user_id = 2;
+}
+
+message RunnerLaunchEndpoint {
+  AttemptEndpointKind kind = 1;
+  string endpoint_id = 2;
+  string address = 3;
+  string connection_id = 4;
+  // Opaque single-session credential, 16..512 bytes.
+  bytes connection_token = 5;
+  uint64 max_frame_bytes = 6;
+  RunnerEndpointProvisioning provisioning = 7;
+  RunnerListenerSlot listener_slot = 8;
+  RunnerExpectedPeerRole expected_peer_role = 9;
+}
+
+// Encoded directly as one bounded frame on the protected bootstrap transport.
+// The receiver acknowledges the exact original bytes, not a re-encoding.
+message RunnerLaunchHandoff {
+  uint32 schema_version = 1;
+  AttemptIdentity identity = 2;
+  string runtime_instance_id = 3;
+  uint32 runner_process_id = 4;
+  repeated RunnerLaunchEndpoint endpoints = 5;
+  // Opaque single-use AgentHello nonce, 16..256 bytes.
+  bytes launch_nonce = 6;
+  // Absolute Unix time. Shape decode does not prove this deadline is live.
+  int64 hard_deadline_at_unix_ms = 7;
+  ResourceBudget reserved_resource_budget = 8;
+  ContainmentReport effective_containment = 9;
+  bytes launch_management_payload_sha256 = 10;
+  RunnerExpectedLocalPeer expected_host_peer = 11;
+  RunnerExpectedLocalPeer expected_supervisor_peer = 12;
+  // Forwarded verbatim from LaunchAttemptProcess. It is bound to this exact
+  // runtime and control endpoint by the protected handoff bytes.
+  ActivationAuthoritySeal activation_authority_seal = 13;
+  // Derived from the Host expectation only after the supervisor has matched it
+  // against the trusted installed binary. Runtime instance and PID are then
+  // bound to the physical spawn before this protected handoff is committed.
+  RuntimeProvenance runtime_provenance = 14;
+}
+
+message RunnerReadyEndpoint {
+  AttemptEndpointKind kind = 1;
+  string endpoint_id = 2;
+  string address = 3;
+  string connection_id = 4;
+}
+
+// Wire evidence that the runner materialized the exact endpoint set. Physical
+// ownership remains an OS/reaper fact and is not minted by this message alone.
+message RunnerEndpointsReady {
+  uint32 schema_version = 1;
+  AttemptIdentity identity = 2;
+  string runtime_instance_id = 3;
+  uint32 runner_process_id = 4;
+  // SHA-256("codestudio.agent.runner-launch-handoff.v1\0" || exact_handoff).
+  bytes acknowledged_handoff_sha256 = 5;
+  repeated RunnerReadyEndpoint endpoints = 6;
+}

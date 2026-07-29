@@ -49,10 +49,10 @@ export function normalizeRepositionFrameInput(raw: unknown): RepositionFrameInpu
 }
 
 export function mountSpriteFrameRepositionRoutes(app: Hono, deps: ServerDeps): void {
-  const store = deps.spriteAnimationsStore;
+  const store = deps.spriteFileStore;
 
   app.post('/api/sprite-studio/animations/:id/frames/reposition', async (c) => {
-    const found = resolveAnim(deps, Number(c.req.param('id')));
+    const found = await resolveAnim(deps, c.req.param('id'));
     if (!found || !found.root) return c.json({ error: 'not_found' }, 404);
     let input: RepositionFrameInput;
     try {
@@ -64,22 +64,22 @@ export function mountSpriteFrameRepositionRoutes(app: Hono, deps: ServerDeps): v
       return c.json({ error: 'unknown_track' }, 400);
     }
 
-    const frames = store.listFrames(found.anim.id, input.track);
+    const frames = await store.listFrames(found.anim.id, input.track);
     const target = frames.find((f) => f.frame_index === input.frameIndex);
     if (!target) return c.json({ error: 'no_frame' }, 400);
-    const version = deps.spriteAssetsStore.getVersion(target.version_id);
+    const version = await store.getVersion(target.version_id);
     if (!version || version.asset_id !== found.asset.id) return c.json({ error: 'invalid_version' }, 400);
 
     try {
       const png = fs.readFileSync(resolveInsideSpriteDir(found.root, version.file_rel_path));
       const source = decodePng(png);
       const repositioned = repositionSubjectOnCanvas(source, { dx: input.dx, dy: input.dy });
-      const row = writeEditedVersion(deps, found.root, found.asset, encodePng(repositioned), {
+      const row = await writeEditedVersion(deps, found.root, found.asset, encodePng(repositioned), {
         setCurrent: false,
         parentVersionId: version.id,
         dims: { width: repositioned.width, height: repositioned.height },
       });
-      store.replaceTrackFrames(
+      await store.replaceTrackFrames(
         found.anim.id,
         input.track,
         frames.map((f) => ({
@@ -92,8 +92,10 @@ export function mountSpriteFrameRepositionRoutes(app: Hono, deps: ServerDeps): v
       return c.json({ error: (e as Error).message }, 500);
     }
 
-    const updated = store.get(found.anim.id);
+    const updated = await store.getAnimation(found.anim.id);
     if (!updated) return c.json({ error: 'not_found' }, 404);
-    return c.json(toAnimDto(updated, store.listFrames(found.anim.id)));
+    return c.json(
+      toAnimDto(updated, await store.listFrames(found.anim.id)),
+    );
   });
 }

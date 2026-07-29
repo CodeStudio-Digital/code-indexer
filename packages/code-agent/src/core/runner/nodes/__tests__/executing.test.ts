@@ -20,6 +20,7 @@ import { consumeStream, thinkingOnlyBudgetMs } from '../executing-stream.js';
 import { makeTestContext } from './test-helpers.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import { HookBus, type HookDefinition } from '@mcp/code-agent/core/hook-bus.js';
+import { asSessionId } from '@mcp/session-storage';
 
 function makeStreamingProvider(deltas: ChatDelta[], onRequest?: (request: ChatRequest) => void): ChatProvider {
   return {
@@ -272,6 +273,28 @@ describe('ExecutingNode', () => {
     expect(visibleNames).toContain('update_goal');
   });
 
+  it('forwards the filesystem session UUID to tool-selection telemetry', async () => {
+    const sessionId = asSessionId('018f0f5e-7b2d-7a45-8c11-0123456789ab');
+    let observedSessionId: string | undefined;
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'text_delta', text: 'done' },
+        { type: 'done', stop_reason: 'end_turn' },
+      ]),
+      registry: makeRegistry({ read_file: () => 'read' }),
+      toolContext: emptyToolContext(),
+    });
+    ctx.opts.sessionId = sessionId;
+    ctx.opts.toolSelectionFilter = async (tools, filterContext) => {
+      observedSessionId = filterContext.sessionId;
+      return tools;
+    };
+
+    expect((await new ExecutingNode().execute(ctx, null)).kind)
+      .toBe('CleanFinish');
+    expect(observedSessionId).toBe(sessionId);
+  });
+
   it('blocks a hallucinated create_goal when update_goal is unavailable even with pinning off', async () => {
     vi.stubEnv('CODER_TOOL_PIN_DISABLE', '1');
     let createCalls = 0;
@@ -308,7 +331,7 @@ describe('ExecutingNode', () => {
     }
   });
 
-  it('nudges once before a text-only finish when writes lack fresh verification', async () => {
+  it('clean-finishes without a verification nudge when writes lack fresh evidence', async () => {
     const registry = new ToolRegistry();
     registry.register({
       name: 'edit_file',
@@ -353,17 +376,13 @@ describe('ExecutingNode', () => {
     };
 
     const first = await new ExecutingNode().execute(ctx, null);
-    expect(first).toEqual({ kind: 'TurnSucceeded', hasToolCalls: false });
-    expect(ctx.messages.at(-1)?.role).toBe('user');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('Completion evidence is not fresh');
-
-    const second = await new ExecutingNode().execute(ctx, first);
-    expect(second.kind).toBe('CleanFinish');
+    expect(first.kind).toBe('CleanFinish');
     expect(ctx.stopReason).toBe('completed');
-    expect(ctx.verification.nudges).toBe(1);
+    expect(ctx.messages.at(-1)?.role).toBe('assistant');
+    expect(ctx.verification.nudges).toBe(0);
   });
 
-  it('re-enters execution instead of clean-finishing substantive work without a goal', async () => {
+  it('clean-finishes substantive work without requiring a goal', async () => {
     const ledger = new ToolCallLedger();
     const { ctx } = makeTestContext({
       provider: makeSequencedProvider([
@@ -412,15 +431,12 @@ describe('ExecutingNode', () => {
     expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
     const finishAttempt = await node.execute(ctx, null);
 
-    expect(finishAttempt.kind).toBe('TurnSucceeded');
-    expect(ctx.stopReason).toBeNull();
-    const reminder = ctx.messages.at(-1);
-    expect(reminder?.role).toBe('user');
-    expect(JSON.stringify(reminder?.content)).toContain('create_goal');
-    expect(JSON.stringify(reminder?.content)).toContain('SAME assistant tool-call batch');
+    expect(finishAttempt.kind).toBe('CleanFinish');
+    expect(ctx.stopReason).toBe('completed');
+    expect(ctx.messages.at(-1)?.role).toBe('assistant');
   });
 
-  it('terminates as an error instead of completed after the bounded goal nudges are exhausted', async () => {
+  it('does not turn an absent goal into a bounded-nudge terminal error', async () => {
     const ledger = new ToolCallLedger();
     const { ctx } = makeTestContext({
       provider: makeSequencedProvider([
@@ -458,14 +474,11 @@ describe('ExecutingNode', () => {
     });
     const node = new ExecutingNode();
 
-    expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
     const terminal = await node.execute(ctx, null);
 
-    expect(terminal.kind).toBe('Aborted');
-    expect(ctx.stopReason).toBe('error');
-    expect(ctx.error?.message).toContain('goal_lifecycle_violation');
-    expect(ctx.stopReason).not.toBe('completed');
+    expect(terminal.kind).toBe('CleanFinish');
+    expect(ctx.stopReason).toBe('completed');
+    expect(ctx.error).toBeNull();
   });
 
   it('supports create_goal, work, then update_goal in the same assistant tool-call batch', async () => {
@@ -553,7 +566,7 @@ describe('ExecutingNode', () => {
     expect((await node.execute(ctx, null)).kind).toBe('CleanFinish');
   });
 
-  it('keeps the durable goal in progress when the independent verifier rejects update_goal', async () => {
+  it('persists completion before scheduling an independent advisory review', async () => {
     type GoalSnapshot = NonNullable<ReturnType<NonNullable<ToolContext['getGoalState']>>>;
     let goal: GoalSnapshot = {
       text: 'Finish the requested correction',
@@ -594,10 +607,10 @@ describe('ExecutingNode', () => {
 
     expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('TurnSucceeded');
     expect(verifyGoalCompletion).toHaveBeenCalledTimes(1);
-    expect(upsertGoalState).not.toHaveBeenCalled();
-    expect(goal.status).toBe('in_progress');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('[goal-verifier]');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('Regression proof is missing');
+    expect(upsertGoalState).toHaveBeenCalledTimes(1);
+    expect(goal.status).toBe('complete');
+    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('Completion health: unverified');
+    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('scheduled asynchronously');
   });
 
   it('supersedes an inherited goal on explicit pivot without asking the completion verifier to lie', async () => {
@@ -654,7 +667,7 @@ describe('ExecutingNode', () => {
     expect(goal.completionNote).toContain('replacement objective');
   });
 
-  it('refuses premature completion, then accepts validation followed by update_goal', async () => {
+  it('persists early completion with warnings and accepts later validation', async () => {
     type GoalSnapshot = NonNullable<ReturnType<NonNullable<ToolContext['getGoalState']>>>;
     let goal: GoalSnapshot | null = null;
     const persistedStatuses: GoalSnapshot['status'][] = [];
@@ -757,10 +770,10 @@ describe('ExecutingNode', () => {
     const node = new ExecutingNode();
 
     expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect(persistedStatuses).toEqual(['in_progress']);
-    expect((goal as GoalSnapshot | null)?.status).toBe('in_progress');
+    expect(persistedStatuses).toEqual(['in_progress', 'complete']);
+    expect((goal as GoalSnapshot | null)?.status).toBe('complete');
     expect(JSON.stringify(ctx.messages.at(-1)?.content))
-      .toContain('[verification-evidence]');
+      .toContain('Completion health: completed_with_warnings');
 
     expect((await node.execute(ctx, null)).kind).toBe('TurnSucceeded');
     expect(persistedStatuses).toEqual(['in_progress', 'complete']);
@@ -769,7 +782,7 @@ describe('ExecutingNode', () => {
     expect((await node.execute(ctx, null)).kind).toBe('CleanFinish');
   });
 
-  it('refuses update_goal in the same batch when substantive work failed', async () => {
+  it('persists update_goal with advisory health when substantive work failed', async () => {
     type GoalSnapshot = NonNullable<ReturnType<NonNullable<ToolContext['getGoalState']>>>;
     let goal: GoalSnapshot | null = null;
     const persistedStatuses: GoalSnapshot['status'][] = [];
@@ -827,11 +840,10 @@ describe('ExecutingNode', () => {
     });
 
     expect((await new ExecutingNode().execute(ctx, null)).kind).toBe('TurnSucceeded');
-    expect(persistedStatuses).toEqual(['in_progress']);
-    expect((goal as GoalSnapshot | null)?.status).toBe('in_progress');
-    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain(
-      'required work is still unresolved',
-    );
+    expect(persistedStatuses).toEqual(['in_progress', 'complete']);
+    expect((goal as GoalSnapshot | null)?.status).toBe('complete');
+    expect(JSON.stringify(ctx.messages.at(-1)?.content))
+      .toContain('Completion health: unverified');
   });
 
   it('compacts from the tokenizer estimate when the provider omits usage (Fix B regression)', async () => {
@@ -1378,6 +1390,68 @@ describe('ExecutingNode', () => {
       event: 'operation_finished',
       args: [expect.objectContaining({ status: 'aborted', kind: 'provider' })],
     }));
+  });
+
+  it('retracts a mid-stream failure so the retry does not stack on the discarded attempt', async () => {
+    // Nothing streamed here reaches `assistantContent`, and Recovering sends
+    // the SAME transcript back — so the retry re-reasons and produces a
+    // near-identical summary. Without the retraction the user sees both.
+    const { ctx, recordedEvents } = makeTestContext({
+      provider: {
+        name: 'mock',
+        model: 'claude-haiku-4-5-20251001',
+        setModel() {},
+        async *chat(): AsyncIterable<ChatDelta> {
+          yield { type: 'thinking_delta', text: 'Analyzing' };
+          yield { type: 'thinking_delta', text: ' the installer' };
+          yield { type: 'text_delta', text: 'Partial' };
+          throw new Error('connection reset mid-stream');
+        },
+      } as ChatProvider,
+      registry: makeRegistry({}),
+      toolContext: emptyToolContext(),
+    });
+
+    const event = await new ExecutingNode().execute(ctx, null);
+
+    expect(event.kind).toBe('ProviderError');
+    expect(recordedEvents).toContainEqual(expect.objectContaining({
+      event: 'stream_rollback',
+      args: [expect.objectContaining({
+        thinkingChars: 'Analyzing the installer'.length,
+        textChars: 'Partial'.length,
+      })],
+    }));
+    // The premise of the retraction: none of it was persisted.
+    expect(ctx.messages).not.toContainEqual(expect.objectContaining({ role: 'assistant' }));
+  });
+
+  it('does not retract on abort — the partial answer is what the user stopped to read', async () => {
+    const abort = new AbortController();
+    const { ctx, recordedEvents } = makeTestContext({
+      provider: {
+        name: 'mock',
+        model: 'claude-haiku-4-5-20251001',
+        setModel() {},
+        async *chat(): AsyncIterable<ChatDelta> {
+          yield { type: 'thinking_delta', text: 'partial reasoning' };
+          // Let consumeStream observe the signal rather than throwing from the
+          // generator — a throw here escapes as an unhandled rejection once
+          // consumeStream stops pulling.
+          abort.abort();
+          yield { type: 'thinking_delta', text: 'never rendered' };
+        },
+      } as ChatProvider,
+      registry: makeRegistry({}),
+      toolContext: { ...emptyToolContext(), signal: abort.signal },
+    });
+
+    const event = await new ExecutingNode().execute(ctx, null);
+
+    // Deltas WERE streamed, so this proves the abort branch returns ahead of
+    // the retraction rather than the counters simply being zero.
+    expect(event.kind).toBe('Aborted');
+    expect(recordedEvents.map((e) => e.event)).not.toContain('stream_rollback');
   });
 
   it('times out thinking-only provider streams', async () => {

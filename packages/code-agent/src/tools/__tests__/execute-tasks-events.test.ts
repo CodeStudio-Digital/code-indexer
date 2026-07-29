@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
 
@@ -33,7 +34,7 @@ function task(overrides: Partial<CoderTask> = {}): CoderTask {
 function setup(tasks: CoderTask[], overrides: Partial<TasksState> = {}) {
   const runner = {
     emit: vi.fn(),
-    sessionId: 123,
+    sessionId: newSessionId(),
     agentLoopV2: false,
     beginTaskScope: vi.fn(),
     currentTaskScopeId: vi.fn(() => null),

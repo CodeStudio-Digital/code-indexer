@@ -94,6 +94,7 @@ const roadmapDecisionBlock = (id: string): StreamBlock =>
 const toolBlock = (id: string): StreamBlock =>
   ({ type: 'tool', call: { id, name: 'read_file', input: {}, status: 'running' } }) as StreamBlock;
 const textBlock = (text: string): StreamBlock => ({ type: 'text', text });
+const thinkingBlock = (text: string): StreamBlock => ({ type: 'thinking', text });
 const taskRunBlock = (runId: string): StreamBlock =>
   ({ type: 'task_run', run: { runId } }) as unknown as StreamBlock;
 const agentsBlock = (
@@ -130,6 +131,24 @@ const toolResult = (id: string): PersistedMessage => ({
 const assistantTextAndTool = (text: string, id: string): PersistedMessage => ({
   role: 'assistant',
   content: [{ type: 'text', text }, { type: 'tool_use', id, name: 'submit_tasks', input: {} }],
+});
+/**
+ * How the runner actually persists ONE provider round: `consumeStream` flushes
+ * TEXT at every tool boundary but flushes THINKING only once at the end, so a
+ * round's whole reasoning lands as a single concatenated block, in the
+ * thinking → text → tool_use order `executing.ts` enforces.
+ */
+const assistantThinkingTextAndTool = (
+  thinking: string,
+  text: string,
+  id: string,
+): PersistedMessage => ({
+  role: 'assistant',
+  content: [
+    { type: 'thinking', text: thinking },
+    { type: 'text', text },
+    { type: 'tool_use', id, name: 'submit_tasks', input: {} },
+  ] as unknown as PersistedMessage['content'],
 });
 const assistantTextAndInteractiveTool = (text: string, id: string, name: string, input: Record<string, unknown>): PersistedMessage => ({
   role: 'assistant',
@@ -293,6 +312,88 @@ describe('visibleLiveBlocks', () => {
     )).toEqual([fresh]);
   });
 
+  it('never renders a live copy with its persisted tool blocks punched out', () => {
+    // THE REGRESSION. When the coverage check declines, history renders above
+    // and the live buffer used to render again below — minus every tool block,
+    // because only those carry a persisted id. The result was a ghost turn of
+    // text + "Pensando…" cards with the tool calls missing from the sequence.
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Investigate' }] } as PersistedMessage,
+      assistantThinkingTextAndTool('thinkAthinkB', 'answer', 'tool-1'),
+      toolResult('tool-1'),
+    ];
+    const reconciliation = buildPersistedLiveReconciliation(messages);
+
+    expect(visibleLiveBlocks(
+      [thinkingBlock('thinkA'), toolBlock('tool-1'), thinkingBlock('thinkB'), textBlock('answer')],
+      reconciliation.persistedToolUseIds,
+      reconciliation.pendingInteractivePromptSignatures,
+      reconciliation.persistedToolResultIds,
+      false,
+      reconciliation,
+    )).toEqual([]);
+  });
+
+  it('cuts a covered prefix outside a mid-turn window too', () => {
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Investigate' }] } as PersistedMessage,
+      assistantTextAndTool('First cycle', 'tool-1'),
+      toolResult('tool-1'),
+    ];
+    const reconciliation = buildPersistedLiveReconciliation(messages);
+    const fresh = textBlock('fresh suffix');
+
+    expect(reconciliation.startsMidTurn).toBe(false);
+    expect(visibleLiveBlocks(
+      [textBlock('First cycle'), toolBlock('tool-1'), fresh],
+      reconciliation.persistedToolUseIds,
+      reconciliation.pendingInteractivePromptSignatures,
+      reconciliation.persistedToolResultIds,
+      false,
+      reconciliation,
+    )).toEqual([fresh]);
+  });
+
+  it('keeps a repeated phrase the persisted cursor has already passed', () => {
+    // The cut is an ordered cursor, not a "history contains this string" test:
+    // a brand-new block that happens to repeat an earlier phrase must survive.
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Investigate' }] } as PersistedMessage,
+      assistantText('Done.'),
+    ];
+    const reconciliation = buildPersistedLiveReconciliation(messages);
+    const freshTool = toolBlock('tool-new');
+    const freshEcho = textBlock('Done.');
+
+    expect(visibleLiveBlocks(
+      [textBlock('Done.'), freshTool, freshEcho],
+      reconciliation.persistedToolUseIds,
+      reconciliation.pendingInteractivePromptSignatures,
+      reconciliation.persistedToolResultIds,
+      false,
+      reconciliation,
+    )).toEqual([freshTool, freshEcho]);
+  });
+
+  it('keeps a running agents card that sits inside the covered prefix', () => {
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Investigate' }] } as PersistedMessage,
+      assistantTextAndTool('First cycle', 'spawn-1'),
+      assistantText('Second cycle'),
+    ];
+    const reconciliation = buildPersistedLiveReconciliation(messages);
+    const running = agentsBlock('g1', 'spawn-1', 'running');
+
+    expect(visibleLiveBlocks(
+      [textBlock('First cycle'), running, textBlock('Second cycle')],
+      reconciliation.persistedToolUseIds,
+      reconciliation.pendingInteractivePromptSignatures,
+      reconciliation.persistedToolResultIds,
+      false,
+      reconciliation,
+    )).toEqual([running]);
+  });
+
   it('drops a live decision_gate when the latest persisted turn has the same prompt but a different tool_use id', () => {
     const persisted = [
       assistantTextAndDecisionGate(
@@ -430,6 +531,36 @@ describe('isLiveTurnDuplicatedInHistory', () => {
     ).toBe(true);
   });
 
+  it('detects a finished turn whose reasoning was split at a tool boundary', () => {
+    // Until this returns true `onClearCurrentTurn()` never fires, so the live
+    // buffer stayed on screen next to the persisted copy even after the turn
+    // ended — the "it never goes away" half of the bug.
+    expect(isLiveTurnDuplicatedInHistory(
+      {
+        blocks: [
+          thinkingBlock('thinkA'),
+          toolBlock('tool-1'),
+          thinkingBlock('thinkB'),
+          textBlock('answer'),
+        ],
+      },
+      [assistantThinkingTextAndTool('thinkAthinkB', 'answer', 'tool-1')],
+    )).toBe(true);
+  });
+
+  it('does not treat a still-growing live reasoning tail as duplicated', () => {
+    expect(isLiveTurnDuplicatedInHistory(
+      {
+        blocks: [
+          thinkingBlock('thinkA'),
+          toolBlock('tool-1'),
+          thinkingBlock('thinkB and more still streaming'),
+        ],
+      },
+      [assistantThinkingTextAndTool('thinkAthinkB', 'answer', 'tool-1')],
+    )).toBe(false);
+  });
+
   it('detects a gate-only paused turn already persisted by tool_use id', () => {
     expect(
       isLiveTurnDuplicatedInHistory(
@@ -562,6 +693,52 @@ describe('liveTurnCoversPersistedAssistantRun', () => {
         assistantText('Second cycle'),
       ],
     )).toBe(true);
+  });
+
+  it('covers a run whose reasoning the backend concatenated across a tool boundary', () => {
+    // The live coalescer opens a NEW thinking card after a tool call, so it
+    // joins two blocks with '\n' where the durable side has one concatenated
+    // block. Raw string comparison called that a different run and rendered
+    // both copies.
+    expect(liveTurnCoversPersistedAssistantRun(
+      {
+        blocks: [
+          thinkingBlock('thinkA'),
+          toolBlock('tool-1'),
+          thinkingBlock('thinkB'),
+          textBlock('answer'),
+        ],
+      },
+      [userMessage, assistantThinkingTextAndTool('thinkAthinkB', 'answer', 'tool-1')],
+    )).toBe(true);
+  });
+
+  it('covers a mid-turn replay whose reasoning was split at a tool boundary', () => {
+    const reconciliation = buildPersistedLiveReconciliation(
+      [assistantThinkingTextAndTool('thinkAthinkB', 'answer', 'tool-1')],
+      784504,
+    );
+
+    expect(reconciliation.startsMidTurn).toBe(true);
+    expect(liveTurnCoversPersistedAssistantRun(
+      {
+        blocks: [
+          textBlock('Earlier cycle'),
+          thinkingBlock('thinkA'),
+          toolBlock('tool-1'),
+          thinkingBlock('thinkB'),
+          textBlock('answer'),
+        ],
+      },
+      reconciliation,
+    )).toBe(true);
+  });
+
+  it('still rejects a live run whose reasoning diverges from the persisted run', () => {
+    expect(liveTurnCoversPersistedAssistantRun(
+      { blocks: [thinkingBlock('completely other reasoning'), toolBlock('tool-1')] },
+      [userMessage, assistantThinkingTextAndTool('thinkAthinkB', 'answer', 'tool-1')],
+    )).toBe(false);
   });
 
   it('rejects a cursor suffix that lacks the persisted beginning of the run', () => {

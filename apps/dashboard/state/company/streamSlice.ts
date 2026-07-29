@@ -34,57 +34,57 @@ import {
 } from './stream-handlers/index.js';
 
 export interface StreamSlice {
-  streams: Map<number, StreamState>;
+  streams: Map<string, StreamState>;
 
   // Lifecycle ───────────────────────────────────────────────
-  streamEnsure: (sessionId: number) => void;
-  streamReset: (sessionId: number) => void;
-  streamSetConnected: (sessionId: number, connected: boolean) => void;
-  streamSetStarted: (sessionId: number, started: boolean) => void;
-  streamSetError: (sessionId: number, error: string | null) => void;
-  streamSetUserMessage: (sessionId: number, msg: string | null) => void;
+  streamEnsure: (sessionId: string) => void;
+  streamReset: (sessionId: string) => void;
+  streamSetConnected: (sessionId: string, connected: boolean) => void;
+  streamSetStarted: (sessionId: string, started: boolean) => void;
+  streamSetError: (sessionId: string, error: string | null) => void;
+  streamSetUserMessage: (sessionId: string, msg: string | null) => void;
   /** P15d — record the latest SSE phase from the reconnecting client. */
   streamSetConnectionPhase: (
-    sessionId: number,
+    sessionId: string,
     phase: StreamState['connectionPhase'],
   ) => void;
 
   // SSE event reducers ──────────────────────────────────────
-  streamApplyAgentEvent: (sessionId: number, ev: AgentEventEnvelope) => void;
-  streamApplyAgentStatus: (sessionId: number, payload: AgentStatusPayload) => void;
+  streamApplyAgentEvent: (sessionId: string, ev: AgentEventEnvelope) => void;
+  streamApplyAgentStatus: (sessionId: string, payload: AgentStatusPayload) => void;
   streamApplySubordinateWaiting: (
-    sessionId: number,
-    agentRunId: number,
+    sessionId: string,
+    agentRunId: string,
     status: 'waiting_plan' | 'waiting_question' | 'waiting_tasks',
   ) => void;
   /** Drop a subordinate from the live map (after the user deletes it). */
-  streamRemoveSubordinate: (sessionId: number, agentRunId: number) => void;
-  streamApplyBoardEntry: (sessionId: number, entry: BoardMessage) => void;
-  streamApplyMasterPrompt: (sessionId: number, prompt: MasterPrompt) => void;
-  streamApplySessionIdle: (sessionId: number, payload: SessionIdlePayload) => void;
+  streamRemoveSubordinate: (sessionId: string, agentRunId: string) => void;
+  streamApplyBoardEntry: (sessionId: string, entry: BoardMessage) => void;
+  streamApplyMasterPrompt: (sessionId: string, prompt: MasterPrompt) => void;
+  streamApplySessionIdle: (sessionId: string, payload: SessionIdlePayload) => void;
   /**
    * P15b — record that the session has stalled (no activity for >N min).
    * The dashboard renders a Continue banner with a manual nudge action.
    */
-  streamApplySessionStalled: (sessionId: number, stalledSinceMs: number) => void;
+  streamApplySessionStalled: (sessionId: string, stalledSinceMs: number) => void;
 
   // REST hydration ──────────────────────────────────────────
-  streamHydrateMasterPrompts: (sessionId: number, prompts: MasterPrompt[]) => void;
-  streamHydrateFromInitialFetch: (sessionId: number, snapshot: InitialFetchSnapshot) => void;
+  streamHydrateMasterPrompts: (sessionId: string, prompts: MasterPrompt[]) => void;
+  streamHydrateFromInitialFetch: (sessionId: string, snapshot: InitialFetchSnapshot) => void;
 }
 
 export interface InitialFetchSnapshot {
   boardMessages?: BoardMessage[];
   masterState?: StreamState['masterState'];
-  subordinateStates?: Map<number, StreamState['subordinateStates'] extends Map<number, infer T> ? T : never>;
+  subordinateStates?: Map<string, StreamState['subordinateStates'] extends Map<string, infer T> ? T : never>;
   masterPrompts?: MasterPrompt[];
 }
 
 function withSlot(
-  prev: Map<number, StreamState>,
-  sessionId: number,
+  prev: Map<string, StreamState>,
+  sessionId: string,
   patch: (slot: StreamState) => StreamState,
-): Map<number, StreamState> {
+): Map<string, StreamState> {
   const next = new Map(prev);
   const current = next.get(sessionId) ?? INITIAL_STREAM_STATE;
   next.set(sessionId, patch(current));
@@ -220,7 +220,7 @@ export const createStreamSlice: StateCreator<StreamSlice, [], [], StreamSlice> =
         // says there's no master agent_run yet (e.g., a fresh sub-
         // session), we want the slot to mirror that, not retain a
         // stale instance from a previous mount.
-        next.masterState = snapshot.masterState;
+        next.masterState = snapshot.masterState ?? null;
         if (snapshot.subordinateStates && snapshot.subordinateStates.size > 0) {
           next.subordinateStates = snapshot.subordinateStates as StreamState['subordinateStates'];
         }

@@ -18,7 +18,7 @@ import type { StateCreator } from 'zustand';
 import type { AgentInboxMessage } from '@mcp/company-contracts';
 
 export interface InboxState {
-  messagesById: Map<number, AgentInboxMessage>;
+  messagesById: Map<string, AgentInboxMessage>;
   /** Monotonic counter — increments on every inbox SSE event. */
   lastEventSeq: number;
   initialized: boolean;
@@ -35,22 +35,22 @@ export const INITIAL_INBOX_STATE: InboxState = {
 };
 
 export interface InboxSlice {
-  inbox: Map<number, InboxState>;
-  inboxEnsure: (sessionId: number) => void;
-  inboxSetLoading: (sessionId: number, loading: boolean) => void;
-  inboxSetError: (sessionId: number, error: string | null) => void;
+  inbox: Map<string, InboxState>;
+  inboxEnsure: (sessionId: string) => void;
+  inboxSetLoading: (sessionId: string, loading: boolean) => void;
+  inboxSetError: (sessionId: string, error: string | null) => void;
   /** Replace the full message map (initial REST fetch). */
-  inboxHydrate: (sessionId: number, messages: AgentInboxMessage[]) => void;
+  inboxHydrate: (sessionId: string, messages: AgentInboxMessage[]) => void;
   /** Bump `lastEventSeq` so any consumer watching it triggers a refetch. */
-  inboxBumpEventSeq: (sessionId: number) => void;
-  inboxReset: (sessionId: number) => void;
+  inboxBumpEventSeq: (sessionId: string) => void;
+  inboxReset: (sessionId: string) => void;
 }
 
 function withSlot(
-  prev: Map<number, InboxState>,
-  sessionId: number,
+  prev: Map<string, InboxState>,
+  sessionId: string,
   patch: (slot: InboxState) => InboxState,
-): Map<number, InboxState> {
+): Map<string, InboxState> {
   const next = new Map(prev);
   const current = next.get(sessionId) ?? INITIAL_INBOX_STATE;
   next.set(sessionId, patch(current));

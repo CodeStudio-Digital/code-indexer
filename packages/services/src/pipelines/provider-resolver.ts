@@ -8,10 +8,14 @@
  * id, and any per-binding config (temperature, max_tokens, …).
  *
  * Lookup order (first non-disabled match wins):
- *   1. scope_type='session',  scope_id=ctx.companySessionId or ctx.sessionId
- *   2. scope_type='template', scope_id=ctx.templateId
- *   3. scope_type='global',   scope_id=null
- *   4. Optional caller-supplied fallback default
+ *   1. scope_type='template', scope_id=ctx.templateId
+ *   2. scope_type='global',   scope_id=null
+ *   3. Optional caller-supplied fallback default
+ *
+ * Session-specific mutable configuration is loaded from the filesystem
+ * session bundle by the session runtime. It is deliberately not represented
+ * by `pipeline_provider_bindings`, so this resolver never queries a session
+ * scope in SQLite.
  *
  * If all four miss, throws `PipelineBindingMissingError` — the caller is
  * expected to handle gracefully (typically by marking that stage as
@@ -25,9 +29,9 @@ import type { ProviderConfig, ProviderStore } from '@mcp/store/provider-store.js
 
 export interface ResolveContext {
   /** A coder/code-agent session id. */
-  sessionId?: number;
+  sessionId?: string;
   /** A company session id (multi-agent). */
-  companySessionId?: number;
+  companySessionId?: string;
   /** Template id (resolved from the company session). */
   templateId?: number;
 }
@@ -40,7 +44,7 @@ export interface ResolvedBinding {
   modelMode: string;
   config: Record<string, unknown>;
   /** Which scope this came from — useful for telemetry / debugging. */
-  resolvedFrom: 'session' | 'template' | 'global' | 'fallback';
+  resolvedFrom: 'template' | 'global' | 'fallback';
   bindingId: number | null;
 }
 
@@ -103,11 +107,10 @@ export class PipelineProviderResolver {
    * appended as the last link (unless a chain binding already uses that
    * provider).
    *
-   * The scope hierarchy (session → template → global) is unchanged — a
-   * session/template override is an intentional choice, so we never fail
-   * over ACROSS scopes. Failover happens WITHIN the winning scope's binding
-   * set plus the appended general default. Returns `[]` when nothing is
-   * bound and no fallback resolves (the caller decides whether that's fatal).
+   * Template overrides are intentional, so we never fail over ACROSS reusable
+   * scopes. Failover happens WITHIN the winning scope's binding set plus the
+   * appended general default. Returns `[]` when nothing is bound and no
+   * fallback resolves (the caller decides whether that's fatal).
    */
   async resolveChain(
     pipelineName: string,
@@ -154,7 +157,7 @@ export class PipelineProviderResolver {
     const attempts: Array<{ scope: string; reason: string }> = [];
 
     const enrichScope = async (
-      scope: 'session' | 'template' | 'global',
+      scope: 'template' | 'global',
       scopeId: number | null,
     ): Promise<ResolvedBinding[]> => {
       const rows = this.bindingsStore.findAllActiveAtScope({
@@ -184,16 +187,7 @@ export class PipelineProviderResolver {
       return chain;
     };
 
-    // 1. Session scope (company session has priority over coder session)
-    const sessionScopeId = ctx.companySessionId ?? ctx.sessionId ?? null;
-    if (sessionScopeId != null) {
-      const chain = await enrichScope('session', sessionScopeId);
-      if (chain.length) return { chain: withFallback(chain), attempts };
-    } else {
-      attempts.push({ scope: 'session', reason: 'no-context' });
-    }
-
-    // 2. Template scope
+    // 1. Template scope
     if (ctx.templateId != null) {
       const chain = await enrichScope('template', ctx.templateId);
       if (chain.length) return { chain: withFallback(chain), attempts };
@@ -201,13 +195,13 @@ export class PipelineProviderResolver {
       attempts.push({ scope: 'template', reason: 'no-context' });
     }
 
-    // 3. Global scope
+    // 2. Global scope
     {
       const chain = await enrichScope('global', null);
       if (chain.length) return { chain: withFallback(chain), attempts };
     }
 
-    // 4. Caller-supplied fallback default only.
+    // 3. Caller-supplied fallback default only.
     if (fallbackDefault) {
       const link = this.makeFallbackLink(pipelineName, bindingRole, fallbackDefault);
       if (link) return { chain: [link], attempts };
@@ -255,7 +249,7 @@ export class PipelineProviderResolver {
     row: PipelineProviderBinding | null,
     pipelineName: string,
     bindingRole: string,
-    resolvedFrom: 'session' | 'template' | 'global',
+    resolvedFrom: 'template' | 'global',
   ): Promise<ResolvedBinding | null> {
     if (!row) return null;
     const provider = this.providerStore.getProvider(row.provider_id);

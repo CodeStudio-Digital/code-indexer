@@ -32,6 +32,8 @@ describe('buildMessages (snapshot-review prompt)', () => {
     for (const key of REQUIRED_KEYS) {
       expect(user).toContain(key);
     }
+    expect(user).toContain('"baselineId":"00000000-0000-4000-8000-000000000000"');
+    expect(user).not.toContain('"baselineId":123');
   });
 
   it('appends the diff text to the user message', () => {

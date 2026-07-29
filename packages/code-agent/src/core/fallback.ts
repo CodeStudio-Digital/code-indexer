@@ -2,7 +2,7 @@
  * Fallback chain — automatic provider recovery on persistent errors.
  *
  * Resolution order:
- * 1. Session-level override (coder_sessions.fallback_provider/model)
+ * 1. Session-level override from the filesystem session state
  * 2. Provider-level chain (provider_configs.fallback_provider_id walk)
  * 3. Global env CODER_FALLBACK_CHAIN (e.g. "anthropic:claude-sonnet-4-6,zai:glm-5.1")
  *

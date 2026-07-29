@@ -52,7 +52,7 @@ export interface MasterResurrectStateMutators {
   readonly companyContext: CompanyContext | null;
   /** Cached prompt block from the first start/resume. */
   readonly promptBlock: string;
-  readonly agentRunId: number | null;
+  readonly agentRunId: string | null;
   readonly runtimeSnapshot: MasterRuntimeSnapshot;
   /** In-flight resurrect, if any. */
   readonly resumingPromise: Promise<void> | null;
@@ -75,8 +75,8 @@ export interface MasterResurrectDeps {
   status: IAgentStatusUpdater;
   board: IBoardPoster;
   state: MasterResurrectStateMutators;
-  wireRunner: (runner: CoderRunner, runId: number) => void;
-  attachCompletion: (handle: RunCoderHandle, runId: number) => void;
+  wireRunner: (runner: CoderRunner, runId: string) => void;
+  attachCompletion: (handle: RunCoderHandle, runId: string) => void;
 }
 
 /**

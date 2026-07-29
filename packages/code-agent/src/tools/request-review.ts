@@ -15,14 +15,15 @@ import { err } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { runReviewSubagent, type ReviewInput, type ReviewFinding } from '@mcp/code-agent/tools/review-subagent.js';
 import type { SubagentParent } from '@mcp/code-agent/tools/implement-subagent.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface RequestReviewDeps {
   provider: ChatProvider;
   /** Snapshot of parent's tool registry. Used as base for the review allowlist. */
   parentTools: import('@mcp/code-agent/core/tool.js').CoderTool[];
-  sessionId?: number;
-  sessionStore?: SessionStore;
+  sessionId?: SessionId;
+  sessionStore?: FsSessionStore;
   /** Reviewer provider (different family). When unset, falls back to parent's. */
   reviewerProvider?: ChatProvider;
 }
@@ -114,7 +115,7 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
         const result = await runReviewSubagent(parent, input);
         if (deps.sessionStore && deps.sessionId != null) {
           try {
-            deps.sessionStore.markSessionReviewedNow(deps.sessionId);
+            await deps.sessionStore.markSessionReviewedNow(deps.sessionId);
           } catch {
             /* best-effort */
           }

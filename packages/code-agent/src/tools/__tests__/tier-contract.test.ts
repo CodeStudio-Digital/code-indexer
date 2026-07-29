@@ -19,6 +19,7 @@
  * via `externalToolTiers`.
  */
 import { describe, expect, it } from 'vitest';
+import { asSessionId } from '@mcp/session-storage';
 import {
   getToolTier,
   allTieredToolNames,
@@ -259,11 +260,11 @@ describe('tier contract — Phase A/B placements are locked', () => {
     const names = (tools: readonly NamedTool[]) => tools.map((tool) => tool.name).sort();
     expect(names(buildAppStudioTools(1, {
       audience: 'company-master',
-      appSessionId: 1,
+      appSessionId: '11111111-1111-4111-8111-111111111111',
     }))).toEqual([...APP_STUDIO_TOOLS].sort());
     expect(names(buildDesignSystemStudioTools(1))).toEqual([...DESIGN_SYSTEM_STUDIO_TOOLS].sort());
     expect(names(buildDesignSystemConsumerTools({
-      sessionId: 1,
+      sessionId: asSessionId('22222222-2222-4222-8222-222222222222'),
       packageName: '@test/ui',
       semver: '1.0.0',
     }))).toEqual([...DESIGN_SYSTEM_CONSUMER_TOOLS].sort());

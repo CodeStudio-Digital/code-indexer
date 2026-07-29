@@ -5,13 +5,58 @@
 import type { Hono } from 'hono';
 import { SkillStore } from '@mcp/store/skill-store.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
+import { resolveActiveWorkspaceSkills } from '@mcp/code-agent/skills/workspace-skills.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseSessionIdParam, notFound } from '../_helpers.js';
 
 function getSkillStore() {
   const config = loadConfig();
   return new SkillStore(config.dbPath);
+}
+
+function sessionProjectIds(session: {
+  project_id: number | null;
+  linked_projects: readonly { project_id: number }[];
+}, isCurrentProject: (projectId: number) => boolean): number[] {
+  const ids = new Set<number>();
+  if (session.project_id != null && isCurrentProject(session.project_id)) {
+    ids.add(session.project_id);
+  }
+  for (const project of session.linked_projects) {
+    if (isCurrentProject(project.project_id)) ids.add(project.project_id);
+  }
+  return [...ids];
+}
+
+function activeSkillProjection(
+  tools: Readonly<Record<string, unknown>>,
+): string[] | undefined {
+  if (!Object.hasOwn(tools, 'active_skills')) return undefined;
+  const value = tools.active_skills;
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string')
+    : [];
+}
+
+function availableSkills(
+  store: SkillStore,
+  projectIds: readonly number[],
+) {
+  const definitions = new Map(
+    store.listSkills({ scope: 'global' }).map((skill) => [skill.id, skill]),
+  );
+  for (const projectId of projectIds) {
+    for (const skill of store.listSkills({ scope: String(projectId) })) {
+      if (!definitions.has(skill.id)) definitions.set(skill.id, skill);
+    }
+  }
+  return [...definitions.values()].sort(
+    (left, right) =>
+      left.sort_order - right.sort_order ||
+      left.name.localeCompare(right.name) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
 export function mountCoderSkillsRoutes(
@@ -23,34 +68,39 @@ export function mountCoderSkillsRoutes(
 
   /**
    * GET /api/coder/sessions/:id/skills — resolved skills for a session.
-   * Returns the final merged list (global + project + session overrides).
+   * Definitions remain in the essential SQLite catalog; the per-session
+   * selection comes exclusively from the bundle's state.json.
    */
-  app.get('/api/coder/sessions/:id/skills', (c) => {
-    const sessionId = parseIdParam(c);
-    if (!Number.isFinite(sessionId)) return c.json({ error: 'invalid session id' }, 400);
+  app.get('/api/coder/sessions/:id/skills', async (c) => {
+    const sessionId = parseSessionIdParam(c);
 
-    const session = sessionStore.getSession(sessionId);
-    if (!session) return c.json({ error: 'session not found' }, 404);
+    const session = await sessionStore.getSession(sessionId);
+    if (!session) return notFound(c, 'session not found');
 
     const store = getSkillStore();
     try {
-      const resolved = store.resolveActiveSkills(sessionId, session.project_id);
-      // Also return all available skills (enabled or not) with session override info
-      const allSkills = store.listSkills({
-        scope: 'global',
-      });
-      const projectSkills = store.listSkills({
-        scope: String(session.project_id),
-      });
-      const combined = [...allSkills, ...projectSkills];
-      const overrides = store.getSessionSkillConfig(sessionId);
-
-      const withStatus = combined.map((skill) => ({
+      const projectIds = sessionProjectIds(
+        session,
+        (projectId) => {
+          const project = deps.db.getProject(projectId);
+          return Boolean(
+            project
+            && !project.is_synthetic
+            && project.root_path.trim().length > 0
+          );
+        },
+      );
+      const explicit = activeSkillProjection(session.state.tools);
+      const resolved = resolveActiveWorkspaceSkills(
+        store,
+        projectIds,
+        explicit,
+      );
+      const activeIds = new Set(resolved.map((skill) => skill.id));
+      const withStatus = availableSkills(store, projectIds).map((skill) => ({
         ...skill,
-        session_enabled: overrides.has(skill.id)
-          ? overrides.get(skill.id)
-          : skill.enabled,
-        is_active: resolved.some((r) => r.id === skill.id),
+        session_enabled: activeIds.has(skill.id),
+        is_active: activeIds.has(skill.id),
       }));
 
       return c.json({ skills: withStatus, active_count: resolved.length });
@@ -63,16 +113,42 @@ export function mountCoderSkillsRoutes(
    * PUT /api/coder/sessions/:id/skills/:skillId — toggle skill for session.
    */
   app.put('/api/coder/sessions/:id/skills/:skillId', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     const skillId = c.req.param('skillId');
-    if (!Number.isFinite(sessionId)) return c.json({ error: 'invalid session id' }, 400);
 
     const body = await c.req.json<{ enabled: boolean }>();
     if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled (boolean) required' }, 400);
 
+    const session = await sessionStore.getSession(sessionId);
+    if (!session) return notFound(c, 'session not found');
+
     const store = getSkillStore();
     try {
-      store.setSessionSkillEnabled(sessionId, skillId, body.enabled);
+      const projectIds = sessionProjectIds(
+        session,
+        (projectId) => {
+          const project = deps.db.getProject(projectId);
+          return Boolean(
+            project
+            && !project.is_synthetic
+            && project.root_path.trim().length > 0
+          );
+        },
+      );
+      const definitions = availableSkills(store, projectIds);
+      if (!definitions.some((skill) => skill.id === skillId)) {
+        return notFound(c, 'skill not found for this session');
+      }
+      const active = new Set(
+        resolveActiveWorkspaceSkills(
+          store,
+          projectIds,
+          activeSkillProjection(session.state.tools),
+        ).map((skill) => skill.id),
+      );
+      if (body.enabled) active.add(skillId);
+      else active.delete(skillId);
+      await sessionStore.setSessionActiveSkills(sessionId, [...active]);
       return c.json({ ok: true, skill_id: skillId, enabled: body.enabled });
     } finally {
       store.close();

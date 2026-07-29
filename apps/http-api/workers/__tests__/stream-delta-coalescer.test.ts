@@ -5,6 +5,9 @@ import {
   type WorkerBusEventEnvelope,
 } from '../stream-delta-coalescer.js';
 
+const FRONTEND_AGENT_RUN_ID = 'a0000000-0000-4000-8000-000000000010';
+const BACKEND_AGENT_RUN_ID = 'a0000000-0000-4000-8000-000000000011';
+
 beforeEach(() => {
   vi.useFakeTimers();
 });
@@ -80,23 +83,43 @@ describe('StreamDeltaCoalescer', () => {
     const a1: WorkerBusEventEnvelope = {
       seq: 1,
       event: 'agent_event',
-      data: { agent: 'frontend', agentRunId: 10, event: 'text_delta', data: 'one' },
+      data: {
+        agent: 'frontend',
+        agentRunId: FRONTEND_AGENT_RUN_ID,
+        event: 'text_delta',
+        data: 'one',
+      },
     };
     const a2: WorkerBusEventEnvelope = {
       seq: 2,
       event: 'agent_event',
-      data: { agent: 'frontend', agentRunId: 10, event: 'text_delta', data: ' two' },
+      data: {
+        agent: 'frontend',
+        agentRunId: FRONTEND_AGENT_RUN_ID,
+        event: 'text_delta',
+        data: ' two',
+      },
     };
     const b: WorkerBusEventEnvelope = {
       seq: 3,
       event: 'agent_event',
-      data: { agent: 'backend', agentRunId: 11, event: 'text_delta', data: 'other' },
+      data: {
+        agent: 'backend',
+        agentRunId: BACKEND_AGENT_RUN_ID,
+        event: 'text_delta',
+        data: 'other',
+      },
     };
 
     const merged = mergeAdjacentStreamDeltas(a1, a2);
     expect(merged).toEqual({
       ...a1,
-      data: { agent: 'frontend', agentRunId: 10, event: 'text_delta', data: 'one two' },
+      data: {
+        agent: 'frontend',
+        agentRunId: FRONTEND_AGENT_RUN_ID,
+        event: 'text_delta',
+        data: 'one two',
+      },
     });
     expect(mergeAdjacentStreamDeltas(merged!, b)).toBeNull();
     // Inputs stay immutable so replay/audit consumers retain their originals.

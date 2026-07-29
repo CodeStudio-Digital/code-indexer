@@ -59,7 +59,17 @@ describe('buildDocNavVerbs materialized result preservation', () => {
             doc_type: 'mixed',
           }
         : null),
-      listChunksBySource: (sourceId: number) => (sourceId === 22 ? outlineChunks : []),
+      // The outline reads five columns, never the chunk bodies — full rows here
+      // would hide an accidental regression back to the `SELECT *` variant.
+      listChunkOutlineBySource: (sourceId: number) => (sourceId === 22
+        ? outlineChunks.map((c) => ({
+            id: c.id,
+            ord: c.ord,
+            heading_path: c.heading_path,
+            source_uri: c.source_uri,
+            token_count: c.token_count,
+          }))
+        : []),
       getCollectionByName: () => null,
       listSourcesByCollection: () => [],
     } as unknown as DocStore;

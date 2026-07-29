@@ -21,6 +21,7 @@
  *   --skip-dashboard      Skip the vite dashboard build.
  *   --target=<targets>    Pass-through to electron-builder
  *                         (e.g. --target=nsis, --target=dir).
+ *   --require-signing     Fail when a platform signing identity is missing.
  *   --no-package          Stop after the asset prep - useful for CI smoke
  *                         tests that just want to verify tsc + esbuild
  *                         succeed without spinning up electron-builder.
@@ -44,6 +45,7 @@ const argv_get = (name) => {
 const skipTsc = flag('--skip-tsc');
 const skipDashboard = flag('--skip-dashboard');
 const noPackage = flag('--no-package');
+const requireSigning = flag('--require-signing');
 const target = argv_get('--target');
 
 function run(cmd, args, opts = {}) {
@@ -98,7 +100,11 @@ async function buildPreload() {
 
 console.log('Building CodeStudio Electron app…');
 console.log(`  root: ${root}`);
-console.log(`  flags: tsc=${!skipTsc} dashboard=${!skipDashboard} package=${!noPackage} target=${target ?? '<default>'}`);
+console.log(
+  `  flags: tsc=${!skipTsc} dashboard=${!skipDashboard}`
+  + ` package=${!noPackage} target=${target ?? '<default>'}`
+  + ` signing=${requireSigning ? 'required' : 'development'}`,
+);
 
 // 1. TypeScript + path-alias rewrite
 if (!skipTsc) {
@@ -151,6 +157,7 @@ await buildPreload();
 // 3d. Bundled provider plugins → dist/bundled-plugins/ (electron-builder ships
 //     it via extraResources → resourcesPath/bundled-plugins; seeded on first boot).
 run('node', ['scripts/build-bundled-plugins.mjs']);
+run('node', ['scripts/package-rust-agent-runtime.mjs']);
 
 if (noPackage) {
   console.log('\n--no-package: skipping electron-builder. Done.');
@@ -168,6 +175,7 @@ run('pnpm', ['run', 'electron:rebuild']);
 // 4. electron-builder
 const builderArgs = ['exec', 'electron-builder', '--config', 'apps/electron/electron-builder.json'];
 if (target) builderArgs.push('--' + target);
+if (requireSigning) builderArgs.push('--config.forceCodeSigning=true');
 run('pnpm', builderArgs);
 
 console.log('\n✓ Build complete. Artifacts in dist/electron-builder/');

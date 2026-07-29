@@ -8,7 +8,7 @@ export interface NotificationRouteTarget {
   kind: NotificationTarget;
   route: string;
   scopeId?: number | string;
-  sessionId?: number | string;
+  sessionId?: string;
   label?: string;
 }
 

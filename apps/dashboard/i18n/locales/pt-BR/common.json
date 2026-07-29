@@ -206,5 +206,9 @@
   "onboarding.project.indexingHelp": "Símbolos e FTS são atualizados em segundo plano com baixo consumo. Nenhum modelo local é carregado e nenhum índice semântico é criado automaticamente; você pode iniciá-lo depois, por projeto.",
   "onboarding.project.pickLater": "Escolher depois pela lista",
   "onboarding.project.open": "Abrir projeto",
-  "commandPalette.open": "Buscar em todo lugar"
+  "commandPalette.open": "Buscar em todo lugar",
+  "actions.answered": "Respondido",
+  "actions.approved": "Aprovado",
+  "actions.back": "Voltar",
+  "actions.rejected": "Rejeitado"
 }

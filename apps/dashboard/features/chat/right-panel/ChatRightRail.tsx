@@ -20,6 +20,7 @@ import {
   Compass,
   GitCompare,
   HardDrive,
+  MonitorPlay,
   ScrollText,
   Settings,
   Workflow,
@@ -44,7 +45,7 @@ interface RailEntry {
 }
 
 interface ChatRightRailProps {
-  sessionId: number;
+  sessionId: string;
   activePanelId: RightPanelId | null;
   onSelectPanel: (id: RightPanelId | null) => void;
   /** Fired when the user clicks the Snapshots icon. Optional. */
@@ -55,6 +56,8 @@ interface ChatRightRailProps {
   unreadNotifications?: number;
   /** Plugin tool windows (side: 'right') — one rail icon each. */
   pluginWindows?: ContribToolWindow[];
+  /** Whether the hosting project contributes its live preview to this rail. */
+  previewAvailable?: boolean;
 }
 
 export const ChatRightRail = memo(function ChatRightRail({
@@ -65,6 +68,7 @@ export const ChatRightRail = memo(function ChatRightRail({
   pendingSnapshots,
   unreadNotifications,
   pluginWindows = [],
+  previewAvailable = false,
 }: ChatRightRailProps) {
   const { t } = useTranslation(['chat']);
   const [chapterCount, setChapterCount] = useState(0);
@@ -99,12 +103,15 @@ export const ChatRightRail = memo(function ChatRightRail({
   const contextEntries = useMemo<RailEntry[]>(
     () => [
       { id: 'meta', icon: Compass, labelKey: 'rightRail.meta', kind: 'panel' },
+      ...(previewAvailable
+        ? [{ id: 'preview' as const, icon: MonitorPlay, labelKey: 'rightRail.preview', kind: 'panel' as const }]
+        : []),
       { id: 'plans', icon: ClipboardList, labelKey: 'rightRail.plans', kind: 'panel' },
       { id: 'drive', icon: HardDrive, labelKey: 'rightRail.drive', kind: 'panel' },
       { id: 'chapters', icon: BookOpen, labelKey: 'rightRail.chapters', kind: 'panel', badge: chapterCount },
       { id: 'diagram', icon: Workflow, labelKey: 'rightRail.diagram', kind: 'panel' },
     ],
-    [chapterCount],
+    [chapterCount, previewAvailable],
   );
 
   const inspectEntries = useMemo<RailEntry[]>(

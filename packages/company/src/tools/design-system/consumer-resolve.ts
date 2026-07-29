@@ -11,9 +11,10 @@ import type {
   DesignSystemStore,
   DesignSystemVersion,
 } from '@mcp/store/design-system-store.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface DsConsumerBinding {
-  sessionId: number;
+  sessionId: SessionId;
   packageName: string;
   semver: string;
 }
@@ -29,10 +30,10 @@ export type ConsumerResolution =
   | { ok: false; error: string };
 
 /** Resolve the pinned session+version, with a clear stale-link message. */
-export function resolveConsumerVersion(
+export async function resolveConsumerVersion(
   store: DesignSystemStore,
   binding: DsConsumerBinding,
-): ConsumerResolution {
+): Promise<ConsumerResolution> {
   const stale = (what: string): ConsumerResolution => ({
     ok: false,
     error:
@@ -40,13 +41,13 @@ export function resolveConsumerVersion(
       'The installed package in node_modules keeps working, but its metadata is gone — ' +
       'ask the user to re-link (or unlink) the design system from the project top bar.',
   });
-  const session = store.getSession(binding.sessionId);
+  const session = await store.getSession(binding.sessionId);
   if (!session) return stale('the DS session no longer exists');
-  const version = store.getVersionBySemver(binding.sessionId, binding.semver);
+  const version = await store.getVersionBySemver(binding.sessionId, binding.semver);
   if (!version || version.status !== 'published') {
     return stale(`version ${binding.semver} is no longer published`);
   }
-  const latest = store.getLatestPublishedVersion(binding.sessionId);
+  const latest = await store.getLatestPublishedVersion(binding.sessionId);
   const newerSemver = latest && latest.semver !== binding.semver ? latest.semver : null;
   return { ok: true, session, version, newerSemver };
 }

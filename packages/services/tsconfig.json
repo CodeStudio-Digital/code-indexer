@@ -8,6 +8,7 @@
   "include": ["src/**/*.ts"],
   "references": [
     { "path": "../shared" },
+    { "path": "../session-storage" },
     { "path": "../store" },
     { "path": "../candidate-pipeline" }
   ]

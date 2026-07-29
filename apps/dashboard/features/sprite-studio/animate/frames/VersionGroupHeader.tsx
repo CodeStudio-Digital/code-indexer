@@ -27,7 +27,7 @@ export function VersionGroupHeader({
   /** User-set display name for this group; falls back to the synthesized one. */
   customLabel?: string;
   onToggleCollapse: (key: string) => void;
-  onGroupSelect: (ids: number[], on: boolean) => void;
+  onGroupSelect: (ids: string[], on: boolean) => void;
   onGroupDelete: (group: FrameGroupView) => void;
   /** Restore this whole batch as the open animation's timeline. */
   onRestoreGroup: (group: FrameGroupView) => void;

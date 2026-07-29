@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "../sessions-fs-migrate.ts",
+    "./**/*.ts"
+  ],
+  "exclude": [
+    "./__tests__/runtime-compatibility-electron.test.ts"
+  ]
+}

@@ -51,7 +51,7 @@ export interface PrioritizedKanban {
   ordered: KanbanCardInput[];
   /** Per-card diagnostics — useful for UI tooltips. */
   diagnostics: Array<{
-    id: number;
+    id: string;
     score: number;
     signals: KanbanCandidate['signals'];
   }>;

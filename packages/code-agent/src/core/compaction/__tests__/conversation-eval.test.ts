@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CompactionSummaryV3 } from '@mcp/code-agent/core/summarizer.js';
-import { evaluateConversationCompaction } from '../conversation-eval.js';
+import { evaluateConversationCompaction, recallAtK } from '../conversation-eval.js';
 
 const facts = [
   { id: 'objective', acceptedPhrases: ['ship the chaptered auto-resume'] },
@@ -9,6 +9,10 @@ const facts = [
   { id: 'resolved', acceptedPhrases: ['duplicate summarizer call removed'] },
   { id: 'pending', acceptedPhrases: ['run the migration smoke test'] },
 ] as const;
+
+function chapterId(index: number): string {
+  return `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+}
 
 function plantedSummary(checkpoint: number): CompactionSummaryV3 {
   return {
@@ -40,8 +44,10 @@ describe('conversation compaction acceptance eval', () => {
       facts,
       recallCases: Array.from({ length: 10 }, (_, index) => ({
         query: `fact ${index}`,
-        expectedChapterId: index + 1,
-        rankedChapterIds: index === 9 ? [99, 98, 97, index + 1] : [index + 1],
+        expectedChapterId: chapterId(index + 1),
+        rankedChapterIds: index === 9
+          ? [chapterId(99), chapterId(98), chapterId(97), chapterId(index + 1)]
+          : [chapterId(index + 1)],
       })),
     });
     expect(result.retentionByCheckpoint.map((item) => item.ratio)).toEqual([1, 1, 1]);
@@ -59,5 +65,13 @@ describe('conversation compaction acceptance eval', () => {
     });
     expect(result.minimumRetention).toBe(0.8);
     expect(result.passes).toBe(false);
+  });
+
+  it('compares chapter UUIDs as opaque strings without numeric coercion', () => {
+    expect(recallAtK([{
+      query: 'chapter identity',
+      expectedChapterId: chapterId(42),
+      rankedChapterIds: ['42', chapterId(42)],
+    }], 1)).toBe(0);
   });
 });

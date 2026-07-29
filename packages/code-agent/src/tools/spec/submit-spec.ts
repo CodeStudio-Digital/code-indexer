@@ -89,7 +89,7 @@ export const submitSpec: CoderTool = {
       aborted?: boolean;
       interrupted?: boolean;
       kind?: 'plan' | 'question' | 'tasks' | 'spec';
-      agentRunId?: number;
+      agentRunId?: string | null;
       role?: string;
     };
     try {
@@ -110,7 +110,7 @@ export const submitSpec: CoderTool = {
       rejected.clear();
       const transitioning = runner.agentId === 'spec';
       if (transitioning) {
-        ctx.setSessionAgent?.('build');
+        await ctx.setSessionAgent?.('build');
       }
       const result: ToolResult = { content: formatSpecResult(true, written.relPath, feedback) };
       if (transitioning) {

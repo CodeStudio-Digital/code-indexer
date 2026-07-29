@@ -6,7 +6,7 @@ import { DEFAULT_SPRITE_STYLE, type SpriteStyleConfig } from '@mcp/store/sprite-
 import { runGenerationJob } from '../job-runner.js';
 import { writeAssetManifest } from '../../repo/manifest.js';
 import { spriteDir } from '../../repo/paths.js';
-import { fakeClient, makeWorld, RED_1PX } from './runner-fakes.js';
+import { fakeClient, makeWorld, RED_1PX, spriteId } from './runner-fakes.js';
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sprite-jobs-test-'));
 afterAll(() => fs.rmSync(tmpRoot, { recursive: true, force: true }));
@@ -27,16 +27,16 @@ describe('runGenerationJob — happy path (staged variants)', () => {
     expect(w.results.some((r) => typeof r.cost_usd === 'number' && (r.cost_usd as number) > 0)).toBe(true);
 
     for (const i of [0, 1]) {
-      expect(fs.existsSync(path.join(w.deps.scratchDir(900), `candidate-${i}.png`))).toBe(true);
+      expect(fs.existsSync(path.join(w.deps.scratchDir(spriteId(900)), `candidate-${i}.png`))).toBe(true);
     }
     const variants = w.events.filter((e) => e.type === 'sprite_variant_ready');
     expect(variants).toHaveLength(2);
     expect(variants[1]).toMatchObject({
-      jobId: 900, index: 1, candidateId: 'candidate-1',
-      thumbUrl: '/api/sprite-studio/jobs/900/candidates/1/thumb',
+      jobId: spriteId(900), index: 1, candidateId: 'candidate-1',
+      thumbUrl: `/api/sprite-studio/jobs/${spriteId(900)}/candidates/1/thumb`,
     });
     const done = w.events.find((e) => e.type === 'sprite_job_done');
-    expect(done).toMatchObject({ jobId: 900, candidates: [
+    expect(done).toMatchObject({ jobId: spriteId(900), candidates: [
       { candidateId: 'candidate-0', index: 0 }, { candidateId: 'candidate-1', index: 1 },
     ]});
     expect(w.insertedVersions).toHaveLength(0); // staged: no version rows
@@ -64,7 +64,7 @@ describe('runGenerationJob — happy path (staged variants)', () => {
     expect(sliceArgs).toEqual([2, 2]);
     expect(w.events.filter((e) => e.type === 'sprite_variant_ready')).toHaveLength(4);
     for (const i of [0, 1, 2, 3]) {
-      expect(fs.existsSync(path.join(w.deps.scratchDir(900), `candidate-${i}.png`))).toBe(true);
+      expect(fs.existsSync(path.join(w.deps.scratchDir(spriteId(900)), `candidate-${i}.png`))).toBe(true);
     }
   });
 
@@ -129,7 +129,7 @@ describe('runGenerationJob — failover and failure', () => {
     expect(w.errors).toHaveLength(1);
     expect(w.errors[0]).toContain('403 org not verified');
     const failed = w.events.find((e) => e.type === 'sprite_job_failed');
-    expect(failed).toMatchObject({ jobId: 900 });
+    expect(failed).toMatchObject({ jobId: spriteId(900) });
     expect(w.statuses).not.toContain('done');
   });
 
@@ -156,19 +156,22 @@ describe('runGenerationJob — autoSave (agent path)', () => {
     const w = makeWorld({
       scratchRoot: path.join(tmpRoot, 'autosave'),
       chain: [{ link, client: fakeClient() }],
-      projectRoot, assetId: 7, assetSlug: 'goblin',
+      projectRoot, assetId: spriteId(7), assetSlug: 'goblin',
     });
     await runGenerationJob(w.deps, w.jobRow, { intent: 'goblin', style, autoSave: true });
 
     expect(w.statuses).toEqual(['prompting', 'generating', 'postprocess', 'saving', 'done']);
     expect(fs.existsSync(path.join(spriteDir(projectRoot), 'assets', 'goblin', 'v001.png'))).toBe(true);
     expect(w.insertedVersions[0]).toMatchObject({
-      asset_id: 7, version: 1, file_rel_path: 'assets/goblin/v001.png',
-      source: 'generated', job_id: 900, width: 1, height: 1,
+      asset_id: spriteId(7), version: 1, file_rel_path: 'assets/goblin/v001.png',
+      source: 'generated', job_id: spriteId(900), width: 1, height: 1,
     });
     expect(typeof w.insertedVersions[0].content_hash).toBe('string');
-    expect(w.currentVersionSets).toEqual([[7, 101]]);
-    expect(w.events.find((e) => e.type === 'sprite_job_done')).toMatchObject({ jobId: 900, versionId: 101 });
+    expect(w.currentVersionSets).toEqual([[spriteId(7), spriteId(101)]]);
+    expect(w.events.find((e) => e.type === 'sprite_job_done')).toMatchObject({
+      jobId: spriteId(900),
+      versionId: spriteId(101),
+    });
   });
 
   it('fails cleanly when autoSave lacks an asset_id', async () => {
@@ -189,7 +192,11 @@ describe('runGenerationJob — cancellation', () => {
     ctrl.abort();
     await runGenerationJob(w.deps, w.jobRow, { intent: 'goblin', style }, ctrl.signal);
     expect(w.statuses).toEqual(['cancelled']);
-    expect(w.events).toEqual([{ type: 'sprite_job', jobId: 900, status: 'cancelled' }]);
+    expect(w.events).toEqual([{
+      type: 'sprite_job',
+      jobId: spriteId(900),
+      status: 'cancelled',
+    }]);
     expect(w.errors).toHaveLength(0);
   });
 });

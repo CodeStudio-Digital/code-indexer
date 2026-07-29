@@ -16,8 +16,8 @@ export function VersionMiniGrid({
   projectId: number;
   versions: AssetVersion[];
   cols: number;
-  currentVersionId: number | null;
-  onThumbClick: (id: number, e: React.MouseEvent) => void;
+  currentVersionId: string | null;
+  onThumbClick: (id: string, e: React.MouseEvent) => void;
 }) {
   return (
     <div

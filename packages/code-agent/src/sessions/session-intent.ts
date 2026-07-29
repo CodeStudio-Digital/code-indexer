@@ -10,7 +10,25 @@
  * the same-shaped block; the assembled context is capped again in
  * snapshot-review-context.ts / the pipeline.
  */
-import type { SessionStore } from './store.js';
+type Awaitable<T> = T | Promise<T>;
+
+export interface SessionIntentStore<SessionKey extends string = string> {
+  getSession(sessionId: SessionKey): Awaitable<{ title?: string | null } | null>;
+  getFirstUserMessageText(sessionId: SessionKey): Awaitable<string | null>;
+  getLatestNonMetaUserMessageText(sessionId: SessionKey): Awaitable<string | null>;
+  listPlans(sessionId: SessionKey): Awaitable<
+    Array<{ status: string; plan_text: string }>
+  >;
+  getTasksState(sessionId: SessionKey): Awaitable<{
+    summary?: string | null;
+    tasks: Array<{
+      id: string;
+      status: string;
+      title?: string | null;
+      content?: string | null;
+    }>;
+  } | null>;
+}
 
 const MAX_FIRST_MSG_CHARS = 1_500;
 const MAX_PLAN_CHARS = 2_000;
@@ -20,20 +38,23 @@ function cap(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
-export function buildSessionIntent(store: SessionStore, sessionId: number): string | null {
+export async function buildSessionIntent<SessionKey extends string>(
+  store: SessionIntentStore<SessionKey>,
+  sessionId: SessionKey,
+): Promise<string | null> {
   try {
     const parts: string[] = [];
 
-    const session = store.getSession(sessionId);
+    const session = await store.getSession(sessionId);
     if (session?.title) parts.push(`Session: ${session.title}`);
 
-    const firstMsg = store.getFirstUserMessageText(sessionId);
+    const firstMsg = await store.getFirstUserMessageText(sessionId);
     if (firstMsg) parts.push(`Original request:\n${cap(firstMsg, MAX_FIRST_MSG_CHARS)}`);
 
     // A pivot changes the human's intent mid-session; surface the latest
     // non-meta request so the review evaluates against the CURRENT ask, not
     // only the first message. Skip when it is identical to the original.
-    const latestMsg = store.getLatestNonMetaUserMessageText(sessionId);
+    const latestMsg = await store.getLatestNonMetaUserMessageText(sessionId);
     if (latestMsg && latestMsg.trim() !== (firstMsg ?? '').trim()) {
       parts.push(`Latest request:\n${cap(latestMsg, MAX_FIRST_MSG_CHARS)}`);
     }
@@ -41,12 +62,12 @@ export function buildSessionIntent(store: SessionStore, sessionId: number): stri
     // The approved plan is the contract the diff is expected to fulfill. The
     // newest plan row wins (listPlans is DESC); only an approved plan counts —
     // a pending/rejected one is not an obligation source.
-    const latestPlan = store.listPlans(sessionId)[0];
+    const latestPlan = (await store.listPlans(sessionId))[0];
     if (latestPlan && latestPlan.status === 'approved' && latestPlan.plan_text.trim()) {
       parts.push(`Approved plan:\n${cap(latestPlan.plan_text, MAX_PLAN_CHARS)}`);
     }
 
-    const tasks = store.getTasksState(sessionId);
+    const tasks = await store.getTasksState(sessionId);
     if (tasks && tasks.tasks.length > 0) {
       const lines = tasks.tasks
         .slice(0, MAX_TASKS)

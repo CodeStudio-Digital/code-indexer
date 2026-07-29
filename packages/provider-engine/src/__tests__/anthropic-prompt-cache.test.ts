@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
 
 vi.mock('@mcp/code-agent/providers/anthropic.js', () => ({
   ANTHROPIC_EXTENDED_CACHE_TTL_BETA: 'extended-cache-ttl-2025-04-11',
+  resolveAnthropicRequestModel: vi.fn(() => ({ apiModel: 'claude-opus-5' })),
   AnthropicChatProvider: class FakeAnthropicChatProvider {
     constructor(opts: Record<string, unknown>) {
       state.constructedWith.push(opts);

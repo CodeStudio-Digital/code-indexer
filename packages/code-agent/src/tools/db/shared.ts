@@ -5,17 +5,19 @@
  * layer binds it to the module-global stores and the runner context.
  */
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { isUuid } from '@mcp/session-storage';
 import type { DbConnection } from '@mcp/store/db-client-store-types.js';
 import { getDbToolsSessionProjects, getDbToolsStore } from './store-binding.js';
 import { pickConnection, resolveDbScope, sanitizeSlug, type ScopedConn } from './scope.js';
 
 /** Company sessions resolve to the ROOT session id (shared project links). */
-function companySessionIdOf(ctx: ToolContext): number | null {
-  const orch = ctx.companyContext?.orchestrator as { effectiveSessionId?: number } | undefined;
-  if (typeof orch?.effectiveSessionId === 'number') return orch.effectiveSessionId;
+function companySessionIdOf(ctx: ToolContext): string | null {
+  const orch = ctx.companyContext?.orchestrator as { effectiveSessionId?: string } | undefined;
+  if (typeof orch?.effectiveSessionId === 'string' && isUuid(orch.effectiveSessionId)) {
+    return orch.effectiveSessionId.toLowerCase();
+  }
   const raw = ctx.companyContext?.companySessionId;
-  if (raw === undefined || raw === null) return null;
-  return typeof raw === 'number' ? raw : Number(raw);
+  return typeof raw === 'string' && isUuid(raw) ? raw.toLowerCase() : null;
 }
 
 export type ScopeResult =
@@ -31,7 +33,7 @@ export function resolveToolScope(ctx: ToolContext): ScopeResult {
       return { ok: false, error: 'db tools unavailable (session-projects store not wired in this process)' };
     }
     const sid = companySessionIdOf(ctx);
-    if (sid === null || Number.isNaN(sid)) {
+    if (sid === null) {
       return { ok: false, error: 'db tools could not resolve the company session id' };
     }
     const connections = links.listCompanySessionProjects(sid).flatMap((p) => {

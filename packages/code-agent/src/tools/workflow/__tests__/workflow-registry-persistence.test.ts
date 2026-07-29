@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import Database from 'better-sqlite3';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
-import { coderOrchestrationCheckpoints259 } from '@mcp/store/migrations/259_coder_orchestration_checkpoints.js';
-import * as checkpoints from '../../../sessions/store/orchestration-checkpoints.js';
+import { FsSessionStore } from '../../../sessions/fs-store/fs-session-store.js';
+import type { SessionId } from '@mcp/session-storage';
 import { listActiveAgents } from '../../active-agent-registry.js';
 import { executeWorkflow } from '../workflow-run.js';
 import { buildWorkflowTool } from '../workflow-tool.js';
@@ -21,25 +23,50 @@ import {
 } from '../workflow-registry.js';
 import { planWaves, type WorkflowRecord } from '../workflow-types.js';
 
-const SESSION_ID = 81;
-let db: Database.Database;
+let temporaryRoot: string;
+let projectRoot: string;
+let dataDir: string;
+let sessionId: SessionId;
+let fsStore: FsSessionStore;
 let store: WorkflowCheckpointStore;
 
 function checkpointStore(): WorkflowCheckpointStore {
   return {
-    saveOrchestrationCheckpoint: (input) => checkpoints.save(db, input),
+    saveOrchestrationCheckpoint: (input) =>
+      fsStore.saveOrchestrationCheckpoint(input),
     loadOrchestrationCheckpoint: (sessionId, kind, scopeId) =>
-      checkpoints.load(db, sessionId, kind, scopeId),
+      fsStore.loadOrchestrationCheckpoint(sessionId, kind, scopeId),
     listOrchestrationCheckpoints: (sessionId, kind, limit) =>
-      checkpoints.list(db, sessionId, kind, limit),
+      fsStore.listOrchestrationCheckpoints(sessionId, kind, limit),
     removeOrchestrationCheckpoint: (sessionId, kind, scopeId, token) =>
-      checkpoints.remove(db, sessionId, kind, scopeId, token),
+      fsStore.removeOrchestrationCheckpoint(
+        sessionId,
+        kind,
+        scopeId,
+        token,
+      ),
     tryAcquireOrchestrationCheckpoint: (sessionId, kind, scopeId, leaseMs) =>
-      checkpoints.tryAcquire(db, sessionId, kind, scopeId, leaseMs),
+      fsStore.tryAcquireOrchestrationCheckpoint(
+        sessionId,
+        kind,
+        scopeId,
+        leaseMs,
+      ),
     releaseOrchestrationCheckpoint: (sessionId, kind, scopeId, token) =>
-      checkpoints.release(db, sessionId, kind, scopeId, token),
+      fsStore.releaseOrchestrationCheckpoint(
+        sessionId,
+        kind,
+        scopeId,
+        token,
+      ),
     renewOrchestrationCheckpoint: (sessionId, kind, scopeId, token, leaseMs) =>
-      checkpoints.renew(db, sessionId, kind, scopeId, token, leaseMs),
+      fsStore.renewOrchestrationCheckpoint(
+        sessionId,
+        kind,
+        scopeId,
+        token,
+        leaseMs,
+      ),
   };
 }
 
@@ -47,7 +74,7 @@ function record(): WorkflowRecord {
   return {
     id: 'wf_restart',
     name: 'restart proof',
-    sessionId: SESSION_ID,
+    sessionId,
     status: 'running',
     steps: [
       {
@@ -77,61 +104,93 @@ function record(): WorkflowRecord {
   };
 }
 
-beforeEach(() => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  db.exec(`
-    CREATE TABLE coder_sessions (id INTEGER PRIMARY KEY);
-    INSERT INTO coder_sessions (id) VALUES (${SESSION_ID});
-  `);
-  coderOrchestrationCheckpoints259.up(db);
+beforeEach(async () => {
+  temporaryRoot = await mkdtemp(join(tmpdir(), 'workflow-checkpoint-'));
+  projectRoot = join(temporaryRoot, 'project');
+  dataDir = join(temporaryRoot, 'data');
+  await Promise.all([mkdir(projectRoot), mkdir(dataDir)]);
+  fsStore = FsSessionStore.fromRoots({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) =>
+        projectId === 81 ? projectRoot : null,
+      listProjectRoots: () => [
+        { project_id: 81, root_path: projectRoot },
+      ],
+    },
+  });
+  sessionId = (
+    await fsStore.createSession({
+      project_id: 81,
+      title: 'workflow checkpoint',
+      provider: 'fake',
+      model: 'fake-model',
+    })
+  ).id;
   store = checkpointStore();
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
-  clearWorkflows(SESSION_ID);
-  db.close();
+  await clearWorkflows(sessionId);
+  await fsStore.close();
+  await rm(temporaryRoot, { recursive: true, force: true });
 });
 
 describe('workflow durable checkpoint', () => {
-  it('restores after executor recreation without planning completed steps again', () => {
-    expect(saveWorkflow(SESSION_ID, record(), store)).toBe(true);
-    const persisted = db.prepare(`
-      SELECT payload_json FROM coder_orchestration_checkpoints
-      WHERE session_id=? AND checkpoint_kind='workflow' AND scope_id='wf_restart'
-    `).get(SESSION_ID) as { payload_json: string };
-    expect(persisted.payload_json).not.toContain('TOP_SECRET_TOKEN');
-    expect(persisted.payload_json).not.toContain('SUPER_SECRET');
+  it('restores after executor recreation without planning completed steps again', async () => {
+    expect(await saveWorkflow(sessionId, record(), store)).toBe(true);
+    const persisted = await store.loadOrchestrationCheckpoint(
+      sessionId,
+      'workflow',
+      'wf_restart',
+    );
+    expect(persisted).not.toBeNull();
+    expect(persisted!.payload_json).not.toContain('TOP_SECRET_TOKEN');
+    expect(persisted!.payload_json).not.toContain('SUPER_SECRET');
 
-    // Process/realm recreation: discard only the memory cache, keep SQLite.
-    clearWorkflows(SESSION_ID);
-    const restored = getWorkflow(SESSION_ID, 'wf_restart', store);
+    // Process/realm recreation: discard memory, keep the bundle checkpoint.
+    await clearWorkflows(sessionId);
+    const restored = await getWorkflow(sessionId, 'wf_restart', store);
     expect(restored).toBeDefined();
     expect(restored?.steps.find((step) => step.id === 'done')?.status).toBe('completed');
     expect(planWaves(restored!.steps)).toEqual([['next']]);
   });
 
-  it('does not dispatch a stale workflow after lease expiry/takeover', () => {
+  it('does not dispatch a stale workflow after lease expiry/takeover', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     vi.stubEnv('CODER_ORCHESTRATION_LEASE_MS', '60000');
-    expect(saveWorkflow(SESSION_ID, record(), store)).toBe(true);
-    expect(tryAcquireWorkflowRun(SESSION_ID, 'wf_restart', store)).toBe(true);
+    expect(await saveWorkflow(sessionId, record(), store)).toBe(true);
+    expect(
+      await tryAcquireWorkflowRun(sessionId, 'wf_restart', store),
+    ).toBe(true);
 
     vi.setSystemTime(new Date('2026-01-01T00:01:01.000Z'));
-    const winner = checkpoints.tryAcquire(db, SESSION_ID, 'workflow', 'wf_restart', 60_000);
-    expect(winner).toMatch(/^lease:/);
+    const winner = await fsStore.tryAcquireOrchestrationCheckpoint(
+      sessionId,
+      'workflow',
+      'wf_restart',
+      60_000,
+    );
+    expect(winner).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     let dispatches = 0;
-    expect(() => {
-      assertWorkflowRunLease(SESSION_ID, 'wf_restart', store);
+    await expect((async () => {
+      await assertWorkflowRunLease(sessionId, 'wf_restart', store);
       dispatches += 1;
-    }).toThrow(/fenced|expired/);
+    })()).rejects.toThrow(/fenced|expired/);
     expect(dispatches).toBe(0);
 
-    releaseWorkflowRun(SESSION_ID, 'wf_restart', store);
-    checkpoints.release(db, SESSION_ID, 'workflow', 'wf_restart', winner!);
+    await releaseWorkflowRun(sessionId, 'wf_restart', store);
+    await fsStore.releaseOrchestrationCheckpoint(
+      sessionId,
+      'workflow',
+      'wf_restart',
+      winner!,
+    );
     vi.unstubAllEnvs();
   });
 
@@ -140,13 +199,17 @@ describe('workflow durable checkpoint', () => {
     let renewals = 0;
     store.renewOrchestrationCheckpoint = (...args) => {
       renewals += 1;
-      return renewals === 1 ? baseRenew(...args) : false;
+      return renewals === 1
+        ? baseRenew(...args)
+        : Promise.resolve(false);
     };
-    expect(saveWorkflow(SESSION_ID, record(), store)).toBe(true);
-    expect(tryAcquireWorkflowRun(SESSION_ID, 'wf_restart', store)).toBe(true);
+    expect(await saveWorkflow(sessionId, record(), store)).toBe(true);
+    expect(
+      await tryAcquireWorkflowRun(sessionId, 'wf_restart', store),
+    ).toBe(true);
     const emit = vi.fn();
     const runner = {
-      sessionId: SESSION_ID,
+      sessionId,
       emit,
       agentLoopV2: false,
     } as unknown as CoderRunner;
@@ -169,27 +232,53 @@ describe('workflow durable checkpoint', () => {
       runner,
     } as ToolContext, record())).rejects.toThrow(/fenced|expired/);
 
-    expect(listActiveAgents(SESSION_ID)).toEqual([]);
+    expect(listActiveAgents(sessionId)).toEqual([]);
     expect(emit.mock.calls.map((call) => call[0])).not.toContain('agents_group_start');
-    expect(workflowLeaseKeepaliveActiveForTests(SESSION_ID, 'wf_restart')).toBe(false);
-    releaseWorkflowRun(SESSION_ID, 'wf_restart', store);
+    expect(
+      workflowLeaseKeepaliveActiveForTests(sessionId, 'wf_restart'),
+    ).toBe(false);
+    await releaseWorkflowRun(sessionId, 'wf_restart', store);
   });
 
   it('keeps a long-running workflow lease alive and stops the timer on terminal cleanup', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
     vi.stubEnv('CODER_ORCHESTRATION_LEASE_MS', '60000');
-    expect(saveWorkflow(SESSION_ID, record(), store)).toBe(true);
-    expect(tryAcquireWorkflowRun(SESSION_ID, 'wf_restart', store)).toBe(true);
+    expect(await saveWorkflow(sessionId, record(), store)).toBe(true);
+    expect(
+      await tryAcquireWorkflowRun(sessionId, 'wf_restart', store),
+    ).toBe(true);
 
-    const stop = startWorkflowRunLeaseKeepalive(SESSION_ID, 'wf_restart', store);
-    expect(workflowLeaseKeepaliveActiveForTests(SESSION_ID, 'wf_restart')).toBe(true);
-    await vi.advanceTimersByTimeAsync(3 * 60_000);
-    expect(checkpoints.tryAcquire(db, SESSION_ID, 'workflow', 'wf_restart', 60_000)).toBeNull();
+    const stop = startWorkflowRunLeaseKeepalive(
+      sessionId,
+      'wf_restart',
+      store,
+    );
+    expect(
+      workflowLeaseKeepaliveActiveForTests(sessionId, 'wf_restart'),
+    ).toBe(true);
+    for (let elapsed = 0; elapsed < 3 * 60_000; elapsed += 20_000) {
+      await vi.advanceTimersByTimeAsync(20_000);
+      await assertWorkflowRunLease(
+        sessionId,
+        'wf_restart',
+        store,
+      );
+    }
+    expect(
+      await fsStore.tryAcquireOrchestrationCheckpoint(
+        sessionId,
+        'workflow',
+        'wf_restart',
+        60_000,
+      ),
+    ).toBeNull();
 
     stop();
-    expect(workflowLeaseKeepaliveActiveForTests(SESSION_ID, 'wf_restart')).toBe(false);
-    releaseWorkflowRun(SESSION_ID, 'wf_restart', store);
+    expect(
+      workflowLeaseKeepaliveActiveForTests(sessionId, 'wf_restart'),
+    ).toBe(false);
+    await releaseWorkflowRun(sessionId, 'wf_restart', store);
     vi.unstubAllEnvs();
   });
 
@@ -197,17 +286,25 @@ describe('workflow durable checkpoint', () => {
     const winnerStore = checkpointStore();
     const loserStore = checkpointStore();
     const initial = record();
-    expect(saveWorkflow(SESSION_ID, initial, winnerStore)).toBe(true);
-    const cachedBefore = getWorkflow(SESSION_ID, initial.id, loserStore)!;
+    expect(await saveWorkflow(sessionId, initial, winnerStore)).toBe(true);
+    const cachedBefore = await getWorkflow(
+      sessionId,
+      initial.id,
+      loserStore,
+    );
+    expect(cachedBefore).toBeDefined();
     const snapshotBefore = JSON.stringify(cachedBefore);
 
-    const winnerToken = winnerStore.tryAcquireOrchestrationCheckpoint(
-      SESSION_ID,
+    const winnerToken =
+      await winnerStore.tryAcquireOrchestrationCheckpoint(
+      sessionId,
       'workflow',
       initial.id,
       120_000,
     );
-    expect(winnerToken).toMatch(/^lease:/);
+    expect(winnerToken).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     const emit = vi.fn();
     const providerChat = vi.fn(async function* () {
       throw new Error('completed workflow must not dispatch');
@@ -225,7 +322,7 @@ describe('workflow durable checkpoint', () => {
     const toolCtx = {
       cwd: process.cwd(),
       projectName: 'test',
-      runner: { sessionId: SESSION_ID, agentLoopV2: false, emit },
+      runner: { sessionId, agentLoopV2: false, emit },
     } as unknown as ToolContext;
 
     const lost = await tool.handler(
@@ -244,8 +341,8 @@ describe('workflow durable checkpoint', () => {
       step.summary = `winner:${step.id}`;
       step.error = undefined;
     }
-    expect(winnerStore.saveOrchestrationCheckpoint({
-      sessionId: SESSION_ID,
+    expect(await winnerStore.saveOrchestrationCheckpoint({
+      sessionId,
       kind: 'workflow',
       scopeId: won.id,
       privacyClass: 'session_private_redacted',
@@ -253,7 +350,12 @@ describe('workflow durable checkpoint', () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString(),
       leaseToken: winnerToken!,
     })).toBe(true);
-    winnerStore.releaseOrchestrationCheckpoint(SESSION_ID, 'workflow', won.id, winnerToken!);
+    await winnerStore.releaseOrchestrationCheckpoint(
+      sessionId,
+      'workflow',
+      won.id,
+      winnerToken!,
+    );
 
     const later = await tool.handler(
       { resume_workflow_id: won.id, retry_failed: true },
@@ -269,9 +371,10 @@ describe('workflow durable checkpoint', () => {
       stillFailed: 0,
     });
     expect(providerChat).not.toHaveBeenCalled();
-    expect(getWorkflow(SESSION_ID, won.id, loserStore)?.steps.every(
-      (step) => step.status === 'completed',
-    )).toBe(true);
+    const restored = await getWorkflow(sessionId, won.id, loserStore);
+    expect(
+      restored?.steps.every((step) => step.status === 'completed'),
+    ).toBe(true);
   });
 
   it('adopts an exactly matched terminal child without replaying the workflow step', async () => {
@@ -286,10 +389,10 @@ describe('workflow durable checkpoint', () => {
       status: 'running',
       groupId: 'wf_restart-w1',
     }];
-    expect(saveWorkflow(SESSION_ID, orphan, store)).toBe(true);
-    clearWorkflows(SESSION_ID);
+    expect(await saveWorkflow(sessionId, orphan, store)).toBe(true);
+    await clearWorkflows(sessionId);
 
-    const reconcileWorkflowStepRun = vi.fn(() => ({
+    const reconcileWorkflowStepRun = vi.fn(async () => ({
       outcome: 'terminal' as const,
       stepStatus: 'completed' as const,
       reason: 'completed',
@@ -321,7 +424,7 @@ describe('workflow durable checkpoint', () => {
     }, {
       cwd: process.cwd(),
       projectName: 'test',
-      runner: { sessionId: SESSION_ID, agentLoopV2: false, emit: vi.fn() },
+      runner: { sessionId, agentLoopV2: false, emit: vi.fn() },
     } as unknown as ToolContext);
 
     expect(result.isError).toBeFalsy();
@@ -332,14 +435,21 @@ describe('workflow durable checkpoint', () => {
     });
     expect(providerChat).not.toHaveBeenCalled();
     expect(reconcileWorkflowStepRun).toHaveBeenCalledWith(
-      SESSION_ID,
+      sessionId,
       'wf_restart-w1',
       'child',
     );
-    const persisted = getWorkflow(SESSION_ID, orphan.id, durableStore)!;
-    expect(persisted.status).toBe('completed');
-    expect(persisted.steps[0].status).toBe('completed');
-    expect(persisted.steps[0].summary).toContain('reconciled after executor crash');
+    const persisted = await getWorkflow(
+      sessionId,
+      orphan.id,
+      durableStore,
+    );
+    expect(persisted).toBeDefined();
+    expect(persisted!.status).toBe('completed');
+    expect(persisted!.steps[0].status).toBe('completed');
+    expect(persisted!.steps[0].summary).toContain(
+      'reconciled after executor crash',
+    );
   });
 
   it('persists outcome_unknown and does not replay it on the same retry_failed recovery call', async () => {
@@ -354,10 +464,10 @@ describe('workflow durable checkpoint', () => {
       status: 'running',
       groupId: 'wf_restart-w1',
     }];
-    expect(saveWorkflow(SESSION_ID, orphan, store)).toBe(true);
-    clearWorkflows(SESSION_ID);
+    expect(await saveWorkflow(sessionId, orphan, store)).toBe(true);
+    await clearWorkflows(sessionId);
 
-    const reconcileWorkflowStepRun = vi.fn(() => ({
+    const reconcileWorkflowStepRun = vi.fn(async () => ({
       outcome: 'outcome_unknown' as const,
       runId: 'child-run-1',
       detail: 'child lifecycle is still nonterminal',
@@ -386,7 +496,7 @@ describe('workflow durable checkpoint', () => {
     }, {
       cwd: process.cwd(),
       projectName: 'test',
-      runner: { sessionId: SESSION_ID, agentLoopV2: false, emit: vi.fn() },
+      runner: { sessionId, agentLoopV2: false, emit: vi.fn() },
     } as unknown as ToolContext);
 
     expect(result.isError).toBe(true);
@@ -398,10 +508,15 @@ describe('workflow durable checkpoint', () => {
       stillFailed: 1,
     });
     expect(providerChat).not.toHaveBeenCalled();
-    const persisted = getWorkflow(SESSION_ID, orphan.id, durableStore)!;
-    expect(persisted.status).toBe('failed');
-    expect(persisted.steps[0].status).toBe('failed');
-    expect(persisted.steps[0].error).toContain('outcome_unknown');
-    expect(persisted.steps[0].error).toContain('again');
+    const persisted = await getWorkflow(
+      sessionId,
+      orphan.id,
+      durableStore,
+    );
+    expect(persisted).toBeDefined();
+    expect(persisted!.status).toBe('failed');
+    expect(persisted!.steps[0].status).toBe('failed');
+    expect(persisted!.steps[0].error).toContain('outcome_unknown');
+    expect(persisted!.steps[0].error).toContain('again');
   });
 });

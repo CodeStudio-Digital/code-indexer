@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { parseAppWorkspace, parseDsConsumer, parseDsWorkspace } from '../builder-config.js';
 
+const SESSION_ID = '11111111-1111-4111-8111-111111111111';
 const CONSUMER = JSON.stringify({
   stack: 'react-ts',
   port: 5181,
-  designSystem: { sessionId: 3, packageName: '@acme/ui', semver: '1.2.0', linkedAt: 'x' },
+  designSystem: { sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.2.0', linkedAt: 'x' },
 });
 
 describe('parseDsConsumer', () => {
   it('parses a valid consumer link', () => {
     expect(parseDsConsumer(CONSUMER)).toEqual({
-      sessionId: 3,
+      sessionId: SESSION_ID,
       packageName: '@acme/ui',
       semver: '1.2.0',
     });
@@ -32,19 +33,19 @@ describe('parseDsConsumer', () => {
       stack: 'react-ts',
       kind: 'ds',
       packageName: '@acme/ds',
-      designSystem: { sessionId: 1, packageName: '@acme/ui', semver: '1.0.0' },
+      designSystem: { sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.0.0' },
     });
     expect(parseDsConsumer(workspace)).toBeNull();
   });
 
   it.each([
     ['missing sessionId', { packageName: '@acme/ui', semver: '1.0.0' }],
-    ['non-integer sessionId', { sessionId: 1.5, packageName: '@acme/ui', semver: '1.0.0' }],
-    ['zero sessionId', { sessionId: 0, packageName: '@acme/ui', semver: '1.0.0' }],
-    ['missing packageName', { sessionId: 1, semver: '1.0.0' }],
-    ['empty packageName', { sessionId: 1, packageName: '', semver: '1.0.0' }],
-    ['missing semver', { sessionId: 1, packageName: '@acme/ui' }],
-    ['non-string semver', { sessionId: 1, packageName: '@acme/ui', semver: 2 }],
+    ['legacy numeric sessionId', { sessionId: 1, packageName: '@acme/ui', semver: '1.0.0' }],
+    ['malformed UUID', { sessionId: 'not-a-uuid', packageName: '@acme/ui', semver: '1.0.0' }],
+    ['missing packageName', { sessionId: SESSION_ID, semver: '1.0.0' }],
+    ['empty packageName', { sessionId: SESSION_ID, packageName: '', semver: '1.0.0' }],
+    ['missing semver', { sessionId: SESSION_ID, packageName: '@acme/ui' }],
+    ['non-string semver', { sessionId: SESSION_ID, packageName: '@acme/ui', semver: 2 }],
   ])('returns null on invalid designSystem: %s', (_label, ds) => {
     expect(parseDsConsumer(JSON.stringify({ stack: 'react-ts', designSystem: ds }))).toBeNull();
   });
@@ -83,7 +84,7 @@ describe('parseAppWorkspace', () => {
     const appWithDs = JSON.stringify({
       kind: 'app',
       stack: 'cf-fullstack',
-      designSystem: { sessionId: 3, packageName: '@acme/ui', semver: '1.0.0' },
+      designSystem: { sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.0.0' },
     });
     expect(parseDsConsumer(appWithDs)).toBeNull();
     expect(parseAppWorkspace(appWithDs)).not.toBeNull();

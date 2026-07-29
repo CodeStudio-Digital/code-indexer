@@ -17,6 +17,10 @@ import { DEFAULT_CONSOLIDATOR_OPTIONS, type ConsolidationPassResult, type Consol
 import type { SnapshotService } from '@mcp/services/services/snapshots.js';
 import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import {
+  sessionEntryIncludesProject,
+  type FsSessionStore,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
 
 const DEFAULT_INTERVAL_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_INTERVAL_MS ?? 6 * 60 * 60 * 1000);
 const DEFAULT_IDLE_MS = Number(process.env.MCP_MEMORY_CONSOLIDATE_IDLE_MS ?? 30 * 60 * 1000);
@@ -65,6 +69,7 @@ export interface MemoryConsolidatorHandle {
 
 export interface StartMemoryConsolidatorArgs {
   db: CodeIndexDB;
+  sessionStore: FsSessionStore;
   snapshotService: SnapshotService;
   embeddingService: EmbeddingService;
   intervalMs?: number;
@@ -83,6 +88,45 @@ export function getMemoryConsolidator(): MemoryConsolidatorHandle | null {
   return activeHandle;
 }
 
+type ConsolidationSessionStore = Pick<
+  FsSessionStore,
+  'catalog' | 'repository'
+>;
+
+/**
+ * The catalog must be refreshed by the caller. A project is idle only when
+ * every owning or linked session is non-running and older than the idle
+ * threshold. Unreadable/invalid state fails closed.
+ */
+export function projectIsIdleForConsolidation(
+  sessions: ConsolidationSessionStore,
+  projectId: number,
+  idleMs: number,
+  now = Date.now(),
+): boolean {
+  const relevant = sessions.catalog
+    .list()
+    .filter((entry) => sessionEntryIncludesProject(entry, projectId));
+
+  for (const entry of relevant) {
+    try {
+      const state =
+        entry.state ??
+        sessions.repository.readStateSync(entry.location);
+      if (state.status === 'running') return false;
+      const sessionUpdated = Date.parse(entry.session.updated_at);
+      const stateUpdated = Date.parse(state.updated_at);
+      if (!Number.isFinite(sessionUpdated) || !Number.isFinite(stateUpdated)) {
+        return false;
+      }
+      if (now - Math.max(sessionUpdated, stateUpdated) < idleMs) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function startMemoryConsolidator(args: StartMemoryConsolidatorArgs): MemoryConsolidatorHandle {
   // createApp() may be rebuilt in-process by tests/dev harnesses. Never leave
   // the previous timer and its full dependency graph retained.
@@ -91,7 +135,7 @@ export function startMemoryConsolidator(args: StartMemoryConsolidatorArgs): Memo
   const idleMs = args.idleMs ?? DEFAULT_IDLE_MS;
   const maxProjects = args.maxProjects ?? DEFAULT_MAX_PROJECTS;
   const options = args.options ?? consolidatorOptionsFromEnv();
-  const { db, snapshotService, embeddingService } = args;
+  const { db, sessionStore, snapshotService, embeddingService } = args;
 
   let stopped = false;
   let inFlight = false;
@@ -128,10 +172,32 @@ export function startMemoryConsolidator(args: StartMemoryConsolidatorArgs): Memo
     if (stopped || inFlight) return [];
     inFlight = true;
     try {
-      const candidates =
-        onlyProjectId != null
-          ? [{ project_id: onlyProjectId, project_name: db.getProject(onlyProjectId)?.name ?? '' }]
-          : db.listConsolidationCandidates(Math.floor(idleMs / 1000), maxProjects);
+      let candidates = onlyProjectId != null
+        ? [{
+            project_id: onlyProjectId,
+            project_name: db.getProject(onlyProjectId)?.name ?? '',
+          }]
+        : [];
+      if (onlyProjectId == null) {
+        await sessionStore.refresh();
+        if (sessionStore.catalog.issues.length > 0) {
+          console.warn(
+            `[memory/consolidator] skipped: filesystem session catalog has ` +
+            `${sessionStore.catalog.issues.length} scan issue(s)`,
+          );
+          return [];
+        }
+        candidates = db
+          .listConsolidationCandidates()
+          .filter((candidate) =>
+            projectIsIdleForConsolidation(
+              sessionStore,
+              candidate.project_id,
+              idleMs,
+            ),
+          )
+          .slice(0, Math.max(1, Math.floor(maxProjects)));
+      }
       const results: ConsolidationPassResult[] = [];
       for (const c of candidates) {
         if (stopped) break;

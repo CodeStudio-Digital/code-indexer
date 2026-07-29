@@ -1,17 +1,28 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
+const SESSION_ID = asSessionId('44444444-4444-4444-8444-444444444444');
+const MISSING_SESSION_ID = asSessionId('44444444-4444-4444-8444-444444444445');
+
+vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
+  getCoderWorkerPool: () => ({
+    abort: vi.fn(),
+    isRunning: vi.fn(() => false),
+  }),
+}));
+
 function setup() {
-  const calls: Array<{ id: number; enabled: boolean }> = [];
-  const sessions = new Map<number, { id: number; thinking_enabled: boolean }>([
-    [1, { id: 1, thinking_enabled: false }],
+  const calls: Array<{ id: SessionId; enabled: boolean }> = [];
+  const sessions = new Map<SessionId, { id: SessionId; thinking_enabled: boolean }>([
+    [SESSION_ID, { id: SESSION_ID, thinking_enabled: false }],
   ]);
   const sessionStore = {
-    getSession: (id: number) => sessions.get(id) ?? null,
-    setSessionThinkingEnabled: (id: number, enabled: boolean) => {
+    getSession: (id: SessionId) => sessions.get(id) ?? null,
+    setSessionThinkingEnabled: (id: SessionId, enabled: boolean) => {
       calls.push({ id, enabled });
       const session = sessions.get(id);
       if (session) session.thinking_enabled = enabled;
@@ -24,7 +35,7 @@ function setup() {
     { sessionStore, providerStore: {} } as unknown as ServerDeps,
     { activeRuns: new Map() } as unknown as CoderRuntime,
   );
-  const patchThinking = (id: number, thinking: unknown) => app.request(
+  const patchThinking = (id: SessionId, thinking: unknown) => app.request(
     `/api/coder/sessions/${id}/thinking`,
     {
       method: 'PATCH',
@@ -38,22 +49,22 @@ function setup() {
 describe('coder PATCH /sessions/:id/thinking', () => {
   it('persists and returns the conversation state', async () => {
     const { calls, patchThinking } = setup();
-    const response = await patchThinking(1, true);
+    const response = await patchThinking(SESSION_ID, true);
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ thinking_enabled: true });
-    expect(calls).toEqual([{ id: 1, enabled: true }]);
+    expect(calls).toEqual([{ id: SESSION_ID, enabled: true }]);
   });
 
   it('rejects non-boolean values without writing', async () => {
     const { calls, patchThinking } = setup();
-    const response = await patchThinking(1, 'true');
+    const response = await patchThinking(SESSION_ID, 'true');
     expect(response.status).toBe(400);
     expect(calls).toEqual([]);
   });
 
   it('returns 404 for a missing conversation', async () => {
     const { calls, patchThinking } = setup();
-    const response = await patchThinking(99, true);
+    const response = await patchThinking(MISSING_SESSION_ID, true);
     expect(response.status).toBe(404);
     expect(calls).toEqual([]);
   });

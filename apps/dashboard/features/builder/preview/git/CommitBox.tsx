@@ -8,7 +8,7 @@ import {
 } from '../api.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   status: GitStatusResponse;
   onMutated: () => void | Promise<void>;

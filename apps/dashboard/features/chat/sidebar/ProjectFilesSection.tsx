@@ -11,7 +11,7 @@ import { cn } from '../../../lib/utils.js';
 import { FileIcon, FolderIcon } from '../../../components/FileIcon.js';
 
 interface ProjectFilesSectionProps {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   selected: string[];
   onToggleSelect: (path: string) => void;

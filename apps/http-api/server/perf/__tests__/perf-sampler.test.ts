@@ -25,10 +25,19 @@ describe('PerfSampler memory attribution', () => {
   it('separates known worker heaps from the RSS remainder while preserving nativeMB', async () => {
     const sampler = new PerfSampler({
       companyMemStats: async () => [
-        { sessionId: 1, stats: workerStats(10, 20) },
-        { sessionId: 2, stats: null },
+        {
+          sessionId: '00000000-0000-4000-8000-000000000001',
+          stats: workerStats(10, 20),
+        },
+        {
+          sessionId: '00000000-0000-4000-8000-000000000002',
+          stats: null,
+        },
       ],
-      coderMemStats: async () => [{ sessionId: 3, stats: workerStats(30, 40) }],
+      coderMemStats: async () => [{
+        sessionId: '00000000-0000-4000-8000-000000000003',
+        stats: workerStats(30, 40),
+      }],
       indexerMemStats: async () => workerStats(5, 10),
     });
     samplers.push(sampler);

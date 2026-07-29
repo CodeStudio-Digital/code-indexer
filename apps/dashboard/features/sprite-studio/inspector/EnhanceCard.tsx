@@ -39,9 +39,9 @@ export function EnhanceCard({
   onApplied,
 }: {
   asset: SpriteAsset | null;
-  activeVersionId: number | null;
+  activeVersionId: string | null;
   projectId?: number;
-  onApplied?: (versionId: number) => void;
+  onApplied?: (versionId: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const [searchParams] = useSearchParams();

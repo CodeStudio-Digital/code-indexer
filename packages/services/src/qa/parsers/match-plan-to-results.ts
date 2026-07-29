@@ -25,7 +25,7 @@ export type ScenarioVerdict = QaTestStatus | 'not-run';
 export interface AnnotatedScenario extends QaTestPlanScenario {
   verdict: ScenarioVerdict;
   /** Reference to the result we matched against (for click-through). */
-  resultId: number | null;
+  resultId: string | null;
 }
 
 export interface AnnotatedSection extends Omit<QaTestPlanSection, 'scenarios'> {

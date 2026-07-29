@@ -37,7 +37,7 @@ export interface ServiceRow {
 }
 
 export interface ServicesSidebarProps {
-  sessionId: number;
+  sessionId: string;
 }
 
 export interface ProjectOption {

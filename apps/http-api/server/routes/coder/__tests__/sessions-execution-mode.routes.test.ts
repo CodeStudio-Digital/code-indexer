@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
+
+const SESSION_ID = asSessionId('55555555-5555-4555-8555-555555555555');
 
 const globalWorkspaceMocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -26,7 +29,7 @@ vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
 import { mountCoderSessionsRoutes } from '../sessions.js';
 
 interface MutableSession {
-  id: number;
+  id: SessionId;
   project_id: number;
   title: string;
   provider: string;
@@ -34,38 +37,43 @@ interface MutableSession {
   is_global: boolean;
   execution_mode_override: 'standard' | 'ultra';
   reasoning_effort_override: string | null;
+  thinking_enabled: boolean;
 }
 
 function setup() {
-  let nextId = 41;
-  const sessions = new Map<number, MutableSession>();
+  const sessions = new Map<SessionId, MutableSession>();
   const addSession = (input: Record<string, unknown>, isGlobal = false): MutableSession => {
     const session: MutableSession = {
-      id: nextId++,
+      id: SESSION_ID,
       project_id: Number(input.project_id ?? 7),
       title: String(input.title ?? 'Session'),
       provider: String(input.provider ?? 'openai'),
       model: String(input.model ?? 'gpt-test'),
       is_global: isGlobal,
-      execution_mode_override: 'standard',
-      reasoning_effort_override: null,
+      execution_mode_override:
+        input.execution_mode_override === 'ultra' ? 'ultra' : 'standard',
+      reasoning_effort_override:
+        typeof input.reasoning_effort_override === 'string'
+          ? input.reasoning_effort_override
+          : null,
+      thinking_enabled: input.thinking_enabled === true,
     };
     sessions.set(session.id, session);
     return session;
   };
 
-  const setSessionExecutionMode = vi.fn((id: number, mode: 'standard' | 'ultra') => {
+  const setSessionExecutionMode = vi.fn((id: SessionId, mode: 'standard' | 'ultra') => {
     const session = sessions.get(id);
     if (session) session.execution_mode_override = mode;
   });
-  const setSessionReasoningEffort = vi.fn((id: number, effort: string | null) => {
+  const setSessionReasoningEffort = vi.fn((id: SessionId, effort: string | null) => {
     const session = sessions.get(id);
     if (session) session.reasoning_effort_override = effort;
   });
   const sessionStore = {
     getLastUsedProviderModel: () => null,
     createSession: vi.fn((input: Record<string, unknown>) => addSession(input)),
-    getSession: (id: number) => sessions.get(id) ?? null,
+    getSession: (id: SessionId) => sessions.get(id) ?? null,
     listRecentSessionsGlobal: () => [],
     setSessionExecutionMode,
     setSessionReasoningEffort,
@@ -92,7 +100,12 @@ function setup() {
 
   const app = new Hono();
   mountCoderSessionsRoutes(app, deps, { activeRuns: new Map() } as unknown as CoderRuntime);
-  return { app, setSessionExecutionMode, setSessionReasoningEffort };
+  return {
+    app,
+    createSession: sessionStore.createSession,
+    setSessionExecutionMode,
+    setSessionReasoningEffort,
+  };
 }
 
 beforeEach(() => {
@@ -101,7 +114,12 @@ beforeEach(() => {
 
 describe('coder session execution mode routes', () => {
   it('persists explicit Ultra independently from native reasoning effort', async () => {
-    const { app, setSessionExecutionMode, setSessionReasoningEffort } = setup();
+    const {
+      app,
+      createSession,
+      setSessionExecutionMode,
+      setSessionReasoningEffort,
+    } = setup();
     const response = await app.request('/api/coder/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -112,20 +130,32 @@ describe('coder session execution mode routes', () => {
         model: 'gpt-test',
         execution_mode: 'ultra',
         reasoning_effort: 'high',
+        thinking_enabled: true,
       }),
     });
 
     expect(response.status).toBe(201);
-    expect(setSessionExecutionMode).toHaveBeenCalledWith(41, 'ultra');
-    expect(setSessionReasoningEffort).toHaveBeenCalledWith(41, 'high');
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      execution_mode_override: 'ultra',
+      reasoning_effort_override: 'high',
+      thinking_enabled: true,
+    }));
+    expect(setSessionExecutionMode).not.toHaveBeenCalled();
+    expect(setSessionReasoningEffort).not.toHaveBeenCalled();
     expect(await response.json()).toEqual(expect.objectContaining({
       execution_mode_override: 'ultra',
       reasoning_effort_override: 'high',
+      thinking_enabled: true,
     }));
   });
 
   it('converts legacy Ultra effort on normal session creation', async () => {
-    const { app, setSessionExecutionMode, setSessionReasoningEffort } = setup();
+    const {
+      app,
+      createSession,
+      setSessionExecutionMode,
+      setSessionReasoningEffort,
+    } = setup();
     const response = await app.request('/api/coder/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -139,12 +169,21 @@ describe('coder session execution mode routes', () => {
     });
 
     expect(response.status).toBe(201);
-    expect(setSessionExecutionMode).toHaveBeenCalledWith(41, 'ultra');
-    expect(setSessionReasoningEffort).toHaveBeenCalledWith(41, null);
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      execution_mode_override: 'ultra',
+      reasoning_effort_override: null,
+    }));
+    expect(setSessionExecutionMode).not.toHaveBeenCalled();
+    expect(setSessionReasoningEffort).not.toHaveBeenCalled();
   });
 
   it('lets an explicit execution mode win over the legacy pseudo-effort', async () => {
-    const { app, setSessionExecutionMode, setSessionReasoningEffort } = setup();
+    const {
+      app,
+      createSession,
+      setSessionExecutionMode,
+      setSessionReasoningEffort,
+    } = setup();
     const response = await app.request('/api/coder/sessions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -159,8 +198,12 @@ describe('coder session execution mode routes', () => {
     });
 
     expect(response.status).toBe(201);
-    expect(setSessionExecutionMode).toHaveBeenCalledWith(41, 'standard');
-    expect(setSessionReasoningEffort).toHaveBeenCalledWith(41, null);
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({
+      execution_mode_override: 'standard',
+      reasoning_effort_override: null,
+    }));
+    expect(setSessionExecutionMode).not.toHaveBeenCalled();
+    expect(setSessionReasoningEffort).not.toHaveBeenCalled();
   });
 
   it('accepts Ultra for global session creation', async () => {
@@ -179,8 +222,15 @@ describe('coder session execution mode routes', () => {
 
     expect(response.status).toBe(201);
     expect(globalWorkspaceMocks.create).toHaveBeenCalledOnce();
-    expect(setSessionExecutionMode).toHaveBeenCalledWith(41, 'ultra');
-    expect(setSessionReasoningEffort).toHaveBeenCalledWith(41, null);
+    expect(globalWorkspaceMocks.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        execution_mode_override: 'ultra',
+        reasoning_effort_override: null,
+      }),
+    );
+    expect(setSessionExecutionMode).not.toHaveBeenCalled();
+    expect(setSessionReasoningEffort).not.toHaveBeenCalled();
   });
 
   it('converts legacy Ultra effort on global session creation', async () => {
@@ -198,8 +248,15 @@ describe('coder session execution mode routes', () => {
     });
 
     expect(response.status).toBe(201);
-    expect(setSessionExecutionMode).toHaveBeenCalledWith(41, 'ultra');
-    expect(setSessionReasoningEffort).toHaveBeenCalledWith(41, null);
+    expect(globalWorkspaceMocks.create).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        execution_mode_override: 'ultra',
+        reasoning_effort_override: null,
+      }),
+    );
+    expect(setSessionExecutionMode).not.toHaveBeenCalled();
+    expect(setSessionReasoningEffort).not.toHaveBeenCalled();
   });
 
   it('updates the dedicated execution mode endpoint', async () => {
@@ -211,14 +268,14 @@ describe('coder session execution mode routes', () => {
     });
     setSessionExecutionMode.mockClear();
 
-    const response = await app.request('/api/coder/sessions/41/execution-mode', {
+    const response = await app.request(`/api/coder/sessions/${SESSION_ID}/execution-mode`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mode: 'ultra' }),
     });
 
     expect(response.status).toBe(200);
-    expect(setSessionExecutionMode).toHaveBeenCalledWith(41, 'ultra');
+    expect(setSessionExecutionMode).toHaveBeenCalledWith(SESSION_ID, 'ultra');
     expect(await response.json()).toEqual(expect.objectContaining({ execution_mode_override: 'ultra' }));
   });
 
@@ -232,15 +289,15 @@ describe('coder session execution mode routes', () => {
     setSessionExecutionMode.mockClear();
     setSessionReasoningEffort.mockClear();
 
-    const response = await app.request('/api/coder/sessions/41/reasoning-effort', {
+    const response = await app.request(`/api/coder/sessions/${SESSION_ID}/reasoning-effort`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ effort: 'ULTRA' }),
     });
 
     expect(response.status).toBe(200);
-    expect(setSessionExecutionMode).toHaveBeenCalledWith(41, 'ultra');
-    expect(setSessionReasoningEffort).toHaveBeenCalledWith(41, null);
+    expect(setSessionExecutionMode).toHaveBeenCalledWith(SESSION_ID, 'ultra');
+    expect(setSessionReasoningEffort).toHaveBeenCalledWith(SESSION_ID, null);
   });
 
   it('lets a legacy effort-only client leave Ultra again', async () => {
@@ -259,15 +316,15 @@ describe('coder session execution mode routes', () => {
     setSessionExecutionMode.mockClear();
     setSessionReasoningEffort.mockClear();
 
-    const response = await app.request('/api/coder/sessions/41/reasoning-effort', {
+    const response = await app.request(`/api/coder/sessions/${SESSION_ID}/reasoning-effort`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ effort: 'high' }),
     });
 
     expect(response.status).toBe(200);
-    expect(setSessionExecutionMode).toHaveBeenCalledWith(41, 'standard');
-    expect(setSessionReasoningEffort).toHaveBeenCalledWith(41, 'high');
+    expect(setSessionExecutionMode).toHaveBeenCalledWith(SESSION_ID, 'standard');
+    expect(setSessionReasoningEffort).toHaveBeenCalledWith(SESSION_ID, 'high');
     expect(await response.json()).toEqual(expect.objectContaining({
       execution_mode_override: 'standard',
       reasoning_effort_override: 'high',

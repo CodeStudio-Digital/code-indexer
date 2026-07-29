@@ -18,7 +18,7 @@ export function DeployProgressCard({
   onDone,
   onAuthRequired,
 }: {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   onDone: (result: LaunchResult) => void;
   onAuthRequired: () => void;

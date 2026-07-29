@@ -9,7 +9,7 @@ export interface SessionToolItem {
   sessionDisabled: boolean;
 }
 
-export function useSessionToolConfig(sessionId: number | null) {
+export function useSessionToolConfig(sessionId: string | null) {
   const [tools, setTools] = useState<SessionToolItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('');
@@ -47,7 +47,7 @@ export function useSessionToolConfig(sessionId: number | null) {
     }
   }, [sessionId]);
 
-  const copyFrom = useCallback(async (sourceSessionId: number) => {
+  const copyFrom = useCallback(async (sourceSessionId: string) => {
     if (!sessionId) return;
     await fetch(`/api/coder/sessions/${sessionId}/tools/copy-from/${sourceSessionId}`, {
       method: 'POST',

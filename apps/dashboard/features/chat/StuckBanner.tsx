@@ -12,11 +12,13 @@
  * rather than legitimately slow. Closing the panel doesn't hide the
  * alert.
  *
- * The component uses a 1s `setInterval` to force re-render — cheap, and
- * only runs while streaming, so an idle session pays nothing.
+ * The counter ticks off the app-wide shared clock (`lib/perf/shared-clock`),
+ * subscribed only while streaming — an idle session pays nothing and a hidden
+ * window stops ticking entirely.
  */
-import { memo, useEffect, useState } from 'react';
+import { memo } from 'react';
 import { AlertCircle, ScrollText } from 'lucide-react';
+import { useNow } from '../../lib/perf/shared-clock.js';
 
 interface StuckBannerProps {
   /** When false, the banner never renders (no stream → no stall to flag). */
@@ -35,18 +37,13 @@ export const StuckBanner = memo(function StuckBanner({
   thresholdMs = 30_000,
   onOpenLog,
 }: StuckBannerProps) {
-  // Force re-render every second while streaming so the elapsed-seconds
-  // counter ticks. We only schedule the interval when we're actually
-  // streaming — an idle session burns nothing.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!streaming) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [streaming]);
+  // Re-render every second while streaming so the elapsed-seconds counter
+  // ticks. Subscribing to the app-wide 1 Hz clock only while `streaming` keeps
+  // an idle session at zero timers, and a hidden window at zero wakeups.
+  const now = useNow(streaming);
 
   if (!streaming || !lastEventAt) return null;
-  const elapsed = Date.now() - lastEventAt;
+  const elapsed = now - lastEventAt;
   if (elapsed < thresholdMs) return null;
 
   const seconds = Math.floor(elapsed / 1000);

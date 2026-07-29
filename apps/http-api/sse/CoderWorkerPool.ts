@@ -2,7 +2,7 @@
  * Pool of worker-backed coder runs (P17).
  *
  * Mirrors `WorkerOrchestratorPool` for the simpler coder path. Each
- * active `coder_sessions.id` maps to a `WorkerHost` running
+ * active filesystem session maps to a `WorkerHost` running
  * `apps/http-api/workers/coder-worker.ts`. The worker hosts the
  * actual `runCoder()` call and its runner; main holds a mirrored
  * `CoderRunBus` populated by worker events.
@@ -51,19 +51,24 @@ import {
   enterBackgroundActivity,
   exitBackgroundActivity,
 } from '../server/perf/freeze-log.js';
+import { noteSyncLeaf } from '../server/perf/stall-evidence.js';
 import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   classifyCoderTerminalOutcome,
   normalizeCoderTerminalSignal,
   type ControlPlaneEventType,
 } from '@mcp/agent-runtime-contracts';
 import {
+  releaseSessionWriterLeaseForOwner,
+  type ProjectId,
+  type SessionId,
+} from '@mcp/session-storage';
+import {
   compareRunTerminalState,
-  type ControlPlaneDivergenceStore,
   type ControlPlaneRunContext,
-  type ControlPlaneStore,
 } from '@mcp/store/control-plane/index.js';
+import type { ControlPlaneAuthority } from '../file-control-plane-store.js';
 import {
   coderControlPlaneShadowEnabled,
   markLocalCoderRunStarted,
@@ -218,7 +223,7 @@ const LIFECYCLE_MIRRORS: Record<string, LifecycleMirror> = {
 };
 
 function mirrorBusLifecycleEvent(
-  store: ControlPlaneStore | null,
+  store: ControlPlaneAuthority | null,
   context: ControlPlaneRunContext,
   event: string,
   data: unknown,
@@ -278,8 +283,24 @@ export interface CoderWorkerPoolOpts {
   workerMaxOldGenerationSizeMb?: number;
   /** Dev-mode TS entry the bootstrap dynamic-imports. */
   workerDevTsEntry?: string;
-  /** SQLite path passed to each worker. */
+  /** SQLite path passed to each worker for essential shared catalogs only. */
   dbPath: string;
+  /**
+   * Filesystem-session authority. The pool must resolve the bundle before it
+   * spawns a worker; a missing resolver/session/root is a hard error and never
+   * falls back to a central database.
+   */
+  resolveSessionRuntimeContext?: (
+    sessionId: SessionId,
+  ) => Promise<SessionRuntimeContext>;
+  /**
+   * Transfers the bundle's single-writer authority to the worker before its
+   * isolate starts. The main-process repository may have opened the writer
+   * while preparing the run; that lease must be fully released first.
+   */
+  handoffSessionWriter?: (
+    context: SessionRuntimeContext,
+  ) => Promise<void>;
   /** Idle TTL before eviction. Default 5 min — only used between runs. */
   ttlMs?: number;
   /**
@@ -313,14 +334,22 @@ export interface CoderWorkerPoolOpts {
    * wired; AgentRun/journal writes still require an accepted run context and
    * their respective feature flags.
    */
-  getControlPlaneStore?: () => ControlPlaneStore | null;
-  /** Audit sink for the shadow run-state comparator (Fase 1D). */
-  getControlPlaneDivergenceStore?: () => ControlPlaneDivergenceStore | null;
+  getControlPlaneStore?: () => ControlPlaneAuthority | null;
+}
+
+export interface SessionRuntimeContext {
+  sessionId: SessionId;
+  projectId: ProjectId | null;
+  projectRoot: string | null;
+  bundlePath: string;
+  /** Pool-minted identity copied into this worker isolate's lease. */
+  writerOwnerId?: string;
 }
 
 interface PoolEntry {
   host: WorkerHost;
   bus: CoderRunBus;
+  sessionContext: SessionRuntimeContext;
   currentRunId: number;
   lastTouchedAt: number;
   detachCurrentBusRuntimeLog: () => void;
@@ -422,7 +451,16 @@ export const DEFAULT_CODER_WORKER_HEAP_MB = 1_024;
 export const CONTROL_PLANE_LEASE_RENEW_INTERVAL_MS = 60_000;
 
 export class CoderWorkerPool {
-  private readonly entries = new Map<number, PoolEntry>();
+  private readonly entries = new Map<SessionId, PoolEntry>();
+  /**
+   * Worker startup and teardown are both asynchronous (a dev worker can take
+   * tens of seconds to boot). Keep one lifecycle promise per session so two
+   * HTTP requests cannot create overlapping isolates, and a fresh request
+   * cannot enter while the previous isolate is still releasing writer.lease.
+   */
+  private readonly entryStarts = new Map<SessionId, Promise<PoolEntry>>();
+  private readonly evictions = new Map<SessionId, Promise<void>>();
+  private readonly lifecycleFailures = new Map<SessionId, Error>();
   private readonly ttlMs: number;
   private readonly postRunLingerMs: number;
   private readonly log: (level: 'info' | 'warn' | 'error', msg: string) => void;
@@ -440,18 +478,18 @@ export class CoderWorkerPool {
   }
 
   /** Read the mirrored bus for a session. Touches `lastTouchedAt`. */
-  getBus(sessionId: number): CoderRunBus | null {
+  getBus(sessionId: SessionId): CoderRunBus | null {
     const entry = this.entries.get(sessionId);
     if (!entry) return null;
     entry.lastTouchedAt = Date.now();
     return entry.bus;
   }
 
-  has(sessionId: number): boolean {
+  has(sessionId: SessionId): boolean {
     return this.entries.has(sessionId);
   }
 
-  getControlPlaneRunContext(sessionId: number): ControlPlaneRunContext | null {
+  getControlPlaneRunContext(sessionId: SessionId): ControlPlaneRunContext | null {
     return this.entries.get(sessionId)?.controlPlaneRunContext ?? null;
   }
 
@@ -460,14 +498,14 @@ export class CoderWorkerPool {
    * symmetric with `WorkerOrchestratorPool.snapshot()`.
    */
   snapshot(): Array<{
-    sessionId: number;
+    sessionId: SessionId;
     workerState: string;
     lastTouchedAt: number;
     idleMs: number;
   }> {
     const now = Date.now();
     const out: Array<{
-      sessionId: number;
+      sessionId: SessionId;
       workerState: string;
       lastTouchedAt: number;
       idleMs: number;
@@ -489,7 +527,7 @@ export class CoderWorkerPool {
    */
   async memStats(
     timeoutMs = 2_000,
-  ): Promise<Array<{ sessionId: number; stats: import('../workers/perf-stats.js').WorkerMemStats | null }>> {
+  ): Promise<Array<{ sessionId: SessionId; stats: import('../workers/perf-stats.js').WorkerMemStats | null }>> {
     const jobs = Array.from(this.entries.entries()).map(async ([sessionId, entry]) => {
       try {
         const stats = (await entry.host
@@ -504,7 +542,7 @@ export class CoderWorkerPool {
   }
 
   /** V8 CPU profile of one session's worker isolate (admin perf panel). */
-  async cpuProfile(sessionId: number, durationMs: number): Promise<object | null> {
+  async cpuProfile(sessionId: SessionId, durationMs: number): Promise<object | null> {
     const entry = this.entries.get(sessionId);
     if (!entry) return null;
     return (await entry.host
@@ -516,13 +554,13 @@ export class CoderWorkerPool {
    * Spawn (if needed) and kick off a fresh `runCoder()` in the worker.
    * Returns the mirrored bus the caller should pump to SSE.
    */
-  async runFresh(sessionId: number, opts: RunFreshOpts): Promise<CoderRunBus> {
+  async runFresh(sessionId: SessionId, opts: RunFreshOpts): Promise<CoderRunBus> {
     const { controlPlaneRunContext, ...workerOpts } = opts;
     let entry: PoolEntry;
     try {
       entry = await this.ensureEntry(sessionId);
     } catch (error) {
-      void terminalizeLocalCoderRun(
+      await terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         controlPlaneRunContext,
         {
@@ -534,7 +572,7 @@ export class CoderWorkerPool {
       throw error;
     }
     if (entry.runInProgress && !entry.bus.ended) {
-      void terminalizeLocalCoderRun(
+      await terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         controlPlaneRunContext,
         {
@@ -571,7 +609,7 @@ export class CoderWorkerPool {
     } catch (err) {
       this.stopControlPlaneLeaseRenewal(entry);
       entry.runInProgress = false;
-      void terminalizeLocalCoderRun(
+      await terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
         entry.controlPlaneRunContext,
         { event: 'error', data: { message: err instanceof Error ? err.message : String(err) }, mode: 'worker_start_failure' },
@@ -594,11 +632,11 @@ export class CoderWorkerPool {
 
   /** Forward a follow-up user message to the worker's runner. */
   async pushUserMessage(
-    sessionId: number,
+    sessionId: SessionId,
     content: string,
     selectedSkillIds?: string[],
-    roundMessageId?: number,
-  ): Promise<void> {
+    operationId = `message:${randomUUID()}`,
+  ): Promise<number> {
     const entry = this.entries.get(sessionId);
     if (!entry) throw new Error(`coder-pool: no active run for session ${sessionId}`);
     this.cancelPostRunEvict(entry);
@@ -606,11 +644,45 @@ export class CoderWorkerPool {
     // (B) — re-engaging the worker mid-linger restarts the in-flight
     // semantics. Cleared again when the next `bus.end` arrives.
     entry.runInProgress = true;
-    await entry.host.requireBridge().request('pushUserMessage', {
+    const result = await entry.host.requireBridge().request<{
+      ok: boolean;
+      roundMessageId: number;
+    }>('pushUserMessage', {
       content,
       selectedSkillIds,
-      roundMessageId,
+      operationId,
     });
+    if (!result.ok || !Number.isSafeInteger(result.roundMessageId)) {
+      throw new Error(`coder-pool: worker did not persist follow-up message for ${sessionId}`);
+    }
+    return result.roundMessageId;
+  }
+
+  /**
+   * Route host-produced session diagnostics through the active filesystem
+   * authority. Returning true means the lifecycle owned the event (including a
+   * deliberate drop during teardown), so callers must not open a main writer.
+   */
+  async appendSessionEvent(
+    sessionId: SessionId,
+    event: string,
+    payload: unknown,
+  ): Promise<boolean> {
+    if (this.evictions.has(sessionId)) return true;
+    const starting = this.entryStarts.get(sessionId);
+    if (starting) await starting;
+    const entry = this.entries.get(sessionId);
+    if (!entry) return false;
+    await entry.host.requireBridge().request(
+      'appendSessionEvent',
+      {
+        event,
+        payload,
+        operationId: `host-event:${event}:${randomUUID()}`,
+      },
+      { timeoutMs: 15_000 },
+    );
+    return true;
   }
 
   /**
@@ -632,7 +704,7 @@ export class CoderWorkerPool {
   }
 
   private ownsControlPlaneLease(
-    sessionId: number,
+    sessionId: SessionId,
     entry: PoolEntry,
     runId: number,
     context: ControlPlaneRunContext,
@@ -657,12 +729,13 @@ export class CoderWorkerPool {
    */
   private startControlPlaneLeaseRenewal(
     entry: PoolEntry,
-    sessionId: number,
+    sessionId: SessionId,
     runId: number,
     context: ControlPlaneRunContext,
   ): void {
     this.stopControlPlaneLeaseRenewal(entry);
     const timer = setInterval(() => {
+      void (async () => {
       if (!this.ownsControlPlaneLease(sessionId, entry, runId, context)) {
         // A queued callback from an ended/replaced run may still enter once.
         // Clear only its own handle; never clobber the replacement's timer.
@@ -672,14 +745,20 @@ export class CoderWorkerPool {
         }
         return;
       }
-      const renewed = renewLocalCoderRunLease(
+      const renewed = await renewLocalCoderRunLease(
         this.opts.getControlPlaneStore?.() ?? null,
         context,
         new Date().toISOString(),
       );
       if (!renewed) {
-        this.handleControlPlaneAuthorityLost(sessionId, entry, runId, context);
+        await this.handleControlPlaneAuthorityLost(
+          sessionId,
+          entry,
+          runId,
+          context,
+        );
       }
+      })();
     }, CONTROL_PLANE_LEASE_RENEW_INTERVAL_MS);
     entry.controlPlaneLeaseRenewTimer = timer;
     if (typeof (timer as { unref?: () => void }).unref === 'function') {
@@ -693,12 +772,12 @@ export class CoderWorkerPool {
    * terminal, and evict the isolate so a failed/cooperative abort cannot keep
    * mutating behind the control plane's back.
    */
-  private handleControlPlaneAuthorityLost(
-    sessionId: number,
+  private async handleControlPlaneAuthorityLost(
+    sessionId: SessionId,
     entry: PoolEntry,
     runId: number,
     context: ControlPlaneRunContext,
-  ): void {
+  ): Promise<void> {
     if (!this.ownsControlPlaneLease(sessionId, entry, runId, context)) return;
     this.stopControlPlaneLeaseRenewal(entry);
 
@@ -720,7 +799,7 @@ export class CoderWorkerPool {
       publish(entry.bus, 'error', terminalData);
       markEnded(entry.bus, 'error', terminalData);
     }
-    terminalizeLocalCoderRun(
+    await terminalizeLocalCoderRun(
       this.opts.getControlPlaneStore?.(),
       context,
       { event: 'error', data: terminalData, mode: 'authority_lost' },
@@ -746,16 +825,21 @@ export class CoderWorkerPool {
     void this.evict(sessionId);
   }
 
-  private prepareRunBus(entry: PoolEntry, sessionId: number, runId: number): void {
+  private prepareRunBus(entry: PoolEntry, sessionId: SessionId, runId: number): void {
     if (entry.currentRunId !== 0 || entry.bus.ended) {
       try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
       entry.bus = createBus(new AbortController());
-      entry.detachCurrentBusRuntimeLog = installRuntimeEventLog(entry.bus, 'coder', sessionId);
+      entry.detachCurrentBusRuntimeLog = installRuntimeEventLog(
+        entry.bus,
+        'coder',
+        sessionId,
+        { bundlePath: entry.sessionContext.bundlePath },
+      );
     }
     entry.currentRunId = runId;
   }
 
-  private schedulePostRunEvict(entry: PoolEntry, sessionId: number): void {
+  private schedulePostRunEvict(entry: PoolEntry, sessionId: SessionId): void {
     if (entry.postRunEvictTimer) clearTimeout(entry.postRunEvictTimer);
     entry.postRunEvictTimer = setTimeout(() => {
       // Re-check: a fresh run might have already cleared the timer
@@ -774,7 +858,7 @@ export class CoderWorkerPool {
     }
   }
 
-  async isWaitingForInput(sessionId: number): Promise<boolean> {
+  async isWaitingForInput(sessionId: SessionId): Promise<boolean> {
     const entry = this.entries.get(sessionId);
     if (!entry) return false;
     return entry.host.requireBridge().request<boolean>('isWaitingForInput', {});
@@ -787,7 +871,7 @@ export class CoderWorkerPool {
    * the caller should fall back to the resume path (synthesize the
    * tool_result and append to message history).
    */
-  async provideUserInput(sessionId: number, value: string, askId?: string): Promise<boolean> {
+  async provideUserInput(sessionId: SessionId, value: string, askId?: string): Promise<boolean> {
     const entry = this.entries.get(sessionId);
     if (!entry) return false;
     this.cancelPostRunEvict(entry);
@@ -798,20 +882,20 @@ export class CoderWorkerPool {
     return !!result?.ok;
   }
 
-  async interruptWait(sessionId: number): Promise<void> {
+  async interruptWait(sessionId: SessionId): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     await entry.host.requireBridge().request('interruptWait', {});
   }
 
-  async setThinking(sessionId: number, thinking: boolean): Promise<void> {
+  async setThinking(sessionId: SessionId, thinking: boolean): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     await entry.host.requireBridge().request('setThinking', { thinking });
   }
 
   /** Push a mid-run tool-permission-mode change into the live runner. */
-  async setToolPermissionMode(sessionId: number, mode: 'ask' | 'auto' | 'unrestricted'): Promise<void> {
+  async setToolPermissionMode(sessionId: SessionId, mode: 'ask' | 'auto' | 'unrestricted'): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     await entry.host.requireBridge().request('setToolPermissionMode', { mode });
@@ -819,7 +903,7 @@ export class CoderWorkerPool {
 
   /** Abort ONE running ephemeral subagent (dashboard row cancel). */
   async abortAgent(
-    sessionId: number,
+    sessionId: SessionId,
     groupId: string,
     agentRef: number | string,
   ): Promise<{ ok: boolean; reason?: string }> {
@@ -831,7 +915,7 @@ export class CoderWorkerPool {
 
   /** Fetch a finished subagent's retained transcript digest from the worker realm. */
   async readAgentTranscript(
-    sessionId: number,
+    sessionId: SessionId,
     spawnId: string,
     agentRef?: number | string,
     maxChars?: number,
@@ -842,14 +926,22 @@ export class CoderWorkerPool {
       { ok: boolean; reason?: string; text?: string; label?: string; status?: string; hasTranscript?: boolean };
   }
 
-  /** Replace the provider of a live worker-side runner after persistence updates. */
-  async swapProvider(sessionId: number, provider: string, model: string): Promise<void> {
+  /**
+   * Persist and apply a provider change inside the active worker authority.
+   * Returns false when no worker owns the session, allowing the caller to use
+   * the main-process repository before the next writer handoff.
+   */
+  async swapProvider(sessionId: SessionId, provider: string, model: string): Promise<boolean> {
     const entry = this.entries.get(sessionId);
-    if (!entry) return;
-    await entry.host.requireBridge().request('swapProvider', { provider, model });
+    if (!entry) return false;
+    const result = await entry.host.requireBridge().request(
+      'swapProvider',
+      { provider, model },
+    ) as { ok?: boolean };
+    return result.ok === true;
   }
 
-  async abort(sessionId: number): Promise<void> {
+  async abort(sessionId: SessionId): Promise<void> {
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     await entry.host.requireBridge().request('abort', {});
@@ -857,24 +949,54 @@ export class CoderWorkerPool {
 
   /** True while a run is in flight for this session (drives the "busy" guard on
    *  routes that must not mutate a live session, e.g. attach/detach project). */
-  isRunning(sessionId: number): boolean {
+  isRunning(sessionId: SessionId): boolean {
     return this.entries.get(sessionId)?.runInProgress === true;
   }
 
-  async evict(sessionId: number): Promise<void> {
+  async evict(sessionId: SessionId): Promise<void> {
+    const existingEviction = this.evictions.get(sessionId);
+    if (existingEviction) return existingEviction;
+
+    // Publish the lifecycle fence before running any asynchronous teardown.
+    // ensureEntry() observes this promise and waits for the old worker to
+    // release its filesystem lease before it is allowed to spawn a replacement.
+    const eviction = Promise.resolve().then(() => this.evictEntry(sessionId));
+    this.evictions.set(sessionId, eviction);
+    try {
+      await eviction;
+    } finally {
+      if (this.evictions.get(sessionId) === eviction) {
+        this.evictions.delete(sessionId);
+      }
+    }
+  }
+
+  private async evictEntry(sessionId: SessionId): Promise<void> {
+    const starting = this.entryStarts.get(sessionId);
+    if (starting) {
+      await starting.catch(() => undefined);
+    }
     const entry = this.entries.get(sessionId);
     if (!entry) return;
     this.stopControlPlaneLeaseRenewal(entry);
-    void terminalizeLocalCoderRun(
+    await terminalizeLocalCoderRun(
       this.opts.getControlPlaneStore?.(),
       entry.controlPlaneRunContext,
       { event: 'error', data: { reason: 'worker-evicted' }, mode: 'evicted' },
     );
     entry.controlPlaneRunContext = null;
     const activityId = enterBackgroundActivity(`coder-worker:evict:${sessionId}`);
-    this.entries.delete(sessionId);
     try {
       this.cancelPostRunEvict(entry);
+      // A worker_thread shares Electron's PID, so force-terminating it with an
+      // open writer.lease creates a lease that PID liveness can never reclaim.
+      // Make lease release a separately acknowledged phase before the generic
+      // WorkerHost stop/terminate sequence.
+      await entry.host.requireBridge().request(
+        'releaseSessionWriter',
+        {},
+        { timeoutMs: 15_000 },
+      );
       // Session truly going away → close the preview window AND stop the dev
       // server the preview started for it ("owned"). The user's own runner is
       // never owned, so it stays up.
@@ -883,6 +1005,9 @@ export class CoderWorkerPool {
       const aliveMs = Date.now() - entry.lastTouchedAt;
       try {
         await entry.host.evict(5_000);
+        if (this.entries.get(sessionId) === entry) {
+          this.entries.delete(sessionId);
+        }
         this.log('info', `[coder-pool] worker evicted session=${sessionId} (idle=${aliveMs}ms)`);
       } catch (err) {
         this.log(
@@ -900,7 +1025,11 @@ export class CoderWorkerPool {
       clearInterval(this.sweepTimer);
       this.sweepTimer = null;
     }
-    const ids = Array.from(this.entries.keys());
+    const ids = Array.from(new Set([
+      ...this.entries.keys(),
+      ...this.entryStarts.keys(),
+      ...this.evictions.keys(),
+    ]));
     await Promise.all(ids.map((id) => this.evict(id)));
   }
 
@@ -909,12 +1038,12 @@ export class CoderWorkerPool {
    * control-plane state after the terminal mirror. Best-effort audit:
    * mismatches are counted and persisted; failures never affect the run.
    */
-  private compareShadowTerminalState(
-    sessionId: number,
+  private async compareShadowTerminalState(
+    sessionId: SessionId,
     context: ControlPlaneRunContext | null,
     event: 'done' | 'error',
     data: unknown,
-  ): void {
+  ): Promise<void> {
     const store = this.opts.getControlPlaneStore?.() ?? null;
     if (!store || !context || !coderControlPlaneShadowEnabled()) return;
     try {
@@ -925,8 +1054,14 @@ export class CoderWorkerPool {
         error: record.error,
         message: record.message,
       });
-      const command = store.commands.get(context.commandId);
-      const run = store.runs.get(context.agentRunId);
+      const command = await store.getCommand(
+        context.sessionId,
+        context.commandId,
+      );
+      const run = await store.getRun(
+        context.sessionId,
+        context.agentRunId,
+      );
       const divergences = compareRunTerminalState({
         legacy: { event: terminal.event, reason: terminal.reason },
         command: command ?? null,
@@ -934,12 +1069,7 @@ export class CoderWorkerPool {
       });
       if (divergences.length === 0) return;
       recordLocalCoderShadowDivergences(divergences.length);
-      this.opts.getControlPlaneDivergenceStore?.()?.recordMany({
-        sessionId: context.sessionId,
-        legacySessionId: context.legacySessionId,
-        commandId: context.commandId,
-        agentRunId: context.agentRunId,
-      }, divergences);
+      await store.recordDivergences(context, divergences);
     } catch (error) {
       this.log('warn', `[coder-pool] control-plane comparator failed session=${sessionId}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -962,15 +1092,66 @@ export class CoderWorkerPool {
     }
   }
 
-  private async ensureEntry(sessionId: number): Promise<PoolEntry> {
+  async resolveRuntimeContext(
+    sessionId: SessionId,
+  ): Promise<SessionRuntimeContext> {
+    const resolveRuntimeContext = this.opts.resolveSessionRuntimeContext;
+    if (!resolveRuntimeContext) {
+      throw new Error(
+        'coder-pool: filesystem session runtime resolver is not configured',
+      );
+    }
+    const sessionContext = await resolveRuntimeContext(sessionId);
+    if (sessionContext.sessionId !== sessionId) {
+      throw new Error(
+        `coder-pool: filesystem resolver returned a different session (${sessionContext.sessionId})`,
+      );
+    }
+    if (sessionContext.projectId != null && !sessionContext.projectRoot) {
+      throw new Error(
+        `coder-pool: project root unavailable for filesystem session ${sessionId}`,
+      );
+    }
+    return sessionContext;
+  }
+
+  private async ensureEntry(sessionId: SessionId): Promise<PoolEntry> {
+    const evicting = this.evictions.get(sessionId);
+    if (evicting) await evicting;
+    const lifecycleFailure = this.lifecycleFailures.get(sessionId);
+    if (lifecycleFailure) throw lifecycleFailure;
+
     const existing = this.entries.get(sessionId);
     if (existing) return existing;
+
+    const starting = this.entryStarts.get(sessionId);
+    if (starting) return starting;
+
+    const start = this.createEntry(sessionId);
+    this.entryStarts.set(sessionId, start);
+    try {
+      return await start;
+    } finally {
+      if (this.entryStarts.get(sessionId) === start) {
+        this.entryStarts.delete(sessionId);
+      }
+    }
+  }
+
+  private async createEntry(sessionId: SessionId): Promise<PoolEntry> {
+    const resolvedContext = await this.resolveRuntimeContext(sessionId);
+    const sessionContext: SessionRuntimeContext = {
+      ...resolvedContext,
+      writerOwnerId: `coder-worker:${randomUUID()}`,
+    };
+    await this.opts.handoffSessionWriter?.(sessionContext);
 
     const host = new WorkerHost({
       name: `coder-session-${sessionId}`,
       workerFile: this.opts.workerFile,
       workerData: {
         sessionId,
+        sessionContext,
         dbPath: this.opts.dbPath,
         // Dev bootstrap reads this to dynamic-import the real TS entry
         // after registering tsx. Absent in production builds.
@@ -980,8 +1161,17 @@ export class CoderWorkerPool {
       resourceLimits: {
         maxOldGenerationSizeMb: this.opts.workerMaxOldGenerationSizeMb ?? DEFAULT_CODER_WORKER_HEAP_MB,
       },
-      maxRestarts: 3,
+      // A restarted WorkerHost would retain bridge handlers wired to the old
+      // MessagePort. Tear the entry down and let the next request create a
+      // fully fenced replacement instead.
+      maxRestarts: 0,
       defaultRequestTimeoutMs: 120_000,
+      // Worker→main event listeners run inline on the Electron main loop, so
+      // this is real blocking time. One hook covers bus.event, bus.end and
+      // every bridge RPC dispatch (docOutline, mcpExt.callTool, LSP, …) — which
+      // is what lets a freeze during an agent turn name what it was doing
+      // instead of coming back unattributed.
+      onDispatch: (type, ms) => noteSyncLeaf(`bus.event:${type}`, ms),
       onCrash: (err) => {
         this.log('error', `[coder-pool] worker session=${sessionId} crashed: ${err.message}`);
         // Apêndice 4 Fase 1 — structured crash log so post-mortem can
@@ -1013,6 +1203,7 @@ export class CoderWorkerPool {
         // segfault in a native dep — anywhere the worker can't run JS
         // anymore. Belt-and-suspenders.
         const entry = this.entries.get(sessionId);
+        if (entry?.host !== host) return;
         if (entry?.bus && !entry.bus.ended) {
           // Emit a worker_log BEFORE markEnded so the dashboard's
           // WorkerLogPanel renders the crash with its real reason
@@ -1035,19 +1226,68 @@ export class CoderWorkerPool {
         }
         if (entry) {
           this.stopControlPlaneLeaseRenewal(entry);
-          terminalizeLocalCoderRun(
-            this.opts.getControlPlaneStore?.(),
-            entry.controlPlaneRunContext,
-            { event: 'error', data: { reason: 'worker-crashed', message: err.message }, mode: 'worker_crash' },
-          );
           const terminalContext = entry.controlPlaneRunContext;
-          setImmediate(() => {
-            this.compareShadowTerminalState(sessionId, terminalContext, 'error', { reason: 'worker-crashed' });
-          });
           entry.controlPlaneRunContext = null;
+          void (async () => {
+            await terminalizeLocalCoderRun(
+              this.opts.getControlPlaneStore?.(),
+              terminalContext,
+              {
+                event: 'error',
+                data: { reason: 'worker-crashed', message: err.message },
+                mode: 'worker_crash',
+              },
+            );
+            await this.compareShadowTerminalState(
+              sessionId,
+              terminalContext,
+              'error',
+              { reason: 'worker-crashed' },
+            );
+          })();
         }
         closePreviewSession(sessionId);
-        this.entries.delete(sessionId);
+        if (this.entries.get(sessionId)?.host === host) {
+          this.entries.delete(sessionId);
+        }
+      },
+      onExit: (_code, planned) => {
+        if (planned) return;
+        const ownerId = sessionContext.writerOwnerId;
+        if (!ownerId || this.evictions.has(sessionId)) return;
+        const cleanup = releaseSessionWriterLeaseForOwner({
+          bundlePath: sessionContext.bundlePath,
+          ownerId,
+        })
+          .then((released) => {
+            this.lifecycleFailures.delete(sessionId);
+            if (released) {
+              this.log(
+                'warn',
+                `[coder-pool] reclaimed crashed worker lease session=${sessionId}`,
+              );
+            }
+          })
+          .catch((error) => {
+            const failure = error instanceof Error ? error : new Error(String(error));
+            this.lifecycleFailures.set(
+              sessionId,
+              new Error(
+                `coder-pool: failed to recover crashed writer for session ${sessionId}: ${failure.message}`,
+                { cause: failure },
+              ),
+            );
+            this.log(
+              'error',
+              `[coder-pool] crashed writer recovery failed session=${sessionId}: ${failure.message}`,
+            );
+          })
+          .finally(() => {
+            if (this.evictions.get(sessionId) === cleanup) {
+              this.evictions.delete(sessionId);
+            }
+          });
+        this.evictions.set(sessionId, cleanup);
       },
       onError: (err) => {
         this.log('warn', `[coder-pool] worker session=${sessionId} error: ${err.message}`);
@@ -1057,6 +1297,19 @@ export class CoderWorkerPool {
     const activityId = enterBackgroundActivity(`coder-worker:spawn:${sessionId}`);
     try {
       await host.start();
+      // Worker boot can overlap best-effort main-process metadata jobs (for
+      // example title/model persistence) that started before the session lock
+      // was acquired. Drain that repository once more, then require the worker
+      // to acknowledge acquisition before any run RPC can be dispatched.
+      await this.opts.handoffSessionWriter?.(sessionContext);
+      await host.requireBridge().request(
+        'acquireSessionWriter',
+        {},
+        { timeoutMs: 15_000 },
+      );
+    } catch (error) {
+      await host.evict().catch(() => undefined);
+      throw error;
     } finally {
       exitBackgroundActivity(activityId);
     }
@@ -1070,7 +1323,12 @@ export class CoderWorkerPool {
     // Mirror the worker's bus to a main-side bus so existing
     // `pumpBusToSSE(c, bus, …)` calls keep working without change.
     const bus = createBus(new AbortController());
-    const detachRuntimeLog = installRuntimeEventLog(bus, 'coder', sessionId);
+    const detachRuntimeLog = installRuntimeEventLog(
+      bus,
+      'coder',
+      sessionId,
+      { bundlePath: sessionContext.bundlePath },
+    );
     // Log the spawn on the brand-new bus — the dashboard's
     // WorkerLogPanel will show "worker spawned (boot=Xms)" as the
     // first event of this run, before any runner events arrive.
@@ -1233,7 +1491,7 @@ export class CoderWorkerPool {
       if (context) {
         if (env.event === 'run_started') {
           const data = env.data && typeof env.data === 'object' ? env.data as Record<string, unknown> : {};
-          markLocalCoderRunStarted(
+          void markLocalCoderRunStarted(
             controlPlaneStore,
             context,
             typeof data.runId === 'string' ? data.runId : undefined,
@@ -1278,17 +1536,23 @@ export class CoderWorkerPool {
         markEnded(e.bus, terminal.event, terminal.data);
       }
       const terminalContext = e.controlPlaneRunContext;
-      terminalizeLocalCoderRun(
-        this.opts.getControlPlaneStore?.(),
-        terminalContext,
-        terminal,
-      );
-      // The bus terminal is already visible to SSE above and authority is now
-      // committed. Keep diagnostic comparison off this event turn.
-      setImmediate(() => {
-        this.compareShadowTerminalState(sessionId, terminalContext, terminal.event, terminal.data);
-      });
       e.controlPlaneRunContext = null;
+      // The bus terminal is already visible to SSE above. The filesystem
+      // authority is queued before any following command for this session, then
+      // the diagnostic comparison runs after that durable transition.
+      void (async () => {
+        await terminalizeLocalCoderRun(
+          this.opts.getControlPlaneStore?.(),
+          terminalContext,
+          terminal,
+        );
+        await this.compareShadowTerminalState(
+          sessionId,
+          terminalContext,
+          terminal.event,
+          terminal.data,
+        );
+      })();
       // (B) — terminal event: run is no longer in progress; sweep may
       // now consider this entry for eviction once ttlMs elapses without
       // a follow-up `runFresh`/`pushUserMessage`.
@@ -1316,6 +1580,7 @@ export class CoderWorkerPool {
     entry = {
       host,
       bus,
+      sessionContext,
       currentRunId: 0,
       lastTouchedAt: Date.now(),
       detachCurrentBusRuntimeLog: detachRuntimeLog,

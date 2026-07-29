@@ -277,11 +277,15 @@ export interface WorkerSpec {
  * refuses to register off the main thread — see the bootstrap header).
  */
 export function resolveWorkerSpec(metaUrl: string, basename: string): WorkerSpec {
-  if (metaUrl.endsWith('.ts')) {
+  // tsx may append a cache-busting query/hash to import.meta.url inside a
+  // nested worker. Inspect the URL pathname rather than the raw string or a
+  // source `client.ts?...` is mistaken for compiled JS.
+  const sourceUrl = new URL(metaUrl);
+  if (sourceUrl.pathname.endsWith('.ts')) {
     return {
       url: new URL('./_dev-bootstrap.mjs', import.meta.url),
-      bootstrapData: { tsEntry: fileURLToPath(new URL(`${basename}.ts`, metaUrl)) },
+      bootstrapData: { tsEntry: fileURLToPath(new URL(`${basename}.ts`, sourceUrl)) },
     };
   }
-  return { url: new URL(`${basename}.js`, metaUrl) };
+  return { url: new URL(`${basename}.js`, sourceUrl) };
 }

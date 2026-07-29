@@ -11,6 +11,7 @@
  *   - frontend task ranks frontend role above qa role
  */
 import { describe, expect, it } from 'vitest';
+import { asAgentRunId } from '@mcp/session-storage';
 import {
   createRolePipeline,
   InMemoryRoleEmbeddingStore,
@@ -18,6 +19,8 @@ import {
   type EmbeddingFn,
   type RoleDescriptor,
 } from '../index.js';
+
+const IDLE_RUN = asAgentRunId('11111111-1111-4111-8111-111111111111');
 
 /**
  * Toy embedder: encodes the FIRST WORD of the input into a 4-dim vector by
@@ -64,7 +67,7 @@ describe('RolePipeline', () => {
     const result = await recommendRoles(pipeline, {
       queryId: 'q', taskText: 'frontend bug',
       availableRoles: ROLES,
-      idleRuns: [{ agentRunId: 100, role: 'frontend' }],
+      idleRuns: [{ agentRunId: IDLE_RUN, role: 'frontend' }],
     });
     const roleCounts = new Map<string, number>();
     for (const r of result.recommendations) {
@@ -100,13 +103,13 @@ describe('RolePipeline', () => {
       queryId: 'q', taskText: 'frontend feature',
       availableRoles: cappedRoles,
       runningByRole: { frontend: 1 },
-      idleRuns: [{ agentRunId: 500, role: 'frontend' }],
+      idleRuns: [{ agentRunId: IDLE_RUN, role: 'frontend' }],
     });
     const frontendReuse = result.recommendations.find(
       (r) => r.role === 'frontend' && r.kind === 'reuse',
     );
     expect(frontendReuse).toBeDefined();
-    expect(frontendReuse?.agentRunId).toBe(500);
+    expect(frontendReuse?.agentRunId).toBe(IDLE_RUN);
   });
 
   it('filters out blocked roles', async () => {
@@ -124,7 +127,7 @@ describe('RolePipeline', () => {
     const result = await recommendRoles(pipeline, {
       queryId: 'q', taskText: 'frontend bug',
       availableRoles: ROLES,
-      idleRuns: [{ agentRunId: 999, role: 'frontend' }],
+      idleRuns: [{ agentRunId: IDLE_RUN, role: 'frontend' }],
     });
     const frontend = result.recommendations.find((r) => r.role === 'frontend');
     expect(frontend?.kind).toBe('reuse'); // wins over spawn thanks to reuseBonus

@@ -1,16 +1,19 @@
 /**
  * Auto-captured session notes — event filtering, canonical titles, the
  * error-streak tracker, and the enabled=false no-op. Store is a fake (no
- * sqlite); upsert semantics are the table's concern, not this module's.
+ * filesystem I/O); upsert semantics are the repository's concern.
  */
 import { describe, it, expect } from 'vitest';
+import { newSessionId } from '@mcp/session-storage';
 import { buildAutoCapture, type AutoCaptureStore } from '../auto-capture.js';
+
+const SESSION_ID = newSessionId();
 
 function fakeStore(): AutoCaptureStore & { saved: Array<{ title: string; body: string; kind?: string }> } {
   const saved: Array<{ title: string; body: string; kind?: string }> = [];
   return {
     saved,
-    rememberMemory(_sid, input) {
+    async rememberMemory(_sid, input) {
       saved.push(input);
       return { title: input.title };
     },
@@ -21,7 +24,7 @@ function capture(over: { enabled?: boolean; isRepeatable?: (n: string) => boolea
   const store = fakeStore();
   const ac = buildAutoCapture({
     store,
-    sessionId: 1,
+    sessionId: SESSION_ID,
     enabled: over.enabled ?? true,
     isRepeatable: over.isRepeatable,
   });
@@ -118,9 +121,13 @@ describe('buildAutoCapture', () => {
 
   it('never throws when the store write fails', () => {
     const boom: AutoCaptureStore = {
-      rememberMemory() { throw new Error('db locked'); },
+      async rememberMemory() { throw new Error('bundle unavailable'); },
     };
-    const ac = buildAutoCapture({ store: boom, sessionId: 1, enabled: true });
+    const ac = buildAutoCapture({
+      store: boom,
+      sessionId: SESSION_ID,
+      enabled: true,
+    });
     expect(() => ac.onPlanResolved('approved', 'plan')).not.toThrow();
   });
 });

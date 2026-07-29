@@ -126,10 +126,10 @@ const PersistedMessages = React.memo(function PersistedMessages({
   const { t } = useTranslation('chat');
   const resultsById = useMemo(() => {
     const m = new Map<string, { content: string; isError: boolean; truncated?: boolean; originalLength?: number }>();
-    // Seed from the coder_tool_calls audit fallback FIRST so any real
-    // tool_result block below overrides it. This covers tool calls whose tool
-    // message was never persisted (pre-fix sessions where a mid-run compaction
-    // dropped it) — without it they render as a perpetual loading spinner.
+    // Seed from the bundle tool-output audit fallback FIRST so any real
+    // tool_result block below overrides it. This covers recovered tool calls
+    // whose transcript block is unavailable; without it they render as a
+    // perpetual loading spinner.
     for (const tr of sessionData.tool_results ?? []) {
       m.set(tr.tool_use_id, {
         content: tr.content ?? '',
@@ -207,12 +207,12 @@ const PersistedMessages = React.memo(function PersistedMessages({
     () => suppressLatestAssistantRun
       ? suppressLatestPersistedAssistantRun(
           cappedGroups,
-          sessionData.preceding_user_message_id,
+          sessionData.preceding_user_seq,
         )
       : cappedGroups,
     [
       cappedGroups,
-      sessionData.preceding_user_message_id,
+      sessionData.preceding_user_seq,
       suppressLatestAssistantRun,
     ],
   );
@@ -231,7 +231,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
   groupsLengthRef.current = groups.length;
 
   const chapterIndex = useConversationChapters(sessionData.session.id);
-  const [activeChapterId, setActiveChapterId] = useState<number | null>(null);
+  const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
   useEffect(() => {
     let pendingMarkerObserver: MutationObserver | null = null;
     let pendingMarkerTimeout: number | null = null;
@@ -243,9 +243,9 @@ const PersistedMessages = React.memo(function PersistedMessages({
     };
     const navigate = (event: Event) => {
       const detail = (event as CustomEvent<{
-        sessionId: number;
-        chapterId: number;
-        endMessageId: number;
+        sessionId: string;
+        chapterId: string;
+        endMessageSeq: number;
       }>).detail;
       if (!detail || detail.sessionId !== sessionData.session.id) return;
       onChapterNavigate?.();
@@ -278,14 +278,14 @@ const PersistedMessages = React.memo(function PersistedMessages({
         });
         pendingMarkerObserver.observe(root, { childList: true, subtree: true });
         pendingMarkerTimeout = window.setTimeout(cancelPendingMarkerWait, 8_000);
-        void onLoadEarlier(detail.endMessageId + 1, 160, true)
+        void onLoadEarlier(detail.endMessageSeq + 1, 160, true)
           .then(() => {
             if (scrollToMarker()) cancelPendingMarkerWait();
           });
       }
     };
     const activate = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId: number; chapterId: number }>).detail;
+      const detail = (event as CustomEvent<{ sessionId: string; chapterId: string }>).detail;
       if (!detail || detail.sessionId !== sessionData.session.id) return;
       setActiveChapterId(detail.chapterId);
     };
@@ -306,14 +306,14 @@ const PersistedMessages = React.memo(function PersistedMessages({
   // Per-turn "files changed" summary refs, keyed by each turn's last assistant
   // group index. Derived from persisted tool calls → survives scrollback/reload.
   const precedingDisplayRoundMessageId = useMemo(() => {
-    let roundMessageId = sessionData.preceding_user_message_id ?? undefined;
+    let roundMessageId = sessionData.preceding_user_seq ?? undefined;
     const skipped = groups.length - cappedGroups.length;
     for (let index = 0; index < skipped; index++) {
       const group = groups[index];
       if (group.kind === 'user') roundMessageId = group.messageId;
     }
     return roundMessageId;
-  }, [cappedGroups.length, groups, sessionData.preceding_user_message_id]);
+  }, [cappedGroups.length, groups, sessionData.preceding_user_seq]);
   const turnSummaries = useMemo(
     () => computeTurnEditSummaries(displayGroups, precedingDisplayRoundMessageId),
     [displayGroups, precedingDisplayRoundMessageId],
@@ -368,11 +368,11 @@ const PersistedMessages = React.memo(function PersistedMessages({
       return;
     }
     if (!onLoadEarlier || exhaustedRef.current) return;
-    const earliestId = sessionData.message_rows[0]?.id;
+    const earliestSeq = sessionData.message_rows[0]?.seq;
     // A summarize boundary can leave zero visible rows. In that case there is
-    // no `before_id`; the backend anchors at maxMessageId + 1 when the user
+    // no `before_seq`; the backend anchors at maxMessageSeq + 1 when the user
     // explicitly asks to cross into archived history.
-    if (!earliestId && !revealArchivedRef.current) return;
+    if (!earliestSeq && !revealArchivedRef.current) return;
     loadingRef.current = true;
     const el = scrollContainerRef.current;
     if (el) prevScrollHeightRef.current = el.scrollHeight;
@@ -382,7 +382,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
       // Rows→groups is at most 1:1, so growing the cap by the page size
       // guarantees the freshly fetched page is not immediately re-hidden.
       if (renderCap !== null) setRenderCap(renderCap + LOAD_MORE_SIZE);
-      const count = await onLoadEarlier(earliestId, LOAD_MORE_SIZE, revealArchivedRef.current);
+      const count = await onLoadEarlier(earliestSeq, LOAD_MORE_SIZE, revealArchivedRef.current);
       if (count === 0) {
         // Backend returned nothing — stop polling forever for this session.
         exhaustedRef.current = true;
@@ -515,6 +515,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
               onDecide={handlers.onDecide}
               onFork={handlers.onFork}
               onRollback={handlers.onRollback}
+              rollbackPendingSeq={handlers.rollbackPendingSeq}
               tasksState={tasksState}
             />
           );
@@ -535,6 +536,7 @@ const PersistedMessages = React.memo(function PersistedMessages({
               onDecide={handlers.onDecide}
               onFork={handlers.onFork}
               onRollback={handlers.onRollback}
+              rollbackPendingSeq={handlers.rollbackPendingSeq}
               tasksState={tasksState}
               activeTasksToolUseId={activeTasksToolUseId}
             />
@@ -697,7 +699,7 @@ export const MessageList = React.memo(function MessageList({
   // bottom on every token. Also use instant scroll during streaming; a smooth
   // animation per token fights with layout and amplifies the jank.
   const stickToBottomRef = useRef(true);
-  const sessionIdRef = useRef<number | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const previousScrollDataRef = useRef<SessionData | null | undefined>(undefined);
   const previousScrollStructureRef = useRef<string | undefined>(undefined);
   const previousScrollStreamingRef = useRef<boolean | undefined>(undefined);
@@ -793,7 +795,7 @@ export const MessageList = React.memo(function MessageList({
   const persistedReconciliation = useMemo(
     () => liveReconciliation ?? buildPersistedLiveReconciliation(
       sessionData?.messages ?? [],
-      sessionData?.preceding_user_message_id,
+      sessionData?.preceding_user_seq,
       (sessionData?.tool_results ?? []).map((result) => result.tool_use_id),
     ),
     [liveReconciliation, sessionData],
@@ -856,10 +858,10 @@ export const MessageList = React.memo(function MessageList({
       const message = sessionData.messages[index];
       if (message.role === 'user' && !message.isMeta) {
         const row = sessionData.message_rows[index];
-        return row?.optimistic ? undefined : row?.id;
+        return row?.optimistic ? undefined : row?.seq;
       }
     }
-    return sessionData.preceding_user_message_id ?? undefined;
+    return sessionData.preceding_user_seq ?? undefined;
   }, [sessionData]);
   const handleChapterNavigate = useCallback(() => {
     // A chapter jump is an explicit request to leave the live tail. Prevent

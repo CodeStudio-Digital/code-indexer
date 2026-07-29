@@ -36,11 +36,16 @@ import { createRequire } from 'node:module';
 import type { Duplex } from 'node:stream';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Hono } from 'hono';
-import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CompanySandboxStore } from '@mcp/store/company-sandbox-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { getCompanyOrchestrator } from '../../sse/companyOrchestrator.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import {
+  asCompanySessionId,
+  type CompanySessionId,
+} from '@mcp/session-storage';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 
 // ─── ws + node-pty surface (typed locally — no @types installed) ──
 
@@ -115,11 +120,12 @@ function tryLoadPty(): NodePtyModule | null {
 
 // ─── Public wire-up ──────────────────────────────────────────────
 
-const PATH_RE = /^\/ws\/terminal\/(\d+)(?:\?(.*))?$/;
+const PATH_RE =
+  /^\/ws\/terminal\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\?(.*))?$/i;
 const DEFAULT_ORIGINS = new Set(['http://localhost', 'http://127.0.0.1']);
 
 export interface TerminalUpgradeDeps {
-  companyStore: CompanyStore;
+  sessionStore: FsSessionStore;
   companySandboxStore: CompanySandboxStore;
   db: CodeIndexDB;
 }
@@ -135,12 +141,15 @@ export interface TerminalUpgradeDeps {
  * Mounted at `GET /api/terminal/diagnose?sessionId=N&target=sandbox|host`.
  */
 export function mountTerminalDiagnoseRoute(app: Hono, deps: TerminalUpgradeDeps): void {
-  app.get('/api/terminal/diagnose', (c) => {
+  app.get('/api/terminal/diagnose', async (c) => {
     const sessionIdRaw = c.req.query('sessionId') ?? '';
     const targetRaw = c.req.query('target') ?? 'sandbox';
-    const sessionId = Number(sessionIdRaw);
-    if (!Number.isFinite(sessionId)) {
-      return c.json({ ok: false, code: 400, error: 'sessionId is required and must be numeric' }, 400);
+    let sessionId: CompanySessionId;
+    try {
+      sessionId = asCompanySessionId(sessionIdRaw);
+      await deps.sessionStore.ensureCatalog();
+    } catch {
+      return c.json({ ok: false, code: 400, error: 'sessionId must be a canonical Company session UUID' }, 400);
     }
     if (targetRaw !== 'sandbox' && targetRaw !== 'host') {
       return c.json({ ok: false, code: 400, error: `target must be 'sandbox' or 'host' (got '${targetRaw}')` }, 400);
@@ -192,7 +201,7 @@ export function mountTerminalDiagnoseRoute(app: Hono, deps: TerminalUpgradeDeps)
  */
 export function attachTerminalUpgrade(server: HttpServer, deps: TerminalUpgradeDeps): void {
   const wss = new wsModule.WebSocketServer({ noServer: true });
-  server.on('upgrade', (req, socket, head) => {
+  server.on('upgrade', async (req, socket, head) => {
     const ctx = parseUpgradeRequest(req);
     if (!ctx) return;
     if (!isOriginAllowed(req)) {
@@ -210,6 +219,12 @@ export function attachTerminalUpgrade(server: HttpServer, deps: TerminalUpgradeD
     const pty = tryLoadPty();
     if (!pty) {
       writeUpgradeFailure(socket, 503, 'node-pty unavailable on this platform');
+      return;
+    }
+    try {
+      await deps.sessionStore.ensureCatalog();
+    } catch {
+      writeUpgradeFailure(socket, 503, 'filesystem session catalog unavailable');
       return;
     }
 
@@ -244,7 +259,7 @@ interface SpawnSpec {
 }
 
 function resolveSandboxSpec(
-  sessionId: number,
+  sessionId: CompanySessionId,
   deps: TerminalUpgradeDeps,
 ): SpawnSpec | { error: string; status: number } {
   const orchestrator = getCompanyOrchestrator(sessionId);
@@ -255,8 +270,11 @@ function resolveSandboxSpec(
   // SandboxBinding contains a driver that cannot cross MessagePort. Read the
   // write-through persisted sandbox row instead; it is the restart-safe source
   // of the exact container id and works for child sessions via their root.
-  const session = deps.companyStore.getCompanySession(sessionId);
-  const sandboxSessionId = session?.parent_session_id ?? sessionId;
+  const session = resolveCompanySession(sessionId, deps);
+  if (!session) {
+    return { error: `session ${sessionId} does not exist in the filesystem catalog`, status: 404 };
+  }
+  const sandboxSessionId = session.rootId;
   const sandbox = deps.companySandboxStore.get(sandboxSessionId);
   if (!sandbox) {
     return { error: `session ${sessionId} has no sandbox binding`, status: 409 };
@@ -275,14 +293,21 @@ function resolveSandboxSpec(
 }
 
 function resolveHostSpec(
-  sessionId: number,
+  sessionId: CompanySessionId,
   deps: TerminalUpgradeDeps,
 ): SpawnSpec | { error: string; status: number } {
   // Prefer the operator-configured project root; fall back to the
-  // session's first project. Both come from the company store, not the
+  // session's first project. Both come from session.json, not
   // orchestrator — the host terminal must work even when the
   // orchestrator is dormant (no sandbox provisioned).
-  const projects = deps.companyStore.listCompanySessionProjects(sessionId);
+  const company = resolveCompanySession(sessionId, deps);
+  if (!company) {
+    return { error: `session ${sessionId} does not exist in the filesystem catalog`, status: 404 };
+  }
+  const projects = company.root.project_ids.map((projectId) => ({
+    project_id: projectId,
+    label: company.root.project_labels[String(projectId)] ?? null,
+  }));
   if (projects.length === 0) {
     return { error: `session ${sessionId} has no project — host terminal needs a working directory`, status: 409 };
   }
@@ -336,7 +361,7 @@ function isOriginAllowed(req: IncomingMessage): boolean {
 // ─── Per-connection plumbing ────────────────────────────────────
 
 interface TerminalCtx {
-  sessionId: number;
+  sessionId: CompanySessionId;
   target: 'sandbox' | 'host';
   cols: number;
   rows: number;
@@ -354,14 +379,44 @@ function parseUpgradeRequest(req: IncomingMessage): TerminalCtx | null {
   const url = req.url ?? '';
   const m = PATH_RE.exec(url);
   if (!m) return null;
-  const sessionId = Number(m[1]);
-  if (!Number.isFinite(sessionId)) return null;
+  let sessionId: CompanySessionId;
+  try {
+    sessionId = asCompanySessionId(m[1]!);
+  } catch {
+    return null;
+  }
   const params = m[2] ? new URLSearchParams(m[2]) : new URLSearchParams();
   const rawTarget = params.get('target') ?? 'sandbox';
   if (rawTarget !== 'sandbox' && rawTarget !== 'host') return null;
   const cols = clampDim(params.get('cols'), 80);
   const rows = clampDim(params.get('rows'), 24);
   return { sessionId, target: rawTarget, cols, rows };
+}
+
+function resolveCompanySession(
+  sessionId: CompanySessionId,
+  deps: TerminalUpgradeDeps,
+): {
+  rootId: CompanySessionId;
+  root: ReturnType<CompanySessionFiles['getSession']>;
+} | null {
+  try {
+    const requestedFiles = new CompanySessionFiles({
+      companySessionId: sessionId,
+      sessionStore: deps.sessionStore,
+    });
+    const requested = requestedFiles.getSession();
+    const rootId = requested.parent_session_id ?? sessionId;
+    const rootFiles = rootId === sessionId
+      ? requestedFiles
+      : new CompanySessionFiles({
+          companySessionId: rootId,
+          sessionStore: deps.sessionStore,
+        });
+    return { rootId, root: rootFiles.getSession() };
+  } catch {
+    return null;
+  }
 }
 
 function clampDim(raw: string | null, fallback: number): number {

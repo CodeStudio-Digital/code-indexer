@@ -59,7 +59,7 @@ export class HyDEService {
 
     // Include the resolved chain in the cache key so changing provider/model
     // or config takes effect immediately without restarting the application.
-    const cacheKey = this.cacheKey(key, chain);
+    const cacheKey = this.cacheKey(key, chain, projectContext);
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
@@ -89,6 +89,14 @@ export class HyDEService {
 
     const cleaned = this.clean(result.content);
     if (!cleaned || cleaned.length < 8) return query;
+    if (!isCompatibleWithProject(cleaned, projectContext?.language)) {
+      console.warn(
+        `[hyde] rejected generated document incompatible with ${
+          projectContext?.language ?? 'project language'
+        }`,
+      );
+      return query;
+    }
     if (this.cache.size >= this.cacheMax) {
       const first = this.cache.keys().next().value;
       if (first !== undefined) this.cache.delete(first);
@@ -97,9 +105,17 @@ export class HyDEService {
     return cleaned;
   }
 
-  private cacheKey(query: string, chain: ResolvedBinding[]): string {
+  private cacheKey(
+    query: string,
+    chain: ResolvedBinding[],
+    projectContext?: { language?: string; concepts?: string[] },
+  ): string {
     return JSON.stringify({
       query,
+      projectContext: {
+        language: projectContext?.language ?? null,
+        concepts: projectContext?.concepts?.slice(0, 8) ?? [],
+      },
       bindings: chain.map((binding) => ({
         id: binding.bindingId,
         provider: binding.provider.id,
@@ -116,12 +132,36 @@ export class HyDEService {
     const fenced = value.match(/```(?:[a-zA-Z]+)?\n?([\s\S]*?)```/);
     if (fenced) value = fenced[1].trim();
     value = value.replace(/\n{3,}/g, '\n\n').trim();
-    return value.slice(0, 500);
+    if (value.length <= 500) return value;
+    const completeLine = value.lastIndexOf('\n', 500);
+    // A single overlong line cannot be truncated safely without changing the
+    // synthetic identifier/type content. Fall back to the raw query instead.
+    return completeLine >= 80 ? value.slice(0, completeLine).trim() : '';
   }
 }
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function isCompatibleWithProject(text: string, language?: string): boolean {
+  const normalized = language?.trim().toLowerCase();
+  if (!normalized) return true;
+  const python = /(?:^|\n)\s*(?:async\s+)?def\s+\w+\s*\(|(?:^|\n)\s*(?:from\s+\S+\s+)?import\s+\S+|\bself\./m.test(text);
+  const php = /<\?php|\$\w+|->|::|\bfunction\s+\w+\s*\(/m.test(text);
+  const jsLike = /\b(?:const|let|interface|type|export|import)\b|=>|:\s*(?:string|number|boolean)\b/.test(text);
+
+  if (normalized === 'php') return !python || php;
+  if (normalized === 'python' || normalized === 'py') return !php || python;
+  if (
+    normalized.includes('typescript')
+    || normalized === 'ts'
+    || normalized.includes('javascript')
+    || normalized === 'js'
+  ) {
+    return !python || jsLike;
+  }
+  return true;
 }
 
 /**

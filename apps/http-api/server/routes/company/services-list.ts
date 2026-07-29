@@ -8,17 +8,25 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  resolveCompanySessionContext,
+  notFound,
+} from '../_helpers.js';
 import { getSandboxManager, inferPreviewStrategy } from '@mcp/services/sandbox/index.js';
 import { getLocalProcessManager } from '@mcp/services/sandbox/local-process/LocalProcessManager.js';
 
 export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db } = deps;
+  const { sessionStore, db } = deps;
 
-  app.get('/api/company/sessions/:id/services', (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+  app.get('/api/company/sessions/:id/services', async (c) => {
+    const resolved = await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
+    const session = resolved.root;
     // Pull every row (including `status='destroyed'` tombstones kept
     // by the soft-delete path of `destroyService`) so the UI can
     // surface orphans. The legacy filter hid them, which is why
@@ -28,7 +36,7 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
     const manager = getSandboxManager();
     const live = new Map(
       manager
-        .listServices(String(id))
+        .listServices(id)
         .map((sb) => [sb.id.split(':')[1] ?? '', sb] as const),
     );
     const services = persisted.map((row) => {
@@ -91,7 +99,7 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
     const alreadyHasPrimary = services.some((s) => s.is_primary);
     if (!alreadyHasPrimary) {
       const sandboxRow = deps.companySandboxStore.get(id);
-      const liveMain = manager.get(String(id));
+      const liveMain = manager.get(id);
       if (sandboxRow || liveMain) {
         const runtimePaused = !!liveMain?.runtimePaused;
         const mountKind = (liveMain?.mountKind ?? sandboxRow?.mount_kind ?? 'owned') as 'owned' | 'external';
@@ -146,7 +154,11 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
       kind?: 'local';
     };
     const augmented: SidecarService[] = services.slice();
-    for (const link of companyStore.listCompanySessionProjects(id)) {
+    for (const projectId of session.project_ids) {
+      const link = {
+        project_id: projectId,
+        label: session.project_labels[String(projectId)] ?? null,
+      };
       if (!link.label) continue;
       if (seen.has(link.label)) continue;
       const project = db.getProject(link.project_id);
@@ -191,7 +203,7 @@ export function mountCompanyServicesListRoute(app: Hono, deps: ServerDeps): void
     // supervisor keeps host-process health in WORKER memory only (no
     // company_sandbox_services row, no migration) and the dashboard
     // receives live verdicts via the `sandbox.service.health` SSE events.
-    const liveLocal = getLocalProcessManager().get(String(id));
+    const liveLocal = getLocalProcessManager().get(id);
     const localRow = deps.companyLocalProjectStore.listBySession(id);
     if (liveLocal || localRow) {
       const cwd = liveLocal?.cwd ?? localRow?.cwd ?? '';

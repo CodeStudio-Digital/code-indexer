@@ -1,4 +1,5 @@
 import type { ApiContext } from './common.js';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
 
 /**
  * Admin operations — provider management, quality/drift dashboards, worker
@@ -53,7 +54,7 @@ export interface AdminApi {
 
   // Drift detection
   drift: {
-    report(input: { sessionId?: number; recent?: number }, ctx: ApiContext): Promise<unknown>;
+    report(input: { sessionId?: SessionId; recent?: number }, ctx: ApiContext): Promise<unknown>;
   };
 
   // Pipeline bindings (model assignments per pipeline)

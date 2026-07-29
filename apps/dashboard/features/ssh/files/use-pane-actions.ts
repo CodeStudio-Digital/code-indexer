@@ -5,12 +5,16 @@
  * delegated up via callbacks so the pane stays transport-agnostic.
  */
 import { useCallback, useState } from 'react';
+import { mapLimit } from '@mcp/shared/utils/map-limit.js';
 import { confirm, prompt, toast } from '../../../components/ui/prompt-dialog.js';
 import type { FsAdapter, FsItem } from './fs-adapter.js';
 import type { PaneSelectionStore } from './pane-selection.js';
 
 type TFn = (key: string, opts?: Record<string, unknown>) => string;
 type Kind = 'local' | 'remote';
+
+/** Matches TRANSFER_CONCURRENCY — a remote delete is an SFTP op like any other. */
+const DELETE_CONCURRENCY = 4;
 
 export interface PaneActions {
   busyPath: string | null;
@@ -74,13 +78,17 @@ export function usePaneActions(a: Args): PaneActions {
     const label = items.length === 1 ? items[0].name : t('files.nSelected', { count: items.length });
     const ok = await confirm({ title: t('sftp.delete'), description: t('sftp.deleteConfirm', { name: label }), confirmLabel: t('sftp.delete'), cancelLabel: t('dialog.cancel'), tone: 'destructive' });
     if (!ok) return;
-    for (const it of items) {
+    // Concurrent, but bounded (see TRANSFER_CONCURRENCY). Safe because `items`
+    // always comes from ONE directory listing, so no entry can be an ancestor
+    // of another — removing them in parallel can't race a parent against its
+    // own child.
+    await mapLimit(items, DELETE_CONCURRENCY, async (it) => {
       try {
         await adapter.remove(it.path, it.type === 'dir');
       } catch (e) {
         err(e);
       }
-    }
+    });
     useSel.getState().prune(items.map((i) => i.path));
     await refresh(cwd);
   }, [adapter, cwd, refresh, err, t, useSel]);

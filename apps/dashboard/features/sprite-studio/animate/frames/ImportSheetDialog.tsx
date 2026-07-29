@@ -23,8 +23,8 @@ export function ImportSheetDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   projectId: number;
-  assetId: number;
-  onImported: (animationId: number) => void;
+  assetId: string;
+  onImported: (animationId: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const [file, setFile] = useState<File | null>(null);

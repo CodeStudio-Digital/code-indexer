@@ -21,7 +21,7 @@ const MIN_BODY_CHARS = 500;
 
 export interface RelevanceGateOptions {
   resolver: PipelineProviderResolver;
-  resolveContext?: { sessionId?: number; companySessionId?: number; templateId?: number };
+  resolveContext?: { sessionId?: string; companySessionId?: string; templateId?: number };
   /** Override the per-call batch size (default 8). */
   batchSize?: number;
   /** Skip the LLM call entirely — useful for tests. Pages that pass heuristics auto-accept. */

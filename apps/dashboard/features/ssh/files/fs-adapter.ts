@@ -21,6 +21,12 @@ export interface FsItem {
   mtime: number;
   /** Unix permission bits (0 when unknown). Remote SFTP always provides; local only with withStats. */
   mode: number;
+  /** Owner uid/gid. Remote only — meaningless on Windows, so the local adapter omits them. */
+  uid?: number;
+  gid?: number;
+  /** Resolved account names (`root`, `www-data`), when the host's passwd/group could be read. */
+  owner?: string;
+  group?: string;
 }
 
 export interface FsAdapter {
@@ -65,6 +71,15 @@ export function fmtMode(mode: number, type: 'file' | 'dir' | 'symlink' | 'other'
     return `${r}${w}${x}`;
   };
   return `${prefix}${triple(6)}${triple(3)}${triple(0)}`;
+}
+
+/**
+ * Account name if the host's passwd/group could be read, else the raw numeric
+ * id (what every SFTP client falls back to), else empty for the local side.
+ */
+export function fmtOwner(name: string | undefined, id: number | undefined): string {
+  if (name) return name;
+  return id == null ? '' : String(id);
 }
 
 /** Epoch ms → compact `YYYY-MM-DD HH:mm`. Empty when mtime is 0/unknown. */

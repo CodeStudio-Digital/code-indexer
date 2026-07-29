@@ -139,5 +139,5 @@ export interface DocIngestQuery extends PipelineQuery {
   collection_id: number;
   source_uri: string;
   source_type: 'pdf' | 'url';
-  resolveContext?: { sessionId?: number; companySessionId?: number; templateId?: number };
+  resolveContext?: { sessionId?: string; companySessionId?: string; templateId?: number };
 }

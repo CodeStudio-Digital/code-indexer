@@ -28,7 +28,7 @@ export function isActiveAppAgent(agent: AgentStreamState): boolean {
 
 export function collectActiveAppAgents(
   stream: Pick<ReturnType<typeof useCompanyStream>, 'masterState' | 'subordinateStates'>,
-  masterSessionId: number | null,
+  masterSessionId: string | null,
 ): AgentStreamState[] {
   const agents: AgentStreamState[] = [];
   if (stream.masterState && isActiveAppAgent(stream.masterState)) {
@@ -46,12 +46,12 @@ export function AppStudioAgentsDropdown({
   masterSessionId,
 }: {
   stream: ReturnType<typeof useCompanyStream>;
-  masterSessionId: number | null;
+  masterSessionId: string | null;
 }) {
   const { t } = useTranslation('appStudio');
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<{
-    coderSessionId: number;
+    coderSessionId: string;
     role: string;
     status: string;
   } | null>(null);

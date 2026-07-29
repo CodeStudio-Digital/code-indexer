@@ -18,6 +18,7 @@ interface MockDb {
 
 const dbs = new Map<number, MockDb>();
 let nextId = 1000;
+const nextMockId = (): string => `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
 const now = () => new Date().toISOString();
 const delay = (ms = 120) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -34,24 +35,26 @@ const SEED: Array<[string, SpriteCategory, number]> = [
 
 function seed(projectId: number): MockDb {
   const project: SpriteProjectInfo = {
-    id: nextId++, projectId, name: `sprite-project-${projectId}`,
+    id: nextMockId(), projectId, name: `sprite-project-${projectId}`,
     settings: structuredClone(DEFAULT_STUDIO_SETTINGS),
     styleVersion: 1, exportDir: 'assets/sprites', createdAt: now(), updatedAt: now(),
   };
   const assets: SpriteAsset[] = [];
   const versions: AssetVersion[] = [];
   for (const [name, category, versionCount] of SEED) {
-    const id = nextId++;
-    let currentVersionId: number | null = null;
+    const id = nextMockId();
+    let currentVersionId: string | null = null;
+    let parentVersionId: string | null = null;
     for (let v = 1; v <= versionCount; v++) {
-      const vid = nextId++;
+      const vid = nextMockId();
       versions.push({
         id: vid, assetId: id, version: v, fileUrl: null, thumbUrl: null,
         width: 32, height: 32, source: v === 1 ? 'generated' : 'edited',
         prompt: v === 1 ? `pixel art ${name.toLowerCase()}` : null,
-        parentVersionId: v > 1 ? vid - 1 : null, jobId: null, createdAt: now(),
+        parentVersionId, jobId: null, createdAt: now(),
       });
       currentVersionId = vid;
+      parentVersionId = vid;
     }
     assets.push({
       id, spriteProjectId: project.id, slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
@@ -106,7 +109,7 @@ export async function mockCreateAsset(
   const db = dbs.get(projectId);
   if (!db) throw new Error('sprite project not initialized');
   const asset: SpriteAsset = {
-    id: nextId++, spriteProjectId: db.project.id,
+    id: nextMockId(), spriteProjectId: db.project.id,
     slug: input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
     name: input.name, category: input.category, tags: [], status: 'draft',
     currentVersionId: null, width: input.width, height: input.height,
@@ -116,7 +119,7 @@ export async function mockCreateAsset(
   return { ...asset };
 }
 
-export async function mockPatchAsset(projectId: number, assetId: number, patch: Partial<SpriteAsset>): Promise<SpriteAsset> {
+export async function mockPatchAsset(projectId: number, assetId: string, patch: Partial<SpriteAsset>): Promise<SpriteAsset> {
   await delay();
   const db = dbs.get(projectId);
   const idx = db?.assets.findIndex((a) => a.id === assetId) ?? -1;
@@ -125,7 +128,7 @@ export async function mockPatchAsset(projectId: number, assetId: number, patch: 
   return { ...db.assets[idx] };
 }
 
-export async function mockDeleteAsset(projectId: number, assetId: number): Promise<void> {
+export async function mockDeleteAsset(projectId: number, assetId: string): Promise<void> {
   await delay();
   const db = dbs.get(projectId);
   if (!db) return;
@@ -133,7 +136,7 @@ export async function mockDeleteAsset(projectId: number, assetId: number): Promi
   db.versions = db.versions.filter((v) => v.assetId !== assetId);
 }
 
-export async function mockListVersions(projectId: number, assetId: number): Promise<AssetVersion[]> {
+export async function mockListVersions(projectId: number, assetId: string): Promise<AssetVersion[]> {
   await delay();
   return (dbs.get(projectId)?.versions ?? []).filter((v) => v.assetId === assetId).map((v) => ({ ...v }));
 }

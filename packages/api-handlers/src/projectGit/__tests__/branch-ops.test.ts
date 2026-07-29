@@ -47,6 +47,24 @@ async function runGit(cwd: string, args: string[]): Promise<void> {
   });
 }
 
+async function gitOutput(cwd: string, args: string[]): Promise<string> {
+  const { spawn } = await import('node:child_process');
+  return new Promise<string>((resolve, reject) => {
+    const child = spawn('git', args, { cwd, windowsHide: true });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on('data', (c: Buffer) => stdout.push(c));
+    child.stderr.on('data', (c: Buffer) => stderr.push(c));
+    child.on('error', reject);
+    child.on('close', (code) =>
+      code === 0
+        ? resolve(Buffer.concat(stdout).toString('utf8').trim())
+        : reject(new Error(Buffer.concat(stderr).toString('utf8') || `git ${args.join(' ')} failed`)),
+    );
+    child.stdin.end();
+  });
+}
+
 function makeHandlers(root: string) {
   return createProjectGitHandlers({
     db: { getProjectRootPath: (id: number) => (id === 1 ? root : undefined) },
@@ -75,6 +93,53 @@ async function setupDivergingRepo(): Promise<string> {
 }
 
 describe('branch ops', () => {
+  it('checks out a remote ref as a local tracking branch and permits re-selection', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'mcp-checkout-origin-'));
+    const work = mkdtempSync(join(tmpdir(), 'mcp-checkout-work-'));
+    dirs.push(origin, work);
+
+    await runGit(origin, ['init', '-b', 'main']);
+    await runGit(origin, ['config', 'user.email', 't@example.com']);
+    await runGit(origin, ['config', 'user.name', 'Tester']);
+    await runGit(origin, ['config', 'commit.gpgsign', 'false']);
+    writeFileSync(join(origin, 'file.txt'), 'base\n');
+    await runGit(origin, ['add', '.']);
+    await runGit(origin, ['commit', '-m', 'base']);
+    await runGit(origin, ['checkout', '-b', 'feature/remote-checkout']);
+    writeFileSync(join(origin, 'file.txt'), 'remote tip\n');
+    await runGit(origin, ['commit', '-am', 'remote tip']);
+    await runGit(origin, ['checkout', 'main']);
+
+    await runGit(tmpdir(), ['clone', origin, work]);
+    // Prove the handler establishes tracking explicitly rather than relying on
+    // the user's branch.autoSetupMerge configuration.
+    await runGit(work, ['config', 'branch.autoSetupMerge', 'false']);
+    const h = makeHandlers(work);
+
+    await h.branchCheckout({
+      projectId: 1,
+      name: 'feature/remote-checkout',
+      create: true,
+      from: 'origin/feature/remote-checkout',
+    }, {} as never);
+
+    expect(await gitOutput(work, ['branch', '--show-current'])).toBe('feature/remote-checkout');
+    expect(await gitOutput(work, ['rev-parse', 'HEAD'])).toBe(
+      await gitOutput(work, ['rev-parse', 'origin/feature/remote-checkout']),
+    );
+    expect(await gitOutput(work, ['rev-parse', '--abbrev-ref', '@{upstream}']))
+      .toBe('origin/feature/remote-checkout');
+
+    await runGit(work, ['checkout', 'main']);
+    await expect(h.branchCheckout({
+      projectId: 1,
+      name: 'feature/remote-checkout',
+      create: true,
+      from: 'origin/feature/remote-checkout',
+    }, {} as never)).resolves.toEqual({ ok: true });
+    expect(await gitOutput(work, ['branch', '--show-current'])).toBe('feature/remote-checkout');
+  });
+
   it('log pagina commits com limit + skip sem repetir a pagina anterior', async () => {
     const dir = await setupDivergingRepo();
     const h = makeHandlers(dir);

@@ -24,28 +24,28 @@ interface KanbanColumnProps {
   column: KanbanColumnType;
   cards: KanbanCardFull[];
   onCardClick: (card: KanbanCardFull) => void;
-  onDrop: (cardId: number, column: KanbanColumnType) => void;
+  onDrop: (cardId: string, column: KanbanColumnType) => void;
   onCreateCard?: (column: KanbanColumnType) => void;
   /**
    * Optional priority scores per card id, populated after Recompute
    * Priorities runs. When provided, cards are sorted DESC by score
    * within the column instead of by `position`.
    */
-  priorityScores?: Map<number, number>;
+  priorityScores?: Map<string, number>;
   /** C3 — WIP limit for this column (autonomy.wipLimits). Null/undefined = none. */
   wipLimit?: number | null;
   /** C3 — commit a new WIP limit (null removes it). Enables the inline editor. */
   onWipLimitChange?: (column: KanbanColumnType, limit: number | null) => void;
   /** C3 — role suggestions per card id (suggest-roles endpoint). */
-  roleSuggestions?: Map<number, string>;
+  roleSuggestions?: Map<string, string>;
   /** C3 — quick-dispatch a card with its suggested role. */
-  onQuickDispatch?: (cardId: number, role: string) => void;
+  onQuickDispatch?: (cardId: string, role: string) => void;
   /** Card ids with a dispatch POST in flight. */
-  dispatchingCardIds?: Set<number>;
+  dispatchingCardIds?: Set<string>;
   /** C3 — open ANY card's modal by id (blocked_by chips). */
-  onOpenCardById?: (cardId: number) => void;
+  onOpenCardById?: (cardId: string) => void;
   /** Resolve a card title across the whole board (blocked_by chips). */
-  titleForCard?: (cardId: number) => string | undefined;
+  titleForCard?: (cardId: string) => string | undefined;
 }
 
 export const KanbanColumn = React.memo(function KanbanColumn({
@@ -131,7 +131,7 @@ export const KanbanColumn = React.memo(function KanbanColumn({
       headerBadge={headerBadge}
       emptyLabel={t('kanban.dropHere')}
       onAdd={onCreateCard ? () => onCreateCard(column) : undefined}
-      onDropItem={(rawId) => { const cardId = Number(rawId); if (Number.isInteger(cardId)) onDrop(cardId, column); }}
+      onDropItem={(cardId) => { if (cardId) onDrop(cardId, column); }}
     >
         {sorted.map((card) => {
           const suggestedRole = roleSuggestions?.get(card.id);

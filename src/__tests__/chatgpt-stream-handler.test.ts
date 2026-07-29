@@ -44,6 +44,9 @@ const baseReq: ChatRequest = {
   ],
 };
 
+const SESSION_ID = '00000000-0000-4000-8000-000000001249';
+const OTHER_SESSION_ID = '00000000-0000-4000-8000-000000001250';
+
 async function collect(p: ChatGPTCodexProvider): Promise<ChatDelta[]> {
   const out: ChatDelta[] = [];
   for await (const d of p.chat(baseReq)) out.push(d);
@@ -211,10 +214,10 @@ describe('ChatGPTCodexProvider stream handler', () => {
         provider as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }
       ).client.responses.create;
 
-      for await (const _ of provider.chat({ ...baseReq, sessionId: 1249 })) void _;
+      for await (const _ of provider.chat({ ...baseReq, sessionId: SESSION_ID })) void _;
 
       const args = create.mock.calls[0][0] as Record<string, unknown>;
-      expect(args.prompt_cache_key).toBe('coder-session-1249');
+      expect(args.prompt_cache_key).toBe(`coder-session-${SESSION_ID}`);
       expect(args.prompt_cache_options).toBeUndefined();
     },
   );
@@ -233,9 +236,9 @@ describe('ChatGPTCodexProvider stream handler', () => {
       'gpt-5.6-sol',
     );
 
-    for await (const _ of provider1.chat({ ...baseReq, sessionId: 1249 })) void _;
-    for await (const _ of provider2.chat({ ...baseReq, sessionId: 1249 })) void _;
-    for await (const _ of provider3.chat({ ...baseReq, sessionId: 1250 })) void _;
+    for await (const _ of provider1.chat({ ...baseReq, sessionId: SESSION_ID })) void _;
+    for await (const _ of provider2.chat({ ...baseReq, sessionId: SESSION_ID })) void _;
+    for await (const _ of provider3.chat({ ...baseReq, sessionId: OTHER_SESSION_ID })) void _;
 
     const createOptions = (provider: ChatGPTCodexProvider) => {
       const create = (
@@ -263,7 +266,7 @@ describe('ChatGPTCodexProvider stream handler', () => {
         provider as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }
       ).client.responses.create;
 
-      for await (const _ of provider.chat({ ...baseReq, sessionId: 1249 })) void _;
+      for await (const _ of provider.chat({ ...baseReq, sessionId: SESSION_ID })) void _;
 
       const args = create.mock.calls[0][0] as Record<string, unknown>;
       expect(args.prompt_cache_key).toBeUndefined();
@@ -295,7 +298,10 @@ describe('ChatGPTCodexProvider stream handler', () => {
       provider as unknown as { client: { responses: { create: ReturnType<typeof vi.fn> } } }
     ).client.responses.create;
 
-    for await (const _ of provider.chat({ ...baseReq, sessionId: 'session-a' })) void _;
+    for await (const _ of provider.chat({
+      ...baseReq,
+      sessionId: '11111111-1111-4111-8111-111111111111',
+    })) void _;
 
     const args = create.mock.calls[0][0] as Record<string, unknown>;
     expect(args.prompt_cache_key).toBe('coder-session-session-a');
@@ -321,7 +327,9 @@ describe('ChatGPTCodexProvider stream handler', () => {
     );
 
     const deltas: ChatDelta[] = [];
-    for await (const delta of provider.chat({ ...baseReq, sessionId: 1249 })) deltas.push(delta);
+    for await (const delta of provider.chat({ ...baseReq, sessionId: SESSION_ID })) {
+      deltas.push(delta);
+    }
     const usage = deltas.find((delta) => delta.type === 'usage');
 
     expect(usage).toEqual({

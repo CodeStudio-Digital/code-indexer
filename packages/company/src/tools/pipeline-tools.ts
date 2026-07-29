@@ -9,6 +9,8 @@ import type { CoderTool, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import { assertUuid, isUuid } from '@mcp/session-storage';
+import type { PipelineId } from '@mcp/company/types.js';
 
 export function buildPipelineMasterTools(orchestrator: CompanyOrchestrator): CoderTool[] {
   return [
@@ -43,7 +45,7 @@ function listPipelines(orchestrator: CompanyOrchestrator): CoderTool {
     source: 'native',
     handler: async (args) => {
       const scope = (args.scope as 'this' | 'global' | 'all' | undefined) ?? 'all';
-      const items = orchestrator.pipelineList({ scope });
+      const items = await orchestrator.pipelineList({ scope });
       const summary = items.map((p) => ({
         id: p.id,
         name: p.name,
@@ -68,7 +70,11 @@ function startPipeline(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      pipeline_id: { type: 'number', description: 'Id of the pipeline to execute (see list_pipelines).' },
+      pipeline_id: {
+        oneOf: [{ type: 'number' }, { type: 'string', format: 'uuid' }],
+        description:
+          'Pipeline id from list_pipelines: numeric for reusable/project definitions, UUID for Company-session definitions.',
+      },
       initial_input: {
         type: 'string',
         description:
@@ -85,10 +91,10 @@ function startPipeline(orchestrator: CompanyOrchestrator): CoderTool {
     parameters,
     source: 'native',
     handler: async (args) => {
-      const pipelineId = args.pipeline_id as number;
+      const pipelineId = parsePipelineId(args.pipeline_id);
       const initialInput = String(args.initial_input ?? '');
       try {
-        const pipeline = orchestrator.pipelineGet(pipelineId);
+        const pipeline = await orchestrator.pipelineGet(pipelineId);
         if (!pipeline) return err(`Pipeline ${pipelineId} not found. Use list_pipelines to see available ids.`);
 
         const validation = orchestrator.pipelineValidate(pipeline.graph);
@@ -111,13 +117,27 @@ function startPipeline(orchestrator: CompanyOrchestrator): CoderTool {
   };
 }
 
+function parsePipelineId(raw: unknown): PipelineId {
+  if (
+    typeof raw === 'number' &&
+    Number.isSafeInteger(raw) &&
+    raw > 0
+  ) {
+    return raw;
+  }
+  if (typeof raw === 'string' && isUuid(raw)) {
+    return assertUuid(raw, 'pipeline_id');
+  }
+  throw new TypeError('pipeline_id must be a positive integer or UUID');
+}
+
 // ─── get_pipeline_status ───────────────────────────────────────
 
 function getPipelineStatus(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      execution_id: { type: 'number', description: 'Pipeline execution id returned by start_pipeline.' },
+      execution_id: { type: 'string', description: 'Pipeline execution UUID returned by start_pipeline.' },
     },
     required: ['execution_id'],
   };
@@ -130,8 +150,8 @@ function getPipelineStatus(orchestrator: CompanyOrchestrator): CoderTool {
     parameters,
     source: 'native',
     handler: async (args) => {
-      const id = args.execution_id as number;
-      const result = orchestrator.pipelineStatus(id);
+      const id = assertUuid(String(args.execution_id), 'execution_id');
+      const result = await orchestrator.pipelineStatus(id);
       if (!result) return err(`Pipeline execution ${id} not found.`);
       const compact = {
         execution: {
@@ -167,7 +187,7 @@ function stopPipeline(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      execution_id: { type: 'number', description: 'Pipeline execution id to abort.' },
+      execution_id: { type: 'string', description: 'Pipeline execution UUID to abort.' },
       reason: { type: 'string', description: 'Optional human-readable reason recorded on the execution row.' },
     },
     required: ['execution_id'],
@@ -180,9 +200,9 @@ function stopPipeline(orchestrator: CompanyOrchestrator): CoderTool {
     parameters,
     source: 'native',
     handler: async (args) => {
-      const id = args.execution_id as number;
+      const id = assertUuid(String(args.execution_id), 'execution_id');
       const reason = args.reason as string | undefined;
-      const ok2 = orchestrator.pipelineAbort(id, reason);
+      const ok2 = await orchestrator.pipelineAbort(id, reason);
       if (!ok2) return err(`Pipeline execution ${id} is not abortable (not found or already terminal).`);
       return ok(`Pipeline execution ${id} aborted${reason ? `: ${reason}` : ''}.`);
     },

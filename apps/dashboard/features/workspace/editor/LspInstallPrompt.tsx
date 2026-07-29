@@ -179,8 +179,8 @@ export function LspInstallPrompt({
         </div>
         {status.route?.projectVersion && (
           <div className="mt-1 text-muted-foreground text-[11px]">
-            Angular {status.route.projectVersion} · {status.route.workspacePath}
-            {status.route.supportTier === 'best-effort' ? ' · suporte legado' : ''}
+            {t('angularProfile.versionOption', { version: status.route.projectVersion })} · {status.route.workspacePath}
+            {status.route.supportTier === 'best-effort' ? ` · ${t('angularProfile.legacySupport')}` : ''}
           </div>
         )}
         {runtimeGate && (

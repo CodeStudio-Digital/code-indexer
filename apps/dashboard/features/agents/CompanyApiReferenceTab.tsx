@@ -20,7 +20,7 @@ import { selectSandbox, useCompanyStore } from '../../state/company/index.js';
 import { useExtraServices } from './preview-sidebar/useExtraServices.js';
 
 interface CompanyApiReferenceTabProps {
-  sessionId: number;
+  sessionId: string;
 }
 
 export function CompanyApiReferenceTab({ sessionId }: CompanyApiReferenceTabProps) {

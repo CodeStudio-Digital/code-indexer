@@ -34,20 +34,20 @@ export function TimelineStrip({
   onActivateTrack, onAddTrack, onRenameTrack, onToggleVisible, onDeleteTrack, onAppend,
 }: {
   projectId: number;
-  assetId: number;
+  assetId: string;
   model: TimelineModel;
   fps: number;
   activeTrack: number;
   selectedIndex: number;
   aligning: boolean;
-  versionById: Map<number, AssetVersion>;
+  versionById: Map<string, AssetVersion>;
   onSelect: (track: number, col: number) => void;
   onAlign: (anchorX: AnchorX, anchorY: AnchorY, scope: AlignScope) => void;
-  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
+  onEditVersion?: (versionId: string, frameIndex: number, track: number) => void;
   onReverse?: () => void;
   onCopy?: () => void;
   onPaste?: () => void;
-  onSetCell: (track: number, col: number, versionId: number) => void;
+  onSetCell: (track: number, col: number, versionId: string) => void;
   onClearCell: (track: number, col: number) => void;
   onDuration: (col: number, ms: number | null) => void;
   onColumnDrag: (from: number, to: number) => void;
@@ -59,7 +59,7 @@ export function TimelineStrip({
   onToggleVisible: (id: number, visible: boolean) => void;
   onDeleteTrack: (id: number) => void;
   /** Append a version at column gridLen of the ACTIVE track. */
-  onAppend: (versionId: number) => void;
+  onAppend: (versionId: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const dragFrom = useRef<{ track: number; col: number } | null>(null);

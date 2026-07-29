@@ -13,7 +13,11 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, notFound, resolveRootSessionId } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  notFound,
+  resolveCompanySessionContext,
+} from '../_helpers.js';
 import { engineKind } from '@mcp/code-agent/tools/db/scope.js';
 
 interface CompanyDbConnectionView {
@@ -30,15 +34,22 @@ interface CompanyDbConnectionView {
 }
 
 export function mountCompanyDbConnectionsRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, dbClientFor, db } = deps;
+  const { sessionStore, dbClientFor, db } = deps;
 
-  app.get('/api/company/sessions/:id/db-connections', (c) => {
-    const id = resolveRootSessionId(companyStore, parseIdParam(c));
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+  app.get('/api/company/sessions/:id/db-connections', async (c) => {
+    const resolved = await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const session = resolved.root;
 
     const connections: CompanyDbConnectionView[] = [];
-    for (const link of companyStore.listCompanySessionProjects(id)) {
+    for (const projectId of session.project_ids) {
+      const link = {
+        project_id: projectId,
+        label: session.project_labels[String(projectId)] ?? null,
+      };
       const projectLabel =
         link.label?.trim() ||
         db.getProject(link.project_id)?.name ||

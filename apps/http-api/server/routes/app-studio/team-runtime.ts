@@ -1,7 +1,11 @@
 import type { Context, Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseSessionIdParam, notFound } from '../_helpers.js';
 import { abortCompanyRuntime } from '../company/runtime-lifecycle.js';
+import type {
+  CompanySessionId,
+  SessionId,
+} from '@mcp/session-storage';
 
 type TeamRuntimeProxyTarget =
   | ''
@@ -18,8 +22,8 @@ type TeamRuntimeProxyTarget =
   | '/wake-master';
 
 export interface AppTeamRuntimeBinding {
-  appSessionId: number;
-  companySessionId: number;
+  appSessionId: SessionId;
+  companySessionId: CompanySessionId;
 }
 
 type AppTeamRuntimeBindingResult =
@@ -37,11 +41,14 @@ type AppTeamRuntimeBindingResult =
  * the authorization boundary that prevents one App from driving another App's
  * team through the facade.
  */
-export function resolveAppTeamRuntimeBinding(
-  deps: Pick<ServerDeps, 'appStudioStore' | 'companyStore'>,
-  appSessionId: number,
-): AppTeamRuntimeBindingResult {
-  const appSession = deps.appStudioStore.getSession(appSessionId);
+export async function resolveAppTeamRuntimeBinding(
+  deps: Pick<
+    ServerDeps,
+    'appStudioStore' | 'operationalSessionFiles'
+  >,
+  appSessionId: SessionId,
+): Promise<AppTeamRuntimeBindingResult> {
+  const appSession = await deps.appStudioStore.getSession(appSessionId);
   if (!appSession) {
     return {
       ok: false,
@@ -59,8 +66,14 @@ export function resolveAppTeamRuntimeBinding(
     };
   }
 
-  const companySession = deps.companyStore.getCompanySession(appSession.company_session_id);
-  const reverseLink = deps.appStudioStore.getSessionByCompanySessionId(appSession.company_session_id);
+  const [companySession, reverseLink] = await Promise.all([
+    deps.operationalSessionFiles.getCompanySession(
+      appSession.company_session_id,
+    ),
+    deps.appStudioStore.getSessionByCompanySessionId(
+      appSession.company_session_id,
+    ),
+  ]);
   if (
     !companySession
     || companySession.runtime_kind !== 'app_studio'
@@ -83,8 +96,14 @@ export function resolveAppTeamRuntimeBinding(
   };
 }
 
-function bindingOrResponse(c: Context, deps: ServerDeps): AppTeamRuntimeBinding | Response {
-  const resolved = resolveAppTeamRuntimeBinding(deps, parseIdParam(c));
+async function bindingOrResponse(
+  c: Context,
+  deps: ServerDeps,
+): Promise<AppTeamRuntimeBinding | Response> {
+  const resolved = await resolveAppTeamRuntimeBinding(
+    deps,
+    parseSessionIdParam(c),
+  );
   if (resolved.ok) return resolved.binding;
   if (resolved.status === 404) return notFound(c, resolved.error);
   return c.json({ error: resolved.error, code: resolved.code }, resolved.status);
@@ -99,7 +118,7 @@ function bindingOrResponse(c: Context, deps: ServerDeps): AppTeamRuntimeBinding 
 async function proxyCompanyRuntimeRoute(
   app: Hono,
   c: Context,
-  companySessionId: number,
+  companySessionId: CompanySessionId,
   target: TeamRuntimeProxyTarget,
 ): Promise<Response> {
   const source = new URL(c.req.url);
@@ -124,7 +143,7 @@ async function proxyCompanyRuntimeRoute(
 
 export function mountAppStudioTeamRuntimeRoutes(app: Hono, deps: ServerDeps): void {
   const proxy = (target: TeamRuntimeProxyTarget) => async (c: Context) => {
-    const binding = bindingOrResponse(c, deps);
+    const binding = await bindingOrResponse(c, deps);
     if (binding instanceof Response) return binding;
     return proxyCompanyRuntimeRoute(app, c, binding.companySessionId, target);
   };
@@ -152,7 +171,7 @@ export function mountAppStudioTeamRuntimeRoutes(app: Hono, deps: ServerDeps): vo
   // sessions. The App facade performs the link authorization above, then calls
   // the shared abort primitive directly.
   app.post('/api/app-studio/apps/:id/team/commands/abort', async (c) => {
-    const binding = bindingOrResponse(c, deps);
+    const binding = await bindingOrResponse(c, deps);
     if (binding instanceof Response) return binding;
     const result = await abortCompanyRuntime(binding.companySessionId);
     if (!result.ok) {

@@ -54,7 +54,7 @@ export class GeminiChatProvider implements ChatProvider {
       // OAuth mode: route through CloudCode (cloudcode-pa.googleapis.com)
       // like the Gemini CLI does. generativelanguage.googleapis.com does NOT
       // accept cloud-platform scoped tokens.
-      // sessionId is persisted in coder_sessions.cloudcode_session_id so it
+      // sessionId is persisted in the bundle state so it
       // survives reconnects and resume — same as gemini-cli's module-level UUID.
       this.cloudCode = {
         authClient: createAuthClient(opts.accessToken, opts.refreshToken),

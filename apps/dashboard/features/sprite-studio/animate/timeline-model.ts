@@ -66,6 +66,9 @@ const remap = (frames: AnimFrame[], f: (col: number) => number | null): AnimFram
   return out;
 };
 
+const draftFrameId = (track: number, col: number, versionId: string): string =>
+  `draft:${track}:${col}:${versionId}`;
+
 /** Delete a column in every track (right side shifts left). */
 export function removeColumn(frames: AnimFrame[], col: number): AnimFrame[] {
   return remap(frames, (c) => (c === col ? null : c > col ? c - 1 : c));
@@ -76,7 +79,11 @@ export function duplicateColumn(frames: AnimFrame[], col: number): AnimFrame[] {
   const shifted = remap(frames, (c) => (c > col ? c + 1 : c));
   const copies = frames
     .filter((f) => f.frameIndex === col)
-    .map((f) => ({ ...f, id: -1, frameIndex: col + 1 }));
+    .map((f) => ({
+      ...f,
+      id: draftFrameId(f.track, col + 1, f.versionId),
+      frameIndex: col + 1,
+    }));
   return [...shifted, ...copies];
 }
 
@@ -95,15 +102,24 @@ export function reverseColumns(frames: AnimFrame[], gridLen: number): AnimFrame[
   return remap(frames, (c) => gridLen - 1 - c);
 }
 
-/** Set/replace ONE cell (track, col) to a version (id -1 = new row). */
+/** Set/replace ONE cell (track, col) to a version (draft id = unsaved row). */
 export function setCell(
   frames: AnimFrame[],
   track: number,
   col: number,
-  versionId: number,
+  versionId: string,
 ): AnimFrame[] {
   const rest = frames.filter((f) => !(f.track === track && f.frameIndex === col));
-  return [...rest, { id: -1, frameIndex: col, versionId, durationMs: null, track }];
+  return [
+    ...rest,
+    {
+      id: draftFrameId(track, col, versionId),
+      frameIndex: col,
+      versionId,
+      durationMs: null,
+      track,
+    },
+  ];
 }
 
 /** Clear ONE cell (empty cells are simply absent rows). */

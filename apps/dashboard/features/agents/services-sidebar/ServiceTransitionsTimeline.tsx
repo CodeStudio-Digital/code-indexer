@@ -2,7 +2,7 @@
  * ServiceTransitionsTimeline — day-grouped audit trail of one service's
  * status/health flips (company B6). Read-only REST view over
  * `GET /services/transitions?service_id=` (mig-188 table); keyset
- * pagination via before_id. Actor badge tells WHO flipped the state
+ * pagination via before_seq. Actor badge tells WHO flipped the state
  * (supervisor / operator / master / agent), kind badge WHICH machine
  * (container status vs probe health).
  */
@@ -10,7 +10,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 interface TransitionRow {
-  id: number;
+  id: string;
+  seq: number;
   service_id: string;
   kind: string;
   from_state: string | null;
@@ -21,7 +22,7 @@ interface TransitionRow {
 }
 
 export interface ServiceTransitionsTimelineProps {
-  sessionId?: number;
+  sessionId?: string;
   serviceId?: string;
 }
 
@@ -54,7 +55,7 @@ export function ServiceTransitionsTimeline({ sessionId, serviceId }: ServiceTran
   const [exhausted, setExhausted] = useState(false);
 
   const fetchPage = useCallback(
-    async (beforeId?: number) => {
+    async (beforeSeq?: number) => {
       if (sessionId == null || !serviceId) return;
       setLoading(true);
       try {
@@ -62,13 +63,13 @@ export function ServiceTransitionsTimeline({ sessionId, serviceId }: ServiceTran
           service_id: serviceId,
           limit: String(PAGE_SIZE),
         });
-        if (beforeId) params.set('before_id', String(beforeId));
+        if (beforeSeq != null) params.set('before_seq', String(beforeSeq));
         const r = await fetch(`/api/company/sessions/${sessionId}/services/transitions?${params}`);
         if (!r.ok) return;
         const body = (await r.json()) as { transitions?: TransitionRow[] };
         const page = body.transitions ?? [];
         if (page.length < PAGE_SIZE) setExhausted(true);
-        setRows((prev) => (beforeId ? [...prev, ...page] : page)); // newest-first
+        setRows((prev) => (beforeSeq != null ? [...prev, ...page] : page)); // newest-first
       } catch {
         /* best-effort */
       } finally {
@@ -92,7 +93,7 @@ export function ServiceTransitionsTimeline({ sessionId, serviceId }: ServiceTran
     if (last && last.day === day) last.items.push(row);
     else groups.push({ day, items: [row] });
   }
-  const oldestId = rows.length > 0 ? rows[rows.length - 1].id : undefined;
+  const oldestSeq = rows.length > 0 ? rows[rows.length - 1].seq : undefined;
 
   return (
     <div className="mt-1 rounded border bg-background/50 px-1.5 py-1 text-[9px]">
@@ -133,12 +134,12 @@ export function ServiceTransitionsTimeline({ sessionId, serviceId }: ServiceTran
           ))}
         </div>
       ))}
-      {!exhausted && oldestId !== undefined && (
+      {!exhausted && oldestSeq !== undefined && (
         <button
           type="button"
           className="mt-0.5 w-full rounded border px-1 py-0.5 text-[9px] text-muted-foreground hover:bg-accent"
           disabled={loading}
-          onClick={() => void fetchPage(oldestId)}
+          onClick={() => void fetchPage(oldestSeq)}
         >
           {loading ? '…' : t('services.timeline.loadMore')}
         </button>

@@ -10,7 +10,7 @@
  * this with foreign_keys=OFF (outside any transaction) — see trim/index.ts.
  */
 import type { DB } from '../../db/types.js';
-import { CENTRAL_DROP_TABLES, projectKeepTables } from './drop-list.js';
+import { projectKeepTables } from './drop-list.js';
 
 /** Remove every `REFERENCES <central>(…) [ON DELETE/UPDATE …]` (inline + standalone). */
 export function stripCentralFks(createSql: string, centralTables: string[]): string {
@@ -27,8 +27,8 @@ export function stripCentralFks(createSql: string, centralTables: string[]): str
   return sql.replace(/,(\s*\))/g, '$1');
 }
 
-function referencesCentral(sql: string): string[] {
-  return CENTRAL_DROP_TABLES.filter((c) => new RegExp(`REFERENCES\\s+"?${c}"?\\b`, 'i').test(sql));
+function referencesCentral(sql: string, central: readonly string[]): string[] {
+  return central.filter((c) => new RegExp(`REFERENCES\\s+"?${c}"?\\b`, 'i').test(sql));
 }
 
 function recreateOne(db: DB, table: string, origSql: string, refs: string[]): void {
@@ -55,11 +55,12 @@ function recreateOne(db: DB, table: string, origSql: string, refs: string[]): vo
 }
 
 /**
- * Recreate every project (KEEP) table that references a central table, stripping
- * the cross-DB FK. Returns the names recreated. Idempotent: a table with no
- * central reference (already trimmed) is skipped.
+ * Recreate every project (KEEP) table that references one of `central` (the
+ * resolved drop set — declared list + derived sweep), stripping the cross-DB FK.
+ * Returns the names recreated. Idempotent: a table with no central reference
+ * (already trimmed) is skipped.
  */
-export function recreateFkEdgeTables(db: DB): string[] {
+export function recreateFkEdgeTables(db: DB, central: readonly string[]): string[] {
   const keep = projectKeepTables();
   const recreated: string[] = [];
   const tables = db.prepare(
@@ -67,7 +68,7 @@ export function recreateFkEdgeTables(db: DB): string[] {
   ).all() as { name: string; sql: string }[];
   for (const { name, sql } of tables) {
     if (name === 'projects' || !keep.has(name)) continue; // central tables handled by the drop pass
-    const refs = referencesCentral(sql);
+    const refs = referencesCentral(sql, central);
     if (refs.length === 0) continue;
     recreateOne(db, name, sql, refs);
     recreated.push(name);

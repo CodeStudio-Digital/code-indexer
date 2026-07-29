@@ -10,9 +10,10 @@
  * Module-global-per-realm like the resume registry: abort is only
  * meaningful while the process that runs the agents is alive.
  */
+import type { SessionId } from '@mcp/session-storage';
 
 export interface ActiveAgentEntry {
-  sessionId: number;
+  sessionId: SessionId;
   groupId: string;
   agentIndex: number;
   label: string;
@@ -25,7 +26,11 @@ interface ActiveAgent extends ActiveAgentEntry {
 
 const byKey = new Map<string, ActiveAgent>();
 
-function keyOf(sessionId: number, groupId: string, agentIndex: number): string {
+function keyOf(
+  sessionId: SessionId,
+  groupId: string,
+  agentIndex: number,
+): string {
   return `${sessionId}:${groupId}:${agentIndex}`;
 }
 
@@ -34,7 +39,7 @@ function keyOf(sessionId: number, groupId: string, agentIndex: number): string {
  * `finally` when the agent settles so aborts can't hit a recycled slot.
  */
 export function registerActiveAgent(
-  sessionId: number | undefined,
+  sessionId: SessionId | undefined,
   groupId: string,
   agentIndex: number,
   label: string,
@@ -51,7 +56,7 @@ export function registerActiveAgent(
  * when nothing matched (already finished, wrong ref).
  */
 export function abortActiveAgent(
-  sessionId: number,
+  sessionId: SessionId,
   groupId: string,
   agentRef: number | string,
 ): ActiveAgentEntry | null {
@@ -70,7 +75,9 @@ export function abortActiveAgent(
 }
 
 /** All running agents for a session (dashboard uses events; this is for routes/tests). */
-export function listActiveAgents(sessionId: number): ActiveAgentEntry[] {
+export function listActiveAgents(
+  sessionId: SessionId,
+): ActiveAgentEntry[] {
   const out: ActiveAgentEntry[] = [];
   for (const agent of byKey.values()) {
     if (agent.sessionId !== sessionId) continue;

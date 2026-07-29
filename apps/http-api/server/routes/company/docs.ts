@@ -22,7 +22,12 @@ import {
   DOCS_CONTENT_CAP_BYTES,
   DOCS_MIRROR_PREFIX,
 } from '@mcp/company/tools/file-path-core.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  resolveCompanySessionContext,
+  notFound,
+} from '../_helpers.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 export type CompanyDocOrigin = 'sandbox' | 'drive_mirror';
 
@@ -44,14 +49,14 @@ interface DocsBinding {
   containerId: string;
 }
 
-function resolveDocsBinding(sessionId: number, serviceId: string | null): DocsBinding | null {
+function resolveDocsBinding(sessionId: CompanySessionId, serviceId: string | null): DocsBinding | null {
   const manager = getSandboxManager();
   if (serviceId) {
-    const sb = manager.getService(String(sessionId), serviceId);
+    const sb = manager.getService(sessionId, serviceId);
     if (!sb) return null;
     return { workdir: sb.workdir, containerId: sb.containerId };
   }
-  const primary = manager.get(String(sessionId));
+  const primary = manager.get(sessionId);
   if (!primary) return null;
   return { workdir: primary.workdir, containerId: primary.containerId };
 }
@@ -66,19 +71,17 @@ const mirrorSvc = normalizeDocServiceId;
  * Scope key of the session's drive (`tpl:<id>` / `ses:<rootId>`) — the
  * docs-RAG bridge uses it to namespace collection names and source URIs.
  */
-export function resolveDocsScopeKey(deps: ServerDeps, sessionId: number): string {
+export function resolveDocsScopeKey(deps: ServerDeps, sessionId: CompanySessionId): string {
   return getMirrorStore(deps, sessionId).resolveScopeKey();
 }
 
 /**
  * Read-only mirror store — instantiated fresh per request like the
- * drive routes do (SQLite WAL + FS keep it coherent across processes);
- * no publisher because these routes never mutate.
+ * drive routes do; no publisher because these routes never mutate.
  */
-function getMirrorStore(deps: ServerDeps, sessionId: number): CompanyDriveStore {
+function getMirrorStore(deps: ServerDeps, sessionId: CompanySessionId): CompanyDriveStore {
   return new CompanyDriveStore({
-    db: deps.db,
-    companyStore: deps.companyStore,
+    sessionStore: deps.sessionStore,
     companySessionId: sessionId,
   });
 }
@@ -94,7 +97,7 @@ async function listSandboxDocs(binding: DocsBinding): Promise<string[]> {
   return probe.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
 }
 
-function listMirrorDocs(deps: ServerDeps, sessionId: number, serviceId: string | null): CompanyDocEntry[] {
+function listMirrorDocs(deps: ServerDeps, sessionId: CompanySessionId, serviceId: string | null): CompanyDocEntry[] {
   const drive = getMirrorStore(deps, sessionId);
   const prefix = `${DOCS_MIRROR_PREFIX}${mirrorSvc(serviceId)}/`;
   return drive.list(drive.resolveScopeKey(), { prefix }).map((meta) => ({
@@ -111,7 +114,7 @@ function listMirrorDocs(deps: ServerDeps, sessionId: number, serviceId: string |
  */
 export async function listCompanyDocs(
   deps: ServerDeps,
-  sessionId: number,
+  sessionId: CompanySessionId,
   serviceId: string | null,
 ): Promise<CompanyDocEntry[]> {
   const binding = resolveDocsBinding(sessionId, serviceId);
@@ -138,7 +141,7 @@ export async function listCompanyDocs(
  */
 export async function readCompanyDoc(
   deps: ServerDeps,
-  sessionId: number,
+  sessionId: CompanySessionId,
   serviceId: string | null,
   path: string,
 ): Promise<CompanyDocContent | null> {
@@ -166,12 +169,13 @@ export async function readCompanyDoc(
 }
 
 export function mountCompanyDocsRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore } = deps;
-
   app.get('/api/company/sessions/:id/docs/list', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+    const resolved = await resolveCompanySessionContext(
+      deps.sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
     const serviceId = c.req.query('service') || null;
     const entries = await listCompanyDocs(deps, id, serviceId);
     // `items` preserved for older consumers; `entries` carries origin.
@@ -179,9 +183,12 @@ export function mountCompanyDocsRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:id/docs/read', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+    const resolved = await resolveCompanySessionContext(
+      deps.sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
     const serviceId = c.req.query('service') || null;
     const path = c.req.query('path') || '';
     if (!checkRelativePath(path, { traversal: 'substring' }).ok) {

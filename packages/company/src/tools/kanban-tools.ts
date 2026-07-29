@@ -59,7 +59,7 @@ function kanbanUpdateMeta(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      card_id: { type: 'number', description: 'ID of the card to update' },
+      card_id: { type: 'string', description: 'UUID of the card to update' },
       title: { type: 'string', description: 'New title' },
       description: { type: 'string', description: 'New description' },
       tag: { type: 'string', enum: ['bug', 'feature', 'refactor', 'documentation', ''], description: 'New tag (empty string to clear)' },
@@ -78,7 +78,7 @@ function kanbanUpdateMeta(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args) => {
       try {
         const tag = args.tag === '' ? null : args.tag as 'bug' | 'feature' | 'refactor' | 'documentation' | undefined;
-        const card = orchestrator.kanbanUpdateCard(args.card_id as number, {
+        const card = orchestrator.kanbanUpdateCard(args.card_id as string, {
           title: args.title as string | undefined,
           description: args.description as string | undefined,
           tag,
@@ -108,7 +108,7 @@ function kanbanPostComment(orchestrator: CompanyOrchestrator): CoderTool {
     type: 'object',
     properties: {
       card_id: {
-        type: 'number',
+        type: 'string',
         description:
           'ID of the card. OMIT when you are a subordinate with an assigned card ' +
           '(your card is auto-resolved). Required when you are the master.',
@@ -139,7 +139,7 @@ function kanbanPostComment(orchestrator: CompanyOrchestrator): CoderTool {
         const agentRunId = ctx.companyContext?.agentRunId ?? null;
         const authorRole = ctx.companyContext?.agentRole ?? 'master';
         // Resolve card_id: explicit > auto-resolve from assigned card.
-        let cardId = args.card_id as number | undefined;
+        let cardId = args.card_id as string | undefined;
         if (cardId == null) {
           if (agentRunId == null) {
             return err(
@@ -181,7 +181,7 @@ function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
     type: 'object',
     properties: {
       card_id: {
-        type: 'number',
+        type: 'string',
         description:
           'ID of the card. OMIT as a subordinate with an assigned card (auto-resolves). ' +
           'Required when you are the master.',
@@ -192,7 +192,7 @@ function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
           type: 'object',
           properties: {
             id: {
-              type: 'number',
+              type: 'string',
               description:
                 'Existing item ID (omit to create new). Get IDs from kanban_get_card or kanban_read_my_card.',
             },
@@ -219,7 +219,7 @@ function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
     handler: async (args, ctx) => {
       try {
         const agentRunId = ctx.companyContext?.agentRunId ?? null;
-        let cardId = args.card_id as number | undefined;
+        let cardId = args.card_id as string | undefined;
         if (cardId == null) {
           if (agentRunId == null) {
             return err(
@@ -235,7 +235,7 @@ function kanbanUpdateObjectives(orchestrator: CompanyOrchestrator): CoderTool {
           }
           cardId = resolved;
         }
-        const items = args.items as Array<{ id?: number; text: string; checked: boolean }>;
+        const items = args.items as Array<{ id?: string; text: string; checked: boolean }>;
         // Defensive validation: when items reference existing IDs, ensure
         // they belong to THIS card. Prevents accidental cross-card writes.
         if (items.some((i) => i.id != null)) {
@@ -268,8 +268,8 @@ function kanbanAddDependency(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      card_id: { type: 'number', description: 'ID of the card that depends on another' },
-      depends_on_card_id: { type: 'number', description: 'ID of the card that blocks this one' },
+      card_id: { type: 'string', description: 'UUID of the card that depends on another' },
+      depends_on_card_id: { type: 'string', description: 'UUID of the card that blocks this one' },
     },
     required: ['card_id', 'depends_on_card_id'],
   };
@@ -281,7 +281,7 @@ function kanbanAddDependency(orchestrator: CompanyOrchestrator): CoderTool {
     source: 'native',
     handler: async (args) => {
       try {
-        orchestrator.kanbanAddDependency(args.card_id as number, args.depends_on_card_id as number);
+        orchestrator.kanbanAddDependency(args.card_id as string, args.depends_on_card_id as string);
         return ok(`Card #${args.card_id} now depends on card #${args.depends_on_card_id}`);
       } catch (e) {
         return err(`Failed to add dependency: ${(e as Error).message}`);
@@ -296,8 +296,8 @@ function kanbanRemoveDependency(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      card_id: { type: 'number', description: 'ID of the card' },
-      depends_on_card_id: { type: 'number', description: 'ID of the blocker card to remove' },
+      card_id: { type: 'string', description: 'UUID of the card' },
+      depends_on_card_id: { type: 'string', description: 'UUID of the blocker card to remove' },
     },
     required: ['card_id', 'depends_on_card_id'],
   };
@@ -309,7 +309,7 @@ function kanbanRemoveDependency(orchestrator: CompanyOrchestrator): CoderTool {
     source: 'native',
     handler: async (args) => {
       try {
-        const removed = orchestrator.kanbanRemoveDependency(args.card_id as number, args.depends_on_card_id as number);
+        const removed = orchestrator.kanbanRemoveDependency(args.card_id as string, args.depends_on_card_id as string);
         return removed
           ? ok(`Dependency removed: card #${args.card_id} no longer blocked by #${args.depends_on_card_id}`)
           : err('Dependency not found');
@@ -326,8 +326,8 @@ function kanbanAssignAgent(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      card_id: { type: 'number', description: 'ID of the card' },
-      agent_run_id: { type: 'number', description: 'ID of the agent run to assign' },
+      card_id: { type: 'string', description: 'UUID of the card' },
+      agent_run_id: { type: 'string', description: 'UUID of the agent run to assign' },
     },
     required: ['card_id', 'agent_run_id'],
   };
@@ -339,9 +339,9 @@ function kanbanAssignAgent(orchestrator: CompanyOrchestrator): CoderTool {
     source: 'native',
     handler: async (args) => {
       try {
-        const sub = orchestrator.getSubordinate(args.agent_run_id as number);
+        const sub = orchestrator.getSubordinate(args.agent_run_id as string);
         const role = sub?.role ?? 'unknown';
-        orchestrator.kanbanAssignAgent(args.card_id as number, args.agent_run_id as number, role);
+        orchestrator.kanbanAssignAgent(args.card_id as string, args.agent_run_id as string, role);
         return ok(`Agent run #${args.agent_run_id} (${role}) assigned to card #${args.card_id}`);
       } catch (e) {
         return err(`Failed to assign agent: ${(e as Error).message}`);
@@ -391,7 +391,7 @@ function kanbanGetCard(orchestrator: CompanyOrchestrator): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',
     properties: {
-      card_id: { type: 'number', description: 'ID of the card' },
+      card_id: { type: 'string', description: 'UUID of the card' },
     },
     required: ['card_id'],
   };
@@ -403,7 +403,7 @@ function kanbanGetCard(orchestrator: CompanyOrchestrator): CoderTool {
     source: 'native',
     handler: async (args) => {
       try {
-        const card = orchestrator.kanbanGetCard(args.card_id as number);
+        const card = orchestrator.kanbanGetCard(args.card_id as string);
         return card ? okStructured(card) : err(`Card #${args.card_id} not found. Use kanban_list_cards to see available cards.`);
       } catch (e) {
         return err(`Failed to get card: ${(e as Error).message}`);

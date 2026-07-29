@@ -14,9 +14,11 @@ import {
   type IdleRunDescriptor,
   type RoleDescriptor,
 } from '@mcp/company/role-pipeline/index.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 export interface RecommendRolesForSessionInput {
-  companySessionId: number;
+  companySessionId: CompanySessionId;
   taskText: string;
   k?: number;
 }
@@ -25,7 +27,7 @@ export interface RecommendRolesForSessionResult {
   recommendations: Array<{
     role: string;
     kind: string;
-    agentRunId?: number;
+    agentRunId?: string;
     score: number;
     signals?: unknown;
   }>;
@@ -47,9 +49,24 @@ export async function recommendRolesForSession(
   deps: ServerDeps,
   input: RecommendRolesForSessionInput,
 ): Promise<RecommendRolesForSessionResult> {
-  const { companyStore, toolSelectionEmbed, roleEmbeddingStore, pipelineTelemetrySink } = deps;
-  const session = companyStore.getCompanySession(input.companySessionId);
-  if (!session) return { recommendations: [] };
+  const {
+    companyStore,
+    sessionStore,
+    toolSelectionEmbed,
+    roleEmbeddingStore,
+    pipelineTelemetrySink,
+  } = deps;
+  await sessionStore.ensureCatalog();
+  let companyFiles: CompanySessionFiles;
+  try {
+    companyFiles = new CompanySessionFiles({
+      companySessionId: input.companySessionId,
+      sessionStore,
+    });
+  } catch {
+    return { recommendations: [] };
+  }
+  const session = companyFiles.getSession();
 
   const template = session.template_id != null
     ? companyStore.getTemplate(session.template_id)
@@ -66,7 +83,7 @@ export async function recommendRolesForSession(
   });
   if (availableRoles.length === 0) return { recommendations: [] };
 
-  const activeRuns = companyStore.listAgentRuns(input.companySessionId);
+  const activeRuns = companyFiles.listAgentRunsSync();
   const runningByRole: Record<string, number> = {};
   const idleRuns: IdleRunDescriptor[] = [];
   for (const r of activeRuns) {

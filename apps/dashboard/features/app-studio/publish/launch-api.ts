@@ -47,7 +47,7 @@ async function consumeSse(
   }
 }
 
-export async function getCfWhoami(sessionId: number): Promise<CfWhoami> {
+export async function getCfWhoami(sessionId: string): Promise<CfWhoami> {
   const r = await fetch(`/api/app-studio/apps/${sessionId}/publish`);
   if (!r.ok) throw new Error(r.statusText);
   return (await r.json()) as CfWhoami;
@@ -55,7 +55,7 @@ export async function getCfWhoami(sessionId: number): Promise<CfWhoami> {
 
 /** wrangler login (OAuth no browser). Resolve com o whoami confirmado. */
 export async function streamCfLogin(
-  sessionId: number,
+  sessionId: string,
   handlers: { onOauthUrl?: (url: string) => void; onLog?: (chunk: string) => void } = {},
 ): Promise<CfWhoami> {
   const r = await fetch(`/api/app-studio/apps/${sessionId}/publish/login`, {
@@ -84,7 +84,7 @@ export interface LaunchResult {
 
 /** A launch chain completa. Lança em erro/auth-required (message distinta). */
 export async function streamAppLaunch(
-  sessionId: number,
+  sessionId: string,
   handlers: { onPhase?: (phase: LaunchPhaseId) => void; onLog?: (chunk: string) => void } = {},
 ): Promise<LaunchResult> {
   const r = await fetch(`/api/app-studio/apps/${sessionId}/publish`, { method: 'POST' });

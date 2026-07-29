@@ -1,6 +1,7 @@
 /**
- * PipelineTelemetryStore — persists stage-level traces from the
- * candidate-pipeline framework.
+ * PipelineTelemetryStore — persists global, non-session stage-level traces
+ * from the candidate-pipeline framework. Session-owned traces belong in the
+ * owning filesystem bundle.
  *
  * Schema is owned by migration 085 (085_pipeline_foundation). Each row is a
  * single stage execution (Source / Hydrator / Filter / Scorer / Selector /
@@ -34,8 +35,6 @@ export type SizeBucket =
 
 export interface PipelineTelemetryRow {
   id: number;
-  session_id: number | null;
-  company_session_id: number | null;
   pipeline_name: string;
   stage: string;
   component_name: string;
@@ -53,8 +52,6 @@ export interface PipelineTelemetryRow {
 }
 
 export interface PipelineTelemetryInsert {
-  session_id?: number | null;
-  company_session_id?: number | null;
   pipeline_name: string;
   stage: string;
   component_name: string;
@@ -90,8 +87,6 @@ export interface PipelineTelemetrySummary {
 
 interface RawRow {
   id: number;
-  session_id: number | null;
-  company_session_id: number | null;
   pipeline_name: string;
   stage: string;
   component_name: string;
@@ -111,8 +106,6 @@ interface RawRow {
 function mapRow(row: RawRow): PipelineTelemetryRow {
   return {
     id: row.id,
-    session_id: row.session_id,
-    company_session_id: row.company_session_id,
     pipeline_name: row.pipeline_name,
     stage: row.stage,
     component_name: row.component_name,
@@ -138,18 +131,16 @@ export class PipelineTelemetryStore {
     const result = this.db
       .prepare(
         `INSERT INTO pipeline_telemetry (
-           session_id, company_session_id, pipeline_name, stage, component_name,
-           duration_ms, duration_bucket, candidates_in, candidates_out, size_bucket,
+           pipeline_name, stage, component_name, duration_ms, duration_bucket,
+           candidates_in, candidates_out, size_bucket,
            cache_hits, cache_misses, errors, diag_json, trace_sampled
          ) VALUES (
-           @session_id, @company_session_id, @pipeline_name, @stage, @component_name,
-           @duration_ms, @duration_bucket, @candidates_in, @candidates_out, @size_bucket,
+           @pipeline_name, @stage, @component_name, @duration_ms, @duration_bucket,
+           @candidates_in, @candidates_out, @size_bucket,
            @cache_hits, @cache_misses, @errors, @diag_json, @trace_sampled
          )`,
       )
       .run({
-        session_id: row.session_id ?? null,
-        company_session_id: row.company_session_id ?? null,
         pipeline_name: row.pipeline_name,
         stage: row.stage,
         component_name: row.component_name,
@@ -172,20 +163,18 @@ export class PipelineTelemetryStore {
     if (rows.length === 0) return;
     const stmt = this.db.prepare(
       `INSERT INTO pipeline_telemetry (
-         session_id, company_session_id, pipeline_name, stage, component_name,
-         duration_ms, duration_bucket, candidates_in, candidates_out, size_bucket,
+         pipeline_name, stage, component_name, duration_ms, duration_bucket,
+         candidates_in, candidates_out, size_bucket,
          cache_hits, cache_misses, errors, diag_json, trace_sampled
        ) VALUES (
-         @session_id, @company_session_id, @pipeline_name, @stage, @component_name,
-         @duration_ms, @duration_bucket, @candidates_in, @candidates_out, @size_bucket,
+         @pipeline_name, @stage, @component_name, @duration_ms, @duration_bucket,
+         @candidates_in, @candidates_out, @size_bucket,
          @cache_hits, @cache_misses, @errors, @diag_json, @trace_sampled
        )`,
     );
     const tx = this.db.transaction((batch: PipelineTelemetryInsert[]) => {
       for (const row of batch) {
         stmt.run({
-          session_id: row.session_id ?? null,
-          company_session_id: row.company_session_id ?? null,
           pipeline_name: row.pipeline_name,
           stage: row.stage,
           component_name: row.component_name,
@@ -205,12 +194,10 @@ export class PipelineTelemetryStore {
     tx(rows);
   }
 
-  /** Recent rows for a given pipeline, optionally scoped by session. */
+  /** Recent global rows for a given pipeline. */
   list(opts: {
     pipelineName?: string;
     stage?: string;
-    sessionId?: number;
-    companySessionId?: number;
     since?: string;
     limit?: number;
   } = {}): PipelineTelemetryRow[] {
@@ -218,8 +205,6 @@ export class PipelineTelemetryStore {
     const params: Record<string, unknown> = {};
     if (opts.pipelineName) { where.push('pipeline_name = @pipelineName'); params.pipelineName = opts.pipelineName; }
     if (opts.stage)        { where.push('stage = @stage');               params.stage = opts.stage; }
-    if (opts.sessionId)    { where.push('session_id = @sessionId');       params.sessionId = opts.sessionId; }
-    if (opts.companySessionId) { where.push('company_session_id = @companySessionId'); params.companySessionId = opts.companySessionId; }
     if (opts.since)        { where.push('created_at >= @since');          params.since = opts.since; }
     const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
     const limit = opts.limit ?? 500;

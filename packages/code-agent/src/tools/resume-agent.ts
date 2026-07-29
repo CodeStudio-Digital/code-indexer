@@ -73,14 +73,24 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
       const sessionId = ctx.runner?.sessionId;
       if (sessionId == null) return err('resume_agent: no active session.');
 
-      const observed = getGroup(sessionId, spawnId, deps.sessionStore);
+      const observed = await getGroup(
+        sessionId,
+        spawnId,
+        deps.sessionStore,
+      );
       if (!observed) {
         return err(
           `resume_agent: spawn '${spawnId}' not found — resumable states live ~45min in this session only. ` +
           `Re-run the task with spawn_agent instead.`,
         );
       }
-      if (!tryAcquireResume(sessionId, spawnId, deps.sessionStore)) {
+      if (
+        !(await tryAcquireResume(
+          sessionId,
+          spawnId,
+          deps.sessionStore,
+        ))
+      ) {
         return err(`resume_agent: spawn '${spawnId}' is already being resumed. Wait for it to finish.`);
       }
 
@@ -88,7 +98,11 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
         // The cache-first observation above is only an existence hint. A
         // different executor may commit and release between that read and our
         // CAS, so target selection must use a fresh snapshot under the lease.
-        const group = reloadGroupUnderLease(sessionId, spawnId, deps.sessionStore);
+        const group = await reloadGroupUnderLease(
+          sessionId,
+          spawnId,
+          deps.sessionStore,
+        );
         if (!group) {
           return err(
             `resume_agent: spawn '${spawnId}' changed while acquiring its recovery checkpoint; ` +
@@ -213,7 +227,7 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
           subUsage: outcome.usage,
         };
       } finally {
-        releaseResume(sessionId, spawnId, deps.sessionStore);
+        await releaseResume(sessionId, spawnId, deps.sessionStore);
       }
     },
   };

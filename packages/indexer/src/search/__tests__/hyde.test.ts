@@ -103,6 +103,37 @@ describe('HyDEService pipeline binding', () => {
     expect(chat).toHaveBeenCalledTimes(2);
   });
 
+  it('keys cached documents by project language context', async () => {
+    const { resolver } = resolverWith([binding()]);
+    const chat = vi.fn<ChatFn>(async (_binding, messages) => ({
+      content: String(messages[0]?.content).includes('primary language: php')
+        ? 'function retryPayment(): void {}'
+        : 'def retry_payment():\n    return True',
+      latencyMs: 1,
+    }));
+    const service = new HyDEService(resolver, { chat });
+
+    await expect(service.generate('retry payment', { language: 'php' }))
+      .resolves.toContain('retryPayment');
+    await expect(service.generate('retry payment', { language: 'python' }))
+      .resolves.toContain('retry_payment');
+    expect(chat).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects Python drift for a PHP project and keeps the raw query', async () => {
+    const { resolver } = resolverWith([binding()]);
+    const chat = vi.fn<ChatFn>(async () => ({
+      content: 'def update_payment(self, account):\n    return account',
+      latencyMs: 1,
+    }));
+    const service = new HyDEService(resolver, { chat });
+
+    await expect(service.generate(
+      'como a conta de pagamento é atualizada?',
+      { language: 'php', concepts: ['associado', 'débito automático'] },
+    )).resolves.toBe('como a conta de pagamento é atualizada?');
+  });
+
   it('fails open to the original query when the configured pipeline call fails', async () => {
     const { resolver } = resolverWith([binding()]);
     const chat = vi.fn<ChatFn>(async () => ({

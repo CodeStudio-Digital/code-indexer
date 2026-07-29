@@ -24,7 +24,7 @@ interface ProjectRow {
 export interface ManageGlobalProjectsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  sessionId: number;
+  sessionId: string;
   linkedProjects: LinkedProject[];
   /** True while a run is in flight — mutations are rejected server-side (409),
    *  so the buttons are disabled and a hint is shown. */

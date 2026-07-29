@@ -31,7 +31,7 @@ export function readNextCardIdleMs(env: NodeJS.ProcessEnv = process.env): number
 /** Minimal card shape (structural — KanbanCardFull satisfies it). */
 export interface NextCardCard {
   column: string;
-  blocked_by: ReadonlyArray<number>;
+  blocked_by: ReadonlyArray<string>;
   agents: ReadonlyArray<{ unassigned_at: string | null }>;
 }
 

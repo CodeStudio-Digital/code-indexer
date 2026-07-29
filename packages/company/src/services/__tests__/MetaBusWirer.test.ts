@@ -4,6 +4,9 @@ import type { RunCoderHandle } from '@mcp/code-agent/index.js';
 import type { IMetaBusPublisher } from '../ports.js';
 import { MetaBusWirer } from '../MetaBusWirer.js';
 
+const BACKEND_RUN_ID = '00000000-0000-4000-8000-000000000017';
+const MASTER_RUN_ID = '00000000-0000-4000-8000-000000000003';
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -26,7 +29,7 @@ function setup() {
     transcriptFlushed: transcript.promise,
   } as unknown as RunCoderHandle;
 
-  new MetaBusWirer(publisher).wire(handle, 'backend', 17);
+  new MetaBusWirer(publisher).wire(handle, 'backend', BACKEND_RUN_ID);
   return { runner, transcript, published };
 }
 
@@ -46,14 +49,14 @@ describe('MetaBusWirer', () => {
     const wirer = new MetaBusWirer(publisher);
 
     expect(() => {
-      wirer.wire({ runner } as unknown as RunCoderHandle, 'master', 3);
+      wirer.wire({ runner } as unknown as RunCoderHandle, 'master', MASTER_RUN_ID);
     }).not.toThrow();
     runner.emit('text_delta', 'before handle');
 
     wirer.wire({
       runner,
       transcriptFlushed: transcript.promise,
-    } as unknown as RunCoderHandle, 'master', 3);
+    } as unknown as RunCoderHandle, 'master', MASTER_RUN_ID);
     runner.emit('text_delta', 'after handle');
     transcript.resolve({
       reason: 'completed',
@@ -81,16 +84,21 @@ describe('MetaBusWirer', () => {
     runner.emit('goal_mutations_persisted', { toolUseIds: ['goal-1'] });
 
     expect(published.map(({ data }) => data)).toEqual([
-      { agent: 'backend', agentRunId: 17, event: 'text_delta', data: { text: 'hello' } },
       {
         agent: 'backend',
-        agentRunId: 17,
+        agentRunId: BACKEND_RUN_ID,
+        event: 'text_delta',
+        data: { text: 'hello' },
+      },
+      {
+        agent: 'backend',
+        agentRunId: BACKEND_RUN_ID,
         event: 'tool_call_start',
         data: { id: 'goal-1', name: 'create_goal', input: { objective: 'ship' } },
       },
       {
         agent: 'backend',
-        agentRunId: 17,
+        agentRunId: BACKEND_RUN_ID,
         event: 'tool_call_result',
         data: {
           id: 'goal-1',
@@ -103,7 +111,7 @@ describe('MetaBusWirer', () => {
       },
       {
         agent: 'backend',
-        agentRunId: 17,
+        agentRunId: BACKEND_RUN_ID,
         event: 'goal_mutations_persisted',
         data: { toolUseIds: ['goal-1'] },
       },
@@ -127,7 +135,7 @@ describe('MetaBusWirer', () => {
         event: 'agent_event',
         data: {
           agent: 'backend',
-          agentRunId: 17,
+          agentRunId: BACKEND_RUN_ID,
           event: 'done',
           data: { reason: 'completed', error: undefined },
         },
@@ -146,7 +154,7 @@ describe('MetaBusWirer', () => {
         event: 'agent_event',
         data: {
           agent: 'backend',
-          agentRunId: 17,
+          agentRunId: BACKEND_RUN_ID,
           event: 'done',
           data: { reason: 'error', error: 'goal transaction failed' },
         },

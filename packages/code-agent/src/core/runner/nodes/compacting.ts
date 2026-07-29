@@ -83,7 +83,7 @@ export class CompactingNode implements BehaviorNode {
       ? Math.min(maxTailTokens, Math.max(protectTokens, Math.floor(estimatedHistoryTokens * 0.55)))
       : maxTailTokens;
     const attemptId = ctx.opts.sessionStore && ctx.opts.sessionId != null
-      ? ctx.opts.sessionStore.startCompactionAttempt({
+      ? await ctx.opts.sessionStore.startCompactionAttempt({
           session_id: ctx.opts.sessionId,
           run_id: ctx.runId,
           turn: ctx.turn,
@@ -98,8 +98,17 @@ export class CompactingNode implements BehaviorNode {
           history_chars_before: charsBefore,
         })
       : null;
-    const finishAttempt = (input: Parameters<NonNullable<typeof ctx.opts.sessionStore>['finishCompactionAttempt']>[1]): void => {
-      ctx.opts.sessionStore?.finishCompactionAttempt(attemptId, input);
+    const finishAttempt = async (
+      input: Parameters<
+        NonNullable<typeof ctx.opts.sessionStore>['finishCompactionAttempt']
+      >[2],
+    ): Promise<void> => {
+      if (!ctx.opts.sessionStore || ctx.opts.sessionId == null) return;
+      await ctx.opts.sessionStore.finishCompactionAttempt(
+        ctx.opts.sessionId,
+        attemptId,
+        input,
+      );
     };
 
     let liveState: Parameters<typeof compactWithLLM>[0]['liveState'];
@@ -199,7 +208,7 @@ export class CompactingNode implements BehaviorNode {
             auto_continue: ctx.autoContinues,
             trigger,
           });
-          finishAttempt({
+          await finishAttempt({
             status: 'deterministic_fallback',
             strategy: 'deterministic',
             summarizer_ran: true,
@@ -223,7 +232,7 @@ export class CompactingNode implements BehaviorNode {
         ctx.stopReason = 'compact_failure';
         ctx.transition = 'compact-pre-turn';
         ctx.error = result.error ?? new Error('Compaction failed');
-        finishAttempt({
+        await finishAttempt({
           status: 'noop',
           strategy: 'none',
           summarizer_ran: true,
@@ -236,7 +245,7 @@ export class CompactingNode implements BehaviorNode {
       // Below cap — surface as a retryable provider error so Recovering
       // applies backoff and the loop tries another turn (which may or may
       // not re-cross the token threshold).
-      finishAttempt({
+      await finishAttempt({
         status: 'noop',
         strategy: 'none',
         summarizer_ran: true,
@@ -288,7 +297,7 @@ export class CompactingNode implements BehaviorNode {
           auto_continue: ctx.autoContinues,
           trigger,
         });
-        finishAttempt({
+        await finishAttempt({
           status: 'deterministic_fallback',
           strategy: 'deterministic',
           summarizer_ran: false,
@@ -314,7 +323,7 @@ export class CompactingNode implements BehaviorNode {
         auto_continue: ctx.autoContinues,
         trigger,
       });
-      finishAttempt({
+      await finishAttempt({
         status: 'noop',
         strategy: 'none',
         summarizer_ran: false,
@@ -325,11 +334,11 @@ export class CompactingNode implements BehaviorNode {
 
     // This is the only LLM result for the boundary. Persist the exact object
     // before replacing the head so the host can align it to durable message
-    // ids. A DB failure is non-fatal: the in-memory resume still keeps this run
-    // alive and the unchanged boundary can be retried later.
+    // sequence. A bundle checkpoint failure is non-fatal: the in-memory resume
+    // still keeps this run alive and the unchanged boundary can be retried.
     let checkpointStatus: 'summarized' | 'checkpoint_failed' = 'summarized';
-    let checkpointChapterId: number | null = null;
-    let checkpointBoundaryId: number | null = null;
+    let checkpointChapterId: string | null = null;
+    let checkpointBoundarySeq: number | null = null;
     let checkpointError: string | null = null;
     if (result.summary && ctx.opts.onCompactionCheckpoint) {
       try {
@@ -340,7 +349,7 @@ export class CompactingNode implements BehaviorNode {
           autoContinues: ctx.autoContinues,
         });
         checkpointChapterId = checkpoint.chapterId ?? null;
-        checkpointBoundaryId = checkpoint.boundaryId ?? null;
+        checkpointBoundarySeq = checkpoint.boundaryId ?? null;
         if (checkpoint.status === 'failed' || checkpoint.status === 'noop') {
           checkpointStatus = 'checkpoint_failed';
           checkpointError = checkpoint.reason ?? `checkpoint ${checkpoint.status}`;
@@ -378,7 +387,7 @@ export class CompactingNode implements BehaviorNode {
       auto_continue: ctx.autoContinues,
       trigger,
     });
-    finishAttempt({
+    await finishAttempt({
       status: checkpointStatus,
       strategy: 'summarizer',
       summarizer_ran: true,
@@ -387,7 +396,7 @@ export class CompactingNode implements BehaviorNode {
       history_chars_after: charsAfter,
       pruned_messages: Math.max(0, result.collapsedFrom - result.collapsedTo),
       chapter_id: checkpointChapterId,
-      boundary_id: checkpointBoundaryId,
+      boundary_seq: checkpointBoundarySeq,
       error_message: checkpointError ?? (result.attemptErrors?.join(' | ') || null),
     });
     if (isMilestone) ctx.bridge?.clearMilestoneCompaction?.();

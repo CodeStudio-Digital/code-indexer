@@ -1,39 +1,19 @@
 /**
- * Diagnostic endpoint for the worker pools.
+ * Diagnostic endpoints for the Company and coder worker pools.
  *
- * `GET /api/admin/workers` returns a snapshot of every spawned
- * worker_thread alongside its lifecycle state. Company and coder runs are
- * both workers-only; failure to resolve either worker is a boot error.
- *
- * Response shape:
- * ```json
- * {
- *   "company": {
- *     "enabled": true,
- *     "workers": [
- *       { "sessionId": 42, "workerState": "running", "lastTouchedAt": …, "idleMs": 1234 }
- *     ]
- *   },
- *   "coder": {
- *     "enabled": false,
- *     "workers": []
- *   },
- *   "node": {
- *     "pid": 12345,
- *     "uptimeSec": 600,
- *     "memMB": 128
- *   }
- * }
- * ```
- *
- * The response is intentionally tiny — purely metadata, no per-event
- * detail. The dashboard doesn't currently consume it; it's for
- * `curl http://localhost:7317/api/admin/workers | jq` during smoke
- * testing.
+ * Session-scoped diagnostics are derived from the filesystem bundles. This
+ * route deliberately has no SQLite handle, compatibility query or durable
+ * global index.
  */
 import type { Hono } from 'hono';
-import Database from 'better-sqlite3';
-import { loadConfig } from '@mcp/shared/utils/config.js';
+import type { AgentRun } from '@mcp/agent-runtime-contracts';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import {
+  ControlPlaneFileRepository,
+  type ControlPlaneEntityDataMap,
+  type ControlPlaneEntityKind,
+  type EntityRecord,
+} from '@mcp/session-storage';
 import {
   describeWorkerOrchestratorStatus,
   getWorkerOrchestratorPool,
@@ -50,22 +30,19 @@ import {
 } from '../../../control-plane-shadow.js';
 
 interface WorkerRow {
-  sessionId: number;
+  sessionId: string;
   workerState: string;
   lastTouchedAt: number;
   idleMs: number;
 }
 
 interface WorkersResponse {
-  // Company orchestrator: workers-only architecture, no env gate.
-  // `enabled` reflects whether the worker file resolved.
   company: {
     enabled: boolean;
     reason: string | null;
     workerFile: string | null;
     workers: WorkerRow[];
   };
-  // Coder runner pool: workers-only, same fail-closed posture as Company.
   coder: {
     enabled: boolean;
     reason: string | null;
@@ -90,50 +67,14 @@ interface JournalStorageByRun {
   payloadBytes: number;
 }
 
-interface JournalStorageReport {
+export interface JournalStorageReport {
   available: boolean;
   events: number;
   totalBytes: number;
   runs: JournalStorageByRun[];
 }
 
-let cachedDbPath: string | null = null;
-
-/**
- * On-demand journal storage read (Fase 1 metrics: storage bytes/run).
- * Uses a short-lived READONLY connection — the same precedent as
- * app-studio/data.ts — so it never adds a writer to the central WAL.
- * Degrades to `available: false` on :memory: DBs, missing files, or
- * databases created before migration 251.
- */
-function readJournalStorageByRun(): JournalStorageReport {
-  const empty: JournalStorageReport = { available: false, events: 0, totalBytes: 0, runs: [] };
-  try {
-    cachedDbPath ??= loadConfig().dbPath;
-    if (cachedDbPath.includes(':memory:')) return empty;
-    const db = new Database(cachedDbPath, { readonly: true, fileMustExist: true });
-    try {
-      const totals = db.prepare(`
-        SELECT COUNT(*) AS events, COALESCE(SUM(LENGTH(payload_json)), 0) AS totalBytes
-        FROM runtime_events
-      `).get() as { events: number; totalBytes: number };
-      const runs = db.prepare(`
-        SELECT agent_run_id AS agentRunId, COUNT(*) AS events,
-          COALESCE(SUM(LENGTH(payload_json)), 0) AS payloadBytes
-        FROM runtime_events
-        GROUP BY agent_run_id
-        ORDER BY payloadBytes DESC
-      `).all() as JournalStorageByRun[];
-      return { available: true, events: totals.events, totalBytes: totals.totalBytes, runs };
-    } finally {
-      db.close();
-    }
-  } catch {
-    return empty;
-  }
-}
-
-interface AgentRunShadowReport {
+export interface AgentRunShadowReport {
   available: boolean;
   childRunsCreated: number;
   childRunsTerminalized: number;
@@ -159,7 +100,7 @@ interface EvaluationOverhead {
   samples: number;
 }
 
-interface PolicyDivergenceReport {
+export interface PolicyDivergenceReport {
   available: boolean;
   total: number;
   agreements: number;
@@ -169,144 +110,325 @@ interface PolicyDivergenceReport {
   divergences: PolicyDivergenceRow[];
 }
 
-const EMPTY_OVERHEAD: EvaluationOverhead = { p50: 0, p95: 0, p99: 0, samples: 0 };
+interface PersistedPolicyComparison {
+  recordType: 'comparison';
+  comparisonId: string;
+  capabilityId: string;
+  legacyEffect: string;
+  shadowEffect: string;
+  agreement: boolean;
+  divergenceKind?: string | null;
+  critical?: boolean | number;
+  detail?: string | null;
+  comparedAt: string;
+  evaluationMs?: number | null;
+}
 
-/** Nearest-rank percentiles over the durable evaluation_ms samples. */
+const EMPTY_OVERHEAD: EvaluationOverhead = {
+  p50: 0,
+  p95: 0,
+  p99: 0,
+  samples: 0,
+};
+const TERMINAL_RUN_STATUSES = new Set([
+  'completed',
+  'failed',
+  'aborted',
+  'interrupted',
+]);
+
 function computeOverhead(samples: number[]): EvaluationOverhead {
   if (samples.length === 0) return EMPTY_OVERHEAD;
   const sorted = [...samples].sort((a, b) => a - b);
-  const pick = (p: number): number =>
-    sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1))];
-  return { p50: pick(50), p95: pick(95), p99: pick(99), samples: sorted.length };
+  const pick = (percentile: number): number =>
+    sorted[
+      Math.min(
+        sorted.length - 1,
+        Math.max(0, Math.ceil((percentile / 100) * sorted.length) - 1),
+      )
+    ];
+  return {
+    p50: pick(50),
+    p95: pick(95),
+    p99: pick(99),
+    samples: sorted.length,
+  };
 }
 
-/**
- * Reads evaluation_ms samples for the overhead percentiles. Isolated in its
- * own try/catch: a database created before migration 256 has no
- * `evaluation_ms` column, and that must NOT mark the whole report
- * unavailable — it degrades to zeroed percentiles instead.
- */
-function readEvaluationOverhead(db: InstanceType<typeof Database>): EvaluationOverhead {
-  try {
-    const rows = db.prepare(`
-      SELECT evaluation_ms AS ms FROM policy_decision_comparisons
-      WHERE evaluation_ms IS NOT NULL
-      ORDER BY compared_at DESC
-      LIMIT 2000
-    `).all() as Array<{ ms: number }>;
-    return computeOverhead(rows.map((r) => r.ms));
-  } catch {
-    return EMPTY_OVERHEAD;
+async function listAll<K extends ControlPlaneEntityKind>(
+  repository: ControlPlaneFileRepository,
+  kind: K,
+): Promise<Array<EntityRecord<ControlPlaneEntityDataMap[K]>>> {
+  const records: Array<EntityRecord<ControlPlaneEntityDataMap[K]>> = [];
+  let cursor: string | undefined;
+  do {
+    const page = await repository.list(kind, {
+      cursor,
+      limit: 1_000,
+      order: 'asc',
+    });
+    records.push(...page.items);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
+  return records;
+}
+
+async function visitControlPlaneBundles(
+  sessionStore: FsSessionStore,
+  visitor: (
+    repository: ControlPlaneFileRepository,
+    sessionId: string,
+  ) => Promise<void>,
+): Promise<void> {
+  await sessionStore.ensureCatalog();
+  // Keep the diagnostic scan bounded to one bundle at a time. It is an
+  // infrequent admin read and must not create an I/O burst across projects.
+  for (const entry of sessionStore.catalog.list()) {
+    await visitor(
+      new ControlPlaneFileRepository({
+        sessionRoot: entry.location.bundle_path,
+      }),
+      String(entry.session.id),
+    );
   }
 }
 
-/** Durable Fase-3 child-run counters read from the central SQLite DB. */
-function readAgentRunShadowMetrics(): AgentRunShadowReport {
-  const empty: AgentRunShadowReport = {
-    available: false,
+function eventPayload(
+  record: EntityRecord<ControlPlaneEntityDataMap['event']>,
+): Record<string, unknown> {
+  const payload = record.data.payload;
+  return payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : {};
+}
+
+function eventRunId(
+  record: EntityRecord<ControlPlaneEntityDataMap['event']>,
+): string | null {
+  const relation = record.relations.run;
+  if (typeof relation === 'string') return relation;
+  const envelope = record.data.envelope;
+  if (envelope && typeof envelope === 'object' && !Array.isArray(envelope)) {
+    const id = (envelope as Record<string, unknown>).agentRunId;
+    if (typeof id === 'string') return id;
+  }
+  return null;
+}
+
+export async function readJournalStorageByRun(
+  sessionStore: FsSessionStore,
+): Promise<JournalStorageReport> {
+  const grouped = new Map<string | null, JournalStorageByRun>();
+  let events = 0;
+  let totalBytes = 0;
+  try {
+    await visitControlPlaneBundles(sessionStore, async (repository) => {
+      for (const record of await listAll(repository, 'event')) {
+        const payloadBytes = Buffer.byteLength(
+          JSON.stringify(record.data.payload ?? null),
+          'utf8',
+        );
+        const agentRunId = eventRunId(record);
+        const current = grouped.get(agentRunId) ?? {
+          agentRunId,
+          events: 0,
+          payloadBytes: 0,
+        };
+        current.events += 1;
+        current.payloadBytes += payloadBytes;
+        grouped.set(agentRunId, current);
+        events += 1;
+        totalBytes += payloadBytes;
+      }
+    });
+    return {
+      available: true,
+      events,
+      totalBytes,
+      runs: [...grouped.values()].sort(
+        (left, right) =>
+          right.payloadBytes - left.payloadBytes ||
+          String(left.agentRunId).localeCompare(String(right.agentRunId)),
+      ),
+    };
+  } catch {
+    return { available: false, events: 0, totalBytes: 0, runs: [] };
+  }
+}
+
+function persistedRun(
+  record: EntityRecord<ControlPlaneEntityDataMap['run']>,
+): AgentRun | null {
+  const run = record.data.run;
+  return run && typeof run === 'object' && !Array.isArray(run)
+    ? run as unknown as AgentRun
+    : null;
+}
+
+export async function readAgentRunShadowMetrics(
+  sessionStore: FsSessionStore,
+): Promise<AgentRunShadowReport> {
+  const report: AgentRunShadowReport = {
+    available: true,
     childRunsCreated: 0,
     childRunsTerminalized: 0,
     activeChildRuns: 0,
     writeErrors: 0,
   };
   try {
-    cachedDbPath ??= loadConfig().dbPath;
-    if (cachedDbPath.includes(':memory:')) return empty;
-    const db = new Database(cachedDbPath, { readonly: true, fileMustExist: true });
-    try {
-      const runs = db.prepare(`
-        SELECT
-          COUNT(*) AS childRunsCreated,
-          COALESCE(SUM(CASE WHEN status IN ('completed', 'failed', 'aborted', 'interrupted') THEN 1 ELSE 0 END), 0)
-            AS childRunsTerminalized,
-          COALESCE(SUM(CASE WHEN status NOT IN ('completed', 'failed', 'aborted', 'interrupted') THEN 1 ELSE 0 END), 0)
-            AS activeChildRuns
-        FROM agent_runs
-        WHERE role = 'subagent' AND parent_agent_run_id IS NOT NULL
-      `).get() as Omit<AgentRunShadowReport, 'available' | 'writeErrors'>;
-      const errors = db.prepare(`
-        SELECT COUNT(*) AS count FROM control_plane_divergences
-        WHERE kind = 'agent_run_shadow_write_error'
-      `).get() as { count: number };
-      return { available: true, ...runs, writeErrors: errors.count };
-    } finally {
-      db.close();
-    }
+    await visitControlPlaneBundles(sessionStore, async (repository) => {
+      const [runs, events] = await Promise.all([
+        listAll(repository, 'run'),
+        listAll(repository, 'event'),
+      ]);
+      for (const record of runs) {
+        const run = persistedRun(record);
+        if (!run?.parentAgentRunId) continue;
+        report.childRunsCreated += 1;
+        if (TERMINAL_RUN_STATUSES.has(run.status)) {
+          report.childRunsTerminalized += 1;
+        } else {
+          report.activeChildRuns += 1;
+        }
+      }
+      for (const record of events) {
+        const payload = eventPayload(record);
+        if (
+          record.data.eventType === 'control-plane.divergence' &&
+          payload.kind === 'agent_run_shadow_write_error'
+        ) {
+          report.writeErrors += 1;
+        }
+      }
+    });
+    return report;
   } catch {
-    return empty;
+    return {
+      available: false,
+      childRunsCreated: 0,
+      childRunsTerminalized: 0,
+      activeChildRuns: 0,
+      writeErrors: 0,
+    };
   }
 }
 
-/**
- * On-demand Policy Engine shadow comparison read (Fase 2). Same short-lived
- * READONLY connection as the storage endpoint. Degrades to `available: false`
- * on :memory: DBs, missing files, or databases created before migration 255.
- */
-function readPolicyDivergences(limit = 100): PolicyDivergenceReport {
-  const empty: PolicyDivergenceReport = {
-    available: false, total: 0, agreements: 0, agreementRate: 0, criticalDivergences: 0,
-    evaluationOverhead: EMPTY_OVERHEAD, divergences: [],
-  };
-  const safeLimit = Math.max(1, Math.min(1000, Math.floor(limit)));
+function policyComparison(
+  record: EntityRecord<ControlPlaneEntityDataMap['policyDecision']>,
+): PersistedPolicyComparison | null {
+  const data = record.data as Record<string, unknown>;
+  if (
+    data.recordType !== 'comparison' ||
+    typeof data.comparisonId !== 'string' ||
+    typeof data.capabilityId !== 'string' ||
+    typeof data.legacyEffect !== 'string' ||
+    typeof data.shadowEffect !== 'string' ||
+    typeof data.agreement !== 'boolean' ||
+    typeof data.comparedAt !== 'string'
+  ) {
+    return null;
+  }
+  return data as unknown as PersistedPolicyComparison;
+}
+
+export async function readPolicyDivergences(
+  sessionStore: FsSessionStore,
+  limit = 100,
+): Promise<PolicyDivergenceReport> {
+  const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
+  const comparisons: PersistedPolicyComparison[] = [];
   try {
-    cachedDbPath ??= loadConfig().dbPath;
-    if (cachedDbPath.includes(':memory:')) return empty;
-    const db = new Database(cachedDbPath, { readonly: true, fileMustExist: true });
-    try {
-      const totals = db.prepare(`
-        SELECT COUNT(*) AS total,
-          COALESCE(SUM(agreement), 0) AS agreements,
-          COALESCE(SUM(critical), 0) AS critical
-        FROM policy_decision_comparisons
-      `).get() as { total: number; agreements: number; critical: number };
-      const divergences = db.prepare(`
-        SELECT comparison_id AS comparisonId, capability_id AS capabilityId,
-          legacy_effect AS legacyEffect, shadow_effect AS shadowEffect,
-          divergence_kind AS divergenceKind, critical, detail, compared_at AS comparedAt
-        FROM policy_decision_comparisons
-        WHERE agreement = 0
-        ORDER BY compared_at DESC
-        LIMIT ?
-      `).all(safeLimit) as PolicyDivergenceRow[];
-      return {
-        available: true,
-        total: totals.total,
-        agreements: totals.agreements,
-        agreementRate: totals.total > 0 ? totals.agreements / totals.total : 1,
-        criticalDivergences: totals.critical,
-        evaluationOverhead: readEvaluationOverhead(db),
-        divergences,
-      };
-    } finally {
-      db.close();
-    }
+    await visitControlPlaneBundles(sessionStore, async (repository) => {
+      for (const record of await listAll(repository, 'policyDecision')) {
+        const comparison = policyComparison(record);
+        if (comparison) comparisons.push(comparison);
+      }
+    });
+    comparisons.sort(
+      (left, right) =>
+        Date.parse(right.comparedAt) - Date.parse(left.comparedAt) ||
+        right.comparisonId.localeCompare(left.comparisonId),
+    );
+    const agreements = comparisons.filter(
+      (comparison) => comparison.agreement,
+    ).length;
+    const criticalDivergences = comparisons.filter(
+      (comparison) => !comparison.agreement && Boolean(comparison.critical),
+    ).length;
+    return {
+      available: true,
+      total: comparisons.length,
+      agreements,
+      agreementRate:
+        comparisons.length > 0 ? agreements / comparisons.length : 1,
+      criticalDivergences,
+      evaluationOverhead: computeOverhead(
+        comparisons
+          .map((comparison) => comparison.evaluationMs)
+          .filter(
+            (sample): sample is number =>
+              typeof sample === 'number' && Number.isFinite(sample),
+          ),
+      ),
+      divergences: comparisons
+        .filter((comparison) => !comparison.agreement)
+        .slice(0, safeLimit)
+        .map((comparison) => ({
+          comparisonId: comparison.comparisonId,
+          capabilityId: comparison.capabilityId,
+          legacyEffect: comparison.legacyEffect,
+          shadowEffect: comparison.shadowEffect,
+          divergenceKind: comparison.divergenceKind ?? null,
+          critical: comparison.critical ? 1 : 0,
+          detail: comparison.detail ?? null,
+          comparedAt: comparison.comparedAt,
+        })),
+    };
   } catch {
-    return empty;
+    return {
+      available: false,
+      total: 0,
+      agreements: 0,
+      agreementRate: 0,
+      criticalDivergences: 0,
+      evaluationOverhead: EMPTY_OVERHEAD,
+      divergences: [],
+    };
   }
 }
 
-export function mountWorkersDiagnosticRoute(app: Hono): void {
-  app.get('/api/admin/workers/control-plane/storage', (c) => {
-    return c.json(readJournalStorageByRun());
+export function mountWorkersDiagnosticRoute(
+  app: Hono,
+  deps: { sessionStore: FsSessionStore },
+): void {
+  app.get('/api/admin/workers/control-plane/storage', async (c) => {
+    return c.json(await readJournalStorageByRun(deps.sessionStore));
   });
 
-  app.get('/api/admin/workers/control-plane/policy-divergences', (c) => {
+  app.get('/api/admin/workers/control-plane/policy-divergences', async (c) => {
     const limit = Number(c.req.query('limit') ?? '100');
-    return c.json(readPolicyDivergences(Number.isFinite(limit) ? limit : 100));
+    return c.json(
+      await readPolicyDivergences(
+        deps.sessionStore,
+        Number.isFinite(limit) ? limit : 100,
+      ),
+    );
   });
 
-  app.get('/api/admin/workers', (c) => {
+  app.get('/api/admin/workers', async (c) => {
     const company: WorkerRow[] = [];
     const coder: WorkerRow[] = [];
 
-    // Company pool: always available when the worker file resolves.
-    // The server refuses to boot otherwise (see startServer).
     try {
       company.push(...getWorkerOrchestratorPool().snapshot());
-    } catch { /* pool not initialized yet */ }
+    } catch {
+      // Pool not initialized yet.
+    }
     try {
       coder.push(...getCoderWorkerPool().snapshot());
-    } catch { /* pool not initialized yet */ }
+    } catch {
+      // Pool not initialized yet.
+    }
 
     const mem = process.memoryUsage();
     const companyStatus = describeWorkerOrchestratorStatus();
@@ -331,7 +453,7 @@ export function mountWorkersDiagnosticRoute(app: Hono): void {
       },
       agentRunShadow: {
         enabled: process.env.CODER_AGENT_RUN_STORE_SHADOW === '1',
-        metrics: readAgentRunShadowMetrics(),
+        metrics: await readAgentRunShadowMetrics(deps.sessionStore),
       },
       node: {
         pid: process.pid,

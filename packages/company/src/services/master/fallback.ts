@@ -1,9 +1,7 @@
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import type { AllowedModel, CompanyRuntimeKind } from '@mcp/company/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IBoardPoster } from '@mcp/company/services/ports.js';
 import { isTransientError } from '@mcp/company/RetryPolicy.js';
-import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 
 export const MASTER_EXPLICIT_FALLBACK_REASON = 'master_fallback_models';
 
@@ -66,15 +64,15 @@ export interface AppliedMasterFallback {
 }
 
 /** Update both the coder session and company provenance before retrying. */
-export function applyExplicitMasterFallback(
-  agentRunId: number,
+export async function applyExplicitMasterFallback(
+  agentRunId: string,
   fallbackModels: readonly AllowedModel[],
   errorDetail: string,
   deps: MasterFallbackDeps,
-): AppliedMasterFallback | null {
+): Promise<AppliedMasterFallback | null> {
   if (deps.ctx.runtimeKind !== 'app_studio' || !isTransientError(errorDetail)) return null;
 
-  const run = deps.ctx.companyStore.getAgentRun(agentRunId);
+  const run = await deps.ctx.companyFiles.getAgentRun(agentRunId);
   if (!run || run.role !== 'master' || run.company_session_id !== deps.ctx.companySessionId) {
     return null;
   }
@@ -92,22 +90,21 @@ export function applyExplicitMasterFallback(
   if (!to) return null;
 
   const reason = `${MASTER_EXPLICIT_FALLBACK_REASON}: ${errorDetail.slice(0, 300)}`;
-  const sessionStore = new SessionStore(deps.ctx.db.raw());
-  try {
-    sessionStore.updateSessionProvider(run.coder_session_id, to.provider, to.model);
-    // Response ids are provider/model-specific. Preserve the transcript, but
-    // force the next runner to reconstruct its turn graph from messages.
-    sessionStore.setLastResponseState(run.coder_session_id, null, null);
-  } finally {
-    sessionStore.close();
-  }
-
-  deps.ctx.companyStore.updateAgentRunProvider(
-    agentRunId,
-    to.provider,
-    to.model,
-    reason,
-  );
+  const sessionStore = deps.ctx.companyFiles.sessionStore;
+  await Promise.all([
+    sessionStore.updateSessionProvider(
+      run.coder_session_id,
+      to.provider,
+      to.model,
+    ),
+    sessionStore.setLastResponseState(run.coder_session_id, null, null),
+    deps.ctx.companyFiles.updateAgentRunProvider(
+      agentRunId,
+      to.provider,
+      to.model,
+      reason,
+    ),
+  ]);
   deps.board.post(
     'system',
     agentRunId,
@@ -115,20 +112,20 @@ export function applyExplicitMasterFallback(
     `[AUTO-FALLBACK] @master ${from.provider}/${from.model} -> ${to.provider}/${to.model} (explicit App role fallback).`,
   );
 
-  if (deps.ctx.appStudioSessionId != null) {
-    try {
-      getAppStudioStore()?.appendEvent(
-        deps.ctx.appStudioSessionId,
-        'agents.model_fallback',
-        'company_agent_run',
-        String(agentRunId),
-        JSON.stringify({ role: 'app_orchestrator', from, to, reason }),
-        `app-master-fallback:${agentRunId}:${to.provider}:${to.model}`,
-      );
-    } catch {
-      // Telemetry must never prevent an explicitly configured retry.
-    }
-  }
+  await deps.ctx.companyFiles.entities.create('log', {
+    relations: { agent_run_id: agentRunId },
+    data: {
+      level: 'info',
+      message: 'agents.model_fallback',
+      event: 'agents.model_fallback',
+      entity_kind: 'company_agent_run',
+      entity_id: agentRunId,
+      role: 'app_orchestrator',
+      from,
+      to,
+      reason,
+    },
+  }).catch(() => undefined);
 
   return { from, to, reason };
 }
@@ -140,7 +137,7 @@ export function applyExplicitMasterFallback(
  */
 export async function runWithExplicitMasterFallback<T>(
   run: () => Promise<T>,
-  agentRunId: number,
+  agentRunId: string,
   fallbackModels: readonly AllowedModel[],
   deps: MasterFallbackDeps,
 ): Promise<T> {
@@ -154,7 +151,12 @@ export async function runWithExplicitMasterFallback<T>(
       // effective provider write is not observable on the next read, never
       // loop more times than the explicit chain supplied by the user.
       if (appliedCount >= fallbackModels.length) throw error;
-      const applied = applyExplicitMasterFallback(agentRunId, fallbackModels, detail, deps);
+      const applied = await applyExplicitMasterFallback(
+        agentRunId,
+        fallbackModels,
+        detail,
+        deps,
+      );
       if (!applied) throw error;
       appliedCount += 1;
     }

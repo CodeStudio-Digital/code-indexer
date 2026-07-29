@@ -67,7 +67,7 @@ export function kanbanPlanGraphTool(orchestrator: CompanyOrchestrator): CoderToo
       if (!validation.ok) return err(validation.error);
 
       const byLocalId = new Map(nodes.map((n) => [n.id.trim(), n]));
-      const realIds = new Map<string, number>();
+      const realIds = new Map<string, string>();
       const lines: string[] = [];
       let failures = 0;
 

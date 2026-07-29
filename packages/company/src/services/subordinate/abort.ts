@@ -33,8 +33,8 @@ export interface SubordinateAbortDeps {
   humanInLoop: HumanInTheLoop;
   attention: MasterAttention;
   /** In-memory registry of running subordinates — mutated by abortAll/finalizeAll. */
-  subordinates: Map<number, SubordinateHandle>;
-  runningIds: Set<number>;
+  subordinates: Map<string, SubordinateHandle>;
+  runningIds: Set<string>;
 }
 
 /**
@@ -48,7 +48,7 @@ export interface SubordinateAbortDeps {
  * Does NOT mutate `subordinates` / `runningIds` — the runner's
  * `.done.finally` (wired by `attachCompletionHandler`) does that.
  */
-export function abortSubordinate(agentRunId: number, deps: SubordinateAbortDeps): boolean {
+export function abortSubordinate(agentRunId: string, deps: SubordinateAbortDeps): boolean {
   const sub = deps.subordinates.get(agentRunId);
   if (!sub) return false;
   sub.runner.abort();
@@ -74,7 +74,7 @@ export function abortSubordinate(agentRunId: number, deps: SubordinateAbortDeps)
  *
  * Returns false when the id is unknown (nothing running to pause).
  */
-export function pauseSubordinate(agentRunId: number, deps: SubordinateAbortDeps): boolean {
+export function pauseSubordinate(agentRunId: string, deps: SubordinateAbortDeps): boolean {
   const sub = deps.subordinates.get(agentRunId);
   if (!sub) return false;
   sub.runner.abort();
@@ -125,7 +125,7 @@ export interface FinalizeAllResult {
 export function finalizeAllSubordinates(deps: SubordinateAbortDeps): FinalizeAllResult {
   let finalized = 0;
   let alreadyStopped = 0;
-  const runs = deps.ctx.companyStore.listAgentRuns(deps.ctx.companySessionId);
+  const runs = deps.ctx.companyFiles.listAgentRunsSync();
   const subs = runs.filter((r) => r.role !== 'master');
 
   for (const run of subs) {

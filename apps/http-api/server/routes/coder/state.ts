@@ -1,4 +1,5 @@
-import type { SessionStore } from '@mcp/code-agent/index.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { CoderRunBus } from '../../../coder-bus.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { CoderPipelineRegistry } from './pipelines-state.js';
@@ -13,20 +14,20 @@ import { RecentMessageKeys } from '../recent-message-keys.js';
  * single chat turn. See `pipelines-state.ts`.
  */
 export interface CoderRuntime {
-  activeRuns: Map<number, CoderRunBus>;
+  activeRuns: Map<SessionId, CoderRunBus>;
   findPendingInteraction(
-    sessionId: number,
-  ): {
+    sessionId: SessionId,
+  ): Promise<{
     toolUseId: string;
     name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'task_list' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
     /** Original tool_use input — the decision_gate resume path needs the questions. */
     input?: Record<string, unknown>;
-  } | null;
+  } | null>;
   /** Dangling tool_use lookup by id (any tool name) — POST /tool-approval dead-runner fallback. */
   findDanglingToolUse(
-    sessionId: number,
+    sessionId: SessionId,
     toolUseId: string,
-  ): { toolUseId: string; name: string } | null;
+  ): Promise<{ toolUseId: string; name: string } | null>;
   coderPipelineRegistry: CoderPipelineRegistry;
   /**
    * Idempotency store for streaming POSTs (/messages, /continue). A retry that
@@ -36,21 +37,21 @@ export interface CoderRuntime {
   recentMessageKeys: RecentMessageKeys;
 }
 
-export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
+export function createCoderRuntime(sessionStore: FsSessionStore): CoderRuntime {
   const coderPipelineRegistry = new CoderPipelineRegistry();
   const recentMessageKeys = new RecentMessageKeys();
 
   // Compatibility Map facade for route consumers. Its state is exclusively
   // owned by CoderWorkerPool: production code cannot install a local runner or
   // bus and therefore cannot reintroduce in-process execution accidentally.
-  const workerRuns = new Map<number, CoderRunBus>();
-  const activeRuns: Map<number, CoderRunBus> = new Proxy(workerRuns, {
+  const workerRuns = new Map<SessionId, CoderRunBus>();
+  const activeRuns: Map<SessionId, CoderRunBus> = new Proxy(workerRuns, {
     get(target, prop, receiver) {
       if (prop === 'get') {
-        return (id: number): CoderRunBus | undefined => getCoderWorkerPool().getBus(id) ?? undefined;
+        return (id: SessionId): CoderRunBus | undefined => getCoderWorkerPool().getBus(id) ?? undefined;
       }
       if (prop === 'has') {
-        return (id: number): boolean => getCoderWorkerPool().has(id);
+        return (id: SessionId): boolean => getCoderWorkerPool().has(id);
       }
       if (prop === 'set') {
         return (): never => {
@@ -58,7 +59,7 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
         };
       }
       if (prop === 'delete') {
-        return (id: number): boolean => {
+        return (id: SessionId): boolean => {
           const had = getCoderWorkerPool().has(id);
           void getCoderWorkerPool().evict(id);
           return had;
@@ -77,14 +78,14 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
    * server restart, page refresh or tab close (when `activeRuns` no longer
    * holds the live runner).
    */
-  function findPendingInteraction(
-    sessionId: number,
-  ): {
+  async function findPendingInteraction(
+    sessionId: SessionId,
+  ): Promise<{
     toolUseId: string;
     name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'task_list' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
     input?: Record<string, unknown>;
-  } | null {
-    const data = sessionStore.loadSessionWithMessages(sessionId);
+  } | null> {
+    const data = await sessionStore.loadSessionWithMessages(sessionId);
     if (!data) return null;
     const seenResults = new Set<string>();
     for (const m of data.messages) {
@@ -128,14 +129,14 @@ export function createCoderRuntime(sessionStore: SessionStore): CoderRuntime {
    * the dead-runner fallback of POST /tool-approval. Unlike
    * `findPendingInteraction` it matches ANY tool name: a PermissionGate
    * pause can sit on write_file/run_command/etc. Only finds calls whose
-   * turn was already flushed to the DB (compaction/restart edge); an
+   * turn was already flushed to the bundle journal (compaction/restart edge); an
    * unflushed pause simply 404s and the model re-decides on the next run.
    */
-  function findDanglingToolUse(
-    sessionId: number,
+  async function findDanglingToolUse(
+    sessionId: SessionId,
     toolUseId: string,
-  ): { toolUseId: string; name: string } | null {
-    const data = sessionStore.loadSessionWithMessages(sessionId);
+  ): Promise<{ toolUseId: string; name: string } | null> {
+    const data = await sessionStore.loadSessionWithMessages(sessionId);
     if (!data) return null;
     for (const m of data.messages) {
       if (m.role === 'tool' || m.role === 'user') {

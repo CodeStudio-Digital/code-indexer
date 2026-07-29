@@ -7,7 +7,7 @@ export function mountTreeRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/company/sessions/:sid/projects/:pid/tree', async (c) => {
     const relPath = c.req.query('path') ?? '.';
     const showHidden = c.req.query('showHidden') === 'true';
-    const guard = guardWorkspaceRequest(c, deps, relPath);
+    const guard = await guardWorkspaceRequest(c, deps, relPath);
     if (guard instanceof Response) return guard;
     try {
       const entries = await listDir(guard.resolved.abs, { showHidden });

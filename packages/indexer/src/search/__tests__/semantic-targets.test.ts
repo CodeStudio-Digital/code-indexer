@@ -86,6 +86,15 @@ describe('semantic targets', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8080/v1/rerank', expect.any(Object));
     expect(results.map((result) => result.id)).toEqual(['second', 'first']);
     expect(results.map((result) => result.score)).toEqual([0.9, 0.2]);
+    expect(await reranker.diagnostics?.()).toMatchObject({
+      configured: true,
+      status: 'active',
+      requested_model: 'rerank',
+      invocation_count: 1,
+      last_candidate_count: 2,
+      last_returned_count: 2,
+      last_error: null,
+    });
   });
 
   it('keeps descending RRF order when the configured reranker fails', async () => {
@@ -100,6 +109,11 @@ describe('semantic targets', () => {
     ], 2);
     expect(results.map((result) => result.id)).toEqual(['high', 'low']);
     expect(results.map((result) => result.score)).toEqual([0.9, 0.1]);
+    expect(await reranker.diagnostics?.()).toMatchObject({
+      status: 'failed',
+      invocation_count: 1,
+      last_error: expect.stringContaining('503'),
+    });
   });
 
   it('fails strict ONNX reranker probes instead of silently returning RRF', async () => {

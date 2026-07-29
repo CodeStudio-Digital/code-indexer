@@ -1,17 +1,18 @@
 import type { Context } from 'hono';
-import type { CompanyStore } from '@mcp/store/company-store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 import type {
   CompanyRuntimeKind,
   CompanySessionCapabilities,
 } from '@mcp/company/types.js';
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
-import { resolveRootSessionId } from '../_helpers.js';
+import { resolveCompanySessionContext } from '../_helpers.js';
 
 export type CompanyRouteSurface = 'kanban' | 'pipelines';
 
 export interface CompanyRouteRuntime {
-  requestedSessionId: number;
-  rootSessionId: number;
+  requestedSessionId: CompanySessionId;
+  rootSessionId: CompanySessionId;
   runtimeKind: CompanyRuntimeKind;
   capabilities: CompanySessionCapabilities;
 }
@@ -21,32 +22,32 @@ export interface CompanyRouteRuntime {
  * The App link is deliberately not needed for generic Company surfaces:
  * `app_studio` denies Kanban/pipelines whether the link is healthy or broken.
  */
-export function resolveCompanyRouteRuntime(
-  companyStore: CompanyStore,
-  requestedSessionId: number,
-): CompanyRouteRuntime | null {
-  const rootSessionId = resolveRootSessionId(companyStore, requestedSessionId);
-  const session = companyStore.getCompanySession(rootSessionId);
-  if (!session) return null;
-  // Compatibility with route fakes and pre-migration rows: only the explicit
-  // persisted App value narrows capability; everything else remains Company.
-  const runtimeKind: CompanyRuntimeKind = session.runtime_kind === 'app_studio'
+export async function resolveCompanyRouteRuntime(
+  sessionStore: FsSessionStore,
+  requestedSessionId: CompanySessionId,
+): Promise<CompanyRouteRuntime | null> {
+  const context = await resolveCompanySessionContext(
+    sessionStore,
+    requestedSessionId,
+  );
+  if (!context) return null;
+  const runtimeKind: CompanyRuntimeKind = context.root.runtime_kind === 'app_studio'
     ? 'app_studio'
     : 'company';
   return {
     requestedSessionId,
-    rootSessionId,
+    rootSessionId: context.rootId,
     runtimeKind,
     capabilities: resolveCompanySessionCapabilities(runtimeKind, null),
   };
 }
 
-export function routeAllowsCompanySurface(
-  companyStore: CompanyStore,
-  sessionId: number,
+export async function routeAllowsCompanySurface(
+  sessionStore: FsSessionStore,
+  sessionId: CompanySessionId,
   surface: CompanyRouteSurface,
-): boolean {
-  const runtime = resolveCompanyRouteRuntime(companyStore, sessionId);
+): Promise<boolean> {
+  const runtime = await resolveCompanyRouteRuntime(sessionStore, sessionId);
   if (!runtime) return false;
   return surface === 'kanban'
     ? runtime.capabilities.allowCompanyKanban
@@ -56,11 +57,11 @@ export function routeAllowsCompanySurface(
 /** App-owned teams keep lifecycle reads/streaming in Company, but every
  * destructive/config mutation must enter through the App facade so workflow
  * attempts and compatibility state are updated atomically. */
-export function isAppOwnedCompanySession(
-  companyStore: CompanyStore,
-  sessionId: number,
-): boolean {
-  return resolveCompanyRouteRuntime(companyStore, sessionId)?.runtimeKind === 'app_studio';
+export async function isAppOwnedCompanySession(
+  sessionStore: FsSessionStore,
+  sessionId: CompanySessionId,
+): Promise<boolean> {
+  return (await resolveCompanyRouteRuntime(sessionStore, sessionId))?.runtimeKind === 'app_studio';
 }
 
 export function appOwnedControlPlaneConflict(c: Context, operation: string) {

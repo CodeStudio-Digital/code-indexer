@@ -26,7 +26,7 @@
 import type { Hono } from 'hono';
 import { createHash } from 'node:crypto';
 import type { ServerDeps } from '../../../deps.js';
-import { parseIdParam } from '../../_helpers.js';
+import { parseSessionIdParam } from '../../_helpers.js';
 import { getSandboxManager, getResolvedRuntime } from '@mcp/services/sandbox/index.js';
 import {
   validatePlaywrightConfig,
@@ -59,7 +59,9 @@ interface EndpointState {
 }
 
 interface DiagnosticsResponse {
-  last_run: ReturnType<ServerDeps['qaTestRunStore']['listRuns']>[number] | null;
+  last_run: Awaited<
+    ReturnType<ServerDeps['qaTestRunStore']['listRuns']>
+  >[number] | null;
   watchdog_kills_24h: number;
   reporter_drift: ReporterDrift;
   endpoint_state: EndpointState;
@@ -70,10 +72,13 @@ const GLOBAL_SETUP_HASH = sha256(QA_GLOBAL_SETUP_TEMPLATE);
 
 export function mountQaDiagnosticsRoute(app: Hono, deps: ServerDeps): void {
   app.get('/api/company/sessions/:id/qa/diagnostics', async (c) => {
-    const sessionId = parseIdParam(c);
-    const runs = deps.qaTestRunStore.listRuns({ company_session_id: sessionId, limit: 1 });
+    const sessionId = parseSessionIdParam(c);
+    const runs = await deps.qaTestRunStore.listRuns({
+      company_session_id: sessionId,
+      limit: 1,
+    });
     const last_run = runs[0] ?? null;
-    const watchdog_kills_24h = deps.qaTestRunStore.countWatchdogKills({
+    const watchdog_kills_24h = await deps.qaTestRunStore.countWatchdogKills({
       company_session_id: sessionId,
       windowMs: DEFAULT_WINDOW_MS,
     });
@@ -91,7 +96,7 @@ export function mountQaDiagnosticsRoute(app: Hono, deps: ServerDeps): void {
   });
 }
 
-async function readReporterDrift(sessionId: number): Promise<ReporterDrift> {
+async function readReporterDrift(sessionId: string): Promise<ReporterDrift> {
   const out: ReporterDrift = {
     reporter_template_match: true,
     global_setup_match: true,
@@ -140,7 +145,7 @@ async function readReporterDrift(sessionId: number): Promise<ReporterDrift> {
   return out;
 }
 
-function computeEndpointState(sessionId: number): EndpointState {
+function computeEndpointState(sessionId: string): EndpointState {
   const { base, fallback } = resolveEndpointBase(process.env, getResolvedRuntime());
   return {
     base,

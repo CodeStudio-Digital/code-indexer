@@ -29,7 +29,7 @@ export function stagePrompt(t: TFunction, stage: DsStageId): string {
  */
 export async function startStage(
   t: TFunction,
-  opts: { dsSessionId: number; projectId: number; stage: DsStageId },
+  opts: { dsSessionId: string; projectId: number; stage: DsStageId },
 ): Promise<void> {
   try {
     await patchPipelineStage(opts.dsSessionId, opts.stage, 'start');

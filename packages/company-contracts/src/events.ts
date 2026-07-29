@@ -20,7 +20,7 @@ import type { AgentInboxMessage } from './models/inbox.js';
 
 export interface AgentStreamPayload {
   agent: string;
-  agentRunId: number;
+  agentRunId: string;
   event: AgentInnerEvent;
   data: unknown;
 }
@@ -43,9 +43,10 @@ export interface BoardEntryEvent {
    * publisher historically forwarded the raw row. Slices coerce when they
    * persist into client state.
    */
-  id: number;
+  id: string;
+  seq: number;
   author_role: string;
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   kind: BoardEntry['kind'] | string;
   content: string;
   mentions: string[];
@@ -55,7 +56,7 @@ export interface BoardEntryEvent {
 // ─── Agent status ──────────────────────────────────────────────
 
 export interface AgentStatusPayload {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   status: AgentRunStatus;
   message: string;
@@ -64,7 +65,7 @@ export interface AgentStatusPayload {
    * the dashboard can open the agent's transcript modal immediately, before
    * the REST snapshot is refreshed. Optional — other emitters omit it.
    */
-  coderSessionId?: number;
+  coderSessionId?: string;
 }
 
 // ─── Master prompts (ask_user / submit_plan) ──────────────────
@@ -76,23 +77,37 @@ export interface MasterPromptPayload {
 // ─── Subordinate prompts ───────────────────────────────────────
 
 export interface SubordinatePromptPayload {
-  agentRunId: number;
+  agentRunId: string;
 }
 
 // ─── Kanban ────────────────────────────────────────────────────
 
 export type KanbanCardCreatedData = { card: KanbanCardFull };
-export type KanbanCardUpdatedData = { cardId: number; patch: Partial<KanbanCardFull> };
-export type KanbanCardMovedData = { cardId: number; column: KanbanColumn; position: number };
-export type KanbanCardDeletedData = { cardId: number };
-export type KanbanCardCommentAddedData = { cardId: number; comment: KanbanCardFull['comments'][number] };
-export type KanbanCardChecklistAddedData = { cardId: number; item: KanbanCardFull['checklist'][number] };
-export type KanbanCardChecklistUpdatedData = { cardId: number; item: KanbanCardFull['checklist'][number] };
-export type KanbanCardChecklistRemovedData = { cardId: number; itemId: number };
-export type KanbanCardDependencyAddedData = { cardId: number; dependsOnId: number };
-export type KanbanCardDependencyRemovedData = { cardId: number; dependsOnId: number };
-export type KanbanCardAssignedData = { cardId: number; agentRunId: number; role: string };
-export type KanbanCardUnassignedData = { cardId: number; agentRunId: number };
+export type KanbanCardUpdatedData = { cardId: string; patch: Partial<KanbanCardFull> };
+export type KanbanCardMovedData = { cardId: string; column: KanbanColumn; position: number };
+export type KanbanCardDeletedData = { cardId: string };
+export type KanbanCardCommentAddedData = { cardId: string; comment: KanbanCardFull['comments'][number] };
+export type KanbanCardChecklistAddedData = { cardId: string; item: KanbanCardFull['checklist'][number] };
+export type KanbanCardChecklistUpdatedData = { cardId: string; item: KanbanCardFull['checklist'][number] };
+export type KanbanCardChecklistRemovedData = { cardId: string; itemId: string };
+export type KanbanCardDependencyAddedData = {
+  cardId: string;
+  dependency: KanbanCardFull['dependencies'][number];
+};
+export type KanbanCardDependencyRemovedData = {
+  cardId: string;
+  dependencyId: string;
+  dependsOnId: string;
+};
+export type KanbanCardAssignedData = {
+  cardId: string;
+  assignment: KanbanCardFull['agents'][number];
+};
+export type KanbanCardUnassignedData = {
+  cardId: string;
+  assignmentId: string;
+  agentRunId: string;
+};
 
 // ─── Session lifecycle ─────────────────────────────────────────
 
@@ -137,14 +152,14 @@ export interface SessionStalledPayload {
 // ─── Sandbox ───────────────────────────────────────────────────
 
 export interface SandboxFileChangedPayload {
-  sessionId: number;
+  sessionId: string;
   serviceId?: string;
   path: string;
   changeType: 'created' | 'modified' | 'deleted';
 }
 
 export interface SandboxStatusPayload {
-  sessionId: number;
+  sessionId: string;
   serviceId?: string;
   status: 'provisioning' | 'ready' | 'paused' | 'error' | 'destroyed';
   previewUrl?: string;
@@ -158,7 +173,7 @@ export interface DriveFileEventPayload {
   scopeKey: string;
   path: string;
   ownerRole?: string;
-  ownerAgentRunId?: number;
+  ownerAgentRunId?: string;
   size?: number;
 }
 
@@ -171,7 +186,7 @@ export interface InboxEventPayload {
 // ─── Git (new in Phase 7 — invalidates GitTab slice) ──────────
 
 export interface GitStatusChangedPayload {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   changeType: 'commit' | 'stage' | 'reset' | 'discard' | 'init';
 }
@@ -179,17 +194,17 @@ export interface GitStatusChangedPayload {
 // ─── Pipeline executor events ──────────────────────────────────
 
 export interface PipelineExecutionPayload {
-  executionId: number;
-  pipelineId: number;
+  executionId: string;
+  pipelineId: import('./models/pipeline.js').PipelineId;
   status: 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
   currentNodeId?: string | null;
 }
 
 export interface PipelineNodePayload {
-  executionId: number;
+  executionId: string;
   nodeId: string;
   nodeStatus: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'aborted';
-  agentRunId?: number | null;
+  agentRunId?: string | null;
   outcomeBranch?: string | null;
 }
 

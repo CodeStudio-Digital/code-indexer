@@ -5,7 +5,7 @@
  * `apps/http-api/server/routes/admin/pipeline-bindings.ts`.
  */
 
-export type BindingScopeType = 'global' | 'template' | 'session';
+export type BindingScopeType = 'global' | 'template';
 
 /** Mirror of `@mcp/services` CapabilityKind (dashboard is outside the Node tsc graph). */
 export type CapabilityKind =
@@ -79,10 +79,10 @@ export interface ResolvePreview {
     model_id: string;
     model_mode: string;
     config: Record<string, unknown>;
-    resolved_from: 'session' | 'template' | 'global' | 'fallback';
+    resolved_from: 'template' | 'global' | 'fallback';
     binding_id: number | null;
   };
-  ctx: { sessionId?: number; companySessionId?: number; templateId?: number };
+  ctx: { templateId?: number };
 }
 
 export interface UpsertBindingInput {
@@ -176,15 +176,11 @@ export async function testBinding(id: number): Promise<BindingTestResult> {
 export async function previewResolution(opts: {
   pipelineName: string;
   bindingRole: string;
-  sessionId?: number;
-  companySessionId?: number;
   templateId?: number;
 }): Promise<ResolvePreview> {
   const params = new URLSearchParams();
   params.set('pipeline_name', opts.pipelineName);
   params.set('binding_role', opts.bindingRole);
-  if (opts.sessionId != null)         params.set('session_id', String(opts.sessionId));
-  if (opts.companySessionId != null)  params.set('company_session_id', String(opts.companySessionId));
   if (opts.templateId != null)        params.set('template_id', String(opts.templateId));
   const r = await fetch(`/api/admin/pipeline-bindings/resolve?${params.toString()}`);
   return (await r.json()) as ResolvePreview;
@@ -200,7 +196,7 @@ export interface BulkClearOptions {
    * confirms via the dialog.
    */
   scope_type?: BindingScopeType;
-  /** Only used when `scope_type='template'|'session'`. */
+  /** Only used when `scope_type='template'`. */
   scope_id?: number | null;
   /** Sentinel required for cross-scope wipes; the panel passes it. */
   confirm?: 'wipe-all';

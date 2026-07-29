@@ -7,7 +7,7 @@
  *   3. registra o projeto com `builder_json {stack:'cf-fullstack', port,
  *      kind:'app', appName, appSlug, dbEngine}` — é isso que liga preview,
  *      coordenador, tools `app_*` e o bloco de prompt do studio;
- *   4. cria a row `app_studio_sessions` + primeira revisão do AppPlanV1;
+ *   4. cria o bundle global do App Studio + primeira revisão do AppPlanV1;
  *   5. cria uma conversa Master e uma equipe Company novas e exclusivas do App.
  *
  * Espelha o contrato emit-driven do DS Studio: registro só acontece com
@@ -21,6 +21,10 @@ import { emptyAppPlan } from '@mcp/app-studio/plan/types.js';
 import { auditAppPlan } from '@mcp/app-studio/plan/fitness.js';
 import type { HandlerDeps } from '../types.js';
 import { createAppTeamSession, type AppTeamSessionView } from './app-team-session.js';
+import type {
+  CompanySessionId,
+  SessionId,
+} from '@mcp/session-storage';
 
 export type AppStudioExecutionMode = 'standard' | 'ultra';
 
@@ -45,8 +49,8 @@ export type AppStudioStreamEvent =
       data: {
         project: Project;
         app_session: AppStudioSession;
-        master_session_id: number;
-        company_session_id: number;
+        master_session_id: SessionId;
+        company_session_id: CompanySessionId;
         team: AppTeamSessionView;
       };
     }
@@ -162,20 +166,20 @@ export async function runAppStudioScaffoldStream(
     });
     const finalProject = deps.db.getProject(project.id) ?? project;
 
-    let appSession = deps.appStudioStore.createSession({
+    let appSession = await deps.appStudioStore.createSession({
       project_id: project.id,
       name: outcome.name,
       app_slug: appSlug,
     });
     const initialPlan = emptyAppPlan('pt-BR');
-    deps.appStudioStore.savePlanRevision({
+    await deps.appStudioStore.savePlanRevision({
       app_session_id: appSession.id,
       plan: initialPlan,
       fitness: auditAppPlan(initialPlan),
       created_by: 'app_create',
     });
 
-    const coderSession = deps.sessionStore.createSession({
+    const coderSession = await deps.sessionStore.createSession({
       project_id: project.id,
       title: outcome.name,
       provider: input.provider.trim(),
@@ -183,17 +187,27 @@ export async function runAppStudioScaffoldStream(
       agent: 'app_orchestrator',
     });
     try {
-      deps.sessionStore.setSessionExecutionMode(coderSession.id, executionSettings.executionMode);
+      await deps.sessionStore.setSessionExecutionMode(
+        coderSession.id,
+        executionSettings.executionMode,
+      );
     } catch (e) {
       emit({ event: 'log', data: { stream: 'stderr', chunk: `execution mode set failed (non-fatal): ${(e as Error).message}\n` } });
     }
     try {
-      deps.sessionStore.setSessionReasoningEffort(coderSession.id, executionSettings.reasoningEffort);
+      await deps.sessionStore.setSessionReasoningEffort(
+        coderSession.id,
+        executionSettings.reasoningEffort,
+      );
     } catch (e) {
       emit({ event: 'log', data: { stream: 'stderr', chunk: `reasoning effort set failed (non-fatal): ${(e as Error).message}\n` } });
     }
 
-    const createdTeam = createAppTeamSession(deps, appSession.id, coderSession.id);
+    const createdTeam = await createAppTeamSession(
+      deps,
+      appSession.id,
+      coderSession.id,
+    );
     appSession = createdTeam.app_session;
 
     emit({

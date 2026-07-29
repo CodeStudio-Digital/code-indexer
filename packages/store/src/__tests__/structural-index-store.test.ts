@@ -219,6 +219,8 @@ describe('structural index store (migrations 139/140)', () => {
     const finish = {
       status: 'completed' as const, totalFiles: 1, indexedFiles: 1, skippedFiles: 0,
       errorCount: 0,
+      phaseTimings: { scanMs: 2, parseMs: 3, writeMs: 4, sweepMs: 1 },
+      peakRssMb: 128,
     };
     const structural = db.startRun(projectId);
     db.finishRun(structural, finish);
@@ -228,6 +230,10 @@ describe('structural index store (migrations 139/140)', () => {
       status: 'completed',
       indexed_files: 1,
       total_files: 1,
+      phase_timings_json: JSON.stringify({
+        scan_ms: 2, parse_ms: 3, write_ms: 4, sweep_ms: 1,
+      }),
+      peak_rss_mb: 128,
     });
     expect(db.getRuns(projectId)).toHaveLength(1);
   });

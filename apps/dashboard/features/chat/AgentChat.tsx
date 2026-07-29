@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AgentPreset } from '@mcp/api-bus';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
@@ -10,6 +10,7 @@ import { useAgentStream } from '../../hooks/useAgentStream.js';
 import { usePipelineStream } from '../../hooks/usePipelineStream.js';
 import { apiDelete, apiPatch, apiPost, useApi } from '../../hooks/useApi.js';
 import { useElementWidth } from '../../hooks/useElementWidth.js';
+import { useOpenedOnce } from '../../hooks/useOpenedOnce.js';
 import { Button } from '../../components/ui/button.js';
 import { useConfirm } from '../../components/ui/dialog-provider.js';
 import {
@@ -28,7 +29,7 @@ import {
   SESSION_INSIGHTS_TAB_EVENT,
   SESSION_INSIGHTS_TAB_STORAGE_KEY,
   type SessionInsightsTab,
-} from './right-panel/SessionInsightsPanel.js';
+} from './right-panel/session-insights-tabs.js';
 import { usePluginPanels } from './right-panel/usePluginPanels.js';
 import { setDiagramXml, getDiagram } from './right-panel/diagram/diagram-store.js';
 import type { RightPanelId } from './right-panel/types.js';
@@ -62,7 +63,23 @@ import { useUnreadNotificationCount } from './notifications/session-notification
 // through `RightPanelHost`; metrics/details/tool stats share Insights. Only
 // Snapshots stays as a true Dialog because its diff viewer needs full width.
 import { SessionSidebar, type SessionView } from './SessionSidebar.js';
-import { SessionImportDialog } from './SessionImportDialog.js';
+// Rarely-opened surfaces, each in its own async chunk. They used to sit in the
+// chat's eager bundle even though the user has to click something to reach
+// them: the snapshots review panel alone pulls ~3.7k lines (file list + diff
+// viewer). `useOpenedOnce` keeps the mount-once semantics of a static import,
+// so exit animations and in-progress form state behave exactly as before.
+const SessionImportDialog = lazy(() =>
+  import('./SessionImportDialog.js').then((m) => ({ default: m.SessionImportDialog })),
+);
+const GlobalNewSessionDialog = lazy(() =>
+  import('./global/GlobalNewSessionDialog.js').then((m) => ({ default: m.GlobalNewSessionDialog })),
+);
+const ManageGlobalProjectsDialog = lazy(() =>
+  import('./global/ManageGlobalProjectsDialog.js').then((m) => ({ default: m.ManageGlobalProjectsDialog })),
+);
+const SnapshotsPanel = lazy(() =>
+  import('../snapshots/SnapshotsPanel.js').then((m) => ({ default: m.SnapshotsPanel })),
+);
 import {
   firstModelValue,
   type SessionLaunchConfig,
@@ -70,9 +87,6 @@ import {
 import { usePinnedTabs } from '../../state/pinned-tabs.js';
 import { buildSessionPin } from '../../state/pinned-tabs-describe.js';
 import { sessionPinId as makeSessionPinId } from '../../state/pinned-tabs-types.js';
-import { GlobalNewSessionDialog } from './global/GlobalNewSessionDialog.js';
-import { ManageGlobalProjectsDialog } from './global/ManageGlobalProjectsDialog.js';
-import { SnapshotsPanel } from '../snapshots/SnapshotsPanel.js';
 import { fetchSnapshotList } from '../snapshots/api.js';
 import { buildSnapshotFileMap, type SnapshotActions } from './messages/snapshot-files-context.js';
 import type { SnapshotFileSummary } from '../snapshots/types.js';
@@ -90,7 +104,7 @@ import type { AgentAttachment } from '../../hooks/useAgentStream.js';
 import type { NotificationSourceContext } from '../notifications/index.js';
 import { markRouteEvent } from '../../lib/perf/route-startup-metrics.js';
 
-export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId, hideAgentPicker, workbenchSlots }: AgentChatProps) {
+export default function AgentChat({ projectId, projectName, mode = 'project', initialSessionId, selectionPrefixSessionId, hideAgentPicker, workbenchSlots, preview }: AgentChatProps) {
   const { t } = useTranslation(['chat', 'common', 'projects']);
   const confirm = useConfirm();
   // Global (multi-project) mode: the session list is cross-project (no
@@ -98,6 +112,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // project multi-select dialog. Default 'project' keeps every existing mount
   // byte-identical.
   const isGlobal = mode === 'global';
+  const previewAvailable = !isGlobal && projectId != null && preview != null;
   useEffect(() => {
     markRouteEvent('AgentChat:mounted', { projectId, tab: 'chat', mode });
   }, [mode, projectId]);
@@ -119,7 +134,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     window.addEventListener('coder:sessions-changed', onSessionsChanged);
     return () => window.removeEventListener('coder:sessions-changed', onSessionsChanged);
   }, [refetchSessions, refetchGroups, isGlobal]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   // Global mode: which linked project the right-rail file tree is rooted at.
   // Defaults to the selected session's primary; reset when the session changes.
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
@@ -136,7 +151,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // SSE deliveries).
   useEffect(() => {
     const onAgentChanged = (e: Event): void => {
-      const detail = (e as CustomEvent).detail as { sessionId?: number; agent?: string };
+      const detail = (e as CustomEvent).detail as { sessionId?: string; agent?: string };
       if (!detail || detail.sessionId !== selectedId) return;
       const next = detail.agent;
       if (next && next !== agent && isAgentPreset(next)) {
@@ -152,10 +167,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // the session-keyed store so the embedded editor renders the new XML, and
   // auto-open the wide Diagram panel the FIRST time per session (subsequent
   // edits update in place without stealing focus).
-  const autoOpenedDiagram = useRef<Set<number>>(new Set());
+  const autoOpenedDiagram = useRef<Set<string>>(new Set());
   useEffect(() => {
     const onDiagramChanged = (e: Event): void => {
-      const d = (e as CustomEvent).detail as { sessionId?: number; path?: string; xml?: string };
+      const d = (e as CustomEvent).detail as { sessionId?: string; path?: string; xml?: string };
       if (!d || d.sessionId !== selectedId || !d.path || typeof d.xml !== 'string') return;
       setDiagramXml(d.sessionId, d.path, d.xml);
       if (!autoOpenedDiagram.current.has(d.sessionId)) {
@@ -209,18 +224,27 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       autoCollapsedRef.current = false;
     }
   }, [chatAreaWidth, sidebarCollapsed]);
-  const pendingAutoTitle = useRef<Set<number>>(new Set());
+  const pendingAutoTitle = useRef<Set<string>>(new Set());
   const creatingSessionRef = useRef(false);
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [rollbackPendingSeq, setRollbackPendingSeq] = useState<number | null>(null);
+  const rollbackInFlightRef = useRef(false);
   const [sessionImportOpen, setSessionImportOpen] = useState(false);
   // Global mode: the multi-project create dialog (project multi-select).
   const [globalNewOpen, setGlobalNewOpen] = useState(false);
   // Global mode: the "manage workspace projects" dialog (attach/remove after create).
   const [manageProjectsOpen, setManageProjectsOpen] = useState(false);
+  // Chunk latches for the lazy dialogs above: nothing is downloaded until the
+  // first open, and once mounted they stay mounted (exit animation + form state
+  // behave exactly like the previous static imports).
+  const sessionImportEverOpened = useOpenedOnce(sessionImportOpen);
+  const globalNewEverOpened = useOpenedOnce(globalNewOpen);
+  const manageProjectsEverOpened = useOpenedOnce(manageProjectsOpen);
   const [newGroupOpen, setNewGroupOpen] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [renameGroupTarget, setRenameGroupTarget] = useState<CoderSessionGroup | null>(null);
   const [renameGroupName, setRenameGroupName] = useState('');
-  const [renameSessionTarget, setRenameSessionTarget] = useState<{ id: number; title: string } | null>(null);
+  const [renameSessionTarget, setRenameSessionTarget] = useState<{ id: string; title: string } | null>(null);
   const [renameSessionTitle, setRenameSessionTitle] = useState('');
   // Snapshots is the only surface that stays as a modal — its content
   // (file diff viewer) needs the full viewport width. The former metrics,
@@ -231,7 +255,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // + turn summaries, the baseline preselected when opening the panel, and a
   // nonce to force a refetch after a user keep/revert (not covered by snapshotTick).
   const [snapshotFiles, setSnapshotFiles] = useState<Map<string, SnapshotFileSummary>>(new Map());
-  const [snapshotInitialBaselineId, setSnapshotInitialBaselineId] = useState<number | null>(null);
+  const [snapshotInitialBaselineId, setSnapshotInitialBaselineId] = useState<string | null>(null);
   const [snapshotRefreshNonce, setSnapshotRefreshNonce] = useState(0);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -256,6 +280,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (saved === 'null') return null;
     // Migrate the old split Skills/Tools panels into the merged config cog.
     if (saved === 'skills' || saved === 'tools') return 'config';
+    // A preview selection is project-scoped. Do not briefly open an empty
+    // right dock when restoring this global preference in another project.
+    if (saved === 'preview' && !previewAvailable) return null;
     // Metrics, details and tool stats now share one session-insights surface.
     if (saved === 'metrics' || saved === 'details' || saved === 'tool-stats') {
       const migratedTab: SessionInsightsTab = saved === 'metrics'
@@ -271,6 +298,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   useEffect(() => {
     localStorage.setItem('chatRightPanelId', activeRightPanelId ?? 'null');
   }, [activeRightPanelId]);
+  useEffect(() => {
+    if (activeRightPanelId === 'preview' && !previewAvailable) {
+      setActiveRightPanelId(null);
+    }
+  }, [activeRightPanelId, previewAvailable]);
   useEffect(() => {
     workbenchSlots?.onSessionStateChange?.({
       hasSession: selectedId != null,
@@ -419,7 +451,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     refetchSession,
   });
 
-  const unreadNotifications = useUnreadNotificationCount(selectedId ?? 0);
+  const unreadNotifications = useUnreadNotificationCount(selectedId);
 
   // Builder/DS studio: gate the preview's auto-fix loop while this chat runs.
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
@@ -591,6 +623,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   ) => {
     if (creatingSessionRef.current) return null;
     creatingSessionRef.current = true;
+    setCreatingSession(true);
     try {
       const selectedProvider = config.provider || provider;
       const selectedModels = getModelsForProvider(selectedProvider);
@@ -640,13 +673,14 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       return created;
     } finally {
       creatingSessionRef.current = false;
+      setCreatingSession(false);
     }
   }, [projectId, provider, model, getModelsForProvider, agent, reasoningEffort, executionMode, adoptExecutionMode, thinking, maxTurns, sessionTemperature, refetchSessions]);
 
-  const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseProjectId?: number }) => {
+  const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseSessionId?: string }) => {
     const created = await apiPost<CoderSession>('/coder/sessions/global', {
-      ...(opts.reuseProjectId
-        ? { reuse_project_id: opts.reuseProjectId }
+      ...(opts.reuseSessionId
+        ? { reuse_session_id: opts.reuseSessionId }
         : { project_ids: opts.projectIds, primary_project_id: opts.primaryProjectId }),
       title: (opts.title ?? 'Nova sessão global').slice(0, 80),
       provider,
@@ -677,7 +711,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   }, [isGlobal, createSession]);
 
   const handleOpenImport = useCallback(() => setSessionImportOpen(true), []);
-  const handleImportedSession = useCallback((sessionId: number) => {
+  const handleImportedSession = useCallback((sessionId: string) => {
     refetchSessions();
     setSelectedId(sessionId);
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
@@ -810,7 +844,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
    * Called by MessageList when the user clicks "Load earlier".
    * Returns the number of message rows fetched (0 = nothing more to load).
    */
-  const loadEarlierMessages = useCallback(async (beforeId: number | undefined, limit = 40, includeArchived = false): Promise<number> => {
+  const loadEarlierMessages = useCallback(async (beforeSeq: number | undefined, limit = 40, includeArchived = false): Promise<number> => {
     const requestedSessionId = selectedId;
     if (!requestedSessionId) return 0;
     const controller = new AbortController();
@@ -818,7 +852,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     try {
       const qs = new URLSearchParams({ limit: String(limit) });
       qs.set('detail', 'preview');
-      if (beforeId != null) qs.set('before_id', String(beforeId));
+      if (beforeSeq != null) qs.set('before_seq', String(beforeSeq));
       if (includeArchived) qs.set('include_archived', '1');
       const res = await fetch(`/api/coder/sessions/${requestedSessionId}/messages?${qs}`, {
         signal: controller.signal,
@@ -1051,7 +1085,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
   }, [selectedId]);
 
-  const handleDelete = useCallback(async (id: number) => {
+  const handleDelete = useCallback(async (id: string) => {
     const ok = await confirm({
       title: t('chat:deleteSession'),
       description: t('chat:deleteSessionDescription'),
@@ -1095,7 +1129,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }
   }, [selectedId, summarizing, confirm, refetchSession, refetchSessions, t]);
 
-  const handleBatchDelete = useCallback(async (ids: number[]) => {
+  const handleBatchDelete = useCallback(async (ids: string[]) => {
     if (ids.length === 0) return;
     const ok = await confirm({
       title: t('chat:deleteSessions', { count: ids.length }),
@@ -1126,7 +1160,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     refetchSessions();
   }, [sessions, confirm, t, view, selectedId, refetchSessions]);
 
-  const handleArchive = useCallback(async (id: number, archived: boolean) => {
+  const handleArchive = useCallback(async (id: string, archived: boolean) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
     // Session leaves the current view — drop selection.
     if (selectedId === id) setSelectedId(null);
@@ -1134,7 +1168,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   }, [selectedId, refetchSessions]);
 
-  const handleFavorite = useCallback(async (id: number, favorite: boolean) => {
+  const handleFavorite = useCallback(async (id: string, favorite: boolean) => {
     await apiPatch(`/coder/sessions/${id}/favorite`, { favorite });
     refetchSessions();
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
@@ -1142,7 +1176,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
 
   // Pin/unpin a session as a global tab. Scope + projectId come from this
   // chat's mode; the title is looked up from the current list.
-  const handleTogglePin = useCallback((id: number) => {
+  const handleTogglePin = useCallback((id: string) => {
     const s = sessions?.find((x) => x.id === id);
     usePinnedTabs.getState().togglePin(
       buildSessionPin({
@@ -1154,11 +1188,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     );
   }, [sessions, isGlobal, projectId]);
   const sessionPinIdFor = useCallback(
-    (id: number) => makeSessionPinId(isGlobal ? 'global' : 'project', id),
+    (id: string) => makeSessionPinId(isGlobal ? 'global' : 'project', id),
     [isGlobal],
   );
 
-  const handleRenameSession = useCallback((id: number, currentTitle: string) => {
+  const handleRenameSession = useCallback((id: string, currentTitle: string) => {
     setRenameSessionTarget({ id, title: currentTitle });
     setRenameSessionTitle(currentTitle);
   }, []);
@@ -1176,18 +1210,18 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   };
 
-  const handleDuplicate = useCallback(async (id: number) => {
+  const handleDuplicate = useCallback(async (id: string) => {
     const res = await apiPost<{ session: CoderSession }>(`/coder/sessions/${id}/duplicate`, {});
     await refetchSessions();
     setSelectedId(res.session.id);
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   }, [refetchSessions]);
 
-  const handleFork = async (messageId: number) => {
+  const handleFork = async (messageSeq: number) => {
     if (!selectedId) return;
     const res = await apiPost<{ session: CoderSession; seed_text: string }>(
       `/coder/sessions/${selectedId}/fork`,
-      { before_message_id: messageId },
+      { before_seq: messageSeq },
     );
     await refetchSessions();
     setSelectedId(res.session.id);
@@ -1197,8 +1231,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
 
   // Rollback: destructively truncate THIS session at the message, then drop its
   // text + attachments back into the composer for editing & re-sending.
-  const handleRollback = async (messageId: number) => {
-    if (!selectedId) return;
+  const handleRollback = async (messageSeq: number) => {
+    if (!selectedId || rollbackInFlightRef.current) return;
     const ok = await confirm({
       title: t('chat:rollbackConfirmTitle'),
       description: t('chat:rollbackConfirmDescription'),
@@ -1206,13 +1240,16 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       confirmLabel: t('chat:rollbackConfirmLabel'),
     });
     if (!ok) return;
+    if (rollbackInFlightRef.current) return;
+    rollbackInFlightRef.current = true;
+    setRollbackPendingSeq(messageSeq);
     // The backend rejects with 409 when a run is active (and 400 on a stale
     // message id). Surface that instead of swallowing it into a silent no-op —
     // the destructive delete either fully succeeds or fully fails server-side.
     try {
       const res = await apiPost<{ seed_text: string; seed_attachments: AgentAttachment[] }>(
         `/coder/sessions/${selectedId}/rollback-to-message`,
-        { message_id: messageId },
+        { seq: messageSeq },
       );
       await refetchSession();
       composerRef.current?.setInput(res.seed_text);
@@ -1225,21 +1262,24 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         description: e instanceof Error ? e.message : String(e),
         confirmLabel: t('common:actions.close'),
       });
+    } finally {
+      rollbackInFlightRef.current = false;
+      setRollbackPendingSeq(null);
     }
   };
 
-  const handleBatchArchive = useCallback(async (ids: number[], archived: boolean) => {
+  const handleBatchArchive = useCallback(async (ids: string[], archived: boolean) => {
     await Promise.all(ids.map((id) => apiPatch(`/coder/sessions/${id}/archive`, { archived })));
     if (selectedId != null && ids.includes(selectedId)) setSelectedId(null);
     refetchSessions();
   }, [selectedId, refetchSessions]);
 
-  const handleMoveToGroup = useCallback(async (id: number, groupId: number | null) => {
+  const handleMoveToGroup = useCallback(async (id: string, groupId: string | null) => {
     await apiPatch(`/coder/sessions/${id}/group`, { group_id: groupId });
     refetchSessions();
   }, [refetchSessions]);
 
-  const handleBatchMoveToGroup = useCallback(async (ids: number[], groupId: number | null) => {
+  const handleBatchMoveToGroup = useCallback(async (ids: string[], groupId: string | null) => {
     await Promise.all(
       ids.map((id) => apiPatch(`/coder/sessions/${id}/group`, { group_id: groupId })),
     );
@@ -1276,7 +1316,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       setRenameGroupTarget(null);
       return;
     }
-    await apiPatch(`/coder/groups/${renameGroupTarget.id}`, { name });
+    await apiPatch(
+      `/coder/groups/${renameGroupTarget.id}?project_id=${projectId}`,
+      { name },
+    );
     setRenameGroupTarget(null);
     refetchGroups();
   };
@@ -1289,10 +1332,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       confirmLabel: t('common:actions.delete'),
     });
     if (!ok) return;
-    await apiDelete(`/coder/groups/${group.id}`);
+    await apiDelete(`/coder/groups/${group.id}?project_id=${projectId}`);
     refetchGroups();
     refetchSessions();
-  }, [confirm, t, refetchGroups, refetchSessions]);
+  }, [confirm, t, refetchGroups, refetchSessions, projectId]);
 
   // Stable handlers reference so the memoized <PersistedMessages /> inside
   // MessageList doesn't re-render on every parent render. Deps are the three
@@ -1342,6 +1385,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       },
       onFork: handleFork,
       onRollback: handleRollback,
+      rollbackPendingSeq,
       onToolApproval: (toolUseId, verdict) => respondToToolApproval(toolUseId, verdict),
       // P1 (ultra-agent parity): lets live agent rows abort ONE subagent /
       // fetch its retained transcript without plumbing a separate context.
@@ -1349,7 +1393,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }),
     // handleFork / handleRollback depend on selectedId — re-create on switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToSpec, respondToToolApproval, selectedId, agent],
+    [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToSpec, respondToToolApproval, selectedId, agent, rollbackPendingSeq],
   );
 
   // Stable handlers for the memoized children (ChatHeader / ChatRightRail) and
@@ -1367,20 +1411,20 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     () => setActiveRightPanelId((p) => (p === 'diagram' ? null : 'diagram')),
     [],
   );
-  const openSnapshots = useCallback((baselineId?: number) => {
+  const openSnapshots = useCallback((baselineId?: string) => {
     setSnapshotInitialBaselineId(baselineId ?? null);
     setSnapshotsOpen(true);
   }, []);
   const refreshSnapshots = useCallback(() => setSnapshotRefreshNonce((n) => n + 1), []);
   const snapshotActions = useMemo<SnapshotActions>(
-    () => ({ scope: 'coder', sessionId: selectedId ?? 0, openSnapshots, refresh: refreshSnapshots }),
+    () => ({ scope: 'coder', sessionId: selectedId ?? '', openSnapshots, refresh: refreshSnapshots }),
     [selectedId, openSnapshots, refreshSnapshots],
   );
   const handleViewChange = useCallback((v: 'active' | 'archived') => {
     setView(v);
     setSelectedId(null);
   }, []);
-  const handleSelectSession = useCallback((id: number) => {
+  const handleSelectSession = useCallback((id: string) => {
     setSelectedId(id);
     setMobileSidebarOpen(false);
     workbenchSlots?.onSessionSelected?.(id);
@@ -1408,22 +1452,26 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     // here was redundant (extra Radix context layer re-rendering on every chat
     // state change). Removed; the remaining rich Radix tooltips still work.
     <>
-      {isGlobal && (
-        <GlobalNewSessionDialog
-          open={globalNewOpen}
-          onOpenChange={setGlobalNewOpen}
-          onCreate={createGlobalSession}
-        />
+      {isGlobal && globalNewEverOpened && (
+        <Suspense fallback={null}>
+          <GlobalNewSessionDialog
+            open={globalNewOpen}
+            onOpenChange={setGlobalNewOpen}
+            onCreate={createGlobalSession}
+          />
+        </Suspense>
       )}
-      {isGlobal && selectedId != null && (
-        <ManageGlobalProjectsDialog
-          open={manageProjectsOpen}
-          onOpenChange={setManageProjectsOpen}
-          sessionId={selectedId}
-          linkedProjects={sessionData?.linked_projects ?? []}
-          streaming={streaming}
-          onChanged={() => { void refetchSession(); }}
-        />
+      {isGlobal && selectedId != null && manageProjectsEverOpened && (
+        <Suspense fallback={null}>
+          <ManageGlobalProjectsDialog
+            open={manageProjectsOpen}
+            onOpenChange={setManageProjectsOpen}
+            sessionId={selectedId}
+            linkedProjects={sessionData?.linked_projects ?? []}
+            streaming={streaming}
+            onChanged={() => { void refetchSession(); }}
+          />
+        </Suspense>
       )}
       <Dialog open={newGroupOpen} onOpenChange={setNewGroupOpen}>
         <DialogContent className="sm:max-w-md">
@@ -1509,18 +1557,20 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      {!isGlobal && projectId != null && (
-        <SessionImportDialog
-          open={sessionImportOpen}
-          onOpenChange={setSessionImportOpen}
-          projectId={projectId}
-          projectName={projectName ?? ''}
-          provider={provider}
-          model={model || PROVIDERS.find((item) => item.id === provider)?.defaultModel || ''}
-          agent={agent}
-          providerOptions={providerOptions}
-          onImported={handleImportedSession}
-        />
+      {!isGlobal && projectId != null && sessionImportEverOpened && (
+        <Suspense fallback={null}>
+          <SessionImportDialog
+            open={sessionImportOpen}
+            onOpenChange={setSessionImportOpen}
+            projectId={projectId}
+            projectName={projectName ?? ''}
+            provider={provider}
+            model={model || PROVIDERS.find((item) => item.id === provider)?.defaultModel || ''}
+            agent={agent}
+            providerOptions={providerOptions}
+            onImported={handleImportedSession}
+          />
+        </Suspense>
       )}
       {/* Snapshots is the only ex-modal that stays modal — its full-width
           diff viewer needs the viewport. The remaining surfaces live in the rail. */}
@@ -1550,6 +1600,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           view={view}
           onViewChange={handleViewChange}
           selectedId={selectedId}
+          creating={creatingSession}
           onSelect={handleSelectSession}
           mobileOpen={mobileSidebarOpen}
           onMobileClose={closeMobileSidebar}
@@ -1597,6 +1648,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 projectId={projectId}
                 projectName={isGlobal ? t('chat:global.workspaceName') : (projectName ?? '')}
                 onOpenSidebar={() => setMobileSidebarOpen(true)}
+                creating={creatingSession}
               />
             </main>
           ) : (
@@ -1622,7 +1674,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   // Builder-style canvas toggle — shown for diagram sessions so
                   // the live draw.io canvas is openable even where the 40px
                   // activity rail is hidden (split/narrow mounts).
-                  showCanvasToggle={agent === 'diagram' || getDiagram(selectedId ?? 0) != null}
+                  showCanvasToggle={agent === 'diagram' || (selectedId ? getDiagram(selectedId) != null : false)}
                   canvasActive={activeRightPanelId === 'diagram'}
                   onToggleCanvas={toggleCanvasPanel}
                   // Global sessions: colored per-project chips (focus the file
@@ -1770,6 +1822,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 pipelineRuntime={pipelineRuntime}
                 activeProcesses={activeProcesses}
                 pluginWindows={pluginPanelWindows}
+                preview={preview}
                 onClose={() => setActiveRightPanelId(null)}
               />
             </Panel>
@@ -1789,6 +1842,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               pendingSnapshots={snapshotPending}
               unreadNotifications={unreadNotifications}
               pluginWindows={pluginPanelWindows}
+              previewAvailable={previewAvailable}
             />
           </div>
         )}
@@ -1801,6 +1855,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           view={view}
           onViewChange={handleViewChange}
           selectedId={selectedId}
+          creating={creatingSession}
           onSelect={handleSelectSession}
           mobileOpen={mobileSidebarOpen}
           onMobileClose={closeMobileSidebar}
@@ -1845,6 +1900,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           pipelineRuntime={pipelineRuntime}
           activeProcesses={activeProcesses}
           pluginWindows={pluginPanelWindows}
+          preview={preview}
           onClose={() => setActiveRightPanelId(null)}
         />,
         workbenchSlots.rightPanelHost,
@@ -1858,6 +1914,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           pendingSnapshots={snapshotPending}
           unreadNotifications={unreadNotifications}
           pluginWindows={pluginPanelWindows}
+          previewAvailable={previewAvailable}
         />,
         workbenchSlots.rightRailHost,
       )}
@@ -1871,14 +1928,24 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
               <DialogDescription>{t('projects:snapshotPanel.dialogDescription')}</DialogDescription>
             </DialogHeader>
             <div className="flex-1 min-h-0">
-              <SnapshotsPanel
-                scope="coder"
-                sessionId={selectedId}
-                refreshKey={snapshotTick}
-                initialBaselineId={snapshotInitialBaselineId}
-                onSubmitReviewMessage={handleSnapshotReviewMessage}
-                dialogMode
-              />
+              {/* Radix only renders DialogContent while open, so the chunk is
+                  fetched on the first open of the snapshots review. */}
+              <Suspense
+                fallback={(
+                  <div className="grid h-full place-items-center" aria-busy="true">
+                    <span className="h-5 w-5 animate-spin rounded-full border-2 border-muted border-t-primary" />
+                  </div>
+                )}
+              >
+                <SnapshotsPanel
+                  scope="coder"
+                  sessionId={selectedId}
+                  refreshKey={snapshotTick}
+                  initialBaselineId={snapshotInitialBaselineId}
+                  onSubmitReviewMessage={handleSnapshotReviewMessage}
+                  dialogMode
+                />
+              </Suspense>
             </div>
           </DialogContent>
         </Dialog>

@@ -27,7 +27,7 @@ import { onEnhanceJobStarted } from '../api-enhance.js';
 import { useSpriteJobs } from '../jobs/useSpriteJobs.js';
 import { EnhanceResultsStrip } from './EnhanceResultsStrip.js';
 
-interface ActiveJob { jobId: number; projectId: number; assetId: number }
+interface ActiveJob { jobId: string; projectId: number; assetId: string }
 
 export function AiEditBar({
   engine,
@@ -44,12 +44,12 @@ export function AiEditBar({
   onInpaint?: (
     maskBlob: Blob,
     prompt: string,
-  ) => void | Promise<{ jobId: number; projectId?: number; assetId?: number } | void>;
+  ) => void | Promise<{ jobId: string; projectId?: number; assetId?: string } | void>;
   /** Optional strip context — falls back to the job-start notification. */
   projectId?: number;
-  assetId?: number;
+  assetId?: string;
   /** Fires with the new version id after a candidate is applied (unwired today). */
-  onApplied?: (versionId: number) => void;
+  onApplied?: (versionId: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const hasSelection = useSpriteEditorStore((s) => s.hasSelection);
@@ -75,7 +75,7 @@ export function AiEditBar({
     try {
       const blob = await maskToPngBlob(mask, engine.selection.width, engine.selection.height);
       const res = await onInpaint(blob, prompt.trim());
-      if (res && typeof res.jobId === 'number') {
+      if (res && typeof res.jobId === 'string' && res.jobId.length > 0) {
         const pid = res.projectId ?? projectId;
         const aid = res.assetId ?? assetId;
         if (pid != null && aid != null) setActive({ jobId: res.jobId, projectId: pid, assetId: aid });

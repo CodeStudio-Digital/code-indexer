@@ -9,6 +9,14 @@ import { CompanyScheduler, type CompanySchedulerDeps } from '../CompanyScheduler
 import { resolveAutonomy } from '../../autonomy/autonomy-config.js';
 import { setGlobalCompanyRecommend } from '../recommend-shim.js';
 
+const SESSION_ID = 'c0000000-0000-4000-8000-000000000001';
+const AGENT_RUN_ID = 'a0000000-0000-4000-8000-000000000042';
+const CODER_SESSION_ID = 'd0000000-0000-4000-8000-000000000007';
+const CARD_ID = 'e0000000-0000-4000-8000-000000000001';
+const BLOCKER_CARD_ID = 'e0000000-0000-4000-8000-000000000099';
+const runId = (n: number): string =>
+  `a0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
 /** Fake per-session autonomy provider over a session `autonomy` object. */
 function fakeAutonomy(autonomy: Record<string, unknown>) {
   return { get: () => resolveAutonomy(JSON.stringify({ autonomy }), {} as NodeJS.ProcessEnv) };
@@ -16,7 +24,7 @@ function fakeAutonomy(autonomy: Record<string, unknown>) {
 
 function makeCard(over: Record<string, unknown> = {}) {
   return {
-    id: 1,
+    id: CARD_ID,
     title: 'Build login form',
     description: 'A todo card',
     column: 'todo',
@@ -43,14 +51,17 @@ interface Spies {
 function makeScheduler(opts: {
   cards: ReturnType<typeof makeCard>[];
   masterAlive: boolean;
-  runs?: Array<{ id: number; role: string; status: string }>;
-  spawnImpl?: () => Promise<{ agentRunId: number; coderSessionId: number }>;
+  runs?: Array<{ id: string; role: string; status: string }>;
+  spawnImpl?: () => Promise<{ agentRunId: string; coderSessionId: string }>;
   /** C2 — per-session autonomy provider; omitted = env+defaults fallback. */
   autonomy?: { get: () => ReturnType<typeof resolveAutonomy> };
 }): { scheduler: CompanyScheduler; spies: Spies; published: Array<{ event: string; data: unknown }> } {
   const published: Array<{ event: string; data: unknown }> = [];
   const spies: Spies = {
-    spawn: vi.fn(opts.spawnImpl ?? (async () => ({ agentRunId: 42, coderSessionId: 7 }))),
+    spawn: vi.fn(opts.spawnImpl ?? (async () => ({
+      agentRunId: AGENT_RUN_ID,
+      coderSessionId: CODER_SESSION_ID,
+    }))),
     assignAgent: vi.fn(),
     moveCard: vi.fn(),
     addComment: vi.fn(),
@@ -58,8 +69,8 @@ function makeScheduler(opts: {
   };
   const deps = {
     ctx: {
-      companySessionId: 1,
-      companyStore: { listAgentRuns: () => opts.runs ?? [] },
+      companySessionId: SESSION_ID,
+      companyFiles: { listAgentRunsSync: () => opts.runs ?? [] },
     },
     kanban: {
       listCardsFull: () => opts.cards,
@@ -92,12 +103,12 @@ describe('CompanyScheduler.tick', () => {
     await scheduler.tick();
     expect(spies.spawn).toHaveBeenCalledTimes(1);
     expect(spies.spawn).toHaveBeenCalledWith(expect.objectContaining({ role: 'frontend' }));
-    expect(spies.assignAgent).toHaveBeenCalledWith(1, 42, 'frontend');
-    expect(spies.moveCard).toHaveBeenCalledWith(1, 'in_progress');
+    expect(spies.assignAgent).toHaveBeenCalledWith(CARD_ID, AGENT_RUN_ID, 'frontend');
+    expect(spies.moveCard).toHaveBeenCalledWith(CARD_ID, 'in_progress');
     // C1 — visibility events on the session metaBus (at from deps.now → 0).
     expect(published).toContainEqual({
       event: 'scheduler_dispatched',
-      data: { cardId: 1, role: 'frontend', agentRunId: 42, at: 0 },
+      data: { cardId: CARD_ID, role: 'frontend', agentRunId: AGENT_RUN_ID, at: 0 },
     });
     expect(published).toContainEqual({
       event: 'scheduler_sweep',
@@ -120,7 +131,7 @@ describe('CompanyScheduler.tick', () => {
     // C1 — the skip is visible; no sweep event when nothing dispatched.
     expect(published).toContainEqual({
       event: 'scheduler_skipped',
-      data: { cardId: 1, reason: 'no_role', at: 0 },
+      data: { cardId: CARD_ID, reason: 'no_role', at: 0 },
     });
     expect(published.some((p) => p.event === 'scheduler_sweep')).toBe(false);
   });
@@ -135,7 +146,7 @@ describe('CompanyScheduler.tick', () => {
     await scheduler.tick();
     expect(published).toContainEqual({
       event: 'scheduler_skipped',
-      data: { cardId: 1, reason: 'spawn_failed', at: 0 },
+      data: { cardId: CARD_ID, reason: 'spawn_failed', at: 0 },
     });
     expect(published.some((p) => p.event === 'scheduler_dispatched')).toBe(false);
     expect(published.some((p) => p.event === 'scheduler_sweep')).toBe(false);
@@ -144,7 +155,7 @@ describe('CompanyScheduler.tick', () => {
   it('skips a blocked card', async () => {
     setGlobalCompanyRecommend(async () => ({ recommendations: [{ role: 'frontend', kind: 'spawn', score: 0.9 }] }));
     const { scheduler, spies } = makeScheduler({
-      cards: [makeCard({ blocked_by: [99] })],
+      cards: [makeCard({ blocked_by: [BLOCKER_CARD_ID] })],
       masterAlive: false,
     });
     await scheduler.tick();
@@ -153,7 +164,11 @@ describe('CompanyScheduler.tick', () => {
 
   it('does nothing when the fleet is already at the concurrency cap', async () => {
     setGlobalCompanyRecommend(async () => ({ recommendations: [{ role: 'frontend', kind: 'spawn', score: 0.9 }] }));
-    const runs = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, role: 'frontend', status: 'running' }));
+    const runs = Array.from({ length: 10 }, (_, i) => ({
+      id: runId(i + 1),
+      role: 'frontend',
+      status: 'running',
+    }));
     const { scheduler, spies } = makeScheduler({ cards: [makeCard()], masterAlive: false, runs });
     await scheduler.tick();
     expect(spies.spawn).not.toHaveBeenCalled();

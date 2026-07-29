@@ -17,7 +17,7 @@
 import { resolveRoleSkills, type RoleSkills } from '@mcp/company/types.js';
 
 export interface ServiceIncident {
-  sessionId: number;
+  sessionId: string;
   serviceId: string;
   detail?: string;
   restartAttempts: number;
@@ -98,23 +98,23 @@ export function findRoleWithSkill(configJson: string | null, skillId: string): s
 
 export interface IncidentDeps {
   notifyMaster(message: string): void;
-  board: { post(authorRole: string, agentRunId: number | null, kind: 'blocker', content: string): void };
+  board: { post(authorRole: string, agentRunId: string | null, kind: 'blocker', content: string): void };
   publisher: { publish(event: string, data: unknown): void };
   kanban?: {
-    listCardsFull(): Array<{ id: number; column: string; title: string }>;
+    listCardsFull(): Array<{ id: string; column: string; title: string }>;
     createCard(input: {
       title: string;
       description?: string;
       column?: 'backlog' | 'todo' | 'in_progress' | 'review' | 'done';
       tag?: 'bug' | 'feature' | 'refactor' | 'documentation' | null;
       created_by?: string;
-    }): { id: number };
-    addComment(cardId: number, authorRole: string, agentRunId: number | null, content: string): unknown;
+    }): { id: string };
+    addComment(cardId: string, authorRole: string, agentRunId: string | null, content: string): unknown;
   };
   inbox?: {
     /** Matches `InboxQueue.send` (sync or async — the result is not consumed). */
     send(args: {
-      fromAgentRunId: number;
+      fromAgentRunId: string;
       fromRole: string;
       toRole: string;
       kind: 'notify';
@@ -186,7 +186,7 @@ async function routeToDevops(
   const role = findRoleWithSkill(deps.getSessionConfigJson(), 'devops');
   if (!role) return;
   await Promise.resolve(deps.inbox.send({
-    fromAgentRunId: 0,
+    fromAgentRunId: incident.sessionId,
     fromRole: 'supervisor',
     toRole: role,
     kind: 'notify',

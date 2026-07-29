@@ -39,7 +39,7 @@ export type { AgentStreamState, BoardMessage, FallbackNotice } from '../state/co
 
 export type CompanyStreamSurface =
   | { kind: 'company' }
-  | { kind: 'app_studio'; appSessionId: number };
+  | { kind: 'app_studio'; appSessionId: string };
 
 export interface CompanyStreamTransport {
   basePath: string;
@@ -178,7 +178,7 @@ export function disposeCompanyStreamLifecycle(
  * without mounting React. App Studio is keyed by its App id; the linked
  * Company id remains an internal server concern. */
 export function resolveCompanyStreamTransport(
-  companySessionId: number | null,
+  companySessionId: string | null,
   surface: CompanyStreamSurface = { kind: 'company' },
 ): CompanyStreamTransport | null {
   if (companySessionId == null) return null;
@@ -226,7 +226,7 @@ function isLiveMasterStatus(status: AgentStatusPayload['status']): boolean {
 }
 
 export function useCompanyStream(
-  companySessionId: number | null,
+  companySessionId: string | null,
   _notificationContext?: NotificationSourceContext,
   surface: CompanyStreamSurface = { kind: 'company' },
 ) {
@@ -316,7 +316,7 @@ export function useCompanyStream(
       if (eventType === 'subordinate_plan_posted') {
         streamApplySubordinateWaiting(
           companySessionId,
-          (data as { agentRunId: number }).agentRunId,
+          (data as { agentRunId: string }).agentRunId,
           'waiting_plan',
         );
         return;
@@ -324,7 +324,7 @@ export function useCompanyStream(
       if (eventType === 'subordinate_question_posted') {
         streamApplySubordinateWaiting(
           companySessionId,
-          (data as { agentRunId: number }).agentRunId,
+          (data as { agentRunId: string }).agentRunId,
           'waiting_question',
         );
         return;
@@ -332,7 +332,7 @@ export function useCompanyStream(
       if (eventType === 'subordinate_tasks_posted') {
         streamApplySubordinateWaiting(
           companySessionId,
-          (data as { agentRunId: number }).agentRunId,
+          (data as { agentRunId: string }).agentRunId,
           'waiting_tasks',
         );
         return;
@@ -587,14 +587,15 @@ export function useCompanyStream(
       const data = (await res.json()) as InitialFetchResponse;
       const boardMessages: BoardMessage[] = (data.recentBoard ?? []).map((b) => ({
         id: b.id,
+        seq: b.seq,
         author_role: b.author_role,
         agent_run_id: b.agent_run_id,
         kind: b.kind,
         content: b.content,
-        mentions: JSON.parse(b.mentions_json || '[]'),
+        mentions: b.mentions,
         created_at: b.created_at,
       }));
-      const subs = new Map<number, AgentStreamState>();
+      const subs = new Map<string, AgentStreamState>();
       let master: AgentStreamState | null = null;
       for (const run of data.agentRuns ?? []) {
         const agentState: AgentStreamState = {
@@ -783,14 +784,15 @@ export function useCompanyStream(
     streamSetError(companySessionId, null);
     await loadKanbanFromDB();
     if (generation !== lifecycleGenerationRef.current) return;
-    let snapshot: {
+    type StateSnapshotLiveness = {
       liveOrchestrator?: boolean;
       masterAlive?: boolean;
       pendingMasterInboxCount?: number;
-    } | null = null;
+    };
+    let snapshot: StateSnapshotLiveness | null = null;
     try {
       const r = await fetch(routeUrl('/state-snapshot'));
-      if (r.ok) snapshot = (await r.json()) as typeof snapshot;
+      if (r.ok) snapshot = (await r.json()) as StateSnapshotLiveness;
     } catch {
       /* fall through to /attach optimistic path */
     }
@@ -911,7 +913,7 @@ export function useCompanyStream(
   );
 
   const respondToMasterPlan = useCallback(
-    async (promptId: number, approved: boolean, feedback?: string) => {
+    async (promptId: string, approved: boolean, feedback?: string) => {
       if (companySessionId == null) return;
       try {
         const submit = async (retryOutcomeUnknown = false): Promise<void> => {
@@ -978,7 +980,7 @@ export function useCompanyStream(
   );
 
   const respondToMasterQuestion = useCallback(
-    async (promptId: number, answer: string) => {
+    async (promptId: string, answer: string) => {
       if (companySessionId == null) return;
       try {
         const submit = async (retryOutcomeUnknown = false): Promise<void> => {
@@ -1176,18 +1178,19 @@ export function useCompanyStream(
 
 interface InitialFetchResponse {
   recentBoard?: Array<{
-    id: number;
+    id: string;
+    seq: number;
     author_role: string;
-    agent_run_id: number | null;
+    agent_run_id: string | null;
     kind: string;
     content: string;
-    mentions_json: string;
+    mentions: string[];
     created_at: string;
   }>;
   agentRuns?: Array<{
-    id: number;
+    id: string;
     role: string;
-    coder_session_id: number;
+    coder_session_id: string;
     status: AgentStreamState['status'];
     status_message: string;
   }>;

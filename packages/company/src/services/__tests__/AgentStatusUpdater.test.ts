@@ -7,20 +7,27 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AgentStatusUpdater } from '@mcp/company/services/AgentStatusUpdater.js';
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000090';
+const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000007';
+const CODER_SESSION_ID = '00000000-0000-4000-8000-000000000042';
+
 function make() {
-  const updateAgentRunStatus = vi.fn();
+  const updateAgentRunStatus = vi.fn(async () => null);
   const publish = vi.fn();
-  const ctx = { companyStore: { updateAgentRunStatus } } as never;
+  const ctx = {
+    companySessionId: COMPANY_SESSION_ID,
+    companyFiles: { updateAgentRunStatus },
+  } as never;
   const bus = { bus: null, publish, markEnded: vi.fn() } as never;
   return { updater: new AgentStatusUpdater(ctx, bus), updateAgentRunStatus, publish };
 }
 
 function makeApp() {
-  const updateAgentRunStatus = vi.fn();
+  const updateAgentRunStatus = vi.fn(async () => null);
   const publish = vi.fn();
   const getAgentRun = vi.fn(() => ({
-    id: 7,
-    company_session_id: 90,
+    id: AGENT_RUN_ID,
+    company_session_id: COMPANY_SESSION_ID,
     configured_provider: 'openai-chatgpt',
     configured_model: 'gpt-5.6-sol',
     provider: 'openai-chatgpt',
@@ -30,8 +37,11 @@ function makeApp() {
   }));
   const ctx = {
     runtimeKind: 'app_studio',
-    companySessionId: 90,
-    companyStore: { updateAgentRunStatus, getAgentRun },
+    companySessionId: COMPANY_SESSION_ID,
+    companyFiles: {
+      updateAgentRunStatus,
+      getAgentRunSync: getAgentRun,
+    },
   } as never;
   const bus = { bus: null, publish, markEnded: vi.fn() } as never;
   return { updater: new AgentStatusUpdater(ctx, bus), publish };
@@ -40,37 +50,50 @@ function makeApp() {
 describe('AgentStatusUpdater.publishStatus', () => {
   it('writes status to the store and publishes agent_status with coderSessionId', () => {
     const { updater, updateAgentRunStatus, publish } = make();
-    updater.publishStatus(7, 'backend', 'running', { coderSessionId: 42 });
-    expect(updateAgentRunStatus).toHaveBeenCalledWith(7, 'running', undefined);
+    updater.publishStatus(AGENT_RUN_ID, 'backend', 'running', {
+      coderSessionId: CODER_SESSION_ID,
+    });
+    expect(updateAgentRunStatus).toHaveBeenCalledWith(
+      AGENT_RUN_ID,
+      'running',
+      undefined,
+    );
     expect(publish).toHaveBeenCalledWith('agent_status', {
-      agentRunId: 7,
+      agentRunId: AGENT_RUN_ID,
       role: 'backend',
       status: 'running',
       message: '',
-      coderSessionId: 42,
+      coderSessionId: CODER_SESSION_ID,
     });
   });
 
   it('setStatusWithBoard publishes (via publishStatus) AND posts a board line', () => {
     const { updater, publish } = make();
     const post = vi.fn();
-    updater.setStatusWithBoard(7, 'backend', 'waiting', 'done', { post });
+    updater.setStatusWithBoard(AGENT_RUN_ID, 'backend', 'waiting', 'done', { post });
     expect(publish).toHaveBeenCalledWith('agent_status', {
-      agentRunId: 7,
+      agentRunId: AGENT_RUN_ID,
       role: 'backend',
       status: 'waiting',
       message: 'done',
       coderSessionId: undefined,
     });
-    expect(post).toHaveBeenCalledWith('backend', 7, 'message', expect.stringContaining('waiting'));
+    expect(post).toHaveBeenCalledWith(
+      'backend',
+      AGENT_RUN_ID,
+      'message',
+      expect.stringContaining('waiting'),
+    );
   });
 
   it('adds configured/effective model provenance for App-owned runs', () => {
     const { updater, publish } = makeApp();
-    updater.publishStatus(7, 'backend', 'running', { coderSessionId: 42 });
+    updater.publishStatus(AGENT_RUN_ID, 'backend', 'running', {
+      coderSessionId: CODER_SESSION_ID,
+    });
 
     expect(publish).toHaveBeenCalledWith('agent_status', expect.objectContaining({
-      agentRunId: 7,
+      agentRunId: AGENT_RUN_ID,
       role: 'backend',
       configuredProvider: 'openai-chatgpt',
       configuredModel: 'gpt-5.6-sol',

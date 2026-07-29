@@ -9,6 +9,8 @@ import {
   buildSubordinateCompanyBlock,
 } from '../../system-prompts.js';
 
+const APP_STUDIO_SESSION_ID = '00000000-0000-4000-8000-000000000042';
+
 describe('CompanySessionCapabilities', () => {
   it('keeps generic Company on Kanban/pipelines without App tools', () => {
     const capabilities = resolveCompanySessionCapabilities('company');
@@ -30,9 +32,12 @@ describe('CompanySessionCapabilities', () => {
   });
 
   it('resolves an App team to the controlled workflow capability', () => {
-    const capabilities = resolveCompanySessionCapabilities('app_studio', 42);
+    const capabilities = resolveCompanySessionCapabilities(
+      'app_studio',
+      APP_STUDIO_SESSION_ID,
+    );
     expect(capabilities).toMatchObject({
-      appStudioSessionId: 42,
+      appStudioSessionId: APP_STUDIO_SESSION_ID,
       promptProfile: 'app_studio',
       toolProfile: 'app_studio',
       autonomyPolicy: 'controlled_app_work',
@@ -63,7 +68,10 @@ describe('CompanySessionCapabilities', () => {
   });
 
   it('disables universal approval and generic orphan recovery for App teams', () => {
-    const capabilities = resolveCompanySessionCapabilities('app_studio', 42);
+    const capabilities = resolveCompanySessionCapabilities(
+      'app_studio',
+      APP_STUDIO_SESSION_ID,
+    );
     expect(constrainAutonomyForCapabilities(capabilities, {
       scheduler: true,
       orphanReset: true,

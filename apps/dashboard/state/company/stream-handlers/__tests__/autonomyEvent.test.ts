@@ -12,20 +12,30 @@ import {
   type AutonomySlice,
 } from '../../autonomySlice.js';
 
+const SESSION_ID = '11111111-1111-4111-8111-111111111111';
+const OTHER_SESSION_ID = '22222222-2222-4222-8222-222222222222';
+
 describe('mapAutonomyStreamEvent', () => {
   it('maps scheduler_dispatched to a dispatch event with server timestamp', () => {
     const ev = mapAutonomyStreamEvent('scheduler_dispatched', {
-      cardId: 3, role: 'frontend', agentRunId: 42, at: 1111,
+      cardId: '33333333-3333-4333-8333-333333333333',
+      role: 'frontend',
+      agentRunId: '42424242-4242-4242-8242-424242424242',
+      at: 1111,
     });
     expect(ev).toMatchObject({
       type: 'dispatch', event: 'scheduler_dispatched',
-      cardId: 3, role: 'frontend', agentRunId: 42, atMs: 1111,
+      cardId: '33333333-3333-4333-8333-333333333333',
+      role: 'frontend',
+      agentRunId: '42424242-4242-4242-8242-424242424242',
+      atMs: 1111,
     });
   });
 
   it('maps scheduler_skipped to a skip event carrying the reason', () => {
-    const ev = mapAutonomyStreamEvent('scheduler_skipped', { cardId: 9, reason: 'no_role', at: 5 });
-    expect(ev).toMatchObject({ type: 'skip', cardId: 9, reason: 'no_role', atMs: 5 });
+    const cardId = '99999999-9999-4999-8999-999999999999';
+    const ev = mapAutonomyStreamEvent('scheduler_skipped', { cardId, reason: 'no_role', at: 5 });
+    expect(ev).toMatchObject({ type: 'skip', cardId, reason: 'no_role', atMs: 5 });
   });
 
   it('maps scheduler_sweep to an aggregate dispatch event', () => {
@@ -36,23 +46,44 @@ describe('mapAutonomyStreamEvent', () => {
   });
 
   it('maps plan_auto_approved to an approval event', () => {
-    const ev = mapAutonomyStreamEvent('plan_auto_approved', { agentRunId: 42, role: 'backend' });
-    expect(ev).toMatchObject({ type: 'approval', agentRunId: 42, role: 'backend' });
+    const ev = mapAutonomyStreamEvent('plan_auto_approved', {
+      agentRunId: '42424242-4242-4242-8242-424242424242',
+      role: 'backend',
+    });
+    expect(ev).toMatchObject({
+      type: 'approval',
+      agentRunId: '42424242-4242-4242-8242-424242424242',
+      role: 'backend',
+    });
   });
 
   it('maps supervisor_incident using detectedAtMs as the timestamp', () => {
     const ev = mapAutonomyStreamEvent('supervisor_incident', {
-      kind: 'agent_quarantined', agentRunId: 7, detail: 'too many recoveries', detectedAtMs: 999,
+      kind: 'agent_quarantined',
+      agentRunId: '77777777-7777-4777-8777-777777777777',
+      detail: 'too many recoveries',
+      detectedAtMs: 999,
     });
     expect(ev).toMatchObject({
-      type: 'incident', kind: 'agent_quarantined', agentRunId: 7,
+      type: 'incident',
+      kind: 'agent_quarantined',
+      agentRunId: '77777777-7777-4777-8777-777777777777',
       detail: 'too many recoveries', atMs: 999,
     });
   });
 
   it('maps master_nudge (case → kind)', () => {
-    const ev = mapAutonomyStreamEvent('master_nudge', { case: 'decision', agentRunId: 3, at: 42 });
-    expect(ev).toMatchObject({ type: 'nudge', kind: 'decision', agentRunId: 3, atMs: 42 });
+    const ev = mapAutonomyStreamEvent('master_nudge', {
+      case: 'decision',
+      agentRunId: '33333333-3333-4333-8333-333333333333',
+      at: 42,
+    });
+    expect(ev).toMatchObject({
+      type: 'nudge',
+      kind: 'decision',
+      agentRunId: '33333333-3333-4333-8333-333333333333',
+      atMs: 42,
+    });
   });
 
   it('returns null for non-autonomy events', () => {
@@ -90,26 +121,38 @@ describe('autonomySlice', () => {
   it('pushes events and keeps the ring bounded', () => {
     const store = makeStore();
     for (let i = 0; i < AUTONOMY_RING_MAX + 20; i++) {
-      store.getState().autonomyPushEvent(1, evt({ atMs: i, cardId: i }));
+      const cardId = `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+      store.getState().autonomyPushEvent(SESSION_ID, evt({ atMs: i, cardId }));
     }
-    const state = store.getState().autonomy.get(1)!;
+    const state = store.getState().autonomy.get(SESSION_ID)!;
     expect(state.events).toHaveLength(AUTONOMY_RING_MAX);
     expect(state.events[state.events.length - 1]!.atMs).toBe(AUTONOMY_RING_MAX + 19);
   });
 
   it('drops an SSE replay of the same event (same server timestamp/fields)', () => {
     const store = makeStore();
-    const wire = { cardId: 3, role: 'frontend', agentRunId: 42, at: 1111 };
-    store.getState().autonomyPushEvent(1, mapAutonomyStreamEvent('scheduler_dispatched', wire)!);
-    store.getState().autonomyPushEvent(1, mapAutonomyStreamEvent('scheduler_dispatched', wire)!);
-    expect(store.getState().autonomy.get(1)!.events).toHaveLength(1);
+    const wire = {
+      cardId: '33333333-3333-4333-8333-333333333333',
+      role: 'frontend',
+      agentRunId: '42424242-4242-4242-8242-424242424242',
+      at: 1111,
+    };
+    store.getState().autonomyPushEvent(
+      SESSION_ID,
+      mapAutonomyStreamEvent('scheduler_dispatched', wire)!,
+    );
+    store.getState().autonomyPushEvent(
+      SESSION_ID,
+      mapAutonomyStreamEvent('scheduler_dispatched', wire)!,
+    );
+    expect(store.getState().autonomy.get(SESSION_ID)!.events).toHaveLength(1);
   });
 
   it('hydrate seeds config + historical events before live ones, deduped', () => {
     const store = makeStore();
     const live = evt({ atMs: 50, type: 'incident', kind: 'stuck_detected' });
-    store.getState().autonomyPushEvent(1, live);
-    store.getState().autonomyHydrate(1, {
+    store.getState().autonomyPushEvent(SESSION_ID, live);
+    store.getState().autonomyHydrate(SESSION_ID, {
       config: { scheduler: true, freeze: false },
       events: [
         evt({ atMs: 10, type: 'approval' }),
@@ -117,7 +160,7 @@ describe('autonomySlice', () => {
         evt({ atMs: 50, type: 'incident', kind: 'stuck_detected' }),
       ],
     });
-    const state = store.getState().autonomy.get(1)!;
+    const state = store.getState().autonomy.get(SESSION_ID)!;
     expect(state.initialized).toBe(true);
     expect(state.config).toMatchObject({ scheduler: true });
     expect(state.events.map((e) => e.atMs)).toEqual([10, 50]);
@@ -125,17 +168,20 @@ describe('autonomySlice', () => {
 
   it('setConfig replaces config without touching events', () => {
     const store = makeStore();
-    store.getState().autonomyPushEvent(1, evt());
-    store.getState().autonomySetConfig(1, { freeze: true });
-    const state = store.getState().autonomy.get(1)!;
+    store.getState().autonomyPushEvent(SESSION_ID, evt());
+    store.getState().autonomySetConfig(SESSION_ID, { freeze: true });
+    const state = store.getState().autonomy.get(SESSION_ID)!;
     expect(state.config).toEqual({ freeze: true });
     expect(state.events).toHaveLength(1);
   });
 
   it('hydrate on an empty slot works (panel mounted before stream)', () => {
     const store = makeStore();
-    store.getState().autonomyHydrate(7, { config: { scheduler: false }, events: [] });
-    const state = store.getState().autonomy.get(7)!;
+    store.getState().autonomyHydrate(
+      OTHER_SESSION_ID,
+      { config: { scheduler: false }, events: [] },
+    );
+    const state = store.getState().autonomy.get(OTHER_SESSION_ID)!;
     expect(state.initialized).toBe(true);
     expect(state.events).toEqual([]);
   });

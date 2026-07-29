@@ -9,6 +9,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RuntimeReconciler, type RuntimeReconcilerDeps } from '../RuntimeReconciler.js';
 import { resolveAutonomy } from '../autonomy/autonomy-config.js';
 
+const SESSION_ID = 'c0000000-0000-4000-8000-000000000001';
+const DEAD_RUN_ID = 'a0000000-0000-4000-8000-000000000005';
+const CARD_ID = 'e0000000-0000-4000-8000-000000000010';
+
 /** Fake per-session autonomy provider over a session `autonomy` object. */
 function fakeAutonomy(autonomy: Record<string, unknown>) {
   return { get: () => resolveAutonomy(JSON.stringify({ autonomy }), {} as NodeJS.ProcessEnv) };
@@ -22,18 +26,18 @@ function makeReconciler(opts: {
   const addComment = vi.fn();
   const deps = {
     ctx: {
-      companySessionId: 1,
-      companyStore: {
-        // Run 5 is dead ('completed') → card 10 below is orphaned.
-        listAgentRuns: () => [{ id: 5, role: 'frontend', status: 'completed' }],
+      companySessionId: SESSION_ID,
+      companyFiles: {
+        // This run is dead ('completed') → the card below is orphaned.
+        listAgentRunsSync: () => [{ id: DEAD_RUN_ID, role: 'frontend', status: 'completed' }],
       },
     },
     kanban: {
       listCardsFull: () => [{
-        id: 10,
+        id: CARD_ID,
         column: 'in_progress',
         blocked_by: [],
-        agents: [{ agent_run_id: 5, unassigned_at: null }],
+        agents: [{ agent_run_id: DEAD_RUN_ID, unassigned_at: null }],
       }],
       moveCard,
       unassignAgent,
@@ -57,8 +61,8 @@ describe('RuntimeReconciler — C2 orphanReset autonomy gate', () => {
   it('default ON: no env, no provider → orphaned card is unassigned and reset to todo', () => {
     const { sweep, moveCard, unassignAgent } = makeReconciler({});
     sweep();
-    expect(unassignAgent).toHaveBeenCalledWith(10, 5);
-    expect(moveCard).toHaveBeenCalledWith(10, 'todo');
+    expect(unassignAgent).toHaveBeenCalledWith(CARD_ID, DEAD_RUN_ID);
+    expect(moveCard).toHaveBeenCalledWith(CARD_ID, 'todo');
   });
 
   it("env MCP_COMPANY_SCHEDULER='0' kills the sweep (no provider → env fallback)", () => {
@@ -98,6 +102,6 @@ describe('RuntimeReconciler — C2 orphanReset autonomy gate', () => {
     expect(moveCard).not.toHaveBeenCalled();
     frozen = false; // e.g. PATCH /config lifted the freeze → provider re-reads
     sweep();
-    expect(moveCard).toHaveBeenCalledWith(10, 'todo');
+    expect(moveCard).toHaveBeenCalledWith(CARD_ID, 'todo');
   });
 });

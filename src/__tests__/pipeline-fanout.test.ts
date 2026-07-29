@@ -4,9 +4,9 @@ import type { PipelineNode } from '@mcp/company/types.js';
 
 // Mock the only DB-touching value import so this test stays pure (no
 // better-sqlite3). Branch output is keyed by coder session id.
-const { OUTPUTS } = vi.hoisted(() => ({ OUTPUTS: {} as Record<number, string> }));
+const { OUTPUTS } = vi.hoisted(() => ({ OUTPUTS: {} as Record<string, string> }));
 vi.mock('@mcp/company/services/finalText.js', () => ({
-  readFinalAssistantText: (sid: number) => OUTPUTS[sid] ?? '',
+  readFinalAssistantText: (_store: unknown, sid: string) => OUTPUTS[sid] ?? '',
 }));
 
 // Imported after the mock is registered (vi.mock is hoisted).
@@ -16,44 +16,86 @@ function flush() {
   return new Promise((r) => setTimeout(r, 0));
 }
 
+const EXECUTION_ID = '00000000-0000-4000-8000-000000000001';
+const COMPANY_ID = '00000000-0000-4000-8000-000000000002';
+const AGENT_IDS = [
+  '00000000-0000-4000-8000-000000000011',
+  '00000000-0000-4000-8000-000000000012',
+  '00000000-0000-4000-8000-000000000013',
+] as const;
+const CODER_IDS = [
+  '00000000-0000-4000-8000-000000000021',
+  '00000000-0000-4000-8000-000000000022',
+  '00000000-0000-4000-8000-000000000023',
+] as const;
+const ROW_IDS = [
+  '00000000-0000-4000-8000-000000000031',
+  '00000000-0000-4000-8000-000000000032',
+  '00000000-0000-4000-8000-000000000033',
+] as const;
+const CARD_IDS = [
+  '00000000-0000-4000-8000-000000000041',
+  '00000000-0000-4000-8000-000000000042',
+] as const;
+
 describe('FanOutRunner', () => {
   it('spawns each project, retries a failed branch, then aggregates and joins', async () => {
     const attention = new MasterAttention();
     const barriers = new Map();
 
     // agentRunId → terminal status; branch 2 fails once, retry (id 3) passes.
-    const STATUS: Record<number, string> = { 1: 'completed', 2: 'error', 3: 'completed' };
-    OUTPUTS[10] = 'OUT-A';
-    OUTPUTS[20] = '';
-    OUTPUTS[30] = 'OUT-B';
+    const STATUS: Record<string, string> = {
+      [AGENT_IDS[0]]: 'completed',
+      [AGENT_IDS[1]]: 'error',
+      [AGENT_IDS[2]]: 'completed',
+    };
+    OUTPUTS[CODER_IDS[0]] = 'OUT-A';
+    OUTPUTS[CODER_IDS[1]] = '';
+    OUTPUTS[CODER_IDS[2]] = 'OUT-B';
 
     let agentSeq = 0;
     let rowSeq = 0;
     let cardSeq = 0;
-    const nodeRows: Record<number, { status?: string; output?: string }> = {};
+    const nodeRows: Record<string, { status?: string; output?: string }> = {};
 
     const exec = {
-      id: 1, pipeline_id: 7, status: 'running',
+      id: EXECUTION_ID, pipeline_id: 7, status: 'running',
       context: { snapshot: { version: 1, nodes: [], edges: [] }, vars: {} },
     };
     const companyStore = {
       getPipelineExecution: () => exec,
-      createPipelineNodeExecution: () => { rowSeq += 1; nodeRows[rowSeq] = {}; return { id: rowSeq }; },
-      updatePipelineNodeExecution: (id: number, patch: { status?: string; output_text?: string }) => {
+      createPipelineNodeExecution: () => {
+        const id = ROW_IDS[rowSeq++]!;
+        nodeRows[id] = {};
+        return { id };
+      },
+      updatePipelineNodeExecution: (id: string, patch: { status?: string; output_text?: string }) => {
         nodeRows[id] = { ...nodeRows[id], ...patch };
       },
     };
     const ctx = {
       companyStore,
+      companyFiles: { sessionStore: {} },
       projects: [
-        { company_session_id: 1, project_id: 11, label: 'A' },
-        { company_session_id: 1, project_id: 22, label: 'B' },
+        { company_session_id: COMPANY_ID, project_id: 11, label: 'A' },
+        { company_session_id: COMPANY_ID, project_id: 22, label: 'B' },
       ],
     };
-    const kanban = { createCard: () => { cardSeq += 1; return { id: cardSeq }; }, assignAgent: () => {}, moveCard: () => {} };
+    const kanban = {
+      createCard: () => ({ id: CARD_IDS[cardSeq++]! }),
+      assignAgent: () => {},
+      moveCard: () => {},
+    };
     const subordinates = {
-      spawn: async () => { agentSeq += 1; return { agentRunId: agentSeq, coderSessionId: agentSeq * 10, status: 'running' }; },
-      statusOf: (agentRunId: number) => STATUS[agentRunId] ?? null,
+      spawn: async () => {
+        const index = agentSeq++;
+        return {
+          agentRunId: AGENT_IDS[index]!,
+          coderSessionId: CODER_IDS[index]!,
+          status: 'running',
+        };
+      },
+      statusOf: (agentRunId: string) => STATUS[agentRunId] ?? null,
       abort: () => true,
     };
     const publisher = { publish: vi.fn() };
@@ -80,23 +122,23 @@ describe('FanOutRunner', () => {
       fanOut: { mode: 'each-project', role: 'backend' },
     };
 
-    await runner.run(1, node, 'the-bug', '');
+    await runner.run(EXECUTION_ID, node, 'the-bug', '');
     expect(agentSeq).toBe(2); // one spawn per project
     expect(joined).toBeNull(); // nothing finished yet
 
     // Branch A (agent 1) completes.
-    attention.signal({ kind: 'finished', agentRunId: 1, role: 'backend' });
+    attention.signal({ kind: 'finished', agentRunId: AGENT_IDS[0], role: 'backend' });
     await flush();
     expect(joined).toBeNull(); // still waiting on B
 
     // Branch B (agent 2) fails → retry spawns agent 3.
-    attention.signal({ kind: 'finished', agentRunId: 2, role: 'backend' });
+    attention.signal({ kind: 'finished', agentRunId: AGENT_IDS[1], role: 'backend' });
     await flush();
     expect(agentSeq).toBe(3);
     expect(joined).toBeNull();
 
     // Retry (agent 3) completes → barrier drains → join.
-    attention.signal({ kind: 'finished', agentRunId: 3, role: 'backend' });
+    attention.signal({ kind: 'finished', agentRunId: AGENT_IDS[2], role: 'backend' });
     await flush();
 
     expect(failed).not.toHaveBeenCalled();
@@ -112,20 +154,30 @@ describe('FanOutRunner', () => {
   it('marks a branch FAILED in the aggregate after exhausting retries (best-effort)', async () => {
     const attention = new MasterAttention();
     const barriers = new Map();
-    OUTPUTS[10] = 'ok-out';
+    OUTPUTS[CODER_IDS[0]] = 'ok-out';
 
     let agentSeq = 0; let rowSeq = 0; let cardSeq = 0;
-    const exec = { id: 1, pipeline_id: 7, status: 'running', context: { snapshot: { version: 1, nodes: [], edges: [] }, vars: {} } };
+    const exec = { id: EXECUTION_ID, pipeline_id: 7, status: 'running', context: { snapshot: { version: 1, nodes: [], edges: [] }, vars: {} } };
     const companyStore = {
       getPipelineExecution: () => exec,
-      createPipelineNodeExecution: () => { rowSeq += 1; return { id: rowSeq }; },
+      createPipelineNodeExecution: () => ({ id: ROW_IDS[rowSeq++]! }),
       updatePipelineNodeExecution: () => {},
     };
-    const ctx = { companyStore, projects: [{ company_session_id: 1, project_id: 11, label: 'A' }, { company_session_id: 1, project_id: 22, label: 'B' }] };
-    const kanban = { createCard: () => { cardSeq += 1; return { id: cardSeq }; }, assignAgent: () => {}, moveCard: () => {} };
+    const ctx = {
+      companyStore,
+      companyFiles: { sessionStore: {} },
+      projects: [
+        { company_session_id: COMPANY_ID, project_id: 11, label: 'A' },
+        { company_session_id: COMPANY_ID, project_id: 22, label: 'B' },
+      ],
+    };
+    const kanban = { createCard: () => ({ id: CARD_IDS[cardSeq++]! }), assignAgent: () => {}, moveCard: () => {} };
     const subordinates = {
-      spawn: async () => { agentSeq += 1; return { agentRunId: agentSeq, coderSessionId: agentSeq * 10, status: 'running' }; },
-      statusOf: (id: number) => (id === 1 ? 'completed' : 'error'),
+      spawn: async () => {
+        const index = agentSeq++;
+        return { agentRunId: AGENT_IDS[index]!, coderSessionId: CODER_IDS[index]!, status: 'running' };
+      },
+      statusOf: (id: string) => (id === AGENT_IDS[0] ? 'completed' : 'error'),
       abort: () => true,
     };
     let joined: string | null = null;
@@ -143,9 +195,9 @@ describe('FanOutRunner', () => {
       fanOut: { mode: 'each-project', role: 'backend' },
     };
 
-    await runner.run(1, node, 'bug', '');
-    attention.signal({ kind: 'finished', agentRunId: 1, role: 'backend' });
-    attention.signal({ kind: 'finished', agentRunId: 2, role: 'backend' });
+    await runner.run(EXECUTION_ID, node, 'bug', '');
+    attention.signal({ kind: 'finished', agentRunId: AGENT_IDS[0], role: 'backend' });
+    attention.signal({ kind: 'finished', agentRunId: AGENT_IDS[1], role: 'backend' });
     await flush();
 
     expect(joined).not.toBeNull();

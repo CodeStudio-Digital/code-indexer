@@ -3,6 +3,11 @@ import {
   IdleController,
   type IdleControllerDeps,
 } from '@mcp/company/services/IdleController.js';
+import { asCompanySessionId } from '@mcp/session-storage';
+
+const COMPANY_SESSION_ID = asCompanySessionId(
+  'c0000000-0000-4000-8000-000000000042',
+);
 
 /**
  * Mock environment for IdleController. The service depends on small
@@ -36,17 +41,17 @@ function makeHarness(overrides: Partial<Harness['state']> = {}): Harness {
   };
   const publish = vi.fn();
   const markEnded = vi.fn();
-  const updateStatus = vi.fn();
+  const updateStatus = vi.fn(async () => undefined);
   const onAutoContinue = vi.fn();
   const consumeMasterShouldContinue = vi.fn(() => false);
 
   const deps: IdleControllerDeps = {
     ctx: {
-      companySessionId: 42,
+      companySessionId: COMPANY_SESSION_ID,
       // The controller only reads three fields off the context.
       get isAborted() { return state.aborted; },
       get isBusEnded() { return state.busEnded; },
-      companyStore: { updateCompanySessionStatus: updateStatus } as never,
+      companyFiles: { updateSessionStatus: updateStatus } as never,
     } as never,
     bus: { publish, markEnded } as never,
     subordinates: {
@@ -85,10 +90,11 @@ describe('IdleController', () => {
   it('publishes session_idle with waiting_for_input when master ends cleanly', () => {
     const h = makeHarness({ hasEnded: true, runningCount: 0 });
     h.controller.onMasterEnded();
-    expect(h.publish).toHaveBeenCalledWith('session_idle', {
-      reason: 'waiting_for_input',
-    });
-    expect(h.updateStatus).toHaveBeenCalledWith(42, 'paused');
+    expect(h.publish).toHaveBeenCalledWith(
+      'session_idle',
+      expect.objectContaining({ reason: 'waiting_for_input' }),
+    );
+    expect(h.updateStatus).toHaveBeenCalledWith('paused');
   });
 
   it('reports master_error reason when the master ended with an error', () => {
@@ -98,10 +104,13 @@ describe('IdleController', () => {
       endedWithError: 'provider timeout',
     });
     h.controller.onMasterEnded();
-    expect(h.publish).toHaveBeenCalledWith('session_idle', {
-      reason: 'master_error',
-      errorDetail: 'provider timeout',
-    });
+    expect(h.publish).toHaveBeenCalledWith(
+      'session_idle',
+      expect.objectContaining({
+        reason: 'master_error',
+        errorDetail: 'provider timeout',
+      }),
+    );
   });
 
   it('does nothing while subordinates are still running', () => {
@@ -142,9 +151,10 @@ describe('IdleController', () => {
     expect(h.publish).not.toHaveBeenCalled();
     h.state.runningCount = 0;
     h.controller.onSubordinatesChanged();
-    expect(h.publish).toHaveBeenCalledWith('session_idle', {
-      reason: 'waiting_for_input',
-    });
+    expect(h.publish).toHaveBeenCalledWith(
+      'session_idle',
+      expect.objectContaining({ reason: 'waiting_for_input' }),
+    );
   });
 
   it('marks the bus done(idle_timeout) after the configured timeout elapses', () => {
@@ -154,7 +164,7 @@ describe('IdleController', () => {
     expect(h.markEnded).not.toHaveBeenCalled();
     vi.advanceTimersByTime(60_000);
     expect(h.markEnded).toHaveBeenCalledWith('done', { reason: 'idle_timeout' });
-    expect(h.updateStatus).toHaveBeenLastCalledWith(42, 'completed');
+    expect(h.updateStatus).toHaveBeenLastCalledWith('completed');
   });
 
   it('cancels the timeout when a subordinate becomes running before it fires', () => {
@@ -202,11 +212,9 @@ describe('IdleController', () => {
     expect(h.markEnded).toHaveBeenCalledOnce();
   });
 
-  it('does not call updateStatus if it throws (best-effort persistence)', () => {
+  it('does not surface a rejected status write (best-effort persistence)', () => {
     const h = makeHarness();
-    h.updateStatus.mockImplementationOnce(() => {
-      throw new Error('db locked');
-    });
+    h.updateStatus.mockRejectedValueOnce(new Error('bundle write failed'));
     expect(() => h.controller.onMasterEnded()).not.toThrow();
     expect(h.publish).toHaveBeenCalled(); // publish still fires
   });

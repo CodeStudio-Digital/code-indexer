@@ -34,6 +34,7 @@ import { defineEditorThemes } from '../features/workspace/editor/themes/index.js
 import { enrichPhpHighlighting, registerPhpConstructHover } from '../features/workspace/editor/php-highlight.js';
 import { registerGroovyHighlighting } from '../features/workspace/editor/groovy-highlight.js';
 import { enrichJavaCsharpHighlighting } from '../features/workspace/editor/java-csharp-highlight.js';
+import { enrichAnnotationHighlighting } from '../features/workspace/editor/annotation-highlight.js';
 import { registerIgnoreHighlighting } from '../features/workspace/editor/ignore-highlight.js';
 import { registerJsonlSupport } from '../features/workspace/editor/jsonl-support.js';
 import { applyLanguageConfigOverlays } from '../features/workspace/editor/language-configs/index.js';
@@ -130,6 +131,10 @@ export function setupMonaco(): void {
   // Enrich PHP highlighting so functions/methods/properties/classes get
   // distinct colours from syntax (free intelephense gives no semantic tokens).
   enrichPhpHighlighting(monaco);
+
+  // Annotations/decorators/attributes are declarations, not comments or markup:
+  // give TS/JS/Python/Rust the same `annotation` scope Java & C# already emit.
+  enrichAnnotationHighlighting(monaco);
   // Hover docs for language constructs (isset/empty/…) that intelephense doesn't document.
   registerPhpConstructHover(monaco);
 

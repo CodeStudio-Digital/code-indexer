@@ -20,7 +20,7 @@ export interface UseLiveRunResult {
   loading: boolean;
 }
 
-export function useLiveRun(sessionId: number, opts?: { serviceId?: string }): UseLiveRunResult {
+export function useLiveRun(sessionId: string, opts?: { serviceId?: string }): UseLiveRunResult {
   const [run, setRun] = useState<QaRun | null>(null);
   const [results, setResults] = useState<QaTestResultWithUrls[]>([]);
   const [loading, setLoading] = useState(true);

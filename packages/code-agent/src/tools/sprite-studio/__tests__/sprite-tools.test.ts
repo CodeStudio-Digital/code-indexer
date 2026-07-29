@@ -48,16 +48,23 @@ describe('buildSpriteStudioTools', () => {
       listAssets: async () => [],
       generate: async (input) => {
         calls.push(input);
-        return { assetId: 3, slug: 'goblin', versionId: 11, fileRelPath: 'assets/goblin/v001.png', width: 32, height: 32 };
+        return {
+          assetId: '00000000-0000-4000-8000-000000000003',
+          slug: 'goblin',
+          versionId: '00000000-0000-4000-8000-000000000011',
+          fileRelPath: 'assets/goblin/v001.png',
+          width: 32,
+          height: 32,
+        };
       },
-      process: async () => ({ versionId: 0 }),
+      process: async () => ({ versionId: '00000000-0000-4000-8000-000000000012' }),
       export: async () => ({ files: [] }),
     };
     setGlobalSpriteStudioHost(host);
     const gen = buildSpriteStudioTools(7).find((t) => t.name === 'sprite_generate')!;
     const res = await gen.handler({ intent: 'a goblin chef', asset_name: 'Goblin' }, CTX);
     expect(res.isError).toBeFalsy();
-    expect(res.content).toContain('version_id: 11');
+    expect(res.content).toContain('version_id: 00000000-0000-4000-8000-000000000011');
     expect(res.content).toContain('assets/goblin/v001.png');
     expect(calls).toEqual([
       { projectId: 7, intent: 'a goblin chef', assetId: undefined, assetName: 'Goblin', category: undefined, n: 1, autoSave: true },

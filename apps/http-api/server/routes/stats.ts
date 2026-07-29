@@ -2,6 +2,7 @@ import type { Hono } from 'hono';
 import { generationMatchesEmbeddingFingerprint, NullVectorStore } from '@mcp/store/vectors.js';
 import { embedQueryForNamespace } from '@mcp/indexer/search/embeddings.js';
 import { codeNamespace } from '@mcp/shared/vector-namespace.js';
+import { readFsSessionMemoryKpis } from '@mcp/code-agent/sessions/fs-store/index.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, notFound } from './_helpers.js';
 import { timeSection } from '../perf/breakdown.js';
@@ -17,17 +18,21 @@ export function mountStatsRoutes(app: Hono, deps: ServerDeps): void {
    * Agent Memory health (migration 181) — feeds the project Memory tab's
    * "is memory actually being used?" card: live project/user memory counts plus
    * telemetry (remember/recall/forget + recalls that injected ≥1 memory).
-   * Read-only over agent_memory / agent_memory_events.
+   * Read-only over shared agent_memory tables and filesystem session bundles.
    */
-  app.get('/api/projects/:id/agent-memory/stats', (c) => {
+  app.get('/api/projects/:id/agent-memory/stats', async (c) => {
     const projectId = parseIdParam(c);
     const project = db.getProject(projectId);
     if (!project) return notFound(c);
+    const sessionKpis = await readFsSessionMemoryKpis(
+      deps.sessionStore,
+      projectId,
+    );
     return c.json({
       ...db.getAgentMemoryStats(projectId),
-      // Effectiveness KPIs (30d, pure SQL) — the measurable loop behind
-      // "is memory making the agent better over time?" (chips on the card).
-      kpis: db.getMemoryEffectivenessKpis(projectId),
+      // Shared memory stock/recall stays in SQLite. Learning and explicit-tool
+      // counters come from the owning/linked filesystem session bundles.
+      kpis: db.getMemoryEffectivenessKpis(projectId, sessionKpis),
     });
   });
 

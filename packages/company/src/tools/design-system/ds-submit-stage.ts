@@ -56,7 +56,7 @@ export function dsSubmitStage(binding: DsToolBinding): CoderTool {
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_submit_stage: DesignSystemStore not wired.');
-        const session = binding.resolveDsSession(store);
+        const session = await binding.resolveDsSession(store);
         if (!session) return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
         const state = parsePipelineState(session.pipeline_json);
         if (!state) {
@@ -71,7 +71,7 @@ export function dsSubmitStage(binding: DsToolBinding): CoderTool {
           mode: session.mode,
           workspaceDir: resolved.path,
           state,
-          recorded: collectRecordedComponents(store, session.id),
+          recorded: await collectRecordedComponents(store, session.id),
         });
 
         let next;
@@ -81,7 +81,7 @@ export function dsSubmitStage(binding: DsToolBinding): CoderTool {
           if (e instanceof DsStageTransitionError) return err(e.message);
           throw e;
         }
-        store.setPipelineJson(session.id, serializePipelineState(next));
+        await store.setPipelineJson(session.id, serializePipelineState(next));
 
         if (!gate.ok) {
           return err(

@@ -14,7 +14,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseCompanySessionIdParam, notFound } from '../_helpers.js';
 
 const OPENAPI_CANDIDATES: ReadonlyArray<string> = [
   'openapi.yaml',
@@ -34,12 +34,10 @@ async function parseOpenApiYaml(raw: string): Promise<unknown> {
 }
 
 export function mountCompanyOpenApiRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore } = deps;
-
   app.get('/api/company/sessions/:id/services/:serviceId/openapi', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseCompanySessionIdParam(c);
     const serviceId = c.req.param('serviceId');
-    const session = companyStore.getCompanySession(id);
+    const session = await deps.operationalSessionFiles.getCompanySession(id);
     if (!session) return notFound(c);
 
     const manager = getSandboxManager();

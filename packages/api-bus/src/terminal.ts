@@ -14,7 +14,7 @@ import type { ApiContext, AsyncStream } from './common.js';
  */
 
 export type TerminalTarget =
-  | { kind: 'sandbox'; sessionId: number }
+  | { kind: 'sandbox'; sessionId: string }
   | { kind: 'host' }
   | { kind: 'project'; projectId: number };
 

@@ -222,7 +222,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
           durationMs: performance.now() - t0,
           durationBucket: durationToBucket(performance.now() - t0),
           traceSampled: query.traceSampled,
-        }, diags);
+        }, diags, query);
       }),
     );
     for (const r of results) {
@@ -258,7 +258,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
             candidatesOut: candidates.length,
             sizeBucket: sizeToBucket(candidates.length),
             traceSampled: query.traceSampled,
-          }, diags);
+          }, diags, query);
           return candidates;
         } catch (e) {
           errs.push({ candidateId: '*', stage: 'source', component: s.name, error: (e as Error).message });
@@ -271,7 +271,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
             candidatesOut: 0,
             errors: 1,
             traceSampled: query.traceSampled,
-          }, diags);
+          }, diags, query);
           return [];
         }
       }),
@@ -336,7 +336,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
         sizeBucket: sizeToBucket(candidates.length),
         errors: errCount,
         traceSampled: query.traceSampled,
-      }, diags);
+      }, diags, query);
     }
     return candidates;
   }
@@ -376,7 +376,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
         candidatesOut: result.kept.length,
         sizeBucket: sizeToBucket(result.kept.length),
         traceSampled: query.traceSampled,
-      }, diags);
+      }, diags, query);
       current = result.kept;
     }
     return current;
@@ -430,7 +430,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
         sizeBucket: sizeToBucket(candidates.length),
         errors: errCount,
         traceSampled: query.traceSampled,
-      }, diags);
+      }, diags, query);
     }
     return candidates;
   }
@@ -462,7 +462,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
       candidatesOut: result.selected.length,
       sizeBucket: sizeToBucket(result.selected.length),
       traceSampled: query.traceSampled,
-    }, diags);
+    }, diags, query);
     return result;
   }
 
@@ -488,7 +488,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
               durationMs: performance.now() - t0,
               durationBucket: durationToBucket(performance.now() - t0),
               traceSampled: query.traceSampled,
-            });
+            }, undefined, query);
           })
           .catch(() => {
             this.emit({
@@ -499,7 +499,7 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
               durationBucket: durationToBucket(performance.now() - t0),
               errors: 1,
               traceSampled: query.traceSampled,
-            });
+            }, undefined, query);
           });
       }
     });
@@ -508,8 +508,23 @@ export class CandidatePipeline<Q extends PipelineQuery, C extends PipelineCandid
   // ────────────────────────────────────────────────────────────────────
   // Telemetry emit helper
   // ────────────────────────────────────────────────────────────────────
-  private emit(event: TelemetryEvent, diags?: StageDiagnostic[]): void {
+  private emit(
+    event: TelemetryEvent,
+    diags?: StageDiagnostic[],
+    query?: PipelineQuery,
+  ): void {
     if (diags) diags.push(eventToDiag(event));
-    try { this.cfg.telemetry?.emit(event); } catch { /* never throw from telemetry */ }
+    const scopedEvent: TelemetryEvent = {
+      ...event,
+      queryId: event.queryId ?? query?.queryId,
+      sessionId: event.sessionId ?? query?.resolveContext?.sessionId,
+      companySessionId:
+        event.companySessionId ?? query?.resolveContext?.companySessionId,
+      requestId: event.requestId ?? query?.resolveContext?.requestId,
+      projectId: event.projectId ?? query?.resolveContext?.projectId,
+      consumer: event.consumer ?? query?.resolveContext?.consumer,
+      queryClass: event.queryClass ?? query?.resolveContext?.queryClass,
+    };
+    try { this.cfg.telemetry?.emit(scopedEvent); } catch { /* never throw from telemetry */ }
   }
 }

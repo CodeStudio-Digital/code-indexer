@@ -19,7 +19,7 @@ export interface ActiveView {
     | 'apps'
     | 'other';
   projectId: number | null;
-  sessionId: number | null;
+  sessionId: string | null;
 }
 
 export function parseView(pathname: string, search: string): ActiveView {
@@ -34,7 +34,7 @@ export function parseView(pathname: string, search: string): ActiveView {
     return {
       page: 'project',
       projectId: Number.isFinite(id) ? id : null,
-      sessionId: sessionIdRaw ? Number(sessionIdRaw) : null,
+      sessionId: sessionIdRaw || null,
     };
   }
   if (pathname === '/agents' || pathname.startsWith('/company/sessions/')) {
@@ -43,7 +43,7 @@ export function parseView(pathname: string, search: string): ActiveView {
   if (pathname.startsWith('/global')) {
     const params = new URLSearchParams(search);
     const sessionIdRaw = params.get('session');
-    return { page: 'global', projectId: null, sessionId: sessionIdRaw ? Number(sessionIdRaw) : null };
+    return { page: 'global', projectId: null, sessionId: sessionIdRaw || null };
   }
   if (pathname.startsWith('/admin')) return { page: 'admin', projectId: null, sessionId: null };
   if (pathname.startsWith('/apps')) return { page: 'apps', projectId: null, sessionId: null };

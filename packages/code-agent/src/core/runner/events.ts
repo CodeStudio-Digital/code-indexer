@@ -15,6 +15,23 @@ import type { AsyncOperationSnapshot } from './operations.js';
 export interface RunnerEvents {
   text_delta: (text: string) => void;
   thinking_delta: (text: string) => void;
+  /**
+   * A provider call died mid-stream after already emitting deltas. Those
+   * partial blocks are NEVER persisted — `assistantContent` is only built on
+   * success — so the retry would leave the discarded attempt stranded on
+   * screen, and the model re-reasons from scratch producing a near-identical
+   * summary right below it.
+   *
+   * The payload carries how much this attempt emitted, which fully describes
+   * the correction: consumers trim that many trailing characters and need no
+   * bookkeeping of their own. NOT idempotent — a consumer that replays events
+   * must apply it exactly as often as it applied the deltas it retracts.
+   */
+  stream_rollback: (payload: {
+    textChars: number;
+    thinkingChars: number;
+    reason: string;
+  }) => void;
   tool_call_start: (id: string, name: string, input: Record<string, unknown>) => void;
   /**
    * `input` rides along because harness-refused calls (gate/pre-read/dedup/…)
@@ -88,7 +105,7 @@ export interface RunnerEvents {
    * One nested tool invocation inside a code_exec script settled (success,
    * failure, or guard refusal). 103 code_exec rows could hide up to 50
    * invisible calls each before this event existed — the index.ts listener
-   * persists these to coder_tool_calls with `parent_tool_use_id` set, OUT of
+   * persists these to bundle tool-call records with `parent_tool_use_id` set, out of
    * the paired tool message (they have no matching tool_use block).
    */
   nested_tool_call: (payload: import('@mcp/code-agent/core/tool.js').NestedToolCallRecord) => void;
@@ -620,9 +637,8 @@ export interface RunnerEvents {
    * >30s, Recovering looping). Dashboard can render this as a per-node
    * time histogram; bare CLI consumers may ignore it.
    *
-   * Phase-1 telemetry: emitted but NOT persisted to any table. If we
-   * later want a coder_session_events table, the producer is already
-   * in place.
+   * Emitted as runtime telemetry; durable session consumers persist it to the
+   * owning bundle's metrics/events files rather than a shared database.
    */
   bt_state_dwell: (payload: {
     runId: string;

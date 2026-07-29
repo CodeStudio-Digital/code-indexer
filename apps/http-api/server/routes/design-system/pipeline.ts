@@ -14,7 +14,11 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseJsonBody,
+  parseSessionIdParam,
+  notFound,
+} from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 import {
   DS_STAGE_IDS,
@@ -64,8 +68,8 @@ export function mountDesignSystemPipelineRoutes(app: Hono, deps: ServerDeps): vo
   const { designSystemStore, db } = deps;
 
   /** Sessão studio + root do projeto-workspace, ou uma resposta de erro. */
-  function resolveStudio(id: number) {
-    const session = designSystemStore.getSession(id);
+  async function resolveStudio(id: string) {
+    const session = await designSystemStore.getSession(id);
     if (!session) return { error: 'not-found' as const };
     if (session.kind !== 'studio') return { error: 'legacy' as const };
     const project = session.project_id != null ? db.getProject(session.project_id) : null;
@@ -74,8 +78,8 @@ export function mountDesignSystemPipelineRoutes(app: Hono, deps: ServerDeps): vo
   }
 
   app.patch('/api/design-system/sessions/:id/pipeline/stage', async (c) => {
-    const id = parseIdParam(c);
-    const resolved = resolveStudio(id);
+    const id = parseSessionIdParam(c);
+    const resolved = await resolveStudio(id);
     if ('error' in resolved) {
       if (resolved.error === 'not-found') return notFound(c);
       return c.json({ error: 'Pipeline is only available for studio sessions with a workspace.' }, 400);
@@ -95,7 +99,7 @@ export function mountDesignSystemPipelineRoutes(app: Hono, deps: ServerDeps): vo
     }
     try {
       const next = applyStageAction(state, stageId, action, body.feedback ?? null);
-      const session = designSystemStore.setPipelineJson(id, serializePipelineState(next));
+      const session = await designSystemStore.setPipelineJson(id, serializePipelineState(next));
       return c.json({ session, pipeline: next });
     } catch (e) {
       if (e instanceof DsStageTransitionError) return c.json({ error: e.message }, 409);
@@ -104,8 +108,8 @@ export function mountDesignSystemPipelineRoutes(app: Hono, deps: ServerDeps): vo
   });
 
   app.post('/api/design-system/sessions/:id/pipeline/init', async (c) => {
-    const id = parseIdParam(c);
-    const resolved = resolveStudio(id);
+    const id = parseSessionIdParam(c);
+    const resolved = await resolveStudio(id);
     if ('error' in resolved) {
       if (resolved.error === 'not-found') return notFound(c);
       return c.json({ error: 'Pipeline is only available for studio sessions with a workspace.' }, 400);
@@ -120,13 +124,13 @@ export function mountDesignSystemPipelineRoutes(app: Hono, deps: ServerDeps): vo
       digestPages: found?.digest.pages ?? null,
     });
     const state = createPipelineState(roadmap, found?.summary ?? null);
-    const session = designSystemStore.setPipelineJson(id, serializePipelineState(state));
+    const session = await designSystemStore.setPipelineJson(id, serializePipelineState(state));
     return c.json({ session, pipeline: state });
   });
 
   app.post('/api/design-system/sessions/:id/analyze-import', async (c) => {
-    const id = parseIdParam(c);
-    const resolved = resolveStudio(id);
+    const id = parseSessionIdParam(c);
+    const resolved = await resolveStudio(id);
     if ('error' in resolved) {
       if (resolved.error === 'not-found') return notFound(c);
       return c.json({ error: 'Theme analysis is only available for studio sessions with a workspace.' }, 400);
@@ -140,7 +144,7 @@ export function mountDesignSystemPipelineRoutes(app: Hono, deps: ServerDeps): vo
       const state = parsePipelineState(resolved.session.pipeline_json);
       if (state) {
         state.theme_digest = summary;
-        designSystemStore.setPipelineJson(id, serializePipelineState(state));
+        await designSystemStore.setPipelineJson(id, serializePipelineState(state));
       }
       return c.json({ ok: true, digest: summary });
     } catch (e) {

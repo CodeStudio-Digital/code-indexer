@@ -8,8 +8,6 @@ import { ToolSelectionOutcomeMatcher } from '../feedback-collector.js';
 function row(overrides: Partial<CounterfactualLogRow> = {}): CounterfactualLogRow {
   return {
     id: 1,
-    session_id: null,
-    company_session_id: null,
     pipeline_name: 'tool_selection',
     shadow_variant: 'k_8',
     query_hash: 'q1',

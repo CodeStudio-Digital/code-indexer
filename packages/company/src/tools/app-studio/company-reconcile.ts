@@ -6,30 +6,30 @@ import type {
 
 type ReconcileAction = 'blocked' | 'cancelled' | 'recovered';
 
-export function reconcileAppWorkItemRuns(args: {
+export async function reconcileAppWorkItemRuns(args: {
   store: AppStudioStore;
   session: AppStudioSession;
-  getAgentRun: (id: number) => { status: string; status_message?: string | null } | null;
-}): Array<{ run: AppStudioWorkItemRun; action: ReconcileAction }> {
+  getAgentRun: (id: string) => { status: string; status_message?: string | null } | null;
+}): Promise<Array<{ run: AppStudioWorkItemRun; action: ReconcileAction }>> {
   const changes: Array<{ run: AppStudioWorkItemRun; action: ReconcileAction }> = [];
-  const activeRuns = args.store.listWorkItemRuns(args.session.id, { limit: 1_000 })
+  const activeRuns = (await args.store.listWorkItemRuns(args.session.id, { limit: 1_000 }))
     .filter((run) => ['claimed', 'running', 'waiting', 'paused'].includes(run.status));
   for (const run of activeRuns) {
-    const item = args.store.getWorkItem(args.session.id, run.work_item_id);
+    const item = await args.store.getWorkItem(args.session.id, run.work_item_id);
     if (run.company_agent_run_id == null) {
       const recoveryMessage = 'Recovered unbound App dispatch claim; the same attempt is ready for redispatch.';
       if (!item || ['done', 'stale', 'cancelled'].includes(item.status)) {
-        args.store.updateWorkItemRunStatus(run.id, 'cancelled', { statusMessage: recoveryMessage });
+        await args.store.updateWorkItemRunStatus(run.id, 'cancelled', { statusMessage: recoveryMessage });
         changes.push({ run, action: 'cancelled' });
         continue;
       }
       if (run.status === 'claimed' && run.status_message === recoveryMessage) continue;
-      args.store.updateWorkItemRunStatus(run.id, 'claimed', { statusMessage: recoveryMessage });
+      await args.store.updateWorkItemRunStatus(run.id, 'claimed', { statusMessage: recoveryMessage });
       if (item.status === 'running') {
-        args.store.setWorkItemStatus(args.session.id, run.work_item_id, 'backlog');
-        args.store.refreshReadyWorkItems(args.session.id);
+        await args.store.setWorkItemStatus(args.session.id, run.work_item_id, 'backlog');
+        await args.store.refreshReadyWorkItems(args.session.id);
       }
-      args.store.appendEvent(
+      await args.store.appendEvent(
         args.session.id,
         'agents.unbound_claim_recovered',
         'work_item_run',
@@ -44,9 +44,9 @@ export function reconcileAppWorkItemRuns(args: {
     if (!agent || !item || item.status !== 'running') continue;
     if (agent.status === 'waiting' || agent.status === 'completed') {
       const reason = 'Specialist finished without recording App Studio evidence.';
-      args.store.updateWorkItemRunStatus(run.id, 'blocked', { statusMessage: reason });
-      args.store.setWorkItemStatus(args.session.id, run.work_item_id, 'blocked', { blockedReason: reason });
-      args.store.appendEvent(
+      await args.store.updateWorkItemRunStatus(run.id, 'blocked', { statusMessage: reason });
+      await args.store.setWorkItemStatus(args.session.id, run.work_item_id, 'blocked', { blockedReason: reason });
+      await args.store.appendEvent(
         args.session.id,
         'agents.run_without_evidence',
         'work_item_run',
@@ -61,9 +61,9 @@ export function reconcileAppWorkItemRuns(args: {
       changes.push({ run, action: 'blocked' });
     } else if (agent.status === 'interrupted') {
       const reason = agent.status_message?.trim() || `Specialist run ended with status ${agent.status}.`;
-      args.store.updateWorkItemRunStatus(run.id, 'paused', { statusMessage: reason });
-      args.store.setWorkItemStatus(args.session.id, run.work_item_id, 'blocked', { blockedReason: reason });
-      args.store.appendEvent(
+      await args.store.updateWorkItemRunStatus(run.id, 'paused', { statusMessage: reason });
+      await args.store.setWorkItemStatus(args.session.id, run.work_item_id, 'blocked', { blockedReason: reason });
+      await args.store.appendEvent(
         args.session.id,
         'agents.run_recovered_after_restart',
         'work_item_run',
@@ -79,9 +79,9 @@ export function reconcileAppWorkItemRuns(args: {
       changes.push({ run, action: 'blocked' });
     } else if (['error', 'aborted'].includes(agent.status)) {
       const reason = agent.status_message?.trim() || `Specialist run ended with status ${agent.status}.`;
-      args.store.updateWorkItemRunStatus(run.id, agent.status as 'error' | 'aborted', { statusMessage: reason });
-      args.store.setWorkItemStatus(args.session.id, run.work_item_id, 'blocked', { blockedReason: reason });
-      args.store.appendEvent(
+      await args.store.updateWorkItemRunStatus(run.id, agent.status as 'error' | 'aborted', { statusMessage: reason });
+      await args.store.setWorkItemStatus(args.session.id, run.work_item_id, 'blocked', { blockedReason: reason });
+      await args.store.appendEvent(
         args.session.id,
         'agents.run_failed',
         'work_item_run',

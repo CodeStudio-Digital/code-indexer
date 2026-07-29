@@ -14,100 +14,117 @@ import { getSpriteWorkerClient } from '../../../sse/SpriteWorkerClient.js';
 import { toAssetDto, toVersionDto } from './mappers.js';
 import { purgeVersionFile, writeEditedVersion } from './version-write.js';
 
-function ctx(deps: ServerDeps, c: { req: { param(k: string): string } }) {
+async function ctx(deps: ServerDeps, c: { req: { param(k: string): string } }) {
   const ideProjectId = Number(c.req.param('projectId'));
-  const project = deps.spriteProjectsStore.getByProjectId(ideProjectId);
+  const project = await deps.spriteFileStore.projectByIdeId(ideProjectId);
   const root = deps.db.getProject(ideProjectId)?.root_path ?? null;
   return { ideProjectId, project, root };
 }
 
 export function mountSpriteAssetRoutes(app: Hono, deps: ServerDeps): void {
-  const store = deps.spriteAssetsStore;
+  const store = deps.spriteFileStore;
 
-  app.get('/api/sprite-studio/projects/:projectId/assets', (c) => {
-    const { ideProjectId, project } = ctx(deps, c);
+  app.get('/api/sprite-studio/projects/:projectId/assets', async (c) => {
+    const { ideProjectId, project } = await ctx(deps, c);
     if (!project) return c.json({ assets: [] });
     const category = c.req.query('category') || undefined;
     const q = c.req.query('q') || undefined;
     const size = { width: project.style.canvas.width, height: project.style.canvas.height };
     // `category` may be a comma list from the UI groups; filter in JS for that case.
     const wanted = category ? new Set(category.split(',')) : null;
-    const rows = store.list(project.id, { q }).filter((a) => !wanted || wanted.has(a.category));
-    return c.json({ assets: rows.map((r) => toAssetDto(ideProjectId, r, versionSize(store, r, size))) });
+    const rows = (await store.listAssets(project.id, { q }))
+      .filter((a) => !wanted || wanted.has(a.category));
+    return c.json({
+      assets: await Promise.all(
+        rows.map(async (r) =>
+          toAssetDto(ideProjectId, r, await versionSize(store, r, size))),
+      ),
+    });
   });
 
   app.post('/api/sprite-studio/projects/:projectId/assets', async (c) => {
-    const { ideProjectId, project, root } = ctx(deps, c);
+    const { ideProjectId, project, root } = await ctx(deps, c);
     if (!project || !root) return c.json({ error: 'not_initialized' }, 404);
     const body = (await c.req.json().catch(() => null)) as
       | { name?: string; category?: string; width?: number; height?: number }
       | null;
     if (!body?.name) return c.json({ error: 'invalid_body' }, 400);
-    const existing = new Set(store.list(project.id).map((a) => a.slug));
+    const existing = new Set(
+      (await store.listAssets(project.id)).map((a) => a.slug),
+    );
     const slug = uniqueSlug(slugify(body.name), (s) => existing.has(s));
     const category = body.category ?? 'misc';
     writeAssetManifest(root, slug, {
       slug, displayName: body.name, category, tags: [], status: 'draft', versions: [],
     });
-    const row = store.create({ sprite_project_id: project.id, slug, display_name: body.name, category });
+    const row = await store.createAsset({
+      sprite_project_id: project.id,
+      slug,
+      display_name: body.name,
+      category,
+    });
     const size = { width: body.width ?? project.style.canvas.width, height: body.height ?? project.style.canvas.height };
     return c.json(toAssetDto(ideProjectId, row, size));
   });
 
   app.patch('/api/sprite-studio/projects/:projectId/assets/:assetId', async (c) => {
-    const { ideProjectId, project } = ctx(deps, c);
+    const { ideProjectId, project } = await ctx(deps, c);
     if (!project) return c.json({ error: 'not_initialized' }, 404);
-    const assetId = Number(c.req.param('assetId'));
+    const assetId = c.req.param('assetId');
     const patch = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
-    store.updateMeta(assetId, {
+    const row = await store.updateAsset(assetId, {
       display_name: typeof patch.name === 'string' ? patch.name : undefined,
       category: typeof patch.category === 'string' ? patch.category : undefined,
       tags: Array.isArray(patch.tags) ? (patch.tags as string[]) : undefined,
       status: typeof patch.status === 'string' ? (patch.status as SpriteAssetStatus) : undefined,
     });
-    const row = store.get(assetId);
     if (!row) return c.json({ error: 'not_found' }, 404);
     const size = { width: project.style.canvas.width, height: project.style.canvas.height };
-    return c.json(toAssetDto(ideProjectId, row, versionSize(store, row, size)));
+    return c.json(
+      toAssetDto(ideProjectId, row, await versionSize(store, row, size)),
+    );
   });
 
   // Deleting an asset removes the repo directory too (the repo is the source
   // of truth — leaving the files would resurrect the asset on resync).
-  app.delete('/api/sprite-studio/projects/:projectId/assets/:assetId', (c) => {
-    const { root } = ctx(deps, c);
-    const assetId = Number(c.req.param('assetId'));
-    const asset = store.get(assetId);
+  app.delete('/api/sprite-studio/projects/:projectId/assets/:assetId', async (c) => {
+    const { root } = await ctx(deps, c);
+    const assetId = c.req.param('assetId');
+    const asset = await store.getAsset(assetId);
     if (asset && root) {
       try { fs.rmSync(assetDir(root, asset.slug), { recursive: true, force: true }); } catch { /* best effort */ }
     }
-    store.delete(assetId);
+    await store.deleteAsset(assetId);
     return c.json({ ok: true });
   });
 
   // Curation delete of one version: repo file + manifest entry + mirror row.
-  app.delete('/api/sprite-studio/projects/:projectId/versions/:versionId', (c) => {
-    const { root } = ctx(deps, c);
-    const versionId = Number(c.req.param('versionId'));
-    const version = store.getVersion(versionId);
+  app.delete('/api/sprite-studio/projects/:projectId/versions/:versionId', async (c) => {
+    const { root } = await ctx(deps, c);
+    const versionId = c.req.param('versionId');
+    const version = await store.getVersion(versionId);
     if (!version || !root) return c.json({ error: 'not_found' }, 404);
-    purgeVersionFile(root, store.get(version.asset_id), version);
-    store.deleteVersion(versionId);
+    purgeVersionFile(root, await store.getAsset(version.asset_id), version);
+    await store.deleteVersion(versionId);
     return c.json({ ok: true });
   });
 
-  app.get('/api/sprite-studio/projects/:projectId/assets/:assetId/versions', (c) => {
-    const { ideProjectId } = ctx(deps, c);
-    const assetId = Number(c.req.param('assetId'));
-    return c.json({ versions: store.listVersions(assetId).map((v) => toVersionDto(ideProjectId, v)) });
+  app.get('/api/sprite-studio/projects/:projectId/assets/:assetId/versions', async (c) => {
+    const { ideProjectId } = await ctx(deps, c);
+    const assetId = c.req.param('assetId');
+    return c.json({
+      versions: (await store.listVersions(assetId))
+        .map((v) => toVersionDto(ideProjectId, v)),
+    });
   });
 
   // POST a hand-edited PNG (from the canvas editor) as a new immutable version.
   // Optional multipart field `setCurrent=false` skips moving the asset's
   // current pointer (derived versions, e.g. frame alignment, stay quiet).
   app.post('/api/sprite-studio/projects/:projectId/assets/:assetId/versions', async (c) => {
-    const { ideProjectId, root } = ctx(deps, c);
-    const assetId = Number(c.req.param('assetId'));
-    const asset = store.get(assetId);
+    const { ideProjectId, root } = await ctx(deps, c);
+    const assetId = c.req.param('assetId');
+    const asset = await store.getAsset(assetId);
     if (!root || !asset) return c.json({ error: 'not_found' }, 404);
     let png: Buffer;
     let setCurrent = true;
@@ -121,7 +138,7 @@ export function mountSpriteAssetRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: 'invalid_multipart' }, 400);
     }
     try {
-      const rowV = writeEditedVersion(deps, root, asset, png, { setCurrent });
+      const rowV = await writeEditedVersion(deps, root, asset, png, { setCurrent });
       return c.json(toVersionDto(ideProjectId, rowV));
     } catch (e) {
       const msg = (e as Error).message;
@@ -130,15 +147,15 @@ export function mountSpriteAssetRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   // Version bytes — full PNG.
-  app.get('/api/sprite-studio/projects/:projectId/versions/:versionId/file', (c) => {
-    const hit = readVersionFile(deps, c);
+  app.get('/api/sprite-studio/projects/:projectId/versions/:versionId/file', async (c) => {
+    const hit = await readVersionFile(deps, c);
     if (!hit) return c.json({ error: 'not_found' }, 404);
     return pngResponse(c, hit.png, hit.contentHash);
   });
 
   // Version thumbnail — box-downscaled off-thread by the sprite worker.
   app.get('/api/sprite-studio/projects/:projectId/versions/:versionId/thumb', async (c) => {
-    const hit = readVersionFile(deps, c);
+    const hit = await readVersionFile(deps, c);
     if (!hit) return c.json({ error: 'not_found' }, 404);
     const s = Math.max(16, Math.min(512, Number(c.req.query('s')) || 128));
     try {
@@ -156,24 +173,24 @@ export function mountSpriteAssetRoutes(app: Hono, deps: ServerDeps): void {
   });
 }
 
-function versionSize(
-  store: ServerDeps['spriteAssetsStore'],
-  asset: { current_version_id: number | null },
+async function versionSize(
+  store: ServerDeps['spriteFileStore'],
+  asset: { current_version_id: string | null },
   fallback: { width: number; height: number },
-): { width: number; height: number } {
+): Promise<{ width: number; height: number }> {
   if (asset.current_version_id == null) return fallback;
-  const v = store.getVersion(asset.current_version_id);
+  const v = await store.getVersion(asset.current_version_id);
   return v?.width && v.height ? { width: v.width, height: v.height } : fallback;
 }
 
-function readVersionFile(
+async function readVersionFile(
   deps: ServerDeps,
   c: { req: { param(k: string): string } },
-): { png: Buffer; contentHash: string | null } | null {
+): Promise<{ png: Buffer; contentHash: string | null } | null> {
   const ideProjectId = Number(c.req.param('projectId'));
-  const versionId = Number(c.req.param('versionId'));
+  const versionId = c.req.param('versionId');
   const root = deps.db.getProject(ideProjectId)?.root_path;
-  const version = deps.spriteAssetsStore.getVersion(versionId);
+  const version = await deps.spriteFileStore.getVersion(versionId);
   if (!root || !version) return null;
   try {
     const abs = resolveInsideSpriteDir(root, version.file_rel_path);

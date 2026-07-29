@@ -5,6 +5,7 @@
  * attempt caps are enforced, and the per-spawn lock serializes callers.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { newSessionId, type SessionId } from '@mcp/session-storage';
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { StopReason } from '@mcp/code-agent/core/runner.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
@@ -33,7 +34,7 @@ const deps = {
 
 let emit: ReturnType<typeof vi.fn>;
 let ctx: ToolContext;
-let SID = 500;
+let SID: SessionId;
 
 function transcript(): AgentMessage[] {
   return [
@@ -43,9 +44,9 @@ function transcript(): AgentMessage[] {
   ];
 }
 
-function retain(reason: StopReason, opts: { attempt?: number; failureNote?: string; index?: number } = {}) {
+async function retain(reason: StopReason, opts: { attempt?: number; failureNote?: string; index?: number } = {}) {
   const now = 0;
-  retainGroup(SID, {
+  await retainGroup(SID, {
     spawnId: 'g1', sessionId: SID, provider: 'stub', model: 'm', createdAt: now, lastTouchedAt: now,
     agents: [{
       agentIndex: opts.index ?? 0, label: 'auth', task: 'orig task', profileId: 'implement',
@@ -69,29 +70,29 @@ function mockRun(reason: StopReason = 'completed', finalText = 'done now') {
 function leaseStore(failRenewal: number) {
   let renewals = 0;
   return {
-    loadOrchestrationCheckpoint: vi.fn(() => {
-      const group = getGroup(SID, 'g1');
-      return group ? { payloadJson: JSON.stringify(group) } : null;
+    loadOrchestrationCheckpoint: vi.fn(async () => {
+      const group = await getGroup(SID, 'g1');
+      return group ? { payload_json: JSON.stringify(group) } : null;
     }),
-    listOrchestrationCheckpoints: vi.fn(() => []),
-    saveOrchestrationCheckpoint: vi.fn(() => true),
-    removeOrchestrationCheckpoint: vi.fn(),
-    tryAcquireOrchestrationCheckpoint: vi.fn(() => 'lease:test'),
-    releaseOrchestrationCheckpoint: vi.fn(),
-    renewOrchestrationCheckpoint: vi.fn(() => {
+    listOrchestrationCheckpoints: vi.fn(async () => []),
+    saveOrchestrationCheckpoint: vi.fn(async () => true),
+    removeOrchestrationCheckpoint: vi.fn(async () => {}),
+    tryAcquireOrchestrationCheckpoint: vi.fn(async () => newSessionId()),
+    releaseOrchestrationCheckpoint: vi.fn(async () => {}),
+    renewOrchestrationCheckpoint: vi.fn(async () => {
       renewals += 1;
       return renewals !== failRenewal;
     }),
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.unstubAllEnvs();
-  SID += 10;
+  SID = newSessionId();
   emit = vi.fn();
   ctx = { cwd: '/tmp', runner: { sessionId: SID, agentLoopV2: false, emit } } as unknown as ToolContext;
   (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mockReset?.();
-  clearSession(SID);
+  await clearSession(SID);
 });
 
 describe('resume_agent', () => {
@@ -103,7 +104,7 @@ describe('resume_agent', () => {
   });
 
   it('seeds the resumed child with the transcript + a continuation nudge', async () => {
-    retain('tool_budget');
+    await retain('tool_budget');
     mockRun('completed');
     const t = buildResumeAgentTool(deps);
     const r = await t.handler({ spawn_id: 'g1', guidance: 'use pnpm test' }, ctx);
@@ -123,16 +124,16 @@ describe('resume_agent', () => {
   it('describes explicit time and turn cutoffs as operational interruptions', async () => {
     const t = buildResumeAgentTool(deps);
 
-    retain('time_budget');
+    await retain('time_budget');
     mockRun('completed');
     await t.handler({ spawn_id: 'g1' }, ctx);
     let specs = (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1];
     let seed = specs[0].initialMessages as AgentMessage[];
     expect((seed.at(-1)!.content[0] as { text: string }).text).toContain('time/stall watchdog');
 
-    clearSession(SID);
+    await clearSession(SID);
     (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mockClear();
-    retain('max_turns');
+    await retain('max_turns');
     mockRun('completed');
     await t.handler({ spawn_id: 'g1' }, ctx);
     specs = (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1];
@@ -141,7 +142,7 @@ describe('resume_agent', () => {
   });
 
   it('re-emits the SAME groupId and bumps attempt', async () => {
-    retain('error', { failureNote: 'boom' });
+    await retain('error', { failureNote: 'boom' });
     mockRun('completed');
     const t = buildResumeAgentTool(deps);
     await t.handler({ spawn_id: 'g1' }, ctx);
@@ -152,16 +153,16 @@ describe('resume_agent', () => {
   });
 
   it('updates the registry attempt after a resume', async () => {
-    retain('error', { failureNote: 'boom' });
+    await retain('error', { failureNote: 'boom' });
     mockRun('error', 'still broken');
     const t = buildResumeAgentTool(deps);
     const result = await t.handler({ spawn_id: 'g1' }, ctx);
     expect(result.isError).toBe(true);
-    expect(getGroup(SID, 'g1')!.agents[0].attempt).toBe(2);
+    expect((await getGroup(SID, 'g1'))!.agents[0].attempt).toBe(2);
   });
 
   it('returns a structured partial error when a resumed agent hits another operational cutoff', async () => {
-    retain('tool_budget');
+    await retain('tool_budget');
     mockRun('tool_budget', 'useful partial work');
     const t = buildResumeAgentTool(deps);
 
@@ -188,7 +189,7 @@ describe('resume_agent', () => {
   });
 
   it('records a hard re-failure as an error and a later identical resume as success', async () => {
-    retain('error', { failureNote: 'boom' });
+    await retain('error', { failureNote: 'boom' });
     const t = buildResumeAgentTool(deps);
     const input = { spawn_id: 'g1' };
     const ledger = new ToolCallLedger();
@@ -237,7 +238,7 @@ describe('resume_agent', () => {
   });
 
   it('skips aborted agents unless explicitly named', async () => {
-    retain('aborted');
+    await retain('aborted');
     const t = buildResumeAgentTool(deps);
     const r = await t.handler({ spawn_id: 'g1' }, ctx);
     expect(r.isError).toBe(true);
@@ -262,7 +263,7 @@ describe('resume_agent', () => {
 
   it('stays partial when an eligible child completes but an ineligible sibling remains failed', async () => {
     const now = 0;
-    retainGroup(SID, {
+    await retainGroup(SID, {
       spawnId: 'g1',
       sessionId: SID,
       provider: 'stub',
@@ -327,7 +328,7 @@ describe('resume_agent', () => {
   });
 
   it('refuses once the attempt cap is reached', async () => {
-    retain('error', { attempt: 3, failureNote: 'boom' });
+    await retain('error', { attempt: 3, failureNote: 'boom' });
     const t = buildResumeAgentTool(deps);
     const r = await t.handler({ spawn_id: 'g1' }, ctx);
     expect(r.isError).toBe(true);
@@ -346,7 +347,7 @@ describe('resume_agent', () => {
   });
 
   it('never resolves a failed logical operation with a false success after reaching the attempt cap', async () => {
-    retain('error', { attempt: 2, failureNote: 'boom' });
+    await retain('error', { attempt: 2, failureNote: 'boom' });
     mockRun('error', 'still broken at final attempt');
     const t = buildResumeAgentTool(deps);
     const input = { spawn_id: 'g1' };
@@ -380,7 +381,7 @@ describe('resume_agent', () => {
   });
 
   it('preserves the prior transcript when a re-failure returns none (M1)', async () => {
-    retain('error', { failureNote: 'boom' });
+    await retain('error', { failureNote: 'boom' });
     // Relaunch fails again but via the outer-catch path → no transcript.
     (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       results: [{
@@ -391,14 +392,14 @@ describe('resume_agent', () => {
     });
     const t = buildResumeAgentTool(deps);
     await t.handler({ spawn_id: 'g1' }, ctx);
-    const st = getGroup(SID, 'g1')!.agents[0];
+    const st = (await getGroup(SID, 'g1'))!.agents[0];
     expect(st.attempt).toBe(2);
     expect(st.transcript).toBeDefined(); // NOT cannibalized → still resumable
   });
 
   it('numbers a resumed agent by its ORIGINAL roster index (L4)', async () => {
     // Agent at original index 1 failed; resume it alone.
-    retain('error', { failureNote: 'boom', index: 1 });
+    await retain('error', { failureNote: 'boom', index: 1 });
     mockRun('completed');
     const t = buildResumeAgentTool(deps);
     const r = await t.handler({ spawn_id: 'g1', agents: [2] }, ctx); // 1-based → index 1
@@ -407,7 +408,7 @@ describe('resume_agent', () => {
   });
 
   it('caps quality failures at 2 attempts', async () => {
-    retain('error', { attempt: 2, failureNote: 'subagent_quality_watchdog: 3 turns no tool' });
+    await retain('error', { attempt: 2, failureNote: 'subagent_quality_watchdog: 3 turns no tool' });
     const t = buildResumeAgentTool(deps);
     // quality is explicit-only AND capped at 2 → attempt 2 refused.
     const r = await t.handler({ spawn_id: 'g1', agents: [1] }, ctx);
@@ -420,7 +421,7 @@ describe('resume_agent', () => {
   });
 
   it('emits no resume start/spawn when the lease is fenced immediately before that boundary', async () => {
-    retain('error', { failureNote: 'boom' });
+    await retain('error', { failureNote: 'boom' });
     mockRun('completed');
     const store = leaseStore(2);
     const t = buildResumeAgentTool({ ...deps, sessionStore: store as never });
@@ -431,7 +432,7 @@ describe('resume_agent', () => {
   });
 
   it('withholds the resume terminal event and tool ACK when the final lease assertion is fenced', async () => {
-    retain('error', { failureNote: 'boom' });
+    await retain('error', { failureNote: 'boom' });
     mockRun('completed');
     const store = leaseStore(6);
     const t = buildResumeAgentTool({ ...deps, sessionStore: store as never });
@@ -444,8 +445,8 @@ describe('resume_agent', () => {
   });
 
   it('reloads the winner roster after acquire instead of resuming a stale snapshot', async () => {
-    retain('error', { failureNote: 'stale failure' });
-    const stale = getGroup(SID, 'g1')!;
+    await retain('error', { failureNote: 'stale failure' });
+    const stale = (await getGroup(SID, 'g1'))!;
     const winner = JSON.parse(JSON.stringify(stale));
     winner.agents[0].reason = 'completed';
     winner.agents[0].failureNote = undefined;
@@ -453,18 +454,18 @@ describe('resume_agent', () => {
     winner.agents[0].attempt = 2;
     let payloadJson = JSON.stringify(stale);
     const store = {
-      loadOrchestrationCheckpoint: vi.fn(() => ({ payloadJson })),
-      listOrchestrationCheckpoints: vi.fn(() => []),
-      saveOrchestrationCheckpoint: vi.fn(() => true),
-      removeOrchestrationCheckpoint: vi.fn(),
-      tryAcquireOrchestrationCheckpoint: vi.fn(() => {
+      loadOrchestrationCheckpoint: vi.fn(async () => ({ payload_json: payloadJson })),
+      listOrchestrationCheckpoints: vi.fn(async () => []),
+      saveOrchestrationCheckpoint: vi.fn(async () => true),
+      removeOrchestrationCheckpoint: vi.fn(async () => {}),
+      tryAcquireOrchestrationCheckpoint: vi.fn(async () => {
         // A different executor commits and releases after our cache read but
         // immediately before this executor wins the CAS.
         payloadJson = JSON.stringify(winner);
-        return 'lease:after-winner';
+        return newSessionId();
       }),
-      releaseOrchestrationCheckpoint: vi.fn(),
-      renewOrchestrationCheckpoint: vi.fn(() => true),
+      releaseOrchestrationCheckpoint: vi.fn(async () => {}),
+      renewOrchestrationCheckpoint: vi.fn(async () => true),
     };
     const tool = buildResumeAgentTool({ ...deps, sessionStore: store as never });
 
@@ -473,31 +474,20 @@ describe('resume_agent', () => {
     expect(result.isError).toBeFalsy();
     expect(String(result.content)).toContain('nothing to resume');
     expect(runParallelAgents).not.toHaveBeenCalled();
-    expect(getGroup(SID, 'g1')?.agents[0].reason).toBe('completed');
+    expect((await getGroup(SID, 'g1'))?.agents[0].reason).toBe('completed');
   });
 
-  it('keeps the pre-migration in-memory resume path, but refuses it in enforce mode', async () => {
-    const compat = {
-      loadOrchestrationCheckpoint: vi.fn(() => null),
-      listOrchestrationCheckpoints: vi.fn(() => []),
-      saveOrchestrationCheckpoint: vi.fn(() => false),
-      removeOrchestrationCheckpoint: vi.fn(),
-      tryAcquireOrchestrationCheckpoint: vi.fn(() => 'compat:test'),
-      releaseOrchestrationCheckpoint: vi.fn(),
-      renewOrchestrationCheckpoint: vi.fn(() => true),
-    };
-    retain('error', { failureNote: 'compat' });
+  it('treats lease tokens as opaque and persists through the filesystem checkpoint API', async () => {
+    const store = leaseStore(Number.POSITIVE_INFINITY);
+    await retain('error', { failureNote: 'retry' });
     mockRun('completed');
-    const tool = buildResumeAgentTool({ ...deps, sessionStore: compat as never });
-    const defaultResult = await tool.handler({ spawn_id: 'g1' }, ctx);
-    expect(defaultResult.isError).toBeFalsy();
-    expect(runParallelAgents).toHaveBeenCalledOnce();
+    const tool = buildResumeAgentTool({ ...deps, sessionStore: store as never });
 
-    clearSession(SID);
-    (runParallelAgents as unknown as ReturnType<typeof vi.fn>).mockClear();
-    retain('error', { failureNote: 'enforce' });
-    vi.stubEnv('CODER_AGENT_RUN_STORE_ENFORCE', '1');
-    await expect(tool.handler({ spawn_id: 'g1' }, ctx)).rejects.toThrow(/migration 259/);
-    expect(runParallelAgents).not.toHaveBeenCalled();
+    const result = await tool.handler({ spawn_id: 'g1' }, ctx);
+
+    expect(result.isError).toBeFalsy();
+    expect(store.tryAcquireOrchestrationCheckpoint).toHaveBeenCalledOnce();
+    expect(store.saveOrchestrationCheckpoint).toHaveBeenCalled();
+    expect(store.releaseOrchestrationCheckpoint).toHaveBeenCalledOnce();
   });
 });

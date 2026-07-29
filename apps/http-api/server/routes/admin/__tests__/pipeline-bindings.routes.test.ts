@@ -19,6 +19,7 @@ interface Captured {
   activated: Record<string, unknown> | null;
   bulkTargets: Array<{ pipeline_name: string; binding_role: string }> | null;
   updated: Record<string, unknown> | null;
+  upserted: Record<string, unknown> | null;
 }
 
 function setup(opts: { knownProviders?: Set<string> } = {}) {
@@ -28,8 +29,16 @@ function setup(opts: { knownProviders?: Set<string> } = {}) {
     activated: null,
     bulkTargets: null,
     updated: null,
+    upserted: null,
   };
   const pipelineBindingsStore = {
+    list() {
+      return [];
+    },
+    upsert(input: Record<string, unknown>) {
+      captured.upserted = input;
+      return 51;
+    },
     bulkApply(input: { targets: Array<{ pipeline_name: string; binding_role: string }> }): number[] {
       captured.bulkTargets = input.targets;
       return input.targets.map((_, i) => i + 1);
@@ -46,7 +55,19 @@ function setup(opts: { knownProviders?: Set<string> } = {}) {
       captured.updated = input;
     },
     get(id: number) {
-      return id === 41 ? { id, provider_id: 'cf-1', model_id: 'codestral', enabled: true } : null;
+      return id === 41 ? {
+        id,
+        pipeline_name: 'editor',
+        binding_role: 'autocomplete',
+        provider_id: 'cf-1',
+        model_id: 'codestral',
+        model_mode: '',
+        config: {},
+        scope_type: 'global',
+        scope_id: null,
+        enabled: true,
+        priority: 0,
+      } : null;
     },
   };
   const providerStore = {
@@ -76,6 +97,23 @@ async function postBulk(app: Hono, body: unknown) {
 }
 
 describe('POST /bulk/apply', () => {
+  it('rejects the removed session scope before touching the store', async () => {
+    const { app, captured } = setup();
+    const response = await postBulk(app, {
+      provider_id: 'cf-1',
+      model_id: 'llama-8b',
+      scope_type: 'session',
+      scope_id: 42,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: 'validation_failed',
+      details: ['scope_type must be global|template'],
+    });
+    expect(captured.bulkTargets).toBeNull();
+  });
+
   it('defaults to setup-eligible roles only', async () => {
     const { app, captured } = setup();
     const response = await postBulk(app, { provider_id: 'cf-1', model_id: 'llama-8b' });
@@ -227,6 +265,28 @@ describe('POST /activate', () => {
 });
 
 describe('POST /pipeline-bindings', () => {
+  it('rejects session scope without writing a SQLite binding', async () => {
+    const { app, captured } = setup();
+    const response = await app.request('/api/admin/pipeline-bindings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pipeline_name: 'quality_policy',
+        binding_role: 'classifier',
+        provider_id: 'cf-1',
+        model_id: 'm',
+        scope_type: 'session',
+        scope_id: 42,
+      }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: 'validation_failed',
+      details: ['scope_type must be global|template'],
+    });
+    expect(captured.upserted).toBeNull();
+  });
+
   it('does not recreate retired no-effect bindings', async () => {
     const { app } = setup();
     const response = await app.request('/api/admin/pipeline-bindings', {
@@ -244,6 +304,19 @@ describe('POST /pipeline-bindings', () => {
 });
 
 describe('PATCH /pipeline-bindings/:id', () => {
+  it('cannot move a reusable binding into session scope', async () => {
+    const { app, captured } = setup();
+    const response = await app.request('/api/admin/pipeline-bindings/41', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope_type: 'session', scope_id: 42 }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'scope_type must be global|template' });
+    expect(captured.updated).toBeNull();
+  });
+
   it('cannot rename a configurable binding into a retired target', async () => {
     const { app, captured } = setup();
     const response = await app.request('/api/admin/pipeline-bindings/41', {
@@ -255,5 +328,14 @@ describe('PATCH /pipeline-bindings/:id', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: 'unknown_target' });
     expect(captured.updated).toBeNull();
+  });
+});
+
+describe('GET /pipeline-bindings', () => {
+  it('rejects the removed session scope instead of silently listing reusable rows', async () => {
+    const { app } = setup();
+    const response = await app.request('/api/admin/pipeline-bindings?scope_type=session');
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: 'scope_type must be global|template' });
   });
 });

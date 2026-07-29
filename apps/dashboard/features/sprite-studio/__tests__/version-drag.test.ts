@@ -11,6 +11,9 @@ import {
   SPRITE_VERSION_MIME,
 } from '../version-drag.js';
 
+const ASSET_ID = '00000000-0000-4000-8000-000000000003';
+const VERSION_ID = '00000000-0000-4000-8000-000000000015';
+
 function fakeDataTransfer(): DataTransfer {
   const store = new Map<string, string>();
   return {
@@ -26,15 +29,20 @@ describe('version-drag payload', () => {
     const dt = fakeDataTransfer();
     expect(hasVersionDragData(dt)).toBe(false);
 
-    setVersionDragData(dt, { versionId: 15, assetId: 3, version: 13, label: 'v013' });
+    setVersionDragData(dt, { versionId: VERSION_ID, assetId: ASSET_ID, version: 13, label: 'v013' });
     expect(dt.effectAllowed).toBe('copy');
     expect(hasVersionDragData(dt)).toBe(true);
-    expect(readVersionDragData(dt)).toEqual({ versionId: 15, assetId: 3, version: 13, label: 'v013' });
+    expect(readVersionDragData(dt)).toEqual({
+      versionId: VERSION_ID,
+      assetId: ASSET_ID,
+      version: 13,
+      label: 'v013',
+    });
   });
 
   it('uses a dedicated MIME so asset/OS drags never collide', () => {
     const dt = fakeDataTransfer();
-    dt.setData('application/x-sprite-asset', JSON.stringify({ assetId: 1, slug: 'hero' }));
+    dt.setData('application/x-sprite-asset', JSON.stringify({ assetId: ASSET_ID, slug: 'hero' }));
     dt.setData('text/plain', 'not-a-version');
     expect(SPRITE_VERSION_MIME).toBe('application/x-sprite-version');
     expect(hasVersionDragData(dt)).toBe(false);
@@ -47,13 +55,13 @@ describe('version-drag payload', () => {
     expect(readVersionDragData(broken)).toBeNull();
 
     const wrongTypes = fakeDataTransfer();
-    wrongTypes.setData(SPRITE_VERSION_MIME, JSON.stringify({ versionId: '15', assetId: 3 }));
+    wrongTypes.setData(SPRITE_VERSION_MIME, JSON.stringify({ versionId: 15, assetId: ASSET_ID }));
     expect(readVersionDragData(wrongTypes)).toBeNull();
   });
 
   it('rejects partial payloads instead of guessing version/label', () => {
     const dt = fakeDataTransfer();
-    dt.setData(SPRITE_VERSION_MIME, JSON.stringify({ versionId: 15, assetId: 3 }));
+    dt.setData(SPRITE_VERSION_MIME, JSON.stringify({ versionId: VERSION_ID, assetId: ASSET_ID }));
     expect(readVersionDragData(dt)).toBeNull();
   });
 });

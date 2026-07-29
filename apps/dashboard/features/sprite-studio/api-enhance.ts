@@ -17,10 +17,10 @@ export type EnhanceJobKind = 'inpaint' | 'enhance';
 
 /** Everything a results view needs to follow + apply one started edit job. */
 export interface EnhanceJobRef {
-  jobId: number;
+  jobId: string;
   projectId: number;
-  assetId: number;
-  versionId: number;
+  assetId: string;
+  versionId: string;
   kind: EnhanceJobKind;
 }
 
@@ -58,8 +58,8 @@ export async function blobToBase64(blob: Blob): Promise<string> {
  */
 export async function startInpaintJob(
   projectId: number,
-  assetId: number,
-  versionId: number,
+  assetId: string,
+  versionId: string,
   maskBlob: Blob,
   prompt: string,
 ): Promise<EnhanceJobRef> {
@@ -75,8 +75,8 @@ export async function startInpaintJob(
 /** Whole-image enhance: img2img of the version with a prompt, no mask. */
 export async function startEnhanceJob(
   projectId: number,
-  assetId: number,
-  versionId: number,
+  assetId: string,
+  versionId: string,
   prompt: string,
   n = 2,
 ): Promise<EnhanceJobRef> {

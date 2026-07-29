@@ -23,8 +23,6 @@ import {
   type RunCoderOptions,
 } from '@mcp/code-agent/index.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
 import { publish as busPublish } from '@apps/http-api/coder-bus.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { AllowedModel, RoleSkills } from '@mcp/company/types.js';
@@ -34,6 +32,7 @@ import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
 import { buildMasterPromptInputs } from '@mcp/company/services/master/prompt-builder.js';
 import { configureMasterSkills } from '@mcp/company/services/master/configure-skills.js';
 import { runWithExplicitMasterFallback } from '@mcp/company/services/master/fallback.js';
+import { createCompanyCoderSession } from '@mcp/company/services/company-coder-sessions.js';
 
 export interface MasterStartOpts {
   userMessage: string;
@@ -89,7 +88,7 @@ export interface MasterStartStateMutators {
   readonly hasHandle: boolean;
   readonly roleConfigs: readonly RoleConfig[];
   readonly allowedModels: readonly AllowedModel[];
-  setAgentRunId: (id: number) => void;
+  setAgentRunId: (id: string) => void;
   setRuntimeSnapshot: (snapshot: MasterRuntimeSnapshot) => void;
   setRoleConfigs: (configs: RoleConfig[]) => void;
   /** Calls `parseMasterConfigFromDb` + assigns into `_allowedModels` / `_roleConfigs`. */
@@ -122,8 +121,8 @@ export interface MasterStartDeps {
   board: IBoardPoster;
   orchestratorRef: unknown;
   state: MasterStartStateMutators;
-  wireRunner: (runner: CoderRunner, runId: number) => void;
-  attachCompletion: (handle: RunCoderHandle, runId: number) => void;
+  wireRunner: (runner: CoderRunner, runId: string) => void;
+  attachCompletion: (handle: RunCoderHandle, runId: string) => void;
 }
 
 export async function startMaster(
@@ -137,24 +136,20 @@ export async function startMaster(
   const primaryProjectId = ctx.projects[0]?.project_id;
   if (!primaryProjectId) throw new Error('Company session has no linked projects');
 
-  const config = loadConfig();
+  const fsSessionStore = ctx.companyFiles.sessionStore;
 
-  // ── Fast path (awaited inside the RPC): create the session + agent_run,
-  // flip statuses, post the start board messages. All cheap/synchronous. ──
-  // `store` is only used for `createSession` here — `runCoder` opens its own
-  // SessionStore — so close it immediately rather than holding it across the
-  // background phase.
-  const store = new SessionStore(config.dbPath);
-  const masterSession = store.createSession({
-    project_id: primaryProjectId,
+  // ── Fast path (awaited inside the RPC): create the filesystem coder
+  // bundle + independent Company agent-run entity, then flip lifecycle state.
+  const masterSession = await createCompanyCoderSession({
+    ctx,
+    sessionStore: fsSessionStore,
     title: `[Company Master] ${ctx.companySessionId}`,
     provider: opts.provider,
     model: opts.model,
+    role: 'master',
   });
-  store.close();
 
-  const masterRun = ctx.companyStore.createAgentRun({
-    company_session_id: ctx.companySessionId,
+  const masterRun = await ctx.companyFiles.createAgentRun({
     role: 'master',
     coder_session_id: masterSession.id,
     project_ids: ctx.projects.map((p) => p.project_id),
@@ -180,10 +175,11 @@ export async function startMaster(
   // (start + resume) alongside role configs.
   deps.state.loadConfigFromDb();
 
-  ctx.companyStore.setMasterSessionId(ctx.companySessionId, masterSession.id);
-  ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
-  // P15c — clear the recovery flag set by `recoverStaleAgentRuns()` on boot.
-  ctx.companyStore.clearSessionRecoveryFlag(ctx.companySessionId);
+  await Promise.all([
+    ctx.companyFiles.setMasterSessionId(masterSession.id),
+    ctx.companyFiles.updateSessionStatus('running'),
+    ctx.companyFiles.clearRecoveryFlag(),
+  ]);
 
   const startBoardMsg =
     opts.attachments && opts.attachments.length > 0
@@ -221,11 +217,11 @@ export async function startMaster(
     // Configure skill enablement on the master's coder session — must
     // happen after `buildMasterPromptInputs` so we know the configured
     // stack for conditional skill resolution.
-    configureMasterSkills({
+    await configureMasterSkills({
       roleConfigs: deps.state.roleConfigs,
       configuredStack: inputs.configuredStack,
       coderSessionId: masterSessionId,
-      primaryProjectId,
+      sessionStore: fsSessionStore,
       masterSkills: opts.skills,
     });
 
@@ -274,7 +270,7 @@ export async function startMaster(
   };
 
   const promise = doStart()
-    .catch((e) => {
+    .catch(async (e) => {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[company s=${ctx.companySessionId}] master start background task failed:`, msg);
       // Distinct SSE event so the dashboard can render a dedicated "master
@@ -293,8 +289,10 @@ export async function startMaster(
         deps.board.post('system', null, 'message', `Master start failed: ${msg}`);
       } catch { /* best-effort */ }
       try {
-        ctx.companyStore.updateAgentRunStatus(agentRunId, 'error');
-        ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'error');
+        await Promise.all([
+          ctx.companyFiles.updateAgentRunStatus(agentRunId, 'error'),
+          ctx.companyFiles.updateSessionStatus('error'),
+        ]);
       } catch { /* best-effort */ }
     })
     .finally(() => {

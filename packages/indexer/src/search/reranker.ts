@@ -12,7 +12,12 @@
  *   - Null (passthrough, for when no reranker is configured)
  */
 
-import type { RerankCandidate, RerankResult, RerankerService } from './reranker-types.js';
+import type {
+  RerankCandidate,
+  RerankResult,
+  RerankerRuntimeDiagnostics,
+  RerankerService,
+} from './reranker-types.js';
 
 // Re-export the contract types so existing importers (`@mcp/indexer/search/reranker.js`)
 // keep working after the extraction to ./reranker-types.ts (avoids an import cycle
@@ -21,8 +26,75 @@ export type {
   RerankCandidate,
   RerankRequestOptions,
   RerankResult,
+  RerankerRuntimeDiagnostics,
   RerankerService,
 } from './reranker-types.js';
+
+class RemoteRerankerRuntime {
+  private active = 0;
+  private invocationCount = 0;
+  private lastCandidateCount: number | null = null;
+  private lastReturnedCount: number | null = null;
+  private lastInvocationAt: string | null = null;
+  private lastSuccessAt: string | null = null;
+  private lastErrorAt: string | null = null;
+  private lastError: string | null = null;
+  private lastLatencyMs: number | null = null;
+
+  begin(candidateCount: number): number {
+    this.active += 1;
+    this.invocationCount += 1;
+    this.lastCandidateCount = candidateCount;
+    this.lastInvocationAt = new Date().toISOString();
+    return performance.now();
+  }
+
+  success(startedAt: number, returnedCount: number): void {
+    this.active = Math.max(0, this.active - 1);
+    this.lastLatencyMs = performance.now() - startedAt;
+    this.lastReturnedCount = returnedCount;
+    this.lastSuccessAt = new Date().toISOString();
+    this.lastError = null;
+    this.lastErrorAt = null;
+  }
+
+  failure(startedAt: number, error: unknown): void {
+    this.active = Math.max(0, this.active - 1);
+    this.lastLatencyMs = performance.now() - startedAt;
+    this.lastReturnedCount = 0;
+    this.lastError = error instanceof Error ? error.message : String(error);
+    this.lastErrorAt = new Date().toISOString();
+  }
+
+  snapshot(options: {
+    model: string;
+    provider: string;
+  }): RerankerRuntimeDiagnostics {
+    const status = this.active > 0
+      ? 'running'
+      : this.lastError
+        ? 'failed'
+        : this.lastSuccessAt
+          ? 'active'
+          : 'configured';
+    return {
+      configured: true,
+      status,
+      requested_model: options.model,
+      resolved_model: options.model,
+      execution_provider: options.provider,
+      active: this.active > 0,
+      invocation_count: this.invocationCount,
+      last_candidate_count: this.lastCandidateCount,
+      last_returned_count: this.lastReturnedCount,
+      last_invocation_at: this.lastInvocationAt,
+      last_success_at: this.lastSuccessAt,
+      last_error_at: this.lastErrorAt,
+      last_error: this.lastError,
+      last_latency_ms: this.lastLatencyMs,
+    };
+  }
+}
 
 function mapIndexedResults(options: {
   rows: Array<{ index?: number; score?: number }>;
@@ -122,6 +194,7 @@ export class CohereReranker implements RerankerService {
   private model: string;
   private endpoint: string;
   private strict: boolean;
+  private readonly runtime = new RemoteRerankerRuntime();
 
   constructor(opts: { apiKey: string; model?: string; endpoint?: string; name?: string; strict?: boolean }) {
     this.apiKey = opts.apiKey;
@@ -134,22 +207,30 @@ export class CohereReranker implements RerankerService {
   async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
     if (candidates.length === 0) return [];
 
+    const startedAt = this.runtime.begin(candidates.length);
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
-    const response = await fetch(this.endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: this.model,
-        query,
-        documents: candidates.map(c => c.text),
-        top_n: topK,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(this.endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: this.model,
+          query,
+          documents: candidates.map(c => c.text),
+          top_n: topK,
+        }),
+      });
+    } catch (error) {
+      this.runtime.failure(startedAt, error);
+      throw error;
+    }
 
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
       const message = `${this.name} rerank failed: ${response.status}${detail ? ` ${detail.slice(0, 300)}` : ''}`;
+      this.runtime.failure(startedAt, message);
       if (this.strict) throw new Error(message);
       console.error(`[reranker] ${message}`);
       return candidates.slice(0, topK).map(c => ({
@@ -161,7 +242,9 @@ export class CohereReranker implements RerankerService {
 
     const data = await response.json() as { results?: Array<{ index?: number; relevance_score?: number }> };
     if (!Array.isArray(data.results)) {
-      if (this.strict) throw new Error(`${this.name} rerank returned no results array`);
+      const message = `${this.name} rerank returned no results array`;
+      this.runtime.failure(startedAt, message);
+      if (this.strict) throw new Error(message);
       return candidates.slice(0, topK).map(c => ({
         id: c.id,
         score: c.originalScore,
@@ -169,13 +252,24 @@ export class CohereReranker implements RerankerService {
       }));
     }
 
-    return mapIndexedResults({
-      rows: data.results.map((row) => ({ index: row.index, score: row.relevance_score })),
-      candidates,
-      topK,
-      name: this.name,
-      strict: this.strict,
-    });
+    try {
+      const results = mapIndexedResults({
+        rows: data.results.map((row) => ({ index: row.index, score: row.relevance_score })),
+        candidates,
+        topK,
+        name: this.name,
+        strict: this.strict,
+      });
+      this.runtime.success(startedAt, results.length);
+      return results;
+    } catch (error) {
+      this.runtime.failure(startedAt, error);
+      throw error;
+    }
+  }
+
+  diagnostics(): RerankerRuntimeDiagnostics {
+    return this.runtime.snapshot({ model: this.model, provider: this.name });
   }
 }
 
@@ -191,6 +285,7 @@ export class CohereReranker implements RerankerService {
  */
 export class OpenAICompatibleReranker implements RerankerService {
   readonly name: string;
+  private readonly runtime = new RemoteRerankerRuntime();
 
   constructor(private readonly options: {
     endpoint: string;
@@ -204,6 +299,7 @@ export class OpenAICompatibleReranker implements RerankerService {
 
   async rerank(query: string, candidates: RerankCandidate[], topK = 10): Promise<RerankResult[]> {
     if (candidates.length === 0) return [];
+    const startedAt = this.runtime.begin(candidates.length);
     const fallback = (): RerankResult[] => candidates.slice(0, topK).map((candidate) => ({
       id: candidate.id,
       score: candidate.originalScore,
@@ -211,19 +307,26 @@ export class OpenAICompatibleReranker implements RerankerService {
     }));
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.options.apiKey) headers.Authorization = `Bearer ${this.options.apiKey}`;
-    const response = await fetch(this.options.endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: this.options.model,
-        query,
-        documents: candidates.map((candidate) => candidate.text),
-        top_n: Math.min(topK, candidates.length),
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(this.options.endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: this.options.model,
+          query,
+          documents: candidates.map((candidate) => candidate.text),
+          top_n: Math.min(topK, candidates.length),
+        }),
+      });
+    } catch (error) {
+      this.runtime.failure(startedAt, error);
+      throw error;
+    }
     if (!response.ok) {
       const detail = await response.text().catch(() => '');
       const message = `${this.name} rerank failed: ${response.status}${detail ? ` ${detail.slice(0, 300)}` : ''}`;
+      this.runtime.failure(startedAt, message);
       if (this.options.strict) throw new Error(message);
       console.error(`[reranker] ${message}`);
       return fallback();
@@ -236,19 +339,34 @@ export class OpenAICompatibleReranker implements RerankerService {
     const rows = payload.data ?? payload.results ?? payload.result;
     if (!Array.isArray(rows)) {
       const message = `${this.name} rerank returned no result array`;
+      this.runtime.failure(startedAt, message);
       if (this.options.strict) throw new Error(message);
       console.error(`[reranker] ${message}`);
       return fallback();
     }
-    return mapIndexedResults({
-      rows: rows.map((row) => ({
-        index: row.index,
-        score: row.score ?? row.relevance_score,
-      })),
-      candidates,
-      topK,
-      name: this.name,
-      strict: this.options.strict ?? false,
+    try {
+      const results = mapIndexedResults({
+        rows: rows.map((row) => ({
+          index: row.index,
+          score: row.score ?? row.relevance_score,
+        })),
+        candidates,
+        topK,
+        name: this.name,
+        strict: this.options.strict ?? false,
+      });
+      this.runtime.success(startedAt, results.length);
+      return results;
+    } catch (error) {
+      this.runtime.failure(startedAt, error);
+      throw error;
+    }
+  }
+
+  diagnostics(): RerankerRuntimeDiagnostics {
+    return this.runtime.snapshot({
+      model: this.options.model,
+      provider: this.name,
     });
   }
 }

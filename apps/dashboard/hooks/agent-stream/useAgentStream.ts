@@ -5,6 +5,7 @@ import type {
   AgentAttachment,
   AssistantTurn,
   DecisionAnswers,
+  SessionId,
   SessionState,
   StreamTask,
   StreamTaskExecutionMode,
@@ -29,7 +30,7 @@ import {
 const ABORT_TERMINAL_EVENT_GRACE_MS = 2_000;
 
 /** Subscribe only the narrow live-transcript surfaces to token/tool frames. */
-export function useAgentCurrentTurn(sessionId: number | null): AssistantTurn | null {
+export function useAgentCurrentTurn(sessionId: SessionId | null): AssistantTurn | null {
   const subscribe = useCallback(
     (listener: () => void) => subscribeAgentCurrentTurn(sessionId, listener),
     [sessionId],
@@ -50,7 +51,7 @@ export function useAgentCurrentTurn(sessionId: number | null): AssistantTurn | n
  * Blocks are kept in arrival order so the rendering matches what the model
  * actually emitted (text → tool_use → text → tool_use, etc.).
  */
-export function useAgentStream(sessionId: number | null, notificationContext?: NotificationSourceContext) {
+export function useAgentStream(sessionId: SessionId | null, notificationContext?: NotificationSourceContext) {
   const consumerIdRef = useRef(Symbol('agent-stream-consumer'));
   const notificationContextRef = useRef(notificationContext);
   notificationContextRef.current = notificationContext;
@@ -89,7 +90,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
 
   const runStream = useCallback(
     (
-      sid: number,
+      sid: SessionId,
       opts: Parameters<typeof openStream>[1],
       onMessageComplete?: () => void,
     ) => agentStreamOwnership.run(
@@ -223,7 +224,7 @@ export function useAgentStream(sessionId: number | null, notificationContext?: N
    * or starts from the buffer head when lastSeenSeq is -1.
    */
   const reattach = useCallback(
-    async (sid: number, onMessageComplete?: () => void) => {
+    async (sid: SessionId, onMessageComplete?: () => void) => {
       const { busId: lastBusId, seq: lastSeq } = readAgentStreamCursor(sid);
       const initialBlocks = lastBusId && lastSeq >= 0
         ? getAgentSessionSnapshot(sid).currentTurn?.blocks

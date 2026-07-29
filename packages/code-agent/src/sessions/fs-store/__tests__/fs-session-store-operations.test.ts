@@ -1,0 +1,259 @@
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { FsSessionStore } from '../fs-session-store.js';
+
+let temporaryRoot: string;
+let projectRoot: string;
+let store: FsSessionStore;
+
+beforeEach(async () => {
+  temporaryRoot = await mkdtemp(join(tmpdir(), 'mcp-fs-session-ops-'));
+  const dataDir = join(temporaryRoot, 'data');
+  projectRoot = join(temporaryRoot, 'project');
+  await Promise.all([mkdir(dataDir), mkdir(projectRoot)]);
+  store = FsSessionStore.fromRoots({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (id) => (id === 7 ? projectRoot : null),
+      listProjectRoots: () => [
+        { project_id: 7, root_path: projectRoot },
+      ],
+    },
+    projectInfoResolver: () => ({
+      project_id: 7,
+      name: 'Project',
+      root_path: projectRoot,
+    }),
+  });
+});
+
+afterEach(async () => {
+  await store.close();
+  await rm(temporaryRoot, { recursive: true, force: true });
+});
+
+describe('filesystem session operations', () => {
+  it('duplicates and forks conversation artifacts without SQLite', async () => {
+    const source = await store.createSession({
+      project_id: 7,
+      title: 'Source',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+    const imageBase64 = Buffer.from('image-bytes').toString('base64');
+    await store.appendMessage({
+      session_id: source.id,
+      operation_id: 'source-user',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Inspect' },
+          { type: 'image', mediaType: 'image/png', base64: imageBase64 },
+        ],
+      },
+    });
+    await store.persistAssistantTurn({
+      session_id: source.id,
+      operation_id: 'source-assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: 'Done' },
+          {
+            type: 'tool_use',
+            id: 'call-1',
+            name: 'read_file',
+            input: { path: 'a.ts' },
+          },
+        ],
+      },
+      usage: { input_tokens: 10, output_tokens: 4 },
+      tool_calls: [
+        {
+          tool_use_id: 'call-1',
+          tool_name: 'read_file',
+          args: { path: 'a.ts' },
+          raw_result: 'raw-output',
+          result_text: 'shaped-output',
+          is_error: false,
+          duration_ms: 9,
+        },
+      ],
+    });
+    const targetSeq = await store.appendMessage({
+      session_id: source.id,
+      operation_id: 'source-editable-user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Edit this request' }],
+      },
+    });
+
+    const duplicate = await store.duplicateSession(source.id);
+    expect(duplicate.id).not.toBe(source.id);
+    expect(duplicate.title).toBe('Source (cópia)');
+    const duplicateData = await store.loadAllSessionMessages(duplicate.id);
+    expect(duplicateData?.messages).toHaveLength(4);
+    expect(duplicateData?.messages[0].content[1]).toMatchObject({
+      type: 'image',
+      base64: imageBase64,
+    });
+    expect(
+      Buffer.from(
+        (await store.getToolOutput(duplicate.id, 'call-1'))!.shaped!,
+      ).toString('utf8'),
+    ).toBe('shaped-output');
+
+    const fork = await store.forkSessionBeforeSeq(source.id, targetSeq);
+    expect(fork.seed_text).toBe('Edit this request');
+    expect(fork.session.id).not.toBe(source.id);
+    expect(
+      (await store.loadAllSessionMessages(fork.session.id))?.messages,
+    ).toHaveLength(3);
+
+    const stats = await store.getSessionStats(source.id);
+    expect(stats).toMatchObject({
+      message_count: 4,
+      assistant_turns: 1,
+      tool_call_count: 1,
+      tool_error_count: 0,
+      distinct_tools: 1,
+      total_tool_duration_ms: 9,
+    });
+  });
+
+  it('rolls back through an append-only marker and never reuses message seq', async () => {
+    const session = await store.createSession({
+      project_id: 7,
+      title: 'Rollback',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+    await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'rollback-user-1',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Keep me' }],
+      },
+    });
+    await store.persistAssistantTurn({
+      session_id: session.id,
+      operation_id: 'rollback-assistant-1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Kept answer' }],
+      },
+      usage: { input_tokens: 5, output_tokens: 2 },
+      tool_calls: [],
+    });
+    const targetSeq = await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'rollback-user-2',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Edit me' },
+          {
+            type: 'document',
+            name: 'note.txt',
+            mediaType: 'text/plain',
+            text: 'attachment',
+          },
+        ],
+      },
+    });
+    await store.persistAssistantTurn({
+      session_id: session.id,
+      operation_id: 'rollback-assistant-2',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Discarded answer' }],
+      },
+      usage: { input_tokens: 11, output_tokens: 7 },
+      tool_calls: [],
+    });
+    await store.recordPlan({
+      session_id: session.id,
+      tool_use_id: 'plan-after-target',
+      message_seq: targetSeq,
+      plan_text: 'Discarded plan',
+    });
+    await store.recordTasks({
+      session_id: session.id,
+      tool_use_id: 'tasks-after-target',
+      state: {
+        summary: 'Discarded tasks',
+        tasks: [],
+        execution_mode: null,
+        approved: false,
+        current_task_id: null,
+      },
+    });
+    await store.upsertSessionGoal(session.id, {
+      text: 'Discarded goal',
+      status: 'in_progress',
+      createdAt: '2026-07-26T12:00:00.000Z',
+      updatedAt: '2026-07-26T12:00:00.000Z',
+    });
+    const location = (await store.getSessionLocation(session.id))!;
+    const beforeCommits =
+      store.repository.readConversationSync(location).length;
+
+    const rolledBack = await store.rollbackSessionToSeq(
+      session.id,
+      targetSeq,
+    );
+    expect(rolledBack).toMatchObject({
+      seed_text: 'Edit me',
+      seed_attachments: [
+        {
+          name: 'note.txt',
+          mediaType: 'text/plain',
+          text: 'attachment',
+        },
+      ],
+      had_attachments: true,
+    });
+    expect(
+      store.repository.readConversationSync(location),
+    ).toHaveLength(beforeCommits + 1);
+    expect(
+      (await store.loadAllSessionMessages(session.id))?.messages.map(
+        (message) => message.content[0],
+      ),
+    ).toEqual([
+      { type: 'text', text: 'Keep me' },
+      { type: 'text', text: 'Kept answer' },
+    ]);
+    expect(await store.listPlans(session.id)).toEqual([]);
+    expect(await store.getTasksState(session.id)).toBeNull();
+    expect(await store.getSessionGoal(session.id)).toBeNull();
+    expect(await store.getSessionStats(session.id)).toMatchObject({
+      total_input_tokens: 5,
+      total_output_tokens: 2,
+      message_count: 2,
+      assistant_turns: 1,
+    });
+
+    // A replay returns the original seed without appending another marker.
+    expect(
+      (await store.rollbackSessionToSeq(session.id, targetSeq)).seed_text,
+    ).toBe('Edit me');
+    expect(
+      store.repository.readConversationSync(location),
+    ).toHaveLength(beforeCommits + 1);
+
+    const nextSeq = await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'rollback-new-user',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'Replacement' }],
+      },
+    });
+    expect(nextSeq).toBeGreaterThan(targetSeq + 1);
+  });
+});

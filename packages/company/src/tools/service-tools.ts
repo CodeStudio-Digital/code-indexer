@@ -60,7 +60,7 @@ function resolveActor(ctx: ToolContext): ServiceControlActor | null {
 }
 
 function recordAgentTransition(
-  sessionId: number, serviceId: string, toState: string, reason: string, actor: string,
+  sessionId: string, serviceId: string, toState: string, reason: string, actor: string,
 ): void {
   try {
     getServiceSupervisorStores()?.transitions.record({
@@ -135,7 +135,7 @@ const serviceLogs: CoderTool = {
   name: 'service_logs',
   // Auto-repeatable via the `_logs` suffix (tail-style naming convention).
   description:
-    "Read the structured, timestamped log history of this session's services (persisted ring buffer fed by the supervisor — survives container restarts, unlike read_sandbox_logs). Every line is prefixed with its service_id and stream (devserver/container/scaffold). Omit service_id to read across ALL services; pass before_id from a previous page to go further back in time.",
+    "Read the structured, timestamped log history of this session's services (persisted ring buffer fed by the supervisor — survives container restarts, unlike read_sandbox_logs). Every line is prefixed with its service_id and stream (devserver/container/scaffold). Omit service_id to read across ALL services; pass before_seq from a previous page to go further back in time.",
   source: 'native',
   riskLevel: 'read',
   mutates: false,
@@ -146,7 +146,7 @@ const serviceLogs: CoderTool = {
       service_id: { type: 'string', description: "Filter to one service (e.g. 'main', 'api'). Omit for all services." },
       lines: { type: 'number', description: `Page size (default ${DEFAULT_LOG_LINES}, max ${MAX_LOG_LINES}).` },
       stream: { type: 'string', enum: ['devserver', 'container', 'scaffold'], description: 'Filter by stream.' },
-      before_id: { type: 'number', description: 'Keyset cursor from a previous page footer — returns strictly older lines.' },
+      before_seq: { type: 'number', description: 'Sequence cursor from a previous page footer — returns strictly older lines.' },
     },
     additionalProperties: false,
   },
@@ -161,11 +161,13 @@ const serviceLogs: CoderTool = {
     const limit = Math.max(1, Math.min(MAX_LOG_LINES, requested));
     const stream = typeof args.stream === 'string' && LOG_STREAMS.has(args.stream) ? args.stream : undefined;
     const serviceId = typeof args.service_id === 'string' && args.service_id.trim() ? args.service_id.trim() : undefined;
-    const beforeId = typeof args.before_id === 'number' && args.before_id > 0 ? Math.floor(args.before_id) : undefined;
+    const beforeSeq = typeof args.before_seq === 'number' && args.before_seq > 0
+      ? Math.floor(args.before_seq)
+      : undefined;
     let rows;
     try {
       rows = logs.listPage(cc.companySessionId, {
-        serviceId, beforeId, limit,
+        serviceId, beforeSeq, limit,
         stream: stream as 'devserver' | 'container' | 'scaffold' | undefined,
       });
     } catch (e) {

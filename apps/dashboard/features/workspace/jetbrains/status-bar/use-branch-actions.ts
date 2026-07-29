@@ -142,7 +142,13 @@ export function useBranchActions({ projectId, repoPath, onMutated, onClose }: Us
         // Materialise a local tracking branch when picking a remote ref
         // — bare `git checkout origin/foo` would land on detached HEAD.
         const local = b.name.replace(/^[^/]+\//, '');
-        await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: local, create: true });
+        await apiCall('projectGit.branchCheckout', {
+          projectId,
+          repoPath,
+          name: local,
+          create: true,
+          from: b.name,
+        });
       } else {
         await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: b.name });
       }

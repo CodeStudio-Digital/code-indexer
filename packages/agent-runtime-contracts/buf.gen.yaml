@@ -1,0 +1,15 @@
+version: v2
+clean: true
+
+inputs:
+  - directory: proto
+
+plugins:
+  - local: protoc-gen-es
+    out: src/generated/v1
+    opt:
+      - target=ts
+      - import_extension=js
+  - remote: buf.build/community/neoeinstein-prost:v0.5.0
+    revision: 1
+    out: ../../native/agent-runtime/crates/agent-protocol/src/generated/v1

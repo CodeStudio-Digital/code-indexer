@@ -37,7 +37,7 @@ vi.mock('@mcp/services/sandbox/index.js', () => ({
 
 vi.mock('@mcp/services/qa/workspace-restore.js', () => ({
   restoreQaWorkspace: mocks.restoreQaWorkspace,
-  renderRunConfigFile: (runId: string | number, endpoint: string) =>
+  renderRunConfigFile: (runId: string, endpoint: string) =>
     JSON.stringify({ runId: String(runId), endpoint }),
 }));
 
@@ -55,10 +55,13 @@ const CTX = { cwd: 'D:/tmp', projectName: 'test' } as ToolContext;
 const QA_CONFIG = JSON.stringify({
   role_assignments: [{ role: 'qa', skills: ['qa-playwright'] }],
 });
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000011';
+const QA_RUN_ID = '00000000-0000-4000-8000-000000000042';
+const QA_TEST_RUN_ID = '00000000-0000-4000-8000-000000000099';
 
 function makeOrchestrator(approval: { approved: boolean; auto: boolean } | null) {
   return {
-    companySessionId: 11,
+    companySessionId: COMPANY_SESSION_ID,
     getSessionConfigJson: () => QA_CONFIG,
     hasApprovedPlan: vi.fn(() => approval),
   } as unknown as CompanyOrchestrator;
@@ -66,7 +69,7 @@ function makeOrchestrator(approval: { approved: boolean; auto: boolean } | null)
 
 function makeStore() {
   const startRun = vi.fn((input: Record<string, unknown>) => ({
-    id: 99,
+    id: QA_TEST_RUN_ID,
     suite: input.suite,
     service_id: input.service_id ?? 'main',
     plan_gate: input.plan_gate ?? null,
@@ -92,7 +95,7 @@ describe('qa_start_run — plan gate', () => {
   it('refuses a QA subordinate without an approved plan (no row created)', async () => {
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
-    const tool = qaStartRun(makeOrchestrator(null), 'qa', 42);
+    const tool = qaStartRun(makeOrchestrator(null), 'qa', QA_RUN_ID);
     const result = await tool.handler({ suite: 'login' }, CTX);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('submit_plan_to_master');
@@ -103,7 +106,11 @@ describe('qa_start_run — plan gate', () => {
   it('persists plan_gate=auto for a fast-path approval', async () => {
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
-    const tool = qaStartRun(makeOrchestrator({ approved: true, auto: true }), 'qa', 42);
+    const tool = qaStartRun(
+      makeOrchestrator({ approved: true, auto: true }),
+      'qa',
+      QA_RUN_ID,
+    );
     const result = await tool.handler({ suite: 'login' }, CTX);
     expect(result.isError).toBeUndefined();
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ plan_gate: 'auto' }));
@@ -112,7 +119,11 @@ describe('qa_start_run — plan gate', () => {
   it('persists plan_gate=approved for a manual approval', async () => {
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
-    const tool = qaStartRun(makeOrchestrator({ approved: true, auto: false }), 'qa', 42);
+    const tool = qaStartRun(
+      makeOrchestrator({ approved: true, auto: false }),
+      'qa',
+      QA_RUN_ID,
+    );
     await tool.handler({ suite: 'login' }, CTX);
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ plan_gate: 'approved' }));
   });
@@ -121,7 +132,7 @@ describe('qa_start_run — plan gate', () => {
     process.env.MCP_QA_REQUIRE_PLAN = '0';
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
-    const tool = qaStartRun(makeOrchestrator(null), 'qa', 42);
+    const tool = qaStartRun(makeOrchestrator(null), 'qa', QA_RUN_ID);
     const result = await tool.handler({ suite: 'login' }, CTX);
     expect(result.isError).toBeUndefined();
     expect(startRun).toHaveBeenCalledWith(expect.objectContaining({ plan_gate: 'skipped' }));
@@ -142,7 +153,11 @@ describe('qa_start_run — config + preflight gates (no orphan rows)', () => {
     mocks.readWorkspaceFile.mockResolvedValue('export default {}');
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
-    const tool = qaStartRun(makeOrchestrator({ approved: true, auto: true }), 'qa', 42);
+    const tool = qaStartRun(
+      makeOrchestrator({ approved: true, auto: true }),
+      'qa',
+      QA_RUN_ID,
+    );
     const result = await tool.handler({ suite: 'login' }, CTX);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('config_invalid');
@@ -159,7 +174,11 @@ describe('qa_start_run — config + preflight gates (no orphan rows)', () => {
     } as never);
     const { store, startRun } = makeStore();
     setQaTestRunStore(store);
-    const tool = qaStartRun(makeOrchestrator({ approved: true, auto: true }), 'qa', 42);
+    const tool = qaStartRun(
+      makeOrchestrator({ approved: true, auto: true }),
+      'qa',
+      QA_RUN_ID,
+    );
     const result = await tool.handler({ suite: 'login' }, CTX);
     expect(result.isError).toBe(true);
     expect(result.content).toContain('sidecar_down');

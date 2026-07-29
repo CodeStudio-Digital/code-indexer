@@ -1,23 +1,25 @@
 /**
- * Fase 2.5 burn-in smoke — functional, NOT an efficacy claim (D-012).
+ * Policy shadow burn-in smoke — functional, not an efficacy claim.
  *
- * Drives the composed policy-shadow port through a small invocation matrix
- * (allow / plan-mode deny / conservative external) against a real migrated
- * SQLite and proves the burn-in loop is measurable: comparisons persisted,
- * agreementRate computable via agreementStats, durable evaluation_ms on every
- * row, zero refusals without ENFORCE, and no raw input leaking into tables.
+ * Drives allow/deny/external invocations against a real filesystem session
+ * bundle and proves that policy data is durable without SQLite or raw input.
  */
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
-import type DatabaseConstructor from 'better-sqlite3';
-import { policyEngine255 } from '@mcp/store/migrations/255_policy_engine.js';
-import { policyComparisonLatency256 } from '@mcp/store/migrations/256_policy_comparison_latency.js';
-import { PolicyDecisionStore } from '@mcp/store/control-plane/index.js';
+import {
+  ControlPlaneFileRepository,
+  isUuid,
+} from '@mcp/session-storage';
+import {
+  FsPolicyShadowRepository,
+  FsSessionStore,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
 import { ToolRegistry } from '../registry.js';
 import type { CoderTool } from '../tool.js';
 import { createPolicyShadowPort } from '../policy-shadow-adapter.js';
-
-type DB = InstanceType<typeof DatabaseConstructor>;
 
 const FLAGS = [
   'CODER_POLICY_ENGINE_SHADOW',
@@ -26,13 +28,18 @@ const FLAGS = [
   'CODER_RESOURCE_GRANTS',
   'CODER_POLICY_ENGINE_ENFORCE',
 ] as const;
-
 const SENTINEL = 'SECRET-BURNIN-INPUT-VALUE';
 
-let db: DB;
 let previous: Record<string, string | undefined>;
+let temporaryRoot: string;
+let sessions: FsSessionStore;
 
-function tool(overrides: Partial<CoderTool> & { name: string; source: CoderTool['source'] }): CoderTool {
+function tool(
+  overrides: Partial<CoderTool> & {
+    name: string;
+    source: CoderTool['source'];
+  },
+): CoderTool {
   return {
     description: 'burn-in tool',
     parameters: { type: 'object', properties: {} },
@@ -41,102 +48,177 @@ function tool(overrides: Partial<CoderTool> & { name: string; source: CoderTool[
   } as CoderTool;
 }
 
-beforeEach(() => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  db.exec('CREATE TABLE coder_sessions (id INTEGER PRIMARY KEY)');
-  policyEngine255.up(db);
-  policyComparisonLatency256.up(db);
-  previous = Object.fromEntries(FLAGS.map((f) => [f, process.env[f]]));
-  for (const f of FLAGS) delete process.env[f];
+beforeEach(async () => {
+  temporaryRoot = await mkdtemp(join(tmpdir(), 'policy-shadow-fs-'));
+  const projectRoot = join(temporaryRoot, 'project');
+  const dataDir = join(temporaryRoot, 'data');
+  await Promise.all([mkdir(projectRoot), mkdir(dataDir)]);
+  sessions = FsSessionStore.fromRoots({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) =>
+        projectId === 17 ? projectRoot : undefined,
+      listProjectRoots: () => [
+        { project_id: 17, root_path: projectRoot },
+      ],
+    },
+  });
+  previous = Object.fromEntries(FLAGS.map((flag) => [flag, process.env[flag]]));
+  for (const flag of FLAGS) delete process.env[flag];
   process.env.CODER_POLICY_ENGINE_SHADOW = '1';
   process.env.CODER_CAPABILITY_CATALOG_SHADOW = '1';
 });
 
-afterEach(() => {
-  db.close();
-  for (const f of FLAGS) {
-    if (previous[f] === undefined) delete process.env[f];
-    else process.env[f] = previous[f];
+afterEach(async () => {
+  await sessions.close();
+  await rm(temporaryRoot, { recursive: true, force: true });
+  for (const flag of FLAGS) {
+    if (previous[flag] === undefined) delete process.env[flag];
+    else process.env[flag] = previous[flag];
   }
 });
 
-describe('policy shadow burn-in smoke', () => {
-  it('runs the invocation matrix: persists comparisons, agreementRate 1.0, latency, no refusals, no raw input', async () => {
+describe('policy shadow filesystem burn-in', () => {
+  it('rejects a comparison whose decision file was not committed', async () => {
+    const session = await sessions.createSession({
+      project_id: 17,
+      title: 'Missing policy decision',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+    const persistence = new FsPolicyShadowRepository(sessions);
+
+    await expect(
+      persistence.recordComparison({
+        sessionId: session.id,
+        agentRunId: randomUUID(),
+        comparisonId: 'comparison:missing',
+        decisionId: 'decision:missing',
+        capabilityId: 'cap:native:read_file',
+        toolUseId: 'tool-use-missing',
+        legacyEffect: 'allow',
+        shadowEffect: 'allow',
+        comparedAt: new Date().toISOString(),
+        evaluationMs: 0,
+      }),
+    ).rejects.toThrow('references missing decision');
+  });
+
+  it('persists UUID records, comparisons and one capability checkpoint without raw input', async () => {
+    const session = await sessions.createSession({
+      project_id: 17,
+      title: 'Policy shadow',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
     const registry = new ToolRegistry();
-    const readTool = tool({ name: 'read_file', source: 'native', mutates: false, riskLevel: 'read' });
-    const editTool = tool({ name: 'edit_file', source: 'native', mutates: true, riskLevel: 'write' });
-    const externalTool = tool({ name: 'mcp__mail__send', source: 'mcp_external' });
+    const readTool = tool({
+      name: 'read_file',
+      source: 'native',
+      mutates: false,
+      riskLevel: 'read',
+    });
+    const editTool = tool({
+      name: 'edit_file',
+      source: 'native',
+      mutates: true,
+      riskLevel: 'write',
+    });
+    const externalTool = tool({
+      name: 'mcp__mail__send',
+      source: 'mcp_external',
+    });
     registry.registerAll([readTool, editTool, externalTool]);
 
-    // Plan mode WITHOUT approval: edit_file must be a deny on both sides
-    // (legacy block / shadow deny) — an agreement in the allow-vs-block
-    // dimension. read_file and the external tool are allows (no ENFORCE, no
-    // legacy restriction in this fixture).
     const created = createPolicyShadowPort({
-      db,
+      persistence: new FsPolicyShadowRepository(sessions),
       registry,
       sessionContext: {
-        getLegacyContext: () => ({ planMode: true, planApproved: false, taskScope: null }),
+        getLegacyContext: () => ({
+          planMode: true,
+          planApproved: false,
+          taskScope: null,
+        }),
         background: false,
-        sessionId: 'session:burnin',
-        agentRunId: 'agent-run:burnin',
+        sessionId: session.id,
       },
       log: () => undefined,
-    })!;
-    expect(created).not.toBeNull();
+    });
+    if (!created) throw new Error('policy shadow flags were not applied');
 
-    const matrix = [
+    for (const [index, entry] of [
       { tool: readTool, name: 'read_file' },
       { tool: editTool, name: 'edit_file' },
       { tool: externalTool, name: 'mcp__mail__send' },
-    ];
-    for (const [index, entry] of matrix.entries()) {
-      const result = await created.port({
-        tool: entry.tool,
-        toolUseId: `tu:burnin:${index}`,
-        toolName: entry.name,
-        toolInput: { note: SENTINEL, index },
-        turn: 1,
-      });
-      // Without ENFORCE the shadow NEVER refuses — even for the deny row.
-      expect(result).toEqual({ refuse: false });
+    ].entries()) {
+      await expect(
+        created.port({
+          tool: entry.tool,
+          toolUseId: `tool-use-${index}`,
+          toolName: entry.name,
+          toolInput: { note: SENTINEL, index },
+          turn: 1,
+        }),
+      ).resolves.toEqual({ refuse: false });
     }
 
-    // ≥3 comparisons persisted, one per invocation.
-    const decisions = new PolicyDecisionStore(db);
-    const comparisons = decisions.listComparisons(10);
-    expect(comparisons.length).toBe(3);
+    const location = await sessions.getSessionLocation(session.id);
+    if (!location) throw new Error('session bundle was not created');
+    const repository = new ControlPlaneFileRepository({
+      sessionRoot: location.bundle_path,
+    });
+    const policyRecords = (
+      await repository.list('policyDecision', {
+        limit: 100,
+        order: 'asc',
+      })
+    ).items;
+    const decisions = policyRecords.filter(
+      (record) => record.data.recordType === 'decision',
+    );
+    const comparisons = policyRecords.filter(
+      (record) => record.data.recordType === 'comparison',
+    );
+    const checkpoints = (
+      await repository.list('checkpoint', {
+        limit: 100,
+        order: 'asc',
+      })
+    ).items.filter(
+      (record) =>
+        record.data.checkpointType === 'resolved_capability_set',
+    );
 
-    // agreementRate = 1.0 — shadow and legacy agree on every row of the
-    // matrix (allow/allow, block/deny, allow/allow).
-    const stats = decisions.agreementStats();
-    expect(stats.total).toBe(3);
-    expect(stats.agreements).toBe(3);
-    expect(stats.agreements / stats.total).toBe(1);
-    expect(stats.critical).toBe(0);
+    expect(decisions).toHaveLength(3);
+    expect(comparisons).toHaveLength(3);
+    expect(checkpoints).toHaveLength(1);
+    expect(
+      [...policyRecords, ...checkpoints].every(
+        (record) =>
+          isUuid(record.id) &&
+          isUuid(record.operationId) &&
+          record.relations.session === session.id,
+      ),
+    ).toBe(true);
 
-    // Durable evaluation_ms on every comparison (numeric, non-negative).
-    for (const row of comparisons) {
-      expect(typeof row.evaluationMs).toBe('number');
-      expect(row.evaluationMs!).toBeGreaterThanOrEqual(0);
+    const comparisonData = comparisons.map((record) => record.data);
+    expect(
+      comparisonData.filter((data) => data.agreement === true),
+    ).toHaveLength(3);
+    expect(
+      comparisonData.find((data) => data.shadowEffect === 'deny'),
+    ).toMatchObject({
+      legacyEffect: 'block',
+      agreement: true,
+    });
+    for (const data of comparisonData) {
+      expect(data.evaluationMs).toEqual(expect.any(Number));
+      expect(data.evaluationMs as number).toBeGreaterThanOrEqual(0);
     }
 
-    // The deny row is the plan-mode edit: legacy block, shadow deny.
-    const denyRow = comparisons.find((c) => c.shadowEffect === 'deny');
-    expect(denyRow).toMatchObject({ legacyEffect: 'block', agreement: true });
-
-    // Catalog flag on: resolved set once, descriptors for the 3 tools.
-    const sets = db.prepare('SELECT COUNT(*) AS count FROM resolved_capability_sets').get() as { count: number };
-    expect(sets.count).toBe(1);
-    const descriptors = db.prepare('SELECT COUNT(*) AS count FROM capability_descriptors').get() as { count: number };
-    expect(descriptors.count).toBe(3);
-
-    // Privacy: the seeded sentinel never lands in any Fase 2 table.
-    const dump = ['policy_decisions', 'policy_decision_comparisons', 'capability_descriptors', 'resolved_capability_sets']
-      .map((table) => (db.prepare(`SELECT * FROM ${table}`).all() as Array<Record<string, unknown>>)
-        .map((r) => JSON.stringify(r)).join('\n'))
-      .join('\n');
-    expect(dump).not.toContain(SENTINEL);
+    expect(checkpoints[0].data.descriptors).toHaveLength(3);
+    expect(JSON.stringify([...policyRecords, ...checkpoints])).not.toContain(
+      SENTINEL,
+    );
   });
 });

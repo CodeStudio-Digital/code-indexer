@@ -1,11 +1,10 @@
 import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
-import { McpAgentRunStore } from '../../mcp-agent-run-store.js';
 import { McpConnectionProfileStore } from '../../mcp-connection-profile-store.js';
 import { mcpConnectionProfiles240 } from '../240_mcp_connection_profiles.js';
 
 describe('migration 240 - MCP connection profiles', () => {
-  it('persists profile policy, token binding and recoverable agent runs', () => {
+  it('persists reusable profile policy and token binding', () => {
     const db = new Database(':memory:');
     db.pragma('foreign_keys = ON');
     db.exec(`
@@ -43,22 +42,10 @@ describe('migration 240 - MCP connection profiles', () => {
       VALUES ('token-1', 'hash', 'test', '["mcp:read"]', datetime('now'), 'bootstrap', ?)
     `).run(profile.id);
 
-    const runs = new McpAgentRunStore(db);
-    runs.create({
-      id: 'run-1',
-      principal: 'token-1',
-      profileId: profile.id,
-      sessionId: 42,
-      projectId: 1,
-      agentId: 'build',
-      status: 'running',
-      taskPreview: 'test',
-      finalText: null,
-      error: null,
-    });
-    expect(runs.countActive('token-1', profile.id)).toBe(1);
-    expect(runs.interruptActiveRuns()).toBe(1);
-    expect(runs.get('run-1')?.status).toBe('interrupted');
+    expect(
+      db.prepare('SELECT profile_id FROM api_tokens WHERE id = ?')
+        .get('token-1'),
+    ).toEqual({ profile_id: profile.id });
     db.close();
   });
 

@@ -1,4 +1,5 @@
 import { minimatch } from 'minimatch';
+import type { SessionId } from '@mcp/session-storage';
 import type {
   PreflightMemoryEntry,
   PreflightSkillMeta,
@@ -10,18 +11,20 @@ interface PreflightCatalogDeps {
   getToolCatalog: () => PreflightToolMeta[];
   getMemoryIndex: (projectId: number) => PreflightMemoryEntry[];
   getSkillCatalog?: (
-    sessionId: number,
+    sessionId: SessionId,
     projectId: number,
     projectRoot?: string,
+    activeSkillIds?: readonly string[] | null,
   ) => PreflightSkillMeta[];
 }
 
 interface PreflightCatalogInput {
-  sessionId: number;
+  sessionId: SessionId;
   projectId?: number | null;
   userMessage: string;
   isGlobalWorkspace?: boolean;
   workspaceProjects?: PreflightWorkspaceProject[];
+  activeSkillIds?: readonly string[] | null;
 }
 
 export interface PreparedPreflightCatalogs {
@@ -95,7 +98,12 @@ export function preparePreflightCatalogs(
         ? [{ projectId: input.projectId, name: '', slug: '', rootPath: '', isPrimary: true }]
         : [];
     for (const project of projects) {
-      for (const skill of deps.getSkillCatalog(input.sessionId, project.projectId, project.rootPath || undefined)) {
+      for (const skill of deps.getSkillCatalog(
+        input.sessionId,
+        project.projectId,
+        project.rootPath || undefined,
+        input.activeSkillIds,
+      )) {
         const current = merged.get(skill.id) ?? {
           ...skill,
           projectSlugSet: new Set<string>(),

@@ -3,18 +3,16 @@
  *
  * The reviewer used to receive whatever the agent CLAIMED about tests
  * ("testSummary" strings). This module replaces claims with the recorded
- * timeline the IDE already owns: `coder_tool_calls` (every exec_command /
- * run_command with result + timestamp) crossed with `session_file_edits`
- * (every file mutation with timestamp). The product is a small, factual
+ * timeline the session bundle already owns: tool-call output metadata crossed
+ * with the baseline edit envelopes. The product is a small, factual
  * block: which verify-ish commands actually ran, how they exited, and which
  * files were edited AFTER the last run — i.e. whether the evidence is stale.
  *
- * Read-only over the shared DB handle; every failure degrades to `null`
+ * Read-only over the filesystem session repository; every failure degrades to `null`
  * (the review simply runs without the section).
  */
-import type DatabaseConstructor from 'better-sqlite3';
-
-type DB = InstanceType<typeof DatabaseConstructor>;
+import type { SessionId } from '@mcp/session-storage';
+import type { FsReviewEvidenceSource } from '../sessions/fs-store/review-evidence-repository.js';
 
 export interface VerifyCommandRecord {
   command: string;
@@ -31,9 +29,9 @@ export interface VerifyEvidence {
   /** Files edited AFTER the last verify run (evidence staleness). */
   filesEditedAfter: string[];
   /**
-   * Files edited in the SAME SQLite second as the last verify. The persisted
-   * timestamps cannot prove ordering inside that second, so completion logic
-   * must treat this as ambiguous rather than silently fresh.
+   * Files edited at the SAME persisted timestamp as the last verify. The
+   * envelope timestamps cannot prove ordering inside that instant, so
+   * completion logic must treat this as ambiguous rather than silently fresh.
    */
   filesEditedAtSameTime?: string[];
 }
@@ -62,23 +60,12 @@ function exitCodeOf(resultText: string | null): number | null {
   return m ? Number(m[1]) : null;
 }
 
-export function buildVerifyEvidence(db: DB, sessionId: number): VerifyEvidence | null {
+export async function buildVerifyEvidence(
+  source: FsReviewEvidenceSource,
+  sessionId: SessionId | string,
+): Promise<VerifyEvidence | null> {
   try {
-    const rows = db
-      .prepare(
-        `SELECT tc.args_json, tc.result_text, tc.is_error, tc.created_at
-           FROM coder_tool_calls tc
-           JOIN coder_messages m ON m.id = tc.message_id
-          WHERE m.session_id = ? AND tc.tool_name IN ('exec_command', 'run_command')
-          ORDER BY tc.id DESC
-          LIMIT 200`,
-      )
-      .all(sessionId) as Array<{
-      args_json: string;
-      result_text: string | null;
-      is_error: number;
-      created_at: string;
-    }>;
+    const rows = await source.listReviewEvidenceToolCalls(sessionId, 200);
 
     const verifies: VerifyCommandRecord[] = [];
     for (const row of rows) {
@@ -96,16 +83,10 @@ export function buildVerifyEvidence(db: DB, sessionId: number): VerifyEvidence |
     let filesEditedAfter: string[] = [];
     let filesEditedAtSameTime: string[] = [];
     if (lastVerify) {
-      const edits = db
-        .prepare(
-          `SELECT DISTINCT b.file_path, e.applied_at
-             FROM session_file_edits e
-             JOIN session_file_baselines b ON b.id = e.baseline_id
-            WHERE b.session_kind = 'coder' AND b.session_id = ? AND e.applied_at >= ?
-            ORDER BY b.file_path
-            LIMIT ${MAX_EDITED_FILES + 1}`,
-        )
-        .all(sessionId, lastVerify.at) as Array<{ file_path: string; applied_at: string }>;
+      const edits = (await source.listReviewEvidenceEdits(sessionId))
+        .filter((row) => row.applied_at >= lastVerify.at)
+        .sort((left, right) => left.file_path.localeCompare(right.file_path))
+        .slice(0, MAX_EDITED_FILES + 1);
       filesEditedAfter = edits
         .filter((row) => row.applied_at > lastVerify.at)
         .map((row) => row.file_path);

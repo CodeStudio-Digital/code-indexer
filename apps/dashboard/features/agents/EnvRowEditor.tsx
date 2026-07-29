@@ -49,7 +49,7 @@ export function sourceLabel(source: EnvSource | undefined): string {
 
 export interface EnvRowEditorProps {
   row: EnvRow;
-  sessionId: number;
+  sessionId: string;
   onSaved: () => Promise<void> | void;
   onDelete?: () => void;
   /** When true, the row renders read-only (managed by the sandbox). */

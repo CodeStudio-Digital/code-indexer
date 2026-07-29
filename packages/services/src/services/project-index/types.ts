@@ -85,6 +85,13 @@ export interface StructuralRunSummary {
   skipped: number;
   errorCount: number;
   durationMs: number;
+  phaseTimings?: {
+    scanMs: number;
+    parseMs: number;
+    writeMs: number;
+    sweepMs: number;
+  };
+  peakRssMb?: number;
   aborted?: 'too_large' | 'signal' | 'empty_scan';
 }
 
@@ -122,6 +129,8 @@ export interface StructuralExecutor {
       /** Manual reindex bypasses the empty-scan anti-wipe guard. */
       allowEmptyWipe?: boolean;
       onProgress?: (p: StructuralProgressFrame) => void;
+      /** Exact scanner delta, acknowledged before structural rows mutate. */
+      onChanges?: (events: readonly DirtyEvent[]) => void | Promise<void>;
     },
   ): Promise<StructuralRunSummary>;
   indexFiles(projectId: number, relPaths: string[]): Promise<IndexFilesSummary>;

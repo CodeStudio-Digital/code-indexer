@@ -5,7 +5,7 @@
  * mirrored structurally here and parsed defensively.
  *
  * Persistence strategy: the raw UI settings object is stored verbatim in
- * `sprite_projects.settings_json` (lossless round-trip for the UI), and a
+ * the Sprite bundle's `project.json` (lossless round-trip for the UI), and a
  * derived `SpriteStyleConfig` is written to `style_json` on every settings
  * write (consumed by generation). GET returns settings_json when present,
  * falling back to a config→UI derivation for older rows.

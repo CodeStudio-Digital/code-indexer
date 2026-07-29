@@ -112,23 +112,13 @@ export function setLoose(db: DB, id: number, loose: boolean): void {
   }
 }
 
-/** Loose ad-hoc folders (migration 176) NOT referenced by any global session —
- *  neither as a junction member (`coder_session_projects`) nor as a session's
- *  own `project_id`. Used by the boot sweep to GC folders left by deleted
- *  global sessions. Tolerant of a pre-176 / pre-152 DB (returns []). */
-export function listOrphanLoose(db: DB): Project[] {
-  try {
-    return db
-      .prepare(
-        `SELECT * FROM projects p
-          WHERE COALESCE(p.is_loose, 0) = 1
-            AND NOT EXISTS (SELECT 1 FROM coder_session_projects csp WHERE csp.project_id = p.id)
-            AND NOT EXISTS (SELECT 1 FROM coder_sessions s WHERE s.project_id = p.id)`,
-      )
-      .all() as Project[];
-  } catch {
-    return [];
-  }
+/**
+ * SQLite no longer knows whether a loose project is referenced by a global
+ * bundle. A catalog-aware filesystem sweep must prove reachability before
+ * cleanup, so this legacy DB-only query deliberately returns no candidates.
+ */
+export function listOrphanLoose(_db: DB): Project[] {
+  return [];
 }
 
 export function update(db: DB, id: number, updates: ProjectUpdates): void {
@@ -181,8 +171,8 @@ export function del(db: DB, id: number): void {
  * data because `ON DELETE CASCADE` + the FTS AFTER-DELETE triggers fan out to
  * the children (files → symbols/file_dependencies/
  * symbol_references/symbol_relations/*_fts; runs → costs; snapshots →
- * snapshot_versions/*_fts; coder_sessions → coder_messages → coder_tool_calls;
- * pipelines → pipeline_executions). Listing only the parents keeps this from
+ * snapshot_versions/*_fts and reusable project pipeline definitions). Listing
+ * only the parents keeps this from
  * silently going stale when a new child table is added.
  */
 const PROJECT_SCOPED_TABLES = [
@@ -190,17 +180,14 @@ const PROJECT_SCOPED_TABLES = [
   'runs',
   'snapshots',
   'webhooks',
-  'coder_session_groups',
-  'coder_sessions',
   'pipelines',
-  'pipeline_executions',
 ] as const;
 
 /**
- * Wipe every bit of a project's indexed data, sessions, snapshots, runs and
- * costs — but KEEP the project row (name/root_path/config) so the user can
- * re-index without re-creating it. Counters are reset; semantic generations
- * and their local vectors are handled by the caller. Runs in one transaction.
+ * Wipe a project's indexed data, project snapshots, runs, costs and reusable
+ * project pipeline definitions, but KEEP the project row and every filesystem
+ * session bundle. Counters are reset; semantic generations and their local
+ * vectors are handled by the caller. Runs in one transaction.
  */
 export function clearData(db: DB, id: number): void {
   const tx = db.transaction((projectId: number) => {

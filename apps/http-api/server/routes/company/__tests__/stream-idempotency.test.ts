@@ -28,6 +28,7 @@ const H = vi.hoisted(() => ({
   resolveAndRunMaster: vi.fn(async () => {}),
   ensureCompanyMasterLive: vi.fn(),
   normalizeAttachments: vi.fn(async (attachments: unknown) => attachments),
+  companyFiles: null as Record<string, (...args: any[]) => any> | null,
 }));
 
 vi.mock('../../../../sse/companyOrchestrator.js', () => ({
@@ -51,10 +52,50 @@ vi.mock('@mcp/services/services/docs/attachment-extract.js', async (importOrigin
   const actual = await importOriginal<typeof import('@mcp/services/services/docs/attachment-extract.js')>();
   return { ...actual, normalizeAttachmentsForModel: H.normalizeAttachments };
 });
+vi.mock('@mcp/company/services/CompanySessionFiles.js', () => ({
+  CompanySessionFiles: class {
+    getSession() { return H.companyFiles!.getSession(); }
+    listAgentRunsSync() { return H.companyFiles!.listAgentRunsSync(); }
+    updateSessionStatus(status: string) {
+      return H.companyFiles!.updateSessionStatus(status);
+    }
+    updateSessionConfig(configJson: string) {
+      return H.companyFiles!.updateSessionConfig(configJson);
+    }
+    updateAgentRunProvider(...args: unknown[]) {
+      return H.companyFiles!.updateAgentRunProvider(...args);
+    }
+    getPendingMasterPrompt(kind?: 'plan' | 'question') {
+      return H.companyFiles!.getPendingMasterPrompt(kind);
+    }
+    claimMasterPromptDelivery(...args: unknown[]) {
+      return H.companyFiles!.claimMasterPromptDelivery(...args);
+    }
+    releaseMasterPromptDelivery(...args: unknown[]) {
+      return H.companyFiles!.releaseMasterPromptDelivery(...args);
+    }
+    markMasterPromptDeliveryOutcomeUnknown(...args: unknown[]) {
+      return H.companyFiles!.markMasterPromptDeliveryOutcomeUnknown(...args);
+    }
+    completeMasterPromptDelivery(...args: unknown[]) {
+      return H.companyFiles!.completeMasterPromptDelivery(...args);
+    }
+  },
+}));
 
 import { mountCompanyStreamRoutes } from '../stream.js';
 import { createBus, markEnded, publish, type CoderRunBus } from '../../../../coder-bus.js';
 import type { ServerDeps } from '../../../deps.js';
+
+const SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const sessionPath = (suffix: string): string =>
+  `/api/company/sessions/${SESSION_ID}${suffix}`;
+const PROMPT_71 = '00000000-0000-4000-8000-000000000071';
+const PROMPT_72 = '00000000-0000-4000-8000-000000000072';
+const PROMPT_73 = '00000000-0000-4000-8000-000000000073';
+const PROMPT_81 = '00000000-0000-4000-8000-000000000081';
+const PROMPT_82 = '00000000-0000-4000-8000-000000000082';
+const PROMPT_83 = '00000000-0000-4000-8000-000000000083';
 
 function makeOrch(): Orch {
   return {
@@ -81,9 +122,9 @@ function setup(
   controlPlaneAvailable = true,
 ) {
   const acceptCalls: unknown[] = [];
-  const prompts = new Map<number, {
-    id: number;
-    company_session_id: number;
+  const prompts = new Map<string, {
+    id: string;
+    company_session_id: string;
     kind: 'plan' | 'question';
     status: 'pending' | 'answered';
     answer: string | null;
@@ -93,9 +134,8 @@ function setup(
     deliveryToken?: string | null;
     deliveryPayloadHash?: string | null;
   }>();
-  const deps = {
-    companyStore: {
-      getCompanySession: (id: number) => ({
+  const companyStore = {
+      getCompanySession: (id: string) => ({
         id,
         config_json: '{}',
         status: 'idle',
@@ -105,15 +145,15 @@ function setup(
       listAgentRuns: () => [],
       setLastUserMessage: () => {},
       updateCompanySessionStatus: () => {},
-      getPendingMasterPrompt: (sessionId: number, kind?: 'plan' | 'question') =>
+      getPendingMasterPrompt: (sessionId: string, kind?: 'plan' | 'question') =>
         [...prompts.values()].find((prompt) =>
           prompt.company_session_id === sessionId
           && prompt.status === 'pending'
           && (!kind || prompt.kind === kind),
         ) ?? null,
-      getMasterPrompt: (promptId: number) => prompts.get(promptId) ?? null,
+      getMasterPrompt: (promptId: string) => prompts.get(promptId) ?? null,
       resolveMasterPrompt: (
-        promptId: number,
+        promptId: string,
         resolution:
           | { kind: 'plan'; approved: boolean; feedback?: string }
           | { kind: 'question'; answer: string },
@@ -130,8 +170,8 @@ function setup(
         return { ...prompt };
       },
       claimMasterPromptDelivery: (
-        promptId: number,
-        sessionId: number,
+        promptId: string,
+        sessionId: string,
         kind: 'plan' | 'question',
         token: string,
         payloadHash: string,
@@ -169,7 +209,7 @@ function setup(
           prompt: { ...prompt },
         };
       },
-      releaseMasterPromptDelivery: (promptId: number, token: string) => {
+      releaseMasterPromptDelivery: (promptId: string, token: string) => {
         const prompt = prompts.get(promptId);
         if (
           !prompt
@@ -184,7 +224,7 @@ function setup(
         prompt.deliveryPayloadHash = null;
         return true;
       },
-      markMasterPromptDeliveryOutcomeUnknown: (promptId: number, token: string) => {
+      markMasterPromptDeliveryOutcomeUnknown: (promptId: string, token: string) => {
         const prompt = prompts.get(promptId);
         if (
           !prompt
@@ -198,7 +238,7 @@ function setup(
         return true;
       },
       completeMasterPromptDelivery: (
-        promptId: number,
+        promptId: string,
         token: string,
         resolution:
           | { kind: 'plan'; approved: boolean; feedback?: string }
@@ -224,7 +264,37 @@ function setup(
         }
         return { ...prompt };
       },
-    },
+    };
+  H.companyFiles = {
+    getSession: () => companyStore.getCompanySession(SESSION_ID),
+    listAgentRunsSync: companyStore.listAgentRuns,
+    updateSessionStatus: companyStore.updateCompanySessionStatus,
+    updateSessionConfig: () => {},
+    updateAgentRunProvider: () => {},
+    getPendingMasterPrompt: (kind?: 'plan' | 'question') =>
+      companyStore.getPendingMasterPrompt(SESSION_ID, kind),
+    claimMasterPromptDelivery: (
+      promptId: string,
+      kind: 'plan' | 'question',
+      token: string,
+      payloadHash: string,
+      opts?: { retryOutcomeUnknown?: boolean },
+    ) => companyStore.claimMasterPromptDelivery(
+      promptId,
+      SESSION_ID,
+      kind,
+      token,
+      payloadHash,
+      opts,
+    ),
+    releaseMasterPromptDelivery: companyStore.releaseMasterPromptDelivery,
+    markMasterPromptDeliveryOutcomeUnknown:
+      companyStore.markMasterPromptDeliveryOutcomeUnknown,
+    completeMasterPromptDelivery: companyStore.completeMasterPromptDelivery,
+  };
+  const deps = {
+    companyStore,
+    sessionStore: { ensureCatalog: async () => {} },
     db: {},
     providerStore: { getProvider: () => undefined },
     controlPlaneStore: controlPlaneAvailable ? {
@@ -236,10 +306,8 @@ function setup(
           idempotencyKey: string;
         };
         payloadHash: string;
-        legacySessionId?: number;
       }) => {
         acceptCalls.push(input);
-        expect(input.legacySessionId).toBeUndefined();
         const key = `${input.command.sessionId}:${input.command.kind}:${input.command.idempotencyKey}`;
         const existing = commands.get(key);
         if (existing) {
@@ -299,6 +367,7 @@ beforeEach(() => {
   H.onSpawn = null;
   H.spawnGate = null;
   H.spawnError = null;
+  H.companyFiles = null;
   H.resolveAndRunMaster.mockClear();
   H.ensureCompanyMasterLive.mockReset();
   H.ensureCompanyMasterLive.mockImplementation(async () => ({ orchestrator: H.orch }));
@@ -312,7 +381,7 @@ describe('company POST /resume idempotency', () => {
     H.orch = orch;
     const h = setup({}, new Map(), false);
 
-    const response = await h.post('/api/company/sessions/1/resume', {
+    const response = await h.post(sessionPath('/resume'), {
       message: 'must not send',
     });
 
@@ -328,12 +397,12 @@ describe('company POST /resume idempotency', () => {
     H.orch = orch;
     const h = setup();
 
-    const r1 = await h.post('/api/company/sessions/1/resume', { message: 'hi', client_msg_id: 'R1' });
+    const r1 = await h.post(sessionPath('/resume'), { message: 'hi', client_msg_id: 'R1' });
     expect(r1.status).toBe(200);
     expect(orch.sendMessageToMaster).toHaveBeenCalledTimes(1);
 
     const r2 = await h.post(
-      '/api/company/sessions/1/resume',
+      sessionPath('/resume'),
       { message: 'hi', client_msg_id: 'R1' },
       { 'Last-Event-ID': '0' },
     );
@@ -354,11 +423,11 @@ describe('company POST /resume idempotency', () => {
     const h = setup();
     const body = { message: 'ack first', client_msg_id: 'R-delivery-pending' };
 
-    const owner = h.post('/api/company/sessions/1/resume', body);
+    const owner = h.post(sessionPath('/resume'), body);
     await vi.waitFor(() => expect(orch.sendMessageToMaster).toHaveBeenCalledTimes(1));
     let duplicateSettled = false;
     const duplicate = Promise.resolve(
-      h.post('/api/company/sessions/1/resume', body),
+      h.post(sessionPath('/resume'), body),
     ).then((response) => {
       duplicateSettled = true;
       return response;
@@ -381,14 +450,14 @@ describe('company POST /resume idempotency', () => {
     const h = setup();
     const body = { message: 'deliver once', client_msg_id: 'R-rpc-reject' };
 
-    const first = await h.post('/api/company/sessions/1/resume', body);
+    const first = await h.post(sessionPath('/resume'), body);
     expect(first.status).toBe(500);
     expect([...h.commands.values()][0]).toMatchObject({
       status: 'failed',
       reasonCode: 'company-resume-setup-failed',
     });
 
-    const retry = await h.post('/api/company/sessions/1/resume', body);
+    const retry = await h.post(sessionPath('/resume'), body);
     expect(retry.status).toBe(200);
     expect(await retry.text()).toContain('event: error');
     expect(orch.sendMessageToMaster).toHaveBeenCalledTimes(1);
@@ -401,7 +470,7 @@ describe('company POST /resume idempotency', () => {
     const h = setup();
     const body = { message: 'deliver at most once', client_msg_id: 'R-port-closed-existing' };
 
-    const first = await h.post('/api/company/sessions/1/resume', body);
+    const first = await h.post(sessionPath('/resume'), body);
     expect(first.status).toBe(500);
     expect(await first.json()).toMatchObject({ code: 'OUTCOME_UNKNOWN' });
     expect(H.orch).toBeNull();
@@ -410,7 +479,7 @@ describe('company POST /resume idempotency', () => {
       reasonCode: 'outcome_unknown',
     });
 
-    const retry = await h.post('/api/company/sessions/1/resume', body);
+    const retry = await h.post(sessionPath('/resume'), body);
     expect(retry.status).toBe(200);
     expect(await retry.text()).toContain('OUTCOME_UNKNOWN');
     expect(orch.sendMessageToMaster).toHaveBeenCalledTimes(1);
@@ -422,7 +491,7 @@ describe('company POST /resume idempotency', () => {
     const h = setup();
     const body = { message: 'resume once', client_msg_id: 'R-port-closed-fresh' };
 
-    const first = await h.post('/api/company/sessions/1/resume', body);
+    const first = await h.post(sessionPath('/resume'), body);
     expect(first.status).toBe(500);
     expect(await first.json()).toMatchObject({ code: 'OUTCOME_UNKNOWN' });
     expect(H.orch).toBeNull();
@@ -431,7 +500,7 @@ describe('company POST /resume idempotency', () => {
       reasonCode: 'outcome_unknown',
     });
 
-    const retry = await h.post('/api/company/sessions/1/resume', body);
+    const retry = await h.post(sessionPath('/resume'), body);
     expect(retry.status).toBe(200);
     expect(await retry.text()).toContain('OUTCOME_UNKNOWN');
     expect(H.resolveAndRunMaster).toHaveBeenCalledTimes(1);
@@ -441,14 +510,14 @@ describe('company POST /resume idempotency', () => {
     const orch = makeOrch();
     H.orch = orch;
     const h = setup();
-    expect((await h.post('/api/company/sessions/1/resume', {
+    expect((await h.post(sessionPath('/resume'), {
       message: 'hi',
       client_msg_id: 'R-error',
     })).status).toBe(200);
 
     markEnded(orch.metaBus as CoderRunBus, 'error', { reason: 'provider-error' });
     expect([...h.commands.values()][0]?.status).toBe('failed');
-    const retry = await h.post('/api/company/sessions/1/resume', {
+    const retry = await h.post(sessionPath('/resume'), {
       message: 'hi',
       client_msg_id: 'R-error',
     });
@@ -461,14 +530,14 @@ describe('company POST /resume idempotency', () => {
     const orch = makeOrch();
     H.orch = orch;
     const firstMount = setup();
-    expect((await firstMount.post('/api/company/sessions/1/resume', {
+    expect((await firstMount.post(sessionPath('/resume'), {
       message: 'once',
       client_msg_id: 'R-terminal-remount',
     })).status).toBe(200);
     markEnded(orch.metaBus as CoderRunBus, 'error', { reason: 'provider-error' });
 
     const remounted = setup({}, firstMount.commands);
-    const firstRetry = await remounted.post('/api/company/sessions/1/resume', {
+    const firstRetry = await remounted.post(sessionPath('/resume'), {
       message: 'once',
       client_msg_id: 'R-terminal-remount',
     });
@@ -476,7 +545,7 @@ describe('company POST /resume idempotency', () => {
     expect(await firstRetry.text()).toContain('event: error');
 
     const secondRetry = await Promise.race([
-      remounted.post('/api/company/sessions/1/resume', {
+      remounted.post(sessionPath('/resume'), {
         message: 'once',
         client_msg_id: 'R-terminal-remount',
       }),
@@ -498,7 +567,7 @@ describe('company POST /resume idempotency', () => {
     const h = setup();
     const body = { message: 'once', client_msg_id: 'R-spawn-failure' };
 
-    expect((await h.post('/api/company/sessions/1/resume', body)).status).toBe(500);
+    expect((await h.post(sessionPath('/resume'), body)).status).toBe(500);
     expect([...h.commands.values()][0]).toMatchObject({
       status: 'failed',
       reasonCode: 'company-resume-failed',
@@ -506,7 +575,7 @@ describe('company POST /resume idempotency', () => {
 
     for (let retry = 0; retry < 2; retry++) {
       const response = await Promise.race([
-        h.post('/api/company/sessions/1/resume', body),
+        h.post(sessionPath('/resume'), body),
         new Promise<never>((_, reject) => {
           const timer = setTimeout(
             () => reject(new Error(`resume retry ${retry + 1} did not settle`)),
@@ -529,7 +598,7 @@ describe('company POST /message delivery', () => {
     vi.mocked(orch.sendMessageToMaster).mockRejectedValueOnce(new Error('bridge unavailable'));
     const h = setup();
 
-    const response = await h.post('/api/company/sessions/1/message', {
+    const response = await h.post(sessionPath('/message'), {
       message: 'must be acknowledged',
     });
 
@@ -549,7 +618,7 @@ describe('company POST /message delivery', () => {
     });
     const h = setup();
 
-    const response = await h.post('/api/company/sessions/1/message', {
+    const response = await h.post(sessionPath('/message'), {
       message: 'answer elsewhere',
     });
 
@@ -563,7 +632,7 @@ describe('company POST /message delivery', () => {
     vi.mocked(orch.sendMessageToMaster).mockRejectedValueOnce(portClosedError());
     const h = setup();
 
-    const response = await h.post('/api/company/sessions/1/message', {
+    const response = await h.post(sessionPath('/message'), {
       message: 'do not replay',
     });
 
@@ -578,15 +647,15 @@ describe('company persisted prompt delivery', () => {
   it.each([
     {
       kind: 'plan' as const,
-      path: '/api/company/sessions/1/plan-response',
-      body: { approved: true, prompt_id: 71 },
-      promptId: 71,
+      path: sessionPath('/plan-response'),
+      body: { approved: true, prompt_id: PROMPT_71 },
+      promptId: PROMPT_71,
     },
     {
       kind: 'question' as const,
-      path: '/api/company/sessions/1/answer',
-      body: { answer: 'because', prompt_id: 72 },
-      promptId: 72,
+      path: sessionPath('/answer'),
+      body: { answer: 'because', prompt_id: PROMPT_72 },
+      promptId: PROMPT_72,
     },
   ])('keeps a pending $kind prompt unresolved when resume delivery fails', async ({
     kind,
@@ -597,7 +666,7 @@ describe('company persisted prompt delivery', () => {
     const h = setup();
     h.prompts.set(promptId, {
       id: promptId,
-      company_session_id: 1,
+      company_session_id: SESSION_ID,
       kind,
       status: 'pending',
       answer: null,
@@ -621,9 +690,9 @@ describe('company persisted prompt delivery', () => {
 
   it('never reports an already-resolved prompt as duplicate success', async () => {
     const h = setup();
-    h.prompts.set(73, {
-      id: 73,
-      company_session_id: 1,
+    h.prompts.set(PROMPT_73, {
+      id: PROMPT_73,
+      company_session_id: SESSION_ID,
       kind: 'question',
       status: 'answered',
       answer: 'already sent',
@@ -631,9 +700,9 @@ describe('company persisted prompt delivery', () => {
       feedback: null,
     });
 
-    const response = await h.post('/api/company/sessions/1/answer', {
+    const response = await h.post(sessionPath('/answer'), {
       answer: 'retry',
-      prompt_id: 73,
+      prompt_id: PROMPT_73,
     });
 
     expect(response.status).toBe(409);
@@ -646,15 +715,15 @@ describe('company persisted prompt delivery', () => {
   it.each([
     {
       kind: 'plan' as const,
-      path: '/api/company/sessions/1/plan-response',
-      body: { approved: true, prompt_id: 81 },
-      promptId: 81,
+      path: sessionPath('/plan-response'),
+      body: { approved: true, prompt_id: PROMPT_81 },
+      promptId: PROMPT_81,
     },
     {
       kind: 'question' as const,
-      path: '/api/company/sessions/1/answer',
-      body: { answer: 'once', prompt_id: 82 },
-      promptId: 82,
+      path: sessionPath('/answer'),
+      body: { answer: 'once', prompt_id: PROMPT_82 },
+      promptId: PROMPT_82,
     },
   ])('serializes concurrent $kind delivery through completion', async ({
     kind,
@@ -666,7 +735,7 @@ describe('company persisted prompt delivery', () => {
     const deliveryOrchestrator = makeOrch();
     h.prompts.set(promptId, {
       id: promptId,
-      company_session_id: 1,
+      company_session_id: SESSION_ID,
       kind,
       status: 'pending',
       answer: null,
@@ -699,9 +768,9 @@ describe('company persisted prompt delivery', () => {
 
   it('durably fences an unknown answer until an explicit same-payload retry', async () => {
     const h = setup();
-    h.prompts.set(83, {
-      id: 83,
-      company_session_id: 1,
+    h.prompts.set(PROMPT_83, {
+      id: PROMPT_83,
+      company_session_id: SESSION_ID,
       kind: 'question',
       status: 'pending',
       answer: null,
@@ -714,28 +783,28 @@ describe('company persisted prompt delivery', () => {
       code: 'OUTCOME_UNKNOWN',
     });
 
-    const first = await h.post('/api/company/sessions/1/answer', {
+    const first = await h.post(sessionPath('/answer'), {
       answer: 'same answer',
-      prompt_id: 83,
+      prompt_id: PROMPT_83,
     });
     expect(first.status).toBe(500);
     expect(await first.json()).toMatchObject({ code: 'OUTCOME_UNKNOWN' });
-    expect(h.prompts.get(83)).toMatchObject({
+    expect(h.prompts.get(PROMPT_83)).toMatchObject({
       status: 'pending',
       deliveryStatus: 'outcome_unknown',
     });
 
-    const implicitRetry = await h.post('/api/company/sessions/1/answer', {
+    const implicitRetry = await h.post(sessionPath('/answer'), {
       answer: 'same answer',
-      prompt_id: 83,
+      prompt_id: PROMPT_83,
     });
     expect(implicitRetry.status).toBe(409);
     expect(await implicitRetry.json()).toMatchObject({ code: 'OUTCOME_UNKNOWN' });
     expect(H.ensureCompanyMasterLive).toHaveBeenCalledTimes(1);
 
-    const conflictingRetry = await h.post('/api/company/sessions/1/answer', {
+    const conflictingRetry = await h.post(sessionPath('/answer'), {
       answer: 'different answer',
-      prompt_id: 83,
+      prompt_id: PROMPT_83,
       retry_outcome_unknown: true,
     });
     expect(conflictingRetry.status).toBe(409);
@@ -748,14 +817,14 @@ describe('company persisted prompt delivery', () => {
       orchestrator: makeOrch(),
       resumed: true,
     });
-    const explicitRetry = await h.post('/api/company/sessions/1/answer', {
+    const explicitRetry = await h.post(sessionPath('/answer'), {
       answer: 'same answer',
-      prompt_id: 83,
+      prompt_id: PROMPT_83,
       retry_outcome_unknown: true,
     });
     expect(explicitRetry.status).toBe(200);
     expect(H.ensureCompanyMasterLive).toHaveBeenCalledTimes(2);
-    expect(h.prompts.get(83)).toMatchObject({
+    expect(h.prompts.get(PROMPT_83)).toMatchObject({
       status: 'answered',
       deliveryStatus: 'delivered',
       answer: 'same answer',
@@ -770,7 +839,7 @@ describe('company POST /start idempotency', () => {
     const h = setup();
     const body = { user_message: 'start once', client_msg_id: 'S-request-timeout' };
 
-    const first = await h.post('/api/company/sessions/1/start', body);
+    const first = await h.post(sessionPath('/start'), body);
     expect(first.status).toBe(500);
     expect(await first.json()).toMatchObject({ code: 'OUTCOME_UNKNOWN' });
     expect(H.orch).toBeNull();
@@ -779,7 +848,7 @@ describe('company POST /start idempotency', () => {
       reasonCode: 'outcome_unknown',
     });
 
-    const retry = await h.post('/api/company/sessions/1/start', body);
+    const retry = await h.post(sessionPath('/start'), body);
     expect(retry.status).toBe(200);
     expect(await retry.text()).toContain('OUTCOME_UNKNOWN');
     expect(H.resolveAndRunMaster).toHaveBeenCalledTimes(1);
@@ -790,7 +859,7 @@ describe('company POST /start idempotency', () => {
     const h = setup();
     const body = { user_message: 'once', client_msg_id: 'S-spawn-failure' };
 
-    expect((await h.post('/api/company/sessions/1/start', body)).status).toBe(500);
+    expect((await h.post(sessionPath('/start'), body)).status).toBe(500);
     expect([...h.commands.values()][0]).toMatchObject({
       status: 'failed',
       reasonCode: 'company-start-setup-failed',
@@ -798,7 +867,7 @@ describe('company POST /start idempotency', () => {
 
     for (let retry = 0; retry < 2; retry++) {
       const response = await Promise.race([
-        h.post('/api/company/sessions/1/start', body),
+        h.post(sessionPath('/start'), body),
         new Promise<never>((_, reject) => {
           const timer = setTimeout(
             () => reject(new Error(`start retry ${retry + 1} did not settle`)),
@@ -825,13 +894,13 @@ describe('company POST /start idempotency', () => {
       return attachments;
     });
 
-    const first = h.post('/api/company/sessions/1/start', {
+    const first = h.post(sessionPath('/start'), {
       user_message: 'go',
       attachments: [{ name: 'a.txt', mediaType: 'text/plain', text: 'body' }],
       client_msg_id: 'concurrent-start',
     });
     await vi.waitFor(() => expect(H.normalizeAttachments).toHaveBeenCalledTimes(1));
-    const duplicate = h.post('/api/company/sessions/1/start', {
+    const duplicate = h.post(sessionPath('/start'), {
       user_message: 'go',
       attachments: [{ name: 'a.txt', mediaType: 'text/plain', text: 'body' }],
       client_msg_id: 'concurrent-start',
@@ -857,7 +926,7 @@ describe('company POST /start idempotency', () => {
     });
 
     const owners = Array.from({ length: 32 }, (_, index) =>
-      h.post('/api/company/sessions/1/start', {
+      h.post(sessionPath('/start'), {
         user_message: `owner-${index}`,
         client_msg_id: `company-owner-${index}`,
       }),
@@ -868,7 +937,7 @@ describe('company POST /start idempotency', () => {
     );
     expect(h.commands.size).toBe(32);
 
-    const overflow = await h.post('/api/company/sessions/1/start', {
+    const overflow = await h.post(sessionPath('/start'), {
       user_message: 'overflow',
       client_msg_id: 'company-owner-32',
     });
@@ -889,12 +958,12 @@ describe('company POST /start idempotency', () => {
   it('returns 409 for the same key with a different payload', async () => {
     H.onSpawn = makeOrch;
     const h = setup();
-    expect((await h.post('/api/company/sessions/1/start', {
+    expect((await h.post(sessionPath('/start'), {
       user_message: 'first',
       client_msg_id: 'payload-key',
     })).status).toBe(200);
 
-    const conflict = await h.post('/api/company/sessions/1/start', {
+    const conflict = await h.post(sessionPath('/start'), {
       user_message: 'different',
       client_msg_id: 'payload-key',
     });
@@ -907,7 +976,7 @@ describe('company POST /start idempotency', () => {
   it('replays only the exact durably-bound bus after a route remount', async () => {
     H.onSpawn = makeOrch;
     const firstMount = setup();
-    expect((await firstMount.post('/api/company/sessions/1/start', {
+    expect((await firstMount.post(sessionPath('/start'), {
       user_message: 'go',
       client_msg_id: 'remount-key',
     })).status).toBe(200);
@@ -917,7 +986,7 @@ describe('company POST /start idempotency', () => {
 
     const remounted = setup({}, firstMount.commands);
     const replay = await remounted.post(
-      '/api/company/sessions/1/start',
+      sessionPath('/start'),
       { user_message: 'go', client_msg_id: 'remount-key' },
       { 'Last-Event-ID': '0' },
     );
@@ -931,7 +1000,7 @@ describe('company POST /start idempotency', () => {
   it('refuses a later unrelated bus and never reexecutes after restart', async () => {
     H.onSpawn = makeOrch;
     const firstMount = setup();
-    expect((await firstMount.post('/api/company/sessions/1/start', {
+    expect((await firstMount.post(sessionPath('/start'), {
       user_message: 'go',
       client_msg_id: 'immutable-bus-key',
     })).status).toBe(200);
@@ -939,7 +1008,7 @@ describe('company POST /start idempotency', () => {
 
     H.orch = makeOrch();
     const remounted = setup({}, firstMount.commands);
-    const retry = await remounted.post('/api/company/sessions/1/start', {
+    const retry = await remounted.post(sessionPath('/start'), {
       user_message: 'go',
       client_msg_id: 'immutable-bus-key',
     });
@@ -954,7 +1023,7 @@ describe('company POST /start idempotency', () => {
     H.onSpawn = makeOrch;
     const h = setup();
 
-    const r1 = await h.post('/api/company/sessions/1/start', { user_message: 'go', client_msg_id: 'S1' });
+    const r1 = await h.post(sessionPath('/start'), { user_message: 'go', client_msg_id: 'S1' });
     expect(r1.status).toBe(200);
     expect(H.resolveAndRunMaster).toHaveBeenCalledTimes(1);
     expect(H.resolveAndRunMaster).toHaveBeenCalledWith(
@@ -965,7 +1034,7 @@ describe('company POST /start idempotency', () => {
 
     // Orchestrator now exists → without dedup this retry would 409.
     const r2 = await h.post(
-      '/api/company/sessions/1/start',
+      sessionPath('/start'),
       { user_message: 'go', client_msg_id: 'S1' },
       { 'Last-Event-ID': '0' },
     );
@@ -979,7 +1048,7 @@ describe('company POST /start idempotency', () => {
     H.onSpawn = makeOrch;
     const h = setup({ runtime_kind: 'app_studio', config_json: '{}' });
 
-    const response = await h.post('/api/company/sessions/1/start', { user_message: 'go' });
+    const response = await h.post(sessionPath('/start'), { user_message: 'go' });
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ code: 'MASTER_RUNTIME_INVALID' });
     expect(H.orch).toBeNull();
@@ -996,7 +1065,7 @@ describe('company POST /start idempotency', () => {
       }),
     });
 
-    const response = await h.post('/api/company/sessions/1/start', { user_message: 'go' });
+    const response = await h.post(sessionPath('/start'), { user_message: 'go' });
     expect(response.status).toBe(200);
     expect(H.resolveAndRunMaster).toHaveBeenCalledWith(
       expect.anything(),
@@ -1015,7 +1084,7 @@ describe('company POST /start idempotency', () => {
     H.orch = orch; // already running
     const h = setup();
 
-    const res = await h.post('/api/company/sessions/1/start', { user_message: 'go' });
+    const res = await h.post(sessionPath('/start'), { user_message: 'go' });
     expect(res.status).toBe(409);
     expect(await res.json()).toMatchObject({ error: 'Already running' });
 

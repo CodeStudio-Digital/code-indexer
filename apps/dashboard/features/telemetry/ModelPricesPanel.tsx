@@ -111,16 +111,23 @@ export function ModelPricesPanel() {
           <span className="font-medium">{t('telemetry:prices.syncDone', { defaultValue: 'Sync' })}:</span>{' '}
           {syncResult.sources.map((s) => (
             <span key={s.tag} className="mr-3">
-              {s.ok ? `${s.tag}: ${s.inserted}/${s.fetched}` : `${s.tag}: ✗ ${s.error ?? 'erro'}`}
+              {s.ok ? `${s.tag}: ${s.inserted}/${s.fetched}` : `${s.tag}: ✗ ${s.error ?? t('telemetry:prices.error')}`}
             </span>
           ))}
-          <span className="text-muted-foreground">({syncResult.totalRows} linhas)</span>
+          <span className="text-muted-foreground">
+            ({t('telemetry:prices.rows', { count: syncResult.totalRows })})
+          </span>
         </div>
       )}
       {backfillResult && (
         <div className="rounded-md border bg-card/50 px-3 py-2 text-xs">
           <span className="font-medium">{t('telemetry:prices.backfillDone', { defaultValue: 'Backfill' })}:</span>{' '}
-          {backfillResult.scanned} escaneados · {backfillResult.updated} atualizados · {backfillResult.nowPriced} com preço · {backfillResult.stillUnpriced} sem preço
+          {t('telemetry:prices.backfillSummary', {
+            scanned: backfillResult.scanned,
+            updated: backfillResult.updated,
+            priced: backfillResult.nowPriced,
+            unpriced: backfillResult.stillUnpriced,
+          })}
         </div>
       )}
 
@@ -144,7 +151,9 @@ export function ModelPricesPanel() {
           <div className="px-3 py-2 border-b">
             <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
               {t('telemetry:prices.title', { defaultValue: 'Preços de modelos (USD por 1M tokens)' })}
-              {' · '}{filtered.length}{filtered.length > shown.length ? ` (mostrando ${shown.length})` : ''}
+              {' · '}{filtered.length}{filtered.length > shown.length
+                ? ` ${t('telemetry:prices.showing', { count: shown.length })}`
+                : ''}
             </div>
             <div className="mt-0.5 text-[11px] normal-case text-muted-foreground">
               {t('telemetry:prices.legend', {
@@ -157,10 +166,10 @@ export function ModelPricesPanel() {
               <thead className="bg-muted/40">
                 <tr className="text-left">
                   <th className="px-3 py-2 font-medium">{t('telemetry:prices.model', { defaultValue: 'Modelo' })}</th>
-                  <th className="px-3 py-2 text-right font-medium">Input</th>
-                  <th className="px-3 py-2 text-right font-medium">Output</th>
-                  <th className="px-3 py-2 text-right font-medium">Cache R</th>
-                  <th className="px-3 py-2 text-right font-medium">Cache W</th>
+                  <th className="px-3 py-2 text-right font-medium">{t('telemetry:prices.input')}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t('telemetry:prices.output')}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t('telemetry:prices.cacheRead')}</th>
+                  <th className="px-3 py-2 text-right font-medium">{t('telemetry:prices.cacheWrite')}</th>
                   <th className="px-3 py-2 font-medium">{t('telemetry:prices.source', { defaultValue: 'Fonte' })}</th>
                 </tr>
               </thead>

@@ -12,16 +12,7 @@ import { SubagentProfilesPanel } from './SubagentProfilesPanel.js';
 import { AddModelForm, type AddModelInput } from './providers/AddModelForm.js';
 import { SubagentTargetSelect } from './providers/SubagentTargetSelect.js';
 import type { AdminModel, AdminProvider, TestResult } from './types.js';
-
-const CLAUDE_CODE_MODEL_ORDER = new Map([
-  ['fable', 0],
-  ['opus', 1],
-  ['sonnet', 2],
-  ['haiku', 3],
-  ['opus-4-7', 4],
-  ['opus-4-6', 5],
-  ['sonnet-4-6', 6],
-]);
+import { sortClaudeCodeModels } from '../../lib/claude-code-model-order.js';
 
 interface ProviderCardProps {
   provider: AdminProvider;
@@ -100,11 +91,7 @@ export function ProviderCard({
     candidate.id !== p.id && candidate.enabled && candidate.use_for_coder
   ));
   const displayedModels = p.kind === 'claude-code'
-    ? [...models].sort((a, b) => {
-        const rankA = CLAUDE_CODE_MODEL_ORDER.get(a.model_id) ?? Number.MAX_SAFE_INTEGER;
-        const rankB = CLAUDE_CODE_MODEL_ORDER.get(b.model_id) ?? Number.MAX_SAFE_INTEGER;
-        return rankA - rankB || a.name.localeCompare(b.name);
-      })
+    ? sortClaudeCodeModels(models, (model) => model.model_id, (model) => model.name)
     : models;
 
   return (

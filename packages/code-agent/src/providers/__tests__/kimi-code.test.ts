@@ -182,6 +182,103 @@ describe('toKimiToolParam — M6 builtin functions (prefix $)', () => {
       properties: { type: { type: 'string' } },
     });
   });
+
+  it('collapses root anyOf while retaining the object contract for Unity MCP schemas', () => {
+    const result = toKimiToolParam({
+      name: 'ext_unity__add_component',
+      parameters: {
+        type: 'object',
+        properties: {
+          instanceId: { type: 'integer' },
+          target: { type: 'object' },
+          componentType: { type: 'string' },
+        },
+        required: ['componentType'],
+        anyOf: [
+          { required: ['instanceId'] },
+          { required: ['target'] },
+        ],
+      },
+    });
+
+    const fn = result.function as {
+      parameters: {
+        type: string;
+        required: string[];
+        anyOf?: unknown;
+      };
+    };
+    expect(fn.parameters.type).toBe('object');
+    expect(fn.parameters.required).toEqual(['componentType']);
+    expect(fn.parameters.anyOf).toBeUndefined();
+  });
+
+  it('merges properties declared only inside root anyOf branches', () => {
+    const result = toKimiToolParam({
+      name: 'union_tool',
+      parameters: {
+        anyOf: [
+          {
+            type: 'object',
+            properties: { path: { type: 'string' } },
+            required: ['path'],
+          },
+          {
+            type: 'object',
+            properties: { instanceId: { type: 'integer' } },
+            required: ['instanceId'],
+          },
+        ],
+      },
+    });
+
+    const fn = result.function as {
+      parameters: {
+        type: string;
+        properties: Record<string, unknown>;
+        anyOf?: unknown;
+      };
+    };
+    expect(fn.parameters).toEqual({
+      type: 'object',
+      properties: {
+        path: { type: 'string' },
+        instanceId: { type: 'integer' },
+      },
+    });
+  });
+
+  it('normalizes nested type plus anyOf without adding a conflicting branch type', () => {
+    const result = toKimiToolParam({
+      name: 'nested_union_tool',
+      parameters: {
+        type: 'object',
+        properties: {
+          value: {
+            type: 'string',
+            anyOf: [
+              { maxLength: 10 },
+              { type: 'number' },
+            ],
+          },
+        },
+      },
+    });
+
+    const fn = result.function as {
+      parameters: {
+        properties: {
+          value: { type?: string; anyOf: Array<Record<string, unknown>> };
+        };
+      };
+    };
+    expect(fn.parameters.properties.value).toEqual({
+      anyOf: [
+        { maxLength: 10, type: 'string' },
+        { type: 'number' },
+      ],
+    });
+  });
 });
 
 describe('KimiCodeChatProvider.chat() — H6 skip empty tool_call deltas', () => {

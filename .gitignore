@@ -37,3 +37,6 @@ worker-market/.deploy.*
 .smoke/
 .codex-tmp/
 debug.log
+
+# Rust agent runtime build output
+native/agent-runtime/target/

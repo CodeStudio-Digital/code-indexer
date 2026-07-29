@@ -5,13 +5,15 @@ import type {
   EnrichedProviderModel,
   PersistedTasksState,
   ProviderOption,
+  SessionId,
   SessionData,
 } from './types.js';
 import { PROVIDERS } from './constants.js';
 import { collectPersistedToolUseIds } from './utils.js';
+import { sortClaudeCodeModels } from '../../lib/claude-code-model-order.js';
 
 interface UseAgentChatStateArgs {
-  selectedId: number | null;
+  selectedId: SessionId | null;
   doneReason: string | null;
   /** Bumped on `tasks_posted` + `message_complete` so the persisted task card
    *  refetches the latest list/approval mid-run, not only on run end. */
@@ -131,7 +133,9 @@ export function useAgentChatState({
             id: p.id,
             label: p.name,
             kind: p.kind,
-            models: p.models,
+            models: p.kind === 'claude-code'
+              ? sortClaudeCodeModels(p.models, (model) => model.id, (model) => model.name)
+              : p.models,
             // Without this, providerSupportsThinking() can't see supportsThinking
             // and the Thinking chip never renders — bug existed since the
             // capability flag was introduced (Composer used the same hook).

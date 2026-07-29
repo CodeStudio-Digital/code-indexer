@@ -16,12 +16,11 @@ import {
   CoderWorkerPool,
   DEFAULT_CODER_WORKER_HEAP_MB,
   type CoderWorkerDocDeps,
+  type SessionRuntimeContext,
 } from './CoderWorkerPool.js';
+import type { SessionId } from '@mcp/session-storage';
 import type { McpExternalPool } from './McpExternalPool.js';
-import type {
-  ControlPlaneDivergenceStore,
-  ControlPlaneStore,
-} from '@mcp/store/control-plane/index.js';
+import type { ControlPlaneAuthority } from '../file-control-plane-store.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
 
 let cachedPool: CoderWorkerPool | null = null;
@@ -42,9 +41,14 @@ const docDeps: CoderWorkerDocDeps = {};
  */
 const mcpPoolBox: { pool: McpExternalPool | null } = { pool: null };
 const controlPlaneBox: {
-  store: ControlPlaneStore | null;
-  divergences: ControlPlaneDivergenceStore | null;
-} = { store: null, divergences: null };
+  store: ControlPlaneAuthority | null;
+} = { store: null };
+const sessionRuntimeBox: {
+  resolve: ((sessionId: SessionId) => Promise<SessionRuntimeContext>) | null;
+} = { resolve: null };
+const sessionWriterHandoffBox: {
+  release: ((context: SessionRuntimeContext) => Promise<void>) | null;
+} = { release: null };
 
 function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'coder-worker');
@@ -96,6 +100,24 @@ export function getCoderWorkerPool(): CoderWorkerPool {
     workerExecArgv: resolved.execArgv,
     workerDevTsEntry: resolved.devTsEntry,
     dbPath,
+    resolveSessionRuntimeContext: async (sessionId) => {
+      const resolve = sessionRuntimeBox.resolve;
+      if (!resolve) {
+        throw new Error(
+          '[coder-pool] filesystem session runtime resolver is not configured',
+        );
+      }
+      return resolve(sessionId);
+    },
+    handoffSessionWriter: async (context) => {
+      const release = sessionWriterHandoffBox.release;
+      if (!release) {
+        throw new Error(
+          '[coder-pool] filesystem session writer handoff is not configured',
+        );
+      }
+      await release(context);
+    },
     workerMaxOldGenerationSizeMb: workerHeapMb,
     ttlMs: Number(process.env.CODER_WORKER_TTL_MS) || undefined,
     postRunLingerMs: Number(process.env.CODER_WORKER_POST_RUN_LINGER_MS) || undefined,
@@ -115,7 +137,6 @@ export function getCoderWorkerPool(): CoderWorkerPool {
     // the legacy per-worker manager.
     getMcpExternalPool: () => mcpPoolBox.pool,
     getControlPlaneStore: () => controlPlaneBox.store,
-    getControlPlaneDivergenceStore: () => controlPlaneBox.divergences,
   });
   return cachedPool;
 }
@@ -177,14 +198,34 @@ export function setCoderWorkerMcpPool(pool: McpExternalPool | null): void {
 }
 
 export function setCoderWorkerControlPlaneStore(
-  store: ControlPlaneStore | null,
-  divergences: ControlPlaneDivergenceStore | null = null,
+  store: ControlPlaneAuthority | null,
 ): void {
   controlPlaneBox.store = store;
-  controlPlaneBox.divergences = divergences;
 }
 
-export function getCoderWorkerControlPlaneStore(): ControlPlaneStore | null {
+/**
+ * Installs the process-wide filesystem session authority used before spawning
+ * a coder worker. There is deliberately no SQLite or central-directory
+ * fallback: an unresolved UUID/root rejects the run.
+ */
+export function setCoderWorkerSessionRuntimeResolver(
+  resolve: ((sessionId: SessionId) => Promise<SessionRuntimeContext>) | null,
+): void {
+  sessionRuntimeBox.resolve = resolve;
+}
+
+/**
+ * Installs the main-to-worker single-writer handoff. The callback must wait
+ * until every queued main-process session write is durable and the lease file
+ * has been released.
+ */
+export function setCoderWorkerSessionWriterHandoff(
+  release: ((context: SessionRuntimeContext) => Promise<void>) | null,
+): void {
+  sessionWriterHandoffBox.release = release;
+}
+
+export function getCoderWorkerControlPlaneStore(): ControlPlaneAuthority | null {
   return controlPlaneBox.store;
 }
 

@@ -3,8 +3,8 @@
  * `spawn.ts` so the semantics are testable without the spawn's I/O.
  *
  * Semantics (decided in the C2 default-flip):
- *   - The COUNT is GLOBAL cross-session (every company worker shares the
- *     same SQLite file — `countActiveSubordinatesGlobal()`), but the CAP is
+ *   - The COUNT is GLOBAL cross-session (the in-memory catalog scans each
+ *     Company/App Studio bundle's agent-run files), but the CAP is
  *     resolved from the CALLING session's autonomy config. Each spawn checks
  *     the global count against its OWN session's cap: a session with
  *     `autonomy.maxSubordinates: 12` may keep spawning after a default-cap
@@ -14,7 +14,7 @@
  *     `MCP_COMPANY_GLOBAL_MAX_SUBORDINATES='0'` produces it; a session
  *     cannot lift the cap (session `null` = "back to default policy" — see
  *     `resolveAutonomy`). Default cap when nothing is configured: 8.
- *   - `countActive` is a thunk so the (cheap but real) DB count is skipped
+ *   - `countActive` is a thunk so the cross-bundle scan is skipped
  *     entirely when uncapped.
  */
 

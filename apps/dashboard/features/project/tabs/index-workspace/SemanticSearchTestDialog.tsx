@@ -31,6 +31,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../../components/ui/tabs.js';
 import { Textarea } from '../../../../components/ui/textarea.js';
 import {
+  recordProjectSemanticOutcome,
   testProjectSemanticSearch,
   type ProjectSemanticSearchInput,
   type ProjectSemanticSearchMode,
@@ -81,6 +82,8 @@ export function SemanticSearchTestDialog({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<ProjectSemanticSearchTestResult | null>(null);
+  const [lexicalResponse, setLexicalResponse] =
+    useState<ProjectSemanticSearchTestResult | null>(null);
   const [executedInput, setExecutedInput] = useState<ProjectSemanticSearchInput | null>(null);
   const controller = useRef<AbortController | null>(null);
 
@@ -107,14 +110,24 @@ export function SemanticSearchTestDialog({
     setLoading(true);
     setError(null);
     try {
+      const lexical = mode === 'fts'
+        ? null
+        : await testProjectSemanticSearch(
+            projectId,
+            { ...input, mode: 'fts' },
+            nextController.signal,
+          );
+      if (nextController.signal.aborted) return;
       const next = await testProjectSemanticSearch(projectId, input, nextController.signal);
       if (nextController.signal.aborted) return;
+      setLexicalResponse(lexical);
       setResponse(next);
       setExecutedInput(input);
     } catch (cause) {
       if (nextController.signal.aborted) return;
       setError(cause instanceof Error ? cause.message : String(cause));
       setResponse(null);
+      setLexicalResponse(null);
       setExecutedInput(null);
     } finally {
       if (controller.current === nextController) setLoading(false);
@@ -246,6 +259,19 @@ export function SemanticSearchTestDialog({
               <TabsContent value="results" className="min-h-0 flex-1">
                 <ScrollArea className="h-full pr-3">
                   <div className="space-y-2 pb-2">
+                    {lexicalResponse ? (
+                      <div className="mb-3 grid gap-3 lg:grid-cols-2">
+                        <SearchTopFive
+                          title="Baseline lexical (FTS)"
+                          response={lexicalResponse}
+                        />
+                        <SearchTopFive
+                          title={`Resultado ${diagnostics?.effectiveMode ?? mode}`}
+                          response={response}
+                          compareAgainst={lexicalResponse}
+                        />
+                      </div>
+                    ) : null}
                     {response.results.map((result, index) => {
                       const path = semanticResultPath(result);
                       const line = semanticResultLine(result);
@@ -268,7 +294,23 @@ export function SemanticSearchTestDialog({
                               </div>
                             </div>
                             {onOpenFile && path ? (
-                              <Button type="button" size="icon" variant="ghost" title={t('index.semanticTest.openFile')} onClick={() => onOpenFile(path)}>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                title={t('index.semanticTest.openFile')}
+                                onClick={() => {
+                                  onOpenFile(path);
+                                  if (diagnostics?.telemetryRequestId) {
+                                    void recordProjectSemanticOutcome(
+                                      projectId,
+                                      diagnostics.telemetryRequestId,
+                                      result.vector_score != null
+                                        && (result.fts_rank == null || result.fts_rank > 5),
+                                    ).catch(() => undefined);
+                                  }
+                                }}
+                              >
                                 <ExternalLink className="h-4 w-4" />
                               </Button>
                             ) : null}
@@ -360,6 +402,47 @@ export function SemanticSearchTestDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function SearchTopFive({
+  title,
+  response,
+  compareAgainst,
+}: {
+  title: string;
+  response: ProjectSemanticSearchTestResult;
+  compareAgainst?: ProjectSemanticSearchTestResult;
+}) {
+  const lexicalKeys = new Set((compareAgainst?.results ?? [])
+    .slice(0, 5)
+    .map((result) => `${result.type}:${semanticResultPath(result)}`));
+  return (
+    <div className="rounded-lg border bg-muted/10 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <strong className="text-xs">{title}</strong>
+        <Badge variant="muted">{milliseconds(response.diagnostics.totalTimeMs)}</Badge>
+      </div>
+      <ol className="space-y-1.5 text-[11px]">
+        {response.results.slice(0, 5).map((result, index) => {
+          const path = semanticResultPath(result);
+          const semanticOnly = !!compareAgainst
+            && !lexicalKeys.has(`${result.type}:${path}`);
+          return (
+            <li
+              key={`${result.type}:${result.id}`}
+              className="flex min-w-0 items-center gap-2"
+            >
+              <span className="w-4 shrink-0 text-right text-muted-foreground">
+                {index + 1}.
+              </span>
+              <span className="min-w-0 flex-1 truncate font-mono">{path}</span>
+              {semanticOnly ? <Badge variant="success">só semântico</Badge> : null}
+            </li>
+          );
+        })}
+      </ol>
+    </div>
   );
 }
 

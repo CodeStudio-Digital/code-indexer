@@ -10,8 +10,8 @@
  * BACKEND_URL / JWT_TOKEN before running an HTTP test battery.
  *
  * Registered for EVERY company session (gated by `opts.companyContext` in
- * index.ts), since the env set lives in the DB (`company_session_envs`) and
- * the read tools work with no container alive. The backing store is wired via
+ * index.ts), since the env set lives in independent files inside the Company
+ * session bundle and the read tools work with no container alive. The backing store is wired via
  * `setEnvToolStore` in BOTH server.ts (main thread) AND company-worker.ts —
  * worker_threads don't share module globals, and master+subordinates run in
  * the worker. The master sees only the read-only trio (see master-filter.ts);
@@ -22,6 +22,7 @@ import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
+import { isUuid } from '@mcp/session-storage';
 
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -38,16 +39,16 @@ function store(): CompanySessionEnvStore | null {
   return envStore;
 }
 
-function sessionIdOf(ctx: ToolContext): number | null {
+function sessionIdOf(ctx: ToolContext): string | null {
   // Env vars are project-wide → resolve to the root session via the
-  // orchestrator's effective id (sub-sessions delegate to parent). Falls
-  // back to the raw companySessionId when the orchestrator isn't wired
-  // (legacy callers / tests that build a context manually).
-  const orch = ctx.companyContext?.orchestrator as { effectiveSessionId?: number } | undefined;
-  if (typeof orch?.effectiveSessionId === 'number') return orch.effectiveSessionId;
+  // orchestrator's effective id (sub-sessions delegate to parent). A direct
+  // Company context is accepted only when it already carries a UUID.
+  const orch = ctx.companyContext?.orchestrator as { effectiveSessionId?: string } | undefined;
+  if (typeof orch?.effectiveSessionId === 'string' && isUuid(orch.effectiveSessionId)) {
+    return orch.effectiveSessionId.toLowerCase();
+  }
   const raw = ctx.companyContext?.companySessionId;
-  if (raw === undefined || raw === null) return null;
-  return typeof raw === 'number' ? raw : Number(raw);
+  return typeof raw === 'string' && isUuid(raw) ? raw.toLowerCase() : null;
 }
 
 const envList: CoderTool = {
@@ -167,7 +168,10 @@ const envSet: CoderTool = {
     // (all services); CSV → restrict materialization to those services.
     const service =
       args.service === undefined ? undefined : String(args.service ?? '').trim() || null;
-    s.upsert(sessionId, key, value, !!args.is_secret, { source: 'agent', serviceScope: service });
+    await s.upsert(sessionId, key, value, !!args.is_secret, {
+      source: 'agent',
+      serviceScope: service,
+    });
     await getSandboxManager()
       .syncEnvsToAllContainers(String(sessionId))
       .catch(() => void 0);

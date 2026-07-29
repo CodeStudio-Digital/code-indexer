@@ -21,9 +21,9 @@ export function AssetGrid({
   onOpen,
 }: {
   assets: SpriteAsset[];
-  activeAssetId: number | null;
-  onSelect: (id: number) => void;
-  onOpen?: (id: number) => void;
+  activeAssetId: string | null;
+  onSelect: (id: string) => void;
+  onOpen?: (id: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const scrollRef = useRef<HTMLDivElement | null>(null);

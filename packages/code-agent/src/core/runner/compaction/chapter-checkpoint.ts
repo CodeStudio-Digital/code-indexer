@@ -4,12 +4,15 @@ import {
   renderResumeV3,
   type CompactionSummaryV3,
 } from '@mcp/code-agent/core/summarizer.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import type { CommitConversationChapterResult } from '@mcp/code-agent/sessions/types.js';
+import type {
+  FsCommitConversationChapterResult,
+  FsSessionStore,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface PersistChapterCheckpointInput {
-  store: SessionStore;
-  sessionId: number;
+  store: FsSessionStore;
+  sessionId: SessionId;
   summary: CompactionSummaryV3;
   headMessages: readonly AgentMessage[];
   source?: 'auto' | 'manual';
@@ -19,22 +22,22 @@ export interface PersistChapterCheckpointInput {
   autoContinues?: number;
 }
 
-export type PersistChapterCheckpointResult = CommitConversationChapterResult | {
+export type PersistChapterCheckpointResult = FsCommitConversationChapterResult | {
   status: 'noop';
   reason: 'unaligned' | 'unsafe_tool_boundary';
-  boundary_id: number;
+  boundary_seq: number;
   pruned_count: 0;
 } | {
   status: 'compatibility';
-  boundary_id: number;
+  boundary_seq: number;
   pruned_count: number;
 };
 
-/** Queues are process-local; the SQLite boundary CAS remains authoritative. */
-const sessionQueues = new Map<number, Promise<void>>();
+/** Process-local ordering complements the bundle's cross-process writer lease. */
+const sessionQueues = new Map<string, Promise<void>>();
 
 export async function serializeSessionCompaction<T>(
-  sessionId: number,
+  sessionId: SessionId,
   task: () => Promise<T>,
 ): Promise<T> {
   const previous = sessionQueues.get(sessionId) ?? Promise.resolve();
@@ -86,7 +89,7 @@ function sameMessage(left: AgentMessage, right: AgentMessage): boolean {
 }
 
 /**
- * Recede an aligned DB prefix when it would archive only one side of a
+ * Recede an aligned durable-transcript prefix when it would archive one side of a
  * tool_use/tool_result pair. Unlike the provider-tail cutoff helper this may
  * never advance over an unseen row: duplicate raw text is safe, a summary gap
  * is not.
@@ -131,8 +134,8 @@ export function recedePrefixToToolPairBoundary(
 
 /**
  * Map a summarized in-memory head onto the longest contiguous prefix of the
- * currently visible DB transcript. Synthetic resume/reminder messages may be
- * skipped, but a DB row may never be skipped: gaps must leave the boundary in
+ * currently visible bundle transcript. Synthetic resume/reminder messages may
+ * be skipped, but a durable record may never be skipped: gaps leave the boundary in
  * place rather than archive text the summary did not see.
  */
 export function alignedDurablePrefix(
@@ -157,10 +160,10 @@ export function alignedDurablePrefix(
  * same transaction. The summary has already been generated; no provider call
  * occurs here.
  */
-export function persistChapterCheckpoint(
+export async function persistChapterCheckpoint(
   input: PersistChapterCheckpointInput,
-): PersistChapterCheckpointResult {
-  const data = input.store.loadSessionWithMessages(input.sessionId);
+): Promise<PersistChapterCheckpointResult> {
+  const data = await input.store.loadSessionWithMessages(input.sessionId);
   if (!data) throw new Error(`session ${input.sessionId} not found`);
   const expectedBoundary = data.session.summary_boundary_id ?? 0;
   const aligned = alignedDurablePrefix(data.messages, input.headMessages);
@@ -168,7 +171,7 @@ export function persistChapterCheckpoint(
     return {
       status: 'noop',
       reason: 'unaligned',
-      boundary_id: expectedBoundary,
+      boundary_seq: expectedBoundary,
       pruned_count: 0,
     };
   }
@@ -177,20 +180,20 @@ export function persistChapterCheckpoint(
     return {
       status: 'noop',
       reason: 'unsafe_tool_boundary',
-      boundary_id: expectedBoundary,
+      boundary_seq: expectedBoundary,
       pruned_count: 0,
     };
   }
 
   const rows = data.message_rows.slice(0, matched);
-  const start = rows[0]!.id;
-  const end = rows[rows.length - 1]!.id;
+  const start = rows[0]!.seq;
+  const end = rows[rows.length - 1]!.seq;
   const resumeText = renderResumeV3(input.summary);
 
   // Operational rollback keeps the one-call V3 pipeline but stores only the
   // compatibility resume/boundary, leaving existing chapter rows untouched.
   if (input.chaptersEnabled === false) {
-    const committed = input.store.setCompactionBoundary(
+    const committed = await input.store.setCompactionBoundary(
       input.sessionId,
       resumeText,
       end,
@@ -198,16 +201,16 @@ export function persistChapterCheckpoint(
     );
     return {
       status: 'compatibility',
-      boundary_id: committed.boundary_id,
+      boundary_seq: committed.boundary_seq,
       pruned_count: committed.pruned_count,
     };
   }
 
   return input.store.commitConversationChapter({
     sessionId: input.sessionId,
-    expectedBoundaryId: expectedBoundary,
-    startMessageId: start,
-    endMessageId: end,
+    expectedBoundarySeq: expectedBoundary,
+    startMessageSeq: start,
+    endMessageSeq: end,
     source: input.source ?? 'auto',
     chapterKind: input.chapterKind ?? (input.trigger?.startsWith('milestone:') ? 'milestone' : 'context'),
     trigger: input.trigger ?? 'context_threshold',

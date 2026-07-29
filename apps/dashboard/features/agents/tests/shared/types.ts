@@ -30,28 +30,13 @@ export type {
  * because not every test produces every artifact (e.g. passed tests
  * usually have no trace/screenshot/video by default).
  */
-export interface QaTestResultWithUrls {
-  id: number;
-  run_id: number;
-  spec_file: string;
-  test_name: string;
-  status: import('@mcp/services/qa/types.js').QaTestStatus;
-  duration_ms: number | null;
-  error: string | null;
-  trace_path: string | null;
-  screenshot_path: string | null;
-  video_path: string | null;
-  /** v4.5 — workspace-relative path to the per-test markdown summary. */
-  summary_md_path: string | null;
-  /** v4.5 — id of the auto-created Kanban bug card (failed tests only). */
-  kanban_card_id: number | null;
-  created_at: string;
+export type QaTestResultWithUrls = import('@mcp/services/qa/types.js').QaTestResult & {
   trace_url: string | null;
   screenshot_url: string | null;
   video_url: string | null;
   /** v4.5 — convenience URL the dashboard renders next to each result row. */
   summary_md_url: string | null;
-}
+};
 
 /**
  * v4.5 — payload returned by `GET /qa/diagnostics`. Used by the empty

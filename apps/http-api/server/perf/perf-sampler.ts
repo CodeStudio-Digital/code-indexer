@@ -30,7 +30,7 @@ export interface ProcessMetricLike {
 }
 
 export interface WorkerStatsRow {
-  sessionId: number;
+  sessionId: string;
   stats: WorkerMemStats | null;
 }
 

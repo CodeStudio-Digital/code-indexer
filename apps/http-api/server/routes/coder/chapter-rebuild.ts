@@ -5,14 +5,18 @@ import {
   type CompactionResumeV3,
 } from '@mcp/code-agent/core/summarizer.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
-import type { CoderMessageRow, RebuiltConversationChapterInput } from '@mcp/code-agent/sessions/types.js';
+import type {
+  FsCoderMessageRow,
+  FsRebuiltConversationChapterInput,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { RebuildConversationChaptersInput } from './chapters.js';
 import { resolveCompactionProviders, summarizeReliably } from './compaction-summary.js';
 
 const MAX_CHUNK_MESSAGES = 50;
 const MAX_CHUNK_CHARS = 60_000;
 
-function rowToMessage(row: CoderMessageRow): AgentMessage {
+function rowToMessage(row: FsCoderMessageRow): AgentMessage {
   const content = JSON.parse(row.content_json) as AgentMessage['content'];
   const selected = row.selected_skill_ids_json
     ? JSON.parse(row.selected_skill_ids_json) as string[]
@@ -26,11 +30,11 @@ function rowToMessage(row: CoderMessageRow): AgentMessage {
 }
 
 interface RowChunk {
-  rows: CoderMessageRow[];
+  rows: FsCoderMessageRow[];
   chars: number;
 }
 
-function containsToolUse(row: CoderMessageRow): boolean {
+function containsToolUse(row: FsCoderMessageRow): boolean {
   if (row.role !== 'assistant') return false;
   try {
     const content = JSON.parse(row.content_json) as Array<{ type?: string }>;
@@ -47,7 +51,9 @@ function containsToolUse(row: CoderMessageRow): boolean {
  * bounds its representation, and rejecting it would make one-user autonomous
  * sessions impossible to rebuild.
  */
-export function chunkArchivedConversation(rows: readonly CoderMessageRow[]): RowChunk[] {
+export function chunkArchivedConversation(
+  rows: readonly FsCoderMessageRow[],
+): RowChunk[] {
   if (rows.length === 0) return [];
   const units: RowChunk[] = [];
   for (let index = 0; index < rows.length;) {
@@ -105,23 +111,22 @@ export interface RebuildConversationChaptersResult {
 /** User-triggered, synchronous rebuild; the route serializes it with active runs. */
 export async function rebuildConversationChapters(
   deps: ServerDeps,
-  sessionId: number,
+  sessionId: SessionId,
   input: RebuildConversationChaptersInput,
 ): Promise<RebuildConversationChaptersResult> {
-  const session = deps.sessionStore.getSession(sessionId);
+  const session = await deps.sessionStore.getSession(sessionId);
   if (!session) throw new Error(`session ${sessionId} not found`);
   const boundary = session.summary_boundary_id ?? 0;
   const scope = input.scope ?? (input.archived_only === false ? 'all' : 'archived');
-  const where = scope === 'archived'
-    ? 'AND id <= ?'
-    : scope === 'visible'
-      ? 'AND id > ?'
-      : '';
-  const rows = deps.sessionStore.getDb().prepare(`
-    SELECT * FROM coder_messages
-    WHERE session_id = ? ${where}
-    ORDER BY id ASC
-  `).all(...(scope === 'all' ? [sessionId] : [sessionId, boundary])) as CoderMessageRow[];
+  const transcript = await deps.sessionStore.loadAllSessionMessages(sessionId);
+  if (!transcript) throw new Error(`session ${sessionId} not found`);
+  const rows = transcript.message_rows.filter((row) =>
+    scope === 'archived'
+      ? row.seq <= boundary
+      : scope === 'visible'
+        ? row.seq > boundary
+        : true,
+  );
   const chunks = chunkArchivedConversation(rows);
   if (chunks.length === 0) {
     return {
@@ -143,9 +148,9 @@ export async function rebuildConversationChapters(
     sessionId,
   );
   let previousResume: CompactionResumeV3 | string | null = null;
-  const rebuilt: RebuiltConversationChapterInput[] = [];
+  const rebuilt: FsRebuiltConversationChapterInput[] = [];
   const successes: Array<{
-    attemptId: number | null;
+    attemptId: string | null;
     start: number;
     end: number;
     provider: string | null;
@@ -156,9 +161,9 @@ export async function rebuildConversationChapters(
   const rebuildRunId = `rebuild:${sessionId}:${Date.now()}`;
 
   for (const [index, chunk] of chunks.entries()) {
-    const start = chunk.rows[0]!.id;
-    const end = chunk.rows[chunk.rows.length - 1]!.id;
-    const attemptId = deps.sessionStore.startCompactionAttempt({
+    const start = chunk.rows[0]!.seq;
+    const end = chunk.rows[chunk.rows.length - 1]!.seq;
+    const attemptId = await deps.sessionStore.startCompactionAttempt({
       session_id: sessionId,
       run_id: rebuildRunId,
       turn: index + 1,
@@ -173,7 +178,7 @@ export async function rebuildConversationChapters(
     }, providers, options, providerResolutionErrors);
     if (!summarized.summary) {
       const error = summarized.errors.join(' | ') || 'all summary providers failed';
-      deps.sessionStore.finishCompactionAttempt(attemptId, {
+      await deps.sessionStore.finishCompactionAttempt(sessionId, attemptId, {
         status: 'noop',
         strategy: 'none',
         summarizer_ran: true,
@@ -186,8 +191,8 @@ export async function rebuildConversationChapters(
     const summary = summarized.summary;
     previousResume = summary.resume;
     rebuilt.push({
-      startMessageId: start,
-      endMessageId: end,
+      startMessageSeq: start,
+      endMessageSeq: end,
       trigger: `user_rebuild:${scope}`,
       title: summary.chapter.title || `Conversation history ${rebuilt.length + 1}`,
       chapterJson: JSON.stringify(summary.chapter),
@@ -211,38 +216,50 @@ export async function rebuildConversationChapters(
 
   let result;
   try {
-    result = deps.sessionStore.insertRebuiltConversationChapters(sessionId, rebuilt);
+    result = await deps.sessionStore.insertRebuiltConversationChapters(
+      sessionId,
+      rebuilt,
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     for (const success of successes) {
-      deps.sessionStore.finishCompactionAttempt(success.attemptId, {
-        status: 'checkpoint_failed',
-        strategy: 'summarizer',
-        summarizer_ran: true,
-        summary_provider: success.provider,
-        summary_model: success.model,
-        history_chars_after: 0,
-        error_message: message,
-      });
+      await deps.sessionStore.finishCompactionAttempt(
+        sessionId,
+        success.attemptId,
+        {
+          status: 'checkpoint_failed',
+          strategy: 'summarizer',
+          summarizer_ran: true,
+          summary_provider: success.provider,
+          summary_model: success.model,
+          history_chars_after: 0,
+          error_message: message,
+        },
+      );
     }
     throw error;
   }
   for (const success of successes) {
     const chapter = result.items.find((item) => (
-      item.start_message_id === success.start && item.end_message_id === success.end
+      item.start_message_seq === success.start &&
+      item.end_message_seq === success.end
     ));
-    deps.sessionStore.finishCompactionAttempt(success.attemptId, {
-      status: 'summarized',
-      strategy: 'summarizer',
-      summarizer_ran: true,
-      summary_provider: success.provider,
-      summary_model: success.model,
-      history_chars_after: 0,
-      pruned_messages: 0,
-      chapter_id: chapter?.id ?? null,
-      boundary_id: boundary || null,
-      error_message: success.errors.join(' | ') || null,
-    });
+    await deps.sessionStore.finishCompactionAttempt(
+      sessionId,
+      success.attemptId,
+      {
+        status: 'summarized',
+        strategy: 'summarizer',
+        summarizer_ran: true,
+        summary_provider: success.provider,
+        summary_model: success.model,
+        history_chars_after: 0,
+        pruned_messages: 0,
+        chapter_id: chapter?.id ?? null,
+        boundary_seq: boundary || null,
+        error_message: success.errors.join(' | ') || null,
+      },
+    );
   }
 
   return {
@@ -253,7 +270,7 @@ export async function rebuildConversationChapters(
     chapters_generated: result.items.length,
     failures,
     superseded_legacy: result.superseded_count,
-    first_message_id: rebuilt[0]?.startMessageId ?? null,
-    last_message_id: rebuilt[rebuilt.length - 1]?.endMessageId ?? null,
+    first_message_id: rebuilt[0]?.startMessageSeq ?? null,
+    last_message_id: rebuilt[rebuilt.length - 1]?.endMessageSeq ?? null,
   };
 }

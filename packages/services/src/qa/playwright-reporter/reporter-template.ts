@@ -14,7 +14,7 @@
  * The runtime needs:
  *   - `PLAYWRIGHT_QA_ENDPOINT` — full URL the reporter POSTs events to.
  *     Scaffolder injects this via `playwright-bootstrap.ts`.
- *   - `PLAYWRIGHT_QA_RUN_ID`   — id of the qa_test_runs row created by
+ *   - `PLAYWRIGHT_QA_RUN_ID`   — UUID of the QA-run bundle entity created by
  *     the agent before invoking `npx playwright test`. Allows the
  *     endpoint to associate test events with the correct run.
  *

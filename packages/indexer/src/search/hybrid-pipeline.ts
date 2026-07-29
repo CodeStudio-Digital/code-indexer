@@ -166,6 +166,30 @@ interface RawSearchInputs {
   ftsSanitize: (q: string, connector: 'AND' | 'OR') => string;
 }
 
+export function semanticProjectContext(
+  db: CodeIndexDB,
+  projectId: number,
+  projectName: string,
+): { language?: string; concepts?: string[] } {
+  try {
+    const languages = db.getStats(projectId).languages;
+    const language = Object.entries(languages)
+      .sort((left, right) => right[1] - left[1])[0]?.[0];
+    const project = db.getProject(projectId);
+    const descriptionTerms = (project?.description ?? '')
+      .split(/[,\s;/]+/)
+      .map((term) => term.trim())
+      .filter((term) => term.length >= 4)
+      .slice(0, 7);
+    return {
+      language,
+      concepts: [projectName, ...descriptionTerms].slice(0, 8),
+    };
+  } catch {
+    return { concepts: [projectName] };
+  }
+}
+
 export class FtsSource implements Source<HybridSearchPipelineQuery, HybridSearchPipelineCandidate> {
   readonly name = 'fts';
   constructor(private deps: RawSearchInputs) {}
@@ -247,7 +271,7 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
   async source(q: HybridSearchPipelineQuery): Promise<HybridSearchPipelineCandidate[]> {
     if (!this.deps.vectorStore) return [];
     try {
-      const variants = await this.buildVariants(q.query);
+      const variants = await this.buildVariants(q);
       q.diag.queryVariants = variants;
 
       // Project isolation rides on the namespace; `type` stays a metadata filter.
@@ -324,7 +348,8 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
     }
   }
 
-  private async buildVariants(query: string): Promise<string[]> {
+  private async buildVariants(q: HybridSearchPipelineQuery): Promise<string[]> {
+    const query = q.query;
     // Same shortcut as the legacy path: identifier-shaped queries skip the
     // HyDE LLM call and template expansion (covers callers that request
     // hybrid explicitly). Kill switch: MCP_HYBRID_HYDE_SKIP_FTS=0.
@@ -332,7 +357,14 @@ export class VectorSource implements Source<HybridSearchPipelineQuery, HybridSea
       return [query.trim()];
     }
     if (this.deps.hyde) {
-      const hypothetical = await this.deps.hyde.generate(query);
+      const hypothetical = await this.deps.hyde.generate(
+        query,
+        semanticProjectContext(
+          this.deps.db,
+          q.projectId,
+          q.projectName,
+        ),
+      );
       if (hypothetical && hypothetical !== query) return [query, hypothetical];
     }
     return buildTemplateVariants(query);

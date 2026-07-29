@@ -16,7 +16,7 @@ import type {
 } from '@mcp/company/types.js';
 
 interface PipelinesTabProps {
-  companySessionId: number;
+  companySessionId: string;
 }
 
 interface SessionFullData {
@@ -29,7 +29,14 @@ interface SkillsResponse {
 }
 
 type PipelinesResponse = Pipeline[] | { pipelines?: Pipeline[]; error?: string };
-type PipelineExecutionsResponse = PipelineExecution[] | { executions?: PipelineExecution[]; error?: string };
+type PipelineExecutionRecord = Omit<PipelineExecution, 'id'> & { id: string };
+type PipelineNodeExecutionRecord = Omit<PipelineNodeExecution, 'id' | 'execution_id'> & {
+  id: string;
+  execution_id: string;
+};
+type PipelineExecutionsResponse =
+  | PipelineExecutionRecord[]
+  | { executions?: PipelineExecutionRecord[]; error?: string };
 
 function normalizePipelines(data: PipelinesResponse | null): Pipeline[] {
   if (Array.isArray(data)) return data;
@@ -37,7 +44,7 @@ function normalizePipelines(data: PipelinesResponse | null): Pipeline[] {
   return [];
 }
 
-function normalizeExecutions(data: PipelineExecutionsResponse | null): PipelineExecution[] {
+function normalizeExecutions(data: PipelineExecutionsResponse | null): PipelineExecutionRecord[] {
   if (Array.isArray(data)) return data;
   if (Array.isArray(data?.executions)) return data.executions;
   return [];
@@ -69,7 +76,7 @@ export function PipelinesTab({ companySessionId }: PipelinesTabProps) {
   const skillsApi = useApi<SkillsResponse>('/admin/skills');
 
   const [editing, setEditing] = useState<Pipeline | null | undefined>(undefined);
-  const [selectedExecutionId, setSelectedExecutionId] = useState<number | null>(null);
+  const [selectedExecutionId, setSelectedExecutionId] = useState<string | null>(null);
   const pipelines = useMemo(() => normalizePipelines(pipelinesApi.data), [pipelinesApi.data]);
   const pipelineListError = responseError(pipelinesApi.data);
   const executions = useMemo(() => normalizeExecutions(executionsApi.data), [executionsApi.data]);
@@ -235,10 +242,10 @@ function PipelineRow({
   onStarted,
 }: {
   pipeline: Pipeline;
-  companySessionId: number;
+  companySessionId: string;
   onEdit: () => void;
   onDeleted: () => void;
-  onStarted: (executionId: number) => void;
+  onStarted: (executionId: string) => void;
 }) {
   const { t } = useTranslation(['agents', 'common']);
   const [starting, setStarting] = useState(false);
@@ -250,7 +257,7 @@ function PipelineRow({
     setStarting(true);
     setError(null);
     try {
-      const exec = await apiPost<PipelineExecution>(
+      const exec = await apiPost<PipelineExecutionRecord>(
         `/company/sessions/${companySessionId}/pipelines/${pipeline.id}/start`,
         { initial_input: initialInput },
       );
@@ -267,7 +274,7 @@ function PipelineRow({
   const handleDelete = async () => {
     const ok = await confirm({
       title: t('agents:pipelines.confirmDelete', { name: pipeline.name }),
-      confirmLabel: t('common:delete', { defaultValue: 'Delete' }),
+      confirmLabel: t('common:actions.delete'),
       tone: 'destructive',
     });
     if (!ok) return;
@@ -338,12 +345,15 @@ function ExecutionDetail({
   executionId,
   onChanged,
 }: {
-  companySessionId: number;
-  executionId: number;
+  companySessionId: string;
+  executionId: string;
   onChanged: () => void;
 }) {
   const { t } = useTranslation(['agents', 'common']);
-  const detail = useApi<{ execution: PipelineExecution; nodes: PipelineNodeExecution[] }>(
+  const detail = useApi<{
+    execution: PipelineExecutionRecord;
+    nodes: PipelineNodeExecutionRecord[];
+  }>(
     `/company/sessions/${companySessionId}/pipelines/executions/${executionId}`,
   );
 
@@ -465,8 +475,8 @@ function ExecutionDetail({
   );
 }
 
-function ExecutionStatusBadge({ status }: { status: PipelineExecution['status'] }) {
-  const variants: Record<PipelineExecution['status'], 'default' | 'secondary' | 'destructive' | 'outline'> = {
+function ExecutionStatusBadge({ status }: { status: PipelineExecutionRecord['status'] }) {
+  const variants: Record<PipelineExecutionRecord['status'], 'default' | 'secondary' | 'destructive' | 'outline'> = {
     running: 'default',
     paused: 'secondary',
     completed: 'secondary',
@@ -476,8 +486,8 @@ function ExecutionStatusBadge({ status }: { status: PipelineExecution['status'] 
   return <Badge variant={variants[status]} className="text-[10px]">{status}</Badge>;
 }
 
-function NodeStatusBadge({ status }: { status: PipelineNodeExecution['status'] }) {
-  const variants: Record<PipelineNodeExecution['status'], 'default' | 'secondary' | 'destructive' | 'outline'> = {
+function NodeStatusBadge({ status }: { status: PipelineNodeExecutionRecord['status'] }) {
+  const variants: Record<PipelineNodeExecutionRecord['status'], 'default' | 'secondary' | 'destructive' | 'outline'> = {
     pending: 'outline',
     running: 'default',
     completed: 'secondary',

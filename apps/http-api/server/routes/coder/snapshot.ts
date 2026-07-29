@@ -6,14 +6,20 @@
  * plus accept/revert primitives at hunk and file granularity.
  *
  * The handlers are thin: they construct a `SessionSnapshotService` over
- * the existing `SessionStore` DB handle and the project root, then forward
- * to it. No tab state lives in the dashboard — the service is the source
- * of truth.
+ * the filesystem session repository and the project root, then forward to
+ * it. No tab state lives in the dashboard — the bundle is the source of
+ * truth.
  */
 import type { Hono } from 'hono';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
-import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
+import {
+  parseJsonBody,
+  parseSeqParam,
+  parseSessionRecordIdParam,
+  parseSessionIdParam,
+  notFound,
+} from '../_helpers.js';
 import {
   SessionSnapshotService,
   type FileDiff,
@@ -29,48 +35,47 @@ import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
 
 export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
-  const snapshotStore = new SessionFileSnapshotStore(sessionStore.getDb());
-  const service = new SessionSnapshotService(snapshotStore, (kind, sessionId, projectId) => {
+  const snapshotStore = sessionStore;
+  const service = new SessionSnapshotService(snapshotStore, async (kind, sessionId, projectId) => {
     if (kind !== 'coder') return null;
-    const s = sessionStore.getSession(sessionId);
+    const s = await sessionStore.getSession(sessionId);
     if (!s) return null;
-    // Global session: a baseline may belong to a linked secondary project; use
-    // its project_id when present, else the session's primary project.
-    if (projectId != null && projectId < 0) {
-      return sessionStore.listSessionFilesystemRoots(sessionId)
-        .find((root) => root.id === -projectId)?.root_path ?? null;
-    }
-    const p = db.getProject(projectId ?? s.project_id);
-    return p?.root_path ?? null;
+    const resolvedProjectId = projectId ?? s.project_id;
+    if (resolvedProjectId == null) return null;
+    // Snapshot contents remain in the bundle, but reading/reverting files
+    // requires a current essential-catalog project. Historical root_path
+    // metadata must never revive authority after project removal.
+    const p = db.getProject(resolvedProjectId);
+    return p && !p.is_synthetic && p.root_path.trim().length > 0
+      ? p.root_path
+      : null;
   });
   const roundReviewPipeline = new SnapshotReviewPipeline(
     deps.pipelineProviderResolver,
     deps.pipelineTelemetrySink,
   );
 
-  const roundBelongsToSession = (sessionId: number, roundMessageId: number): boolean => {
-    const row = sessionStore.getDb().prepare(
-      `SELECT 1 FROM coder_messages
-        WHERE id = ? AND session_id = ? AND role = 'user'
-          AND COALESCE(is_meta, 0) = 0
-        LIMIT 1`,
-    ).get(roundMessageId, sessionId);
-    return !!row;
+  const roundBelongsToSession = async (
+    sessionId: SessionId,
+    roundSeq: number,
+  ): Promise<boolean> => {
+    const row = await sessionStore.getMessageBySeq(sessionId, roundSeq);
+    return row?.role === 'user' && row.row.is_meta === 0;
   };
 
-  const roundSnapshotAllowed = (
-    sessionId: number,
-    roundMessageId: number,
-    roundSnapshotId: number,
+  const roundSnapshotAllowed = async (
+    sessionId: SessionId,
+    roundSeq: number,
+    roundSnapshotId: string,
   ) => {
-    const row = snapshotStore.getRoundSnapshotById(roundSnapshotId);
+    const row = await snapshotStore.getRoundSnapshotById(roundSnapshotId);
     if (
       !row
       || row.session_kind !== 'coder'
       || row.session_id !== sessionId
-      || row.round_message_id !== roundMessageId
+      || row.round_message_id !== roundSeq
     ) return null;
-    const global = snapshotStore.getBaselineById(row.global_baseline_id);
+    const global = await snapshotStore.getBaselineById(row.global_baseline_id);
     if (
       !global
       || global.session_kind !== row.session_kind
@@ -81,27 +86,28 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
     return row;
   };
 
-  const roundContextRows = (sessionId: number, roundMessageId: number) => {
-    if (!roundBelongsToSession(sessionId, roundMessageId)) return null;
-    const rows = snapshotStore.listRoundSnapshots('coder', sessionId, roundMessageId, {
+  const roundContextRows = async (sessionId: SessionId, roundSeq: number) => {
+    if (!(await roundBelongsToSession(sessionId, roundSeq))) return null;
+    const rows = await snapshotStore.listRoundSnapshots('coder', sessionId, roundSeq, {
       includeClosed: true,
     });
-    return rows.every((row) => !!roundSnapshotAllowed(sessionId, roundMessageId, row.id))
+    return (await Promise.all(
+      rows.map((row) => roundSnapshotAllowed(sessionId, roundSeq, row.id)),
+    )).every(Boolean)
       ? rows
       : null;
   };
 
   app.get('/api/coder/sessions/:id/snapshot', async (c) => {
-    const id = parseIdParam(c);
-    if (!Number.isFinite(id)) return c.json({ error: 'bad id' }, 400);
+    const id = parseSessionIdParam(c);
     const includeClosed = c.req.query('includeClosed') === '1';
     const files = await service.listFiles('coder', id, { includeClosed });
     return c.json({ files });
   });
 
   app.get('/api/coder/sessions/:id/snapshot/file/:baselineId/diff', async (c) => {
-    const baselineId = parseIdParam(c, 'baselineId');
-    if (!Number.isFinite(baselineId)) return c.json({ error: 'bad baselineId' }, 400);
+    parseSessionIdParam(c);
+    const baselineId = parseSessionRecordIdParam(c, 'baselineId');
     const context = Number(c.req.query('context') ?? 3);
     const contextBeforeRaw = c.req.query('contextBefore');
     const contextAfterRaw = c.req.query('contextAfter');
@@ -114,30 +120,24 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
     return c.json(diff);
   });
 
-  app.get('/api/coder/sessions/:id/snapshot/round/:roundMessageId', async (c) => {
-    const id = parseIdParam(c);
-    const roundMessageId = parseIdParam(c, 'roundMessageId');
-    if (!Number.isFinite(id) || !Number.isFinite(roundMessageId)) {
-      return c.json({ error: 'bad id' }, 400);
-    }
-    if (!roundContextRows(id, roundMessageId)) {
+  app.get('/api/coder/sessions/:id/snapshot/round/:roundSeq', async (c) => {
+    const id = parseSessionIdParam(c);
+    const roundSeq = parseSeqParam(c, 'roundSeq');
+    if (!(await roundContextRows(id, roundSeq))) {
       return notFound(c, 'round not found');
     }
-    const files = await service.listRoundFiles('coder', id, roundMessageId);
-    const reviews = snapshotStore.listRoundReviewFindings('coder', id, roundMessageId);
-    return c.json({ roundMessageId, files, reviews });
+    const files = await service.listRoundFiles('coder', id, roundSeq);
+    const reviews = await snapshotStore.listRoundReviewFindings('coder', id, roundSeq);
+    return c.json({ roundSeq, files, reviews });
   });
 
   app.get(
-    '/api/coder/sessions/:id/snapshot/round/:roundMessageId/file/:roundSnapshotId/diff',
+    '/api/coder/sessions/:id/snapshot/round/:roundSeq/file/:roundSnapshotId/diff',
     async (c) => {
-      const id = parseIdParam(c);
-      const roundMessageId = parseIdParam(c, 'roundMessageId');
-      const roundSnapshotId = parseIdParam(c, 'roundSnapshotId');
-      if (!Number.isFinite(id) || !Number.isFinite(roundMessageId) || !Number.isFinite(roundSnapshotId)) {
-        return c.json({ error: 'bad id' }, 400);
-      }
-      if (!roundSnapshotAllowed(id, roundMessageId, roundSnapshotId)) {
+      const id = parseSessionIdParam(c);
+      const roundSeq = parseSeqParam(c, 'roundSeq');
+      const roundSnapshotId = parseSessionRecordIdParam(c, 'roundSnapshotId');
+      if (!(await roundSnapshotAllowed(id, roundSeq, roundSnapshotId))) {
         return notFound(c, 'round snapshot not found');
       }
       const context = Number(c.req.query('context') ?? 3);
@@ -154,12 +154,12 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   );
 
   app.post(
-    '/api/coder/sessions/:id/snapshot/round/:roundMessageId/file/:roundSnapshotId/accept-hunk',
+    '/api/coder/sessions/:id/snapshot/round/:roundSeq/file/:roundSnapshotId/accept-hunk',
     async (c) => {
-      const id = parseIdParam(c);
-      const roundMessageId = parseIdParam(c, 'roundMessageId');
-      const roundSnapshotId = parseIdParam(c, 'roundSnapshotId');
-      if (!roundSnapshotAllowed(id, roundMessageId, roundSnapshotId)) {
+      const id = parseSessionIdParam(c);
+      const roundSeq = parseSeqParam(c, 'roundSeq');
+      const roundSnapshotId = parseSessionRecordIdParam(c, 'roundSnapshotId');
+      if (!(await roundSnapshotAllowed(id, roundSeq, roundSnapshotId))) {
         return notFound(c, 'round snapshot not found');
       }
       const body = await parseJsonBody<{ fingerprint?: string }>(c);
@@ -169,12 +169,12 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   );
 
   app.post(
-    '/api/coder/sessions/:id/snapshot/round/:roundMessageId/file/:roundSnapshotId/revert-hunk',
+    '/api/coder/sessions/:id/snapshot/round/:roundSeq/file/:roundSnapshotId/revert-hunk',
     async (c) => {
-      const id = parseIdParam(c);
-      const roundMessageId = parseIdParam(c, 'roundMessageId');
-      const roundSnapshotId = parseIdParam(c, 'roundSnapshotId');
-      if (!roundSnapshotAllowed(id, roundMessageId, roundSnapshotId)) {
+      const id = parseSessionIdParam(c);
+      const roundSeq = parseSeqParam(c, 'roundSeq');
+      const roundSnapshotId = parseSessionRecordIdParam(c, 'roundSnapshotId');
+      if (!(await roundSnapshotAllowed(id, roundSeq, roundSnapshotId))) {
         return notFound(c, 'round snapshot not found');
       }
       const body = await parseJsonBody<{ fingerprint?: string }>(c);
@@ -184,12 +184,12 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   );
 
   app.post(
-    '/api/coder/sessions/:id/snapshot/round/:roundMessageId/file/:roundSnapshotId/accept',
+    '/api/coder/sessions/:id/snapshot/round/:roundSeq/file/:roundSnapshotId/accept',
     async (c) => {
-      const id = parseIdParam(c);
-      const roundMessageId = parseIdParam(c, 'roundMessageId');
-      const roundSnapshotId = parseIdParam(c, 'roundSnapshotId');
-      if (!roundSnapshotAllowed(id, roundMessageId, roundSnapshotId)) {
+      const id = parseSessionIdParam(c);
+      const roundSeq = parseSeqParam(c, 'roundSeq');
+      const roundSnapshotId = parseSessionRecordIdParam(c, 'roundSnapshotId');
+      if (!(await roundSnapshotAllowed(id, roundSeq, roundSnapshotId))) {
         return notFound(c, 'round snapshot not found');
       }
       return c.json(await service.acceptRoundFile(roundSnapshotId));
@@ -197,32 +197,32 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   );
 
   app.post(
-    '/api/coder/sessions/:id/snapshot/round/:roundMessageId/file/:roundSnapshotId/revert',
+    '/api/coder/sessions/:id/snapshot/round/:roundSeq/file/:roundSnapshotId/revert',
     async (c) => {
-      const id = parseIdParam(c);
-      const roundMessageId = parseIdParam(c, 'roundMessageId');
-      const roundSnapshotId = parseIdParam(c, 'roundSnapshotId');
-      if (!roundSnapshotAllowed(id, roundMessageId, roundSnapshotId)) {
+      const id = parseSessionIdParam(c);
+      const roundSeq = parseSeqParam(c, 'roundSeq');
+      const roundSnapshotId = parseSessionRecordIdParam(c, 'roundSnapshotId');
+      if (!(await roundSnapshotAllowed(id, roundSeq, roundSnapshotId))) {
         return notFound(c, 'round snapshot not found');
       }
       return c.json(await service.revertRoundFile(roundSnapshotId));
     },
   );
 
-  app.post('/api/coder/sessions/:id/snapshot/round/:roundMessageId/revert-all', async (c) => {
-    const id = parseIdParam(c);
-    const roundMessageId = parseIdParam(c, 'roundMessageId');
-    if (!roundContextRows(id, roundMessageId)) return notFound(c, 'round not found');
+  app.post('/api/coder/sessions/:id/snapshot/round/:roundSeq/revert-all', async (c) => {
+    const id = parseSessionIdParam(c);
+    const roundSeq = parseSeqParam(c, 'roundSeq');
+    if (!(await roundContextRows(id, roundSeq))) return notFound(c, 'round not found');
     const body = await parseJsonBody<{ confirm?: boolean }>(c);
     if (!body.confirm) return c.json({ error: 'confirm required' }, 400);
-    const result = await service.revertRoundAll('coder', id, roundMessageId);
+    const result = await service.revertRoundAll('coder', id, roundSeq);
     return c.json(result, result.ok ? 200 : 409);
   });
 
-  app.post('/api/coder/sessions/:id/snapshot/round/:roundMessageId/review', async (c) => {
-    const id = parseIdParam(c);
-    const roundMessageId = parseIdParam(c, 'roundMessageId');
-    const rows = roundContextRows(id, roundMessageId);
+  app.post('/api/coder/sessions/:id/snapshot/round/:roundSeq/review', async (c) => {
+    const id = parseSessionIdParam(c);
+    const roundSeq = parseSeqParam(c, 'roundSeq');
+    const rows = await roundContextRows(id, roundSeq);
     if (!rows) return notFound(c, 'round not found');
     const diffs = filterReviewableDiffs((await Promise.all(
       rows.map((row) => service.getRoundDiff(row.id, { context: 3 })),
@@ -232,11 +232,11 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
       0,
     );
     if (pendingHunks === 0) {
-      snapshotStore.replaceRoundReviewFindings(rows.map((row) => row.id), []);
+      await snapshotStore.replaceRoundReviewFindings(rows.map((row) => row.id), []);
       return c.json({ reviews: [], message: 'No pending round diff hunks to review.' });
     }
     let intent: string | null = null;
-    try { intent = buildSessionIntent(sessionStore, id); } catch { /* best effort */ }
+    try { intent = await buildSessionIntent(sessionStore, id); } catch { /* best effort */ }
     const result = await roundReviewPipeline.review({
       sessionKind: 'coder',
       sessionId: id,
@@ -274,7 +274,7 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
         diff_excerpt: finding.diffExcerpt ?? null,
       }];
     });
-    const reviews = snapshotStore.replaceRoundReviewFindings(
+    const reviews = await snapshotStore.replaceRoundReviewFindings(
       rows.map((row) => row.id),
       findings,
     );
@@ -282,7 +282,8 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/coder/sessions/:id/snapshot/file/:baselineId/accept-hunk', async (c) => {
-    const baselineId = parseIdParam(c, 'baselineId');
+    parseSessionIdParam(c);
+    const baselineId = parseSessionRecordIdParam(c, 'baselineId');
     const body = await parseJsonBody<{ fingerprint: string }>(c);
     if (!body.fingerprint) return c.json({ error: 'fingerprint required' }, 400);
     const r = await service.acceptHunk(baselineId, body.fingerprint);
@@ -290,7 +291,8 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/coder/sessions/:id/snapshot/file/:baselineId/revert-hunk', async (c) => {
-    const baselineId = parseIdParam(c, 'baselineId');
+    parseSessionIdParam(c);
+    const baselineId = parseSessionRecordIdParam(c, 'baselineId');
     const body = await parseJsonBody<{ fingerprint: string }>(c);
     if (!body.fingerprint) return c.json({ error: 'fingerprint required' }, 400);
     const r = await service.revertHunk(baselineId, body.fingerprint);
@@ -298,25 +300,27 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/coder/sessions/:id/snapshot/file/:baselineId/accept', async (c) => {
-    const baselineId = parseIdParam(c, 'baselineId');
+    parseSessionIdParam(c);
+    const baselineId = parseSessionRecordIdParam(c, 'baselineId');
     const r = await service.acceptFile(baselineId);
     return c.json(r);
   });
 
   app.post('/api/coder/sessions/:id/snapshot/file/:baselineId/revert', async (c) => {
-    const baselineId = parseIdParam(c, 'baselineId');
+    parseSessionIdParam(c);
+    const baselineId = parseSessionRecordIdParam(c, 'baselineId');
     const r = await service.revertFile(baselineId);
     return c.json(r);
   });
 
   app.post('/api/coder/sessions/:id/snapshot/accept-all', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const r = await service.acceptAll('coder', id);
     return c.json(r);
   });
 
   app.post('/api/coder/sessions/:id/snapshot/revert-all', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ confirm: boolean }>(c);
     if (!body.confirm) return c.json({ error: 'confirm required' }, 400);
     const r = await service.revertAll('coder', id);

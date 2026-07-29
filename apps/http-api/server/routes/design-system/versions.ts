@@ -17,7 +17,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { extname, join, normalize, resolve as resolvePath } from 'node:path';
 import type { Hono } from 'hono';
 import { stream } from 'hono/streaming';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseSessionIdParam, notFound } from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 
 const MIME: Record<string, string> = {
@@ -41,51 +41,51 @@ const MIME: Record<string, string> = {
 export function mountDesignSystemVersionRoutes(app: Hono, deps: ServerDeps): void {
   const { designSystemStore } = deps;
 
-  app.get('/api/design-system/sessions/:id/versions', (c) => {
-    const id = parseIdParam(c);
-    const session = designSystemStore.getSession(id);
+  app.get('/api/design-system/sessions/:id/versions', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
-    return c.json({ versions: designSystemStore.listVersions(id) });
+    return c.json({ versions: await designSystemStore.listVersions(id) });
   });
 
-  app.get('/api/design-system/sessions/:id/versions/:semver', (c) => {
-    const id = parseIdParam(c);
+  app.get('/api/design-system/sessions/:id/versions/:semver', async (c) => {
+    const id = parseSessionIdParam(c);
     const semver = c.req.param('semver') ?? '';
-    const session = designSystemStore.getSession(id);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
-    const version = designSystemStore.getVersionBySemver(id, semver);
+    const version = await designSystemStore.getVersionBySemver(id, semver);
     if (!version) return notFound(c, `Version '${semver}' not found.`);
-    const components = designSystemStore.listComponents(version.id);
+    const components = await designSystemStore.listComponents(version.id);
     return c.json({ version, components });
   });
 
-  app.get('/api/design-system/sessions/:id/versions/:semver/docs', (c) => {
-    const id = parseIdParam(c);
+  app.get('/api/design-system/sessions/:id/versions/:semver/docs', async (c) => {
+    const id = parseSessionIdParam(c);
     const semver = c.req.param('semver') ?? '';
-    const session = designSystemStore.getSession(id);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
-    const version = designSystemStore.getVersionBySemver(id, semver);
+    const version = await designSystemStore.getVersionBySemver(id, semver);
     if (!version) return notFound(c, `Version '${semver}' not found.`);
     return c.body(version.docs_md ?? '', 200, { 'Content-Type': 'text/markdown; charset=utf-8' });
   });
 
-  app.get('/api/design-system/sessions/:id/versions/:semver/components', (c) => {
-    const id = parseIdParam(c);
+  app.get('/api/design-system/sessions/:id/versions/:semver/components', async (c) => {
+    const id = parseSessionIdParam(c);
     const semver = c.req.param('semver') ?? '';
-    const session = designSystemStore.getSession(id);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
-    const version = designSystemStore.getVersionBySemver(id, semver);
+    const version = await designSystemStore.getVersionBySemver(id, semver);
     if (!version) return notFound(c, `Version '${semver}' not found.`);
-    return c.json({ components: designSystemStore.listComponents(version.id) });
+    return c.json({ components: await designSystemStore.listComponents(version.id) });
   });
 
   // Storybook static proxy. Path is everything after `/storybook/`.
   app.get('/api/design-system/sessions/:id/versions/:semver/storybook/*', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const semver = c.req.param('semver') ?? '';
-    const session = designSystemStore.getSession(id);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
-    const version = designSystemStore.getVersionBySemver(id, semver);
+    const version = await designSystemStore.getVersionBySemver(id, semver);
     if (!version) return notFound(c, `Version '${semver}' not found.`);
     if (!version.storybook_path) {
       return c.json({ error: 'No Storybook build for this version.' }, 404);

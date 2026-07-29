@@ -25,7 +25,7 @@ const DEFAULT_WINDOW_MS = 5_000;
 
 /** What the summary needs to know about one pending plan. */
 export interface PendingPlanSummaryEntry {
-  agentRunId: number;
+  agentRunId: string;
   role: string;
   planText: string;
 }

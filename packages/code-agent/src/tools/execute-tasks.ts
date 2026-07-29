@@ -273,7 +273,7 @@ async function handleExecuteTasksInPlanMode(
     // submit_tasks already collected the user's approval — unlock + switch to
     // build, then let the waves run. Fixes the pre-existing dead-end where
     // markTasksApproved() left planApproved=false and execute_tasks got gated.
-    applyPlanApproval(runner, ctx);
+    await applyPlanApproval(runner, ctx);
     return null;
   }
 
@@ -285,7 +285,7 @@ async function handleExecuteTasksInPlanMode(
           .join('\n')}`
       : 'The agent called execute_tasks to start working but has not submitted a written ' +
         'plan or task list. Approve leaving plan mode to begin?';
-  ctx.recordPlan?.(id, planText);
+  await ctx.recordPlan?.(id, planText);
   runner.emit('plan_posted', { type: 'plan', id, plan: planText, kind: 'mutating' });
 
   const raw = await runner.waitForUserInput();
@@ -298,19 +298,19 @@ async function handleExecuteTasksInPlanMode(
 
   if (parsed.interrupted) return err('execute_tasks: plan review interrupted.');
   if (parsed.aborted) {
-    ctx.resolvePlan?.(id, 'aborted', parsed.feedback);
+    await ctx.resolvePlan?.(id, 'aborted', parsed.feedback);
     return err('execute_tasks: plan review aborted by user.');
   }
   if (!parsed.approved) {
-    ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
+    await ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
     return ok(
       `Plan rejected by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} ` +
         `Refine the approach and call submit_plan (or submit_tasks) again before executing.`,
     );
   }
 
-  ctx.resolvePlan?.(id, 'approved', parsed.feedback);
-  const extras = applyPlanApproval(runner, ctx);
+  await ctx.resolvePlan?.(id, 'approved', parsed.feedback);
+  const extras = await applyPlanApproval(runner, ctx);
   return {
     content:
       `Plan approved by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} ` +
@@ -381,7 +381,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
         store: deps.sessionStore,
         sessionId: ctx.runner?.sessionId,
       });
-      persist.recordRunStarted({ runId, mode, startedAt });
+      await persist.recordRunStarted({ runId, mode, startedAt });
 
       // PR-E: token budget tracker. Cap of 0/null means unlimited (gate
       // becomes a no-op). When over, the orchestrator asks the user via
@@ -456,7 +456,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
             for (const task of group.tasks) {
               const blockedBy = firstBlockedDependency(task, statusById);
               if (blockedBy) {
-                const skippedResult = skipTaskDueToDependency(ctx, run, task, blockedBy);
+                const skippedResult = await skipTaskDueToDependency(ctx, run, task, blockedBy);
                 applyStatus(statusById, task.id, skippedResult.status);
                 skipped.push(skippedResult);
                 continue;
@@ -464,13 +464,14 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
               // PR-D: stale-skip check. When inputs are unchanged since
               // the last successful run, skip silently with a synthetic
               // result that the dashboard renders as 'skipped+stale'.
-              const staleVerdict = shouldSkipTask({
+              const staleVerdict = await shouldSkipTask({
                 task,
                 cwd: ctx.cwd ?? process.cwd(),
                 store: deps.sessionStore,
+                sessionId: ctx.runner?.sessionId,
               });
               if (staleVerdict.skip) {
-                const skippedResult = skipTaskAsStale(ctx, run, task, staleVerdict);
+                const skippedResult = await skipTaskAsStale(ctx, run, task, staleVerdict);
                 applyStatus(statusById, task.id, skippedResult.status);
                 skipped.push(skippedResult);
                 continue;
@@ -480,14 +481,14 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
               if (verdict === 'abort') {
                 // User pressed cancel_pending — drop this task AND every
                 // task that would have come after it in this loop.
-                skipped.push(skipTaskAsBudgetCapped(ctx, run, task, 'budget_cap_cancel'));
+                skipped.push(await skipTaskAsBudgetCapped(ctx, run, task, 'budget_cap_cancel'));
                 applyStatus(statusById, task.id, 'skipped');
                 continue;
               }
               if (verdict === 'skip') {
                 // 'stop_after_current' branch — current task already running
                 // elsewhere, just skip the queued ones.
-                skipped.push(skipTaskAsBudgetCapped(ctx, run, task, 'budget_cap'));
+                skipped.push(await skipTaskAsBudgetCapped(ctx, run, task, 'budget_cap'));
                 applyStatus(statusById, task.id, 'skipped');
                 continue;
               }
@@ -528,7 +529,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
               const remainingInThisRun = countRemainingInline(
                 state.tasks, statusById, firstInline.id,
               );
-              openInlineScope(ctx, run, firstInline);
+              await openInlineScope(ctx, run, firstInline);
               openedInlineScope = { task: firstInline, remaining: remainingInThisRun };
               applyStatus(statusById, firstInline.id, 'running');
               break outer;
@@ -567,7 +568,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
 
       const runFinishedAt = new Date().toISOString();
       const runStatus: 'completed' | 'failed' = failedTasks > 0 ? 'failed' : 'completed';
-      persist.recordRunFinished({
+      await persist.recordRunFinished({
         runId,
         status: runStatus,
         finishedAt: runFinishedAt,
@@ -623,8 +624,8 @@ async function runGroupParallel(
   // through (single retry attempt, no per-attempt persist loop). Future work.
   const startedAt = new Date().toISOString();
   for (const t of tasks) {
-    emitTaskRunTaskStarted(ctx, run, t, startedAt, 'subagent');
-    ctx.updateTaskStatus?.(t.id, { status: 'running', started_at: startedAt, mode_used: 'subagent' });
+    await emitTaskRunTaskStarted(ctx, run, t, startedAt, 'subagent');
+    await ctx.updateTaskStatus?.(t.id, { status: 'running', started_at: startedAt, mode_used: 'subagent' });
     ctx.runner?.emit('task_started', { task_id: t.id, mode: 'subagent', started_at: startedAt });
   }
 
@@ -739,7 +740,7 @@ async function runGroupParallel(
       files_modified: [],
       errors: status === 'failed' ? summary : undefined,
     };
-    ctx.updateTaskStatus?.(t.id, {
+    await ctx.updateTaskStatus?.(t.id, {
       status,
       finished_at: finishedAt,
       result: taskResult,
@@ -750,7 +751,7 @@ async function runGroupParallel(
       result: taskResult,
       finished_at: finishedAt,
     });
-    emitTaskRunTaskFinished(ctx, run, t, {
+    await emitTaskRunTaskFinished(ctx, run, t, {
       status,
       summary,
       error: taskResult.errors,
@@ -783,7 +784,7 @@ async function runOneTask(
 ): Promise<TaskRunResult> {
   // Task-level lifecycle (fires ONCE regardless of retry count).
   const taskStartedAt = new Date().toISOString();
-  ctx.updateTaskStatus?.(task.id, { status: 'running', started_at: taskStartedAt, mode_used: 'subagent' });
+  await ctx.updateTaskStatus?.(task.id, { status: 'running', started_at: taskStartedAt, mode_used: 'subagent' });
   ctx.runner?.emit('task_started', { task_id: task.id, mode: 'subagent', started_at: taskStartedAt });
 
   const art = resolveKindArtifacts(task, ctx);
@@ -791,7 +792,7 @@ async function runOneTask(
   const limits = resolveTaskLimit(task, deps.resolveLimitsForProfile?.(taskProfile));
 
   // PR-C: each attempt re-spawns a fresh subagent with the same briefing.
-  // Per-attempt rows land in coder_task_run_items via run.persist; the
+  // Per-attempt records land in the session task-run bundle via run.persist; the
   // dashboard's task_run_task_started/_finished SSEs fire once for the
   // FIRST attempt (so kanban transitions don't flicker) and the FINAL
   // attempt's outcome.
@@ -807,9 +808,16 @@ async function runOneTask(
     if (attemptIdx === 0) {
       // First attempt — emit live SSE start. Subsequent retries persist
       // silently (dashboard will see the final outcome reflect retry count).
-      emitTaskRunTaskStarted(ctx, run, task, attemptStartedAt, 'subagent', 0);
+      await emitTaskRunTaskStarted(
+        ctx,
+        run,
+        task,
+        attemptStartedAt,
+        'subagent',
+        0,
+      );
     } else {
-      run.persist.recordTaskStarted({
+      await run.persist.recordTaskStarted({
         runId: run.runId,
         task,
         waveIdx: run.wave,
@@ -883,11 +891,11 @@ async function runOneTask(
     const summary = raw.finalText || '(no summary)';
     const error = status === 'failed' ? summary : undefined;
 
-    // Per-attempt persistence — separate row in coder_task_run_items.
+    // Per-attempt persistence — separate immutable record in the session bundle.
     // PR-D: include fingerprint so future runs of the same task can
     // skip-stale-compare. Only persist on success — failed attempts
     // get null so we don't accidentally "match" a stale failed state.
-    run.persist.recordTaskFinished({
+    await run.persist.recordTaskFinished({
       runId: run.runId,
       task,
       waveIdx: run.wave,
@@ -914,7 +922,7 @@ async function runOneTask(
     files_modified: [] as string[],
     errors: attemptResult.error,
   };
-  ctx.updateTaskStatus?.(task.id, {
+  await ctx.updateTaskStatus?.(task.id, {
     status: attemptResult.status,
     finished_at: attemptResult.finishedAt,
     result: taskResult,
@@ -928,7 +936,7 @@ async function runOneTask(
   // Emit SSE for dashboard. dispatchWithRetry already persisted the
   // per-attempt rows (including the final attempt), so skip the re-persist
   // here — emit-only mode.
-  emitTaskRunTaskFinished(ctx, run, task, {
+  await emitTaskRunTaskFinished(ctx, run, task, {
     status: attemptResult.status,
     summary: attemptResult.summary,
     error: attemptResult.error,
@@ -970,20 +978,26 @@ function firstBlockedDependency(
  * emit the standard lifecycle events so the dashboard's kanban
  * transitions identically to the singular `execute_task` flow.
  */
-function openInlineScope(
+async function openInlineScope(
   ctx: ToolContext,
   run: TaskRunContext,
   task: CoderTask,
-): void {
+): Promise<void> {
   const startedAt = new Date().toISOString();
-  ctx.updateTaskStatus?.(task.id, {
+  await ctx.updateTaskStatus?.(task.id, {
     status: 'running',
     mode_used: 'inline',
     started_at: startedAt,
   });
   ctx.runner?.beginTaskScope({ id: task.id, files: task.files });
   ctx.runner?.emit('task_started', { task_id: task.id, mode: 'inline', started_at: startedAt });
-  emitTaskRunTaskStarted(ctx, run, task, startedAt, 'inline');
+  await emitTaskRunTaskStarted(
+    ctx,
+    run,
+    task,
+    startedAt,
+    'inline',
+  );
 }
 
 /**
@@ -1038,16 +1052,16 @@ function renderInlineScopeInstruction(task: CoderTask, remaining: number): strin
  * (already computed by the wave loop) so the next dashboard view shows
  * "skipped (inputs_unchanged)" instead of a generic skip.
  */
-function skipTaskAsStale(
+async function skipTaskAsStale(
   ctx: ToolContext,
   run: TaskRunContext,
   task: CoderTask,
   verdict: { reason?: string; fingerprint: string | null },
-): TaskRunResult {
+): Promise<TaskRunResult> {
   const finishedAt = new Date().toISOString();
   const summary = `Skipped: inputs unchanged since last successful run (fingerprint ${verdict.fingerprint ?? '?'}).`;
   const result = { summary, files_modified: [] };
-  ctx.updateTaskStatus?.(task.id, {
+  await ctx.updateTaskStatus?.(task.id, {
     status: 'skipped',
     finished_at: finishedAt,
     result,
@@ -1060,7 +1074,7 @@ function skipTaskAsStale(
   });
   // Persist so the dashboard timeline reflects the skip; carry the
   // fingerprint forward so the next run can also detect staleness.
-  run.persist.recordTaskFinished({
+  await run.persist.recordTaskFinished({
     runId: run.runId,
     task,
     waveIdx: run.wave,
@@ -1123,16 +1137,16 @@ function parseBudgetAnswer(raw: string): BudgetDecision {
  * `skipTaskDueToDependency` — emits lifecycle + persists with the
  * supplied skip_reason so the dashboard distinguishes the cause.
  */
-function skipTaskAsBudgetCapped(
+async function skipTaskAsBudgetCapped(
   ctx: ToolContext,
   run: TaskRunContext,
   task: CoderTask,
   skipReason: string,
-): TaskRunResult {
+): Promise<TaskRunResult> {
   const finishedAt = new Date().toISOString();
   const summary = `Skipped: run token budget exceeded (${skipReason}).`;
   const result = { summary, files_modified: [] };
-  ctx.updateTaskStatus?.(task.id, {
+  await ctx.updateTaskStatus?.(task.id, {
     status: 'skipped',
     finished_at: finishedAt,
     result,
@@ -1143,7 +1157,7 @@ function skipTaskAsBudgetCapped(
     result,
     finished_at: finishedAt,
   });
-  run.persist.recordTaskFinished({
+  await run.persist.recordTaskFinished({
     runId: run.runId,
     task,
     waveIdx: run.wave,
@@ -1170,17 +1184,17 @@ function skipTaskAsBudgetCapped(
   };
 }
 
-function skipTaskDueToDependency(
+async function skipTaskDueToDependency(
   ctx: ToolContext,
   run: TaskRunContext,
   task: CoderTask,
   blockedBy: { id: string; status: TaskStatus | 'missing' },
-): TaskRunResult {
+): Promise<TaskRunResult> {
   const finishedAt = new Date().toISOString();
   const summary =
     `Skipped because dependency ${blockedBy.id} finished with status '${blockedBy.status}'.`;
   const result = { summary, files_modified: [], errors: summary };
-  ctx.updateTaskStatus?.(task.id, {
+  await ctx.updateTaskStatus?.(task.id, {
     status: 'skipped',
     finished_at: finishedAt,
     result,
@@ -1191,7 +1205,7 @@ function skipTaskDueToDependency(
     result,
     finished_at: finishedAt,
   });
-  emitTaskRunTaskFinished(ctx, run, task, {
+  await emitTaskRunTaskFinished(ctx, run, task, {
     status: 'skipped',
     summary,
     usage: { input_tokens: 0, output_tokens: 0 },
@@ -1232,17 +1246,17 @@ function progressToTaskMeta(
   };
 }
 
-function emitTaskRunTaskStarted(
+async function emitTaskRunTaskStarted(
   ctx: ToolContext,
   run: TaskRunContext,
   task: CoderTask,
   startedAt: string,
   mode: TaskRunTaskMode,
   attempt = 0,
-): void {
+): Promise<void> {
   // PR-B: write-through persistence. NOOP_PERSIST when no real store.
   // PR-C: attempt index threads through so retries don't overwrite earlier rows.
-  run.persist.recordTaskStarted({
+  await run.persist.recordTaskStarted({
     runId: run.runId,
     task,
     waveIdx: run.wave,
@@ -1284,7 +1298,7 @@ function emitTaskRunTaskProgress(
   reportTaskRunProgress(ctx, run, task, toolCallCount);
 }
 
-function emitTaskRunTaskFinished(
+async function emitTaskRunTaskFinished(
   ctx: ToolContext,
   run: TaskRunContext,
   task: CoderTask,
@@ -1301,11 +1315,11 @@ function emitTaskRunTaskFinished(
     /** PR-C: when true, skip the persist call — dispatchWithRetry already wrote per-attempt rows. */
     skipPersist?: boolean;
   },
-): void {
-  // PR-B: write-through persistence (upsert into coder_task_run_items).
-  // PR-C: per-attempt persistence — multiple rows per (run, task) when retried.
+): Promise<void> {
+  // PR-B: write-through persistence into the session task-run repository.
+  // PR-C: per-attempt persistence — multiple records per (run, task) when retried.
   if (!result.skipPersist) {
-    run.persist.recordTaskFinished({
+    await run.persist.recordTaskFinished({
       runId: run.runId,
       task,
       waveIdx: run.wave,

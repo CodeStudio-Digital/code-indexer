@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import Database from 'better-sqlite3';
-import type DatabaseConstructor from 'better-sqlite3';
-import { policyEngine255 } from '@mcp/store/migrations/255_policy_engine.js';
-import { policyComparisonLatency256 } from '@mcp/store/migrations/256_policy_comparison_latency.js';
+import {
+  asAgentRunId,
+  asSessionId,
+} from '@mcp/session-storage';
 import { ToolRegistry } from '../registry.js';
 import type { CoderTool } from '../tool.js';
 import type { PolicyContext } from '../policy.js';
@@ -11,8 +11,12 @@ import {
   createPolicyShadowPort,
   type PolicyShadowDeps,
 } from '../policy-shadow-adapter.js';
-
-type DB = InstanceType<typeof DatabaseConstructor>;
+import type {
+  PolicyShadowCapabilitySetWrite,
+  PolicyShadowComparisonWrite,
+  PolicyShadowDecisionWrite,
+  PolicyShadowPersistencePort,
+} from '../policy-shadow-persistence.js';
 
 const FLAGS = [
   'CODER_POLICY_ENGINE_SHADOW',
@@ -22,8 +26,39 @@ const FLAGS = [
   'CODER_POLICY_ENGINE_ENFORCE',
 ] as const;
 
-let db: DB;
 let previous: Record<string, string | undefined>;
+const SESSION_ID = asSessionId('11111111-1111-4111-8111-111111111111');
+const ROOT_RUN_ID = asAgentRunId('22222222-2222-4222-8222-222222222222');
+const FOREGROUND_RUN_ID = asAgentRunId('33333333-3333-4333-8333-333333333333');
+const BACKGROUND_RUN_ID = asAgentRunId('44444444-4444-4444-8444-444444444444');
+const PATH_RUN_ID = asAgentRunId('55555555-5555-4555-8555-555555555555');
+const FILTERED_RUN_ID = asAgentRunId('66666666-6666-4666-8666-666666666666');
+
+interface RecordingPersistence extends PolicyShadowPersistencePort {
+  decisions: PolicyShadowDecisionWrite[];
+  comparisons: PolicyShadowComparisonWrite[];
+  capabilitySets: PolicyShadowCapabilitySetWrite[];
+}
+
+function recordingPersistence(): RecordingPersistence {
+  const persistence: RecordingPersistence = {
+    decisions: [],
+    comparisons: [],
+    capabilitySets: [],
+    async recordDecision(input) {
+      persistence.decisions.push(input);
+    },
+    async recordComparison(input) {
+      persistence.comparisons.push(input);
+    },
+    async recordCapabilitySet(input) {
+      persistence.capabilitySets.push(input);
+    },
+  };
+  return persistence;
+}
+
+let persistence: RecordingPersistence;
 
 function tool(overrides: Partial<CoderTool> & { name: string; source: CoderTool['source'] }): CoderTool {
   return {
@@ -43,13 +78,13 @@ function makeRegistry(): ToolRegistry {
 
 function makeDeps(overrides: Partial<PolicyShadowDeps> = {}, ctx: Partial<PolicyContext> = {}): PolicyShadowDeps {
   return {
-    db,
+    persistence,
     registry: makeRegistry(),
     sessionContext: {
       getLegacyContext: () => ({ planMode: false, planApproved: false, taskScope: null, ...ctx }),
       background: false,
-      sessionId: 'session:test',
-      agentRunId: 'agent-run:test',
+      sessionId: SESSION_ID,
+      agentRunId: ROOT_RUN_ID,
     },
     log: () => undefined,
     ...overrides,
@@ -61,21 +96,16 @@ function invocation(name: string, toolObj: CoderTool | null) {
 }
 
 function comparisonCount(): number {
-  return (db.prepare('SELECT COUNT(*) AS count FROM policy_decision_comparisons').get() as { count: number }).count;
+  return persistence.comparisons.length;
 }
 
 beforeEach(() => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  db.exec('CREATE TABLE coder_sessions (id INTEGER PRIMARY KEY)');
-  policyEngine255.up(db);
-  policyComparisonLatency256.up(db);
+  persistence = recordingPersistence();
   previous = Object.fromEntries(FLAGS.map((f) => [f, process.env[f]]));
   for (const f of FLAGS) delete process.env[f];
 });
 
 afterEach(() => {
-  db.close();
   for (const f of FLAGS) {
     if (previous[f] === undefined) delete process.env[f];
     else process.env[f] = previous[f];
@@ -96,12 +126,10 @@ describe('createPolicyShadowPort', () => {
     expect(result).toEqual({ refuse: false });
     expect(created.metrics.evaluations).toBe(1);
     expect(comparisonCount()).toBe(1);
-    const row = db.prepare('SELECT shadow_effect, agreement, evaluation_ms FROM policy_decision_comparisons').get() as {
-      shadow_effect: string; agreement: number; evaluation_ms: number | null;
-    };
-    expect(row.shadow_effect).toBe('allow');
-    expect(row.agreement).toBe(1);
-    expect(typeof row.evaluation_ms).toBe('number');
+    const row = persistence.comparisons[0];
+    expect(row.shadowEffect).toBe('allow');
+    expect(row.legacyEffect).toBe('allow');
+    expect(typeof row.evaluationMs).toBe('number');
   });
 
   it('shadow on: a plan-mode deny still returns refuse:false without ENFORCE', async () => {
@@ -111,10 +139,10 @@ describe('createPolicyShadowPort', () => {
 
     const result = await created.port(invocation('edit_file', registry.get('edit_file')!));
     expect(result).toEqual({ refuse: false });
-    const row = db.prepare('SELECT shadow_effect, legacy_effect, agreement FROM policy_decision_comparisons').get() as {
-      shadow_effect: string; legacy_effect: string; agreement: number;
-    };
-    expect(row).toEqual({ shadow_effect: 'deny', legacy_effect: 'block', agreement: 1 });
+    expect(persistence.comparisons[0]).toMatchObject({
+      shadowEffect: 'deny',
+      legacyEffect: 'block',
+    });
   });
 
   it('ENFORCE on: refuses a shadow deny with a structured refusal', async () => {
@@ -159,6 +187,23 @@ describe('createPolicyShadowPort', () => {
     expect(comparisonCount()).toBe(0);
   });
 
+  it('contains a filesystem persistence error without dual-writing elsewhere', async () => {
+    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
+    persistence.recordDecision = async () => {
+      throw new Error('bundle unavailable');
+    };
+    const created = createPolicyShadowPort(makeDeps())!;
+    const registry = makeRegistry();
+
+    await expect(
+      created.port(invocation('read_file', registry.get('read_file')!)),
+    ).resolves.toEqual({ refuse: false });
+    expect(created.metrics.evaluations).toBe(1);
+    expect(created.metrics.errors).toBe(1);
+    expect(persistence.decisions).toHaveLength(0);
+    expect(persistence.comparisons).toHaveLength(0);
+  });
+
   it('fails closed opaquely on an internal evaluation error only in ENFORCE', async () => {
     process.env.CODER_POLICY_ENGINE_ENFORCE = '1';
     const created = createPolicyShadowPort(makeDeps())!;
@@ -183,10 +228,8 @@ describe('createPolicyShadowPort', () => {
     await created.port(invocation('read_file', registry.get('read_file')!));
     await created.port(invocation('edit_file', registry.get('edit_file')!));
 
-    const sets = db.prepare('SELECT COUNT(*) AS count FROM resolved_capability_sets').get() as { count: number };
-    const descriptors = db.prepare('SELECT COUNT(*) AS count FROM capability_descriptors').get() as { count: number };
-    expect(sets.count).toBe(1); // once per run, not per invocation
-    expect(descriptors.count).toBe(2);
+    expect(persistence.capabilitySets).toHaveLength(1);
+    expect(persistence.capabilitySets[0].descriptors).toHaveLength(2);
   });
 
   it('scopes the same authority to child foreground/background mode and task paths', async () => {
@@ -219,8 +262,8 @@ describe('createPolicyShadowPort', () => {
         taskScope: null,
       }),
       background: false,
-      sessionId: 'session:test:child:fg',
-      agentRunId: 'agent-run:child:fg',
+      sessionId: SESSION_ID,
+      agentRunId: FOREGROUND_RUN_ID,
     });
     const background = created.createScopedPort({
       getLegacyContext: () => ({
@@ -229,8 +272,8 @@ describe('createPolicyShadowPort', () => {
         taskScope: null,
       }),
       background: true,
-      sessionId: 'session:test:child:bg',
-      agentRunId: 'agent-run:child:bg',
+      sessionId: SESSION_ID,
+      agentRunId: BACKGROUND_RUN_ID,
     });
 
     expect(await foreground(invocation('edit_file', registry.get('edit_file')!)))
@@ -238,14 +281,13 @@ describe('createPolicyShadowPort', () => {
     expect(await background(invocation('edit_file', registry.get('edit_file')!)))
       .toMatchObject({ refuse: true });
 
-    const rows = db.prepare(`
-      SELECT background, effect, reason_code
-      FROM policy_decisions
-      ORDER BY rowid
-    `).all() as Array<{ background: number; effect: string; reason_code: string }>;
-    expect(rows.slice(-2)).toEqual([
-      { background: 0, effect: 'ask', reason_code: 'approval_required' },
-      { background: 1, effect: 'deny', reason_code: 'background_ask_denied' },
+    expect(persistence.decisions.slice(-2).map((row) => ({
+      background: row.background,
+      effect: row.decision.effect,
+      reasonCode: row.decision.reasonCode,
+    }))).toEqual([
+      { background: false, effect: 'ask', reasonCode: 'approval_required' },
+      { background: true, effect: 'deny', reasonCode: 'background_ask_denied' },
     ]);
 
     const pathScoped = created.createScopedPort({
@@ -255,7 +297,8 @@ describe('createPolicyShadowPort', () => {
         taskScope: { id: 'child-scope', files: ['allowed.ts'] },
       }),
       background: false,
-      sessionId: 'session:test:child:path',
+      sessionId: SESSION_ID,
+      agentRunId: PATH_RUN_ID,
     });
     const outside = invocation('edit_file', registry.get('edit_file')!);
     outside.toolInput = { path: 'outside.ts' };
@@ -278,17 +321,17 @@ describe('createPolicyShadowPort', () => {
         taskScope: null,
       }),
       background: false,
-      agentRunId: 'agent-run:filtered-child',
+      sessionId: SESSION_ID,
+      agentRunId: FILTERED_RUN_ID,
       capabilityRegistry: childRegistry,
     });
 
     await child(invocation('read_file', childRegistry.get('read_file')!));
 
-    const row = db.prepare(`
-      SELECT set_json FROM resolved_capability_sets
-      WHERE agent_run_id='agent-run:filtered-child'
-    `).get() as { set_json: string };
-    const set = JSON.parse(row.set_json) as { registered: string[] };
+    const set = persistence.capabilitySets.find(
+      (row) => row.agentRunId === FILTERED_RUN_ID,
+    )?.set;
+    if (!set) throw new Error('filtered child capability set was not recorded');
     expect(set.registered).toEqual(['cap:native:read_file']);
     expect(set.registered).not.toContain('cap:native:edit_file');
   });

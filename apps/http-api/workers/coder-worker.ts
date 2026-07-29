@@ -1,7 +1,7 @@
 /**
  * Coder-session worker entrypoint (P17).
  *
- * One worker_thread per active `coder_sessions.id`. Mirrors the
+ * One worker_thread per active filesystem session UUID. Mirrors the
  * company-worker design but for the simpler coder path (project
  * chat without the CompanyOrchestrator). Inside the worker:
  *
@@ -44,6 +44,8 @@ import {
 // worker_thread has its own, so install before any provider fetch.
 installLlmDispatcher();
 import {
+  closeSharedCentral,
+  getSharedSessionStore,
   runCoder,
   type RunCoderHandle,
   type CoderAttachment,
@@ -139,34 +141,41 @@ import { PluginStorageStore } from '../../../packages/store/src/plugin-storage-s
 import { getSubagentJobManager } from '@mcp/code-agent/tools/subagent-jobs.js';
 import { disposeExecCommandSessions } from '@mcp/code-agent/tools/exec-command.js';
 import { disposeTrackedProcessTrees } from '@mcp/shared/utils/process-tree.js';
+import type {
+  JsonValue,
+  ProjectId,
+  SessionId,
+} from '../../../packages/session-storage/src/index.js';
 
 interface CoderWorkerData {
-  sessionId: number;
+  sessionId: SessionId;
   dbPath: string;
+  sessionContext: {
+    sessionId: SessionId;
+    projectId: ProjectId | null;
+    projectRoot: string | null;
+    bundlePath: string;
+    writerOwnerId: string;
+  };
 }
 
 const port = parentPort;
 if (!port) throw new Error('coder-worker.ts: not running inside a worker_thread');
 
-const { sessionId, dbPath } = workerData as CoderWorkerData;
+const { sessionId, dbPath, sessionContext } = workerData as CoderWorkerData;
+if (sessionContext.sessionId !== sessionId) {
+  throw new Error('coder-worker.ts: session runtime context identity mismatch');
+}
+if (sessionContext.projectId != null && !sessionContext.projectRoot) {
+  throw new Error(
+    `coder-worker.ts: project root unavailable for filesystem session ${sessionId}`,
+  );
+}
+if (!sessionContext.writerOwnerId) {
+  throw new Error('coder-worker.ts: writer owner identity is missing');
+}
 
 const dbConn = openWorkerDb({ dbPath });
-
-function workerProjectRoot(): string | null {
-  try {
-    const row = dbConn.handle
-      .prepare(
-        `SELECT p.root_path AS root
-           FROM coder_sessions s
-           JOIN projects p ON p.id = s.project_id
-          WHERE s.id = ?`,
-      )
-      .get(sessionId) as { root?: string } | undefined;
-    return row?.root ?? null;
-  } catch {
-    return null;
-  }
-}
 
 function listWorkerEnabledPluginRuntime(projectRoot: string | null): {
   toolPlugins: EnabledPlugin[];
@@ -405,23 +414,37 @@ setGlobalDocsResearcher(docsResearcherShim);
 // Verdaccio publish run host-side from this process). Stores are
 // dual-mode (accept a dbPath string) and VerdaccioService reads all its
 // state from the DB, so fresh instances here are equivalent to main's.
-setDesignSystemStore(new DesignSystemStore(dbPath));
+const designSessionStore = getSharedSessionStore(
+  dbPath,
+  sessionContext.writerOwnerId,
+);
+await designSessionStore.ensureCatalog();
+setDesignSystemStore(new DesignSystemStore(designSessionStore));
 setDesignSystemSkillStore(new SkillStore(dbPath));
-// App Studio store — mesmo motivo (app_* tools rodam neste worker).
-setAppStudioStore(new AppStudioStore(dbPath));
+// App Studio operational state is filesystem-only. The worker receives the
+// shared bundle repository/catalog and reads SQLite solely for the essential
+// project-root catalog needed to locate a project-owned bundle.
+setAppStudioStore(new AppStudioStore({
+  repository: designSessionStore.repository,
+  catalog: designSessionStore.catalog,
+  locator: designSessionStore.locator,
+  getProject: (projectId) => {
+    const row = dbConn.handle
+      .prepare('SELECT id, root_path FROM projects WHERE id = ?')
+      .get(projectId) as { id: number; root_path: string } | undefined;
+    return row ? { id: row.id, root_path: row.root_path } : null;
+  },
+}));
 // API client store for the `api_*` agent tools (auto-test/auto-fix). Single
 // `api`-agent sessions run in this worker, so the main-thread binding is null
 // here — re-wire a fresh dual-mode instance. R1: when project-DB routing is on
 // and this session's project has migrated, bind to that project's DB so the
 // agent reads/writes the same `api_*` rows the dashboard does (else they'd
 // diverge); otherwise fall back to the central dbPath (byte-identical to today).
-const apiSessionProjectId = (
-  dbConn.handle.prepare('SELECT project_id AS p FROM coder_sessions WHERE id = ?').get(sessionId) as
-    | { p?: number }
-    | undefined
-)?.p;
 const apiClientDbPath =
-  (apiSessionProjectId != null && routedFeatureDbPath(dbConn.handle, apiSessionProjectId)) || dbPath;
+  (sessionContext.projectId != null
+    && routedFeatureDbPath(dbConn.handle, sessionContext.projectId))
+  || dbPath;
 setApiClientStore(new ApiClientStore(apiClientDbPath));
 // db_* v2 tools — same routed feature-DB path as the api-client store (the
 // db_connections rows live wherever the project's feature tables live).
@@ -459,6 +482,8 @@ interface ActiveRunState {
   detachBusEndListener: () => void;
 }
 let activeRun: ActiveRunState | null = null;
+let stopping = false;
+let stopPreparation: Promise<void> | null = null;
 
 function detachRunForwarders(run: ActiveRunState): void {
   try { run.flushBusEvents(); } catch { /* best-effort */ }
@@ -484,6 +509,54 @@ function releaseCompletedRun(run: ActiveRunState): void {
   run.bus.subscribers.clear();
   run.bus.eventSinks.clear();
   if (activeRun === run) activeRun = null;
+}
+
+/**
+ * Drain the active turn and release the filesystem writer before the worker
+ * thread can be terminated. worker_threads share process.pid with Electron
+ * main, so an abandoned PID-scoped lease cannot be reclaimed safely.
+ */
+function prepareWorkerStop(): Promise<void> {
+  if (stopPreparation) return stopPreparation;
+  stopping = true;
+  stopPreparation = (async () => {
+    try {
+      const run = activeRun;
+      if (run?.runner?.isWaitingForInput()) {
+        // Parked awaiting approval — its checkpoint is already durable.
+      } else if (run) {
+        try {
+          getSubagentJobManager().abortSession(sessionId, 'worker stop');
+        } catch {
+          // best-effort
+        }
+        const handle = run.handle;
+        run.ctrl.abort();
+        if (run.runner) {
+          try { run.runner.abort(); } catch { /* best-effort */ }
+        }
+        if (handle?.done) {
+          await Promise.race([
+            handle.done.catch(() => undefined),
+            new Promise((resolve) => setTimeout(resolve, 4_000)),
+          ]);
+        }
+      }
+    } catch {
+      // Continue to the mandatory lease-release barrier.
+    }
+
+    // Close this session explicitly first. FsSessionStore.close() is designed
+    // as broad best-effort shutdown; the handoff needs a strict per-session
+    // acknowledgement so main never spawns a replacement over a live lease.
+    const sessionStore = getSharedSessionStore(dbPath);
+    const location = await sessionStore.getSessionLocation(sessionId);
+    if (location) {
+      await sessionStore.repository.closeSession(location);
+    }
+    await closeSharedCentral();
+  })();
+  return stopPreparation;
 }
 
 function createActiveRun(runId: number): ActiveRunState {
@@ -806,6 +879,9 @@ interface RunFreshPayload {
 
 bridge.handle('runFresh', async (payload) => {
   recordRpc('runFresh');
+  if (stopping) {
+    throw new Error('coder-worker: worker is stopping');
+  }
   const opts = payload as RunFreshPayload;
   if (activeRun?.inProgress) throw new Error('coder-worker: run already in progress');
   if (activeRun) detachRunForwarders(activeRun);
@@ -817,7 +893,9 @@ bridge.handle('runFresh', async (payload) => {
   activeRun = run;
   let pluginHost: PluginWorkerHost | null = null;
   try {
-    const { toolPlugins, bundles } = listWorkerEnabledPluginRuntime(workerProjectRoot());
+    const { toolPlugins, bundles } = listWorkerEnabledPluginRuntime(
+      sessionContext.projectRoot,
+    );
     let pluginTools: ReturnType<typeof buildPluginTools> | undefined;
     if (toolPlugins.length > 0) {
       pluginHost = new PluginWorkerHost({
@@ -891,7 +969,7 @@ bridge.handle('runFresh', async (payload) => {
     wireRunnerEventsToBus(result.runner, run.bus, { deferTerminalEvent: true });
 
     // Close the public stream only after the terminal assistant/tool pair is
-    // durable. `runner.done` fires before runCoder drains its DB writer; ending
+    // durable. `runner.done` fires before runCoder drains its filesystem writer; ending
     // the SSE there made the dashboard refetch a one-turn-behind transcript.
     void result.transcriptFlushed
       .then((outcome) => {
@@ -950,16 +1028,49 @@ bridge.handle('interruptWait', () => {
   }
 });
 
-bridge.handle('pushUserMessage', (payload) => {
+bridge.handle('pushUserMessage', async (payload) => {
   recordRpc('pushUserMessage');
-  const { content, selectedSkillIds, roundMessageId } = payload as {
+  const { content, selectedSkillIds, operationId } = payload as {
     content: string;
     selectedSkillIds?: string[];
-    roundMessageId?: number;
+    operationId: string;
   };
   const runner = activeRun?.runner;
   if (!runner) throw new Error('coder-worker: no runner — call runFresh first');
+  const roundMessageId = await getSharedSessionStore(dbPath).appendMessage({
+    session_id: sessionId,
+    operation_id: operationId,
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: content }],
+      ...(selectedSkillIds && selectedSkillIds.length > 0
+        ? { selectedSkillIds }
+        : {}),
+    },
+  });
   runner.pushUserMessage(content, { selectedSkillIds, roundMessageId });
+  return { ok: true, roundMessageId };
+});
+
+bridge.handle('appendSessionEvent', async (payload) => {
+  recordRpc('appendSessionEvent');
+  if (stopping) {
+    throw new Error('coder-worker: worker is stopping');
+  }
+  const { event, payload: eventPayload, operationId } = payload as {
+    event: string;
+    payload: JsonValue;
+    operationId: string;
+  };
+  if (!event || !operationId) {
+    throw new Error('coder-worker: appendSessionEvent requires event and operationId');
+  }
+  await getSharedSessionStore(dbPath).appendSessionEvent(
+    sessionId,
+    event,
+    eventPayload,
+    operationId,
+  );
   return { ok: true };
 });
 
@@ -1030,7 +1141,12 @@ bridge.handle('readAgentTranscript', async (payload) => {
   const { findRetainedAgent, renderAgentTranscript } = await import(
     '@mcp/code-agent/tools/read-agent-transcript.js'
   );
-  const agent = findRetainedAgent(sessionId, spawnId, agentRef);
+  const agent = await findRetainedAgent(
+    sessionId,
+    spawnId,
+    agentRef,
+    getSharedSessionStore(dbPath),
+  );
   if (!agent) return { ok: false, reason: 'not_found' };
   // Completed transcripts are spilled to disk; the renderer restores them via
   // the retained pointer, so a spilled agent is still "hasTranscript".
@@ -1050,11 +1166,15 @@ bridge.handle('readAgentTranscript', async (payload) => {
 bridge.handle('swapProvider', async (payload) => {
   recordRpc('swapProvider');
   const { provider, model } = payload as { provider: string; model: string };
-  const runner = activeRun?.runner;
-  if (!runner) return { ok: false, reason: 'no_runner' };
   const { createChatProviderAsync } = await import('@mcp/services/providers/factory.js');
-  runner.swapProvider(await createChatProviderAsync(provider, model));
-  return { ok: true };
+  const nextProvider = await createChatProviderAsync(provider, model);
+  await getSharedSessionStore(
+    dbPath,
+    sessionContext.writerOwnerId,
+  ).updateSessionProvider(sessionId, provider, nextProvider.model);
+  const runner = activeRun?.runner;
+  if (runner) runner.swapProvider(nextProvider);
+  return { ok: true, activeRunner: Boolean(runner), model: nextProvider.model };
 });
 
 bridge.handle('abort', () => {
@@ -1076,9 +1196,6 @@ bridge.handle('abort', () => {
 
 bridge.handle('stop', async () => {
   recordRpc('stop');
-  try { await workerDocSearch.dispose(); } catch { /* telemetry is best-effort */ }
-  try { disposeExecCommandSessions('coder-worker-stop'); } catch { /* best-effort */ }
-  try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
   // `stop` is the EVICT/shutdown path (WorkerHost.evict → dispose). It must
   // NOT abort an interactive pause: `runner.abort()` resolves waitForUserInput
   // with {aborted:true}, the tool returns "aborted by user", and the eventual
@@ -1087,30 +1204,32 @@ bridge.handle('stop', async () => {
   // durably checkpointed (host `awaiting_input` hook), so leave the turn
   // PARKED; the dangling tool_use is recovered by findPendingInteraction on
   // the next open. Explicit user aborts go through the separate `abort` RPC.
-  try {
-    const run = activeRun;
-    if (run?.runner?.isWaitingForInput()) {
-      // Parked awaiting approval — durable already; do nothing destructive.
-      return { ok: true };
-    }
-    if (run) {
-      // Normal in-flight turn: abort and wait (bounded) for the run to settle
-      // so flushPendingTurn + drainSession land before the worker is killed.
-      // Also kill any background subagent jobs — the worker is going away.
-      try { getSubagentJobManager().abortSession(sessionId, 'worker stop'); } catch { /* best-effort */ }
-      const handle = run.handle;
-      run.ctrl.abort();
-      if (run.runner) {
-        try { run.runner.abort(); } catch { /* best-effort */ }
-      }
-      if (handle?.done) {
-        await Promise.race([
-          handle.done.catch(() => undefined),
-          new Promise((resolve) => setTimeout(resolve, 4000)),
-        ]);
-      }
-    }
-  } catch { /* best-effort */ }
+  await prepareWorkerStop();
+  try { await workerDocSearch.dispose(); } catch { /* telemetry is best-effort */ }
+  try { disposeExecCommandSessions('coder-worker-stop'); } catch { /* best-effort */ }
+  try { await disposeTrackedProcessTrees(); } catch { /* best-effort */ }
+  return { ok: true };
+});
+
+// Separate acknowledgement used by CoderWorkerPool before generic eviction.
+// This keeps the writer barrier independent from slower doc/process cleanup.
+bridge.handle('acquireSessionWriter', async () => {
+  recordRpc('acquireSessionWriter');
+  const sessionStore = getSharedSessionStore(
+    dbPath,
+    sessionContext.writerOwnerId,
+  );
+  const location = await sessionStore.getSessionLocation(sessionId);
+  if (!location || location.bundle_path !== sessionContext.bundlePath) {
+    throw new Error(`Filesystem session ${sessionId} moved before worker writer acquisition`);
+  }
+  await sessionStore.repository.primeSession(location);
+  return { ok: true };
+});
+
+bridge.handle('releaseSessionWriter', async () => {
+  recordRpc('releaseSessionWriter');
+  await prepareWorkerStop();
   return { ok: true };
 });
 

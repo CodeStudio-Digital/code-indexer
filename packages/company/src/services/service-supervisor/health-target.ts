@@ -37,7 +37,7 @@ export type HealthTarget =
 export type LocalHealthTarget = Extract<HealthTarget, { kind: 'local' }>;
 
 /** serviceId under which a session's host process reports health (B8). */
-export function localServiceId(sessionId: number): string {
+export function localServiceId(sessionId: string): string {
   return `local:${sessionId}`;
 }
 

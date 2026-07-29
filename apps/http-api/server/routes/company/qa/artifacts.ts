@@ -20,7 +20,10 @@ import type { Hono } from 'hono';
 import * as fs from 'node:fs/promises';
 import * as nodePath from 'node:path';
 import type { ServerDeps } from '../../../deps.js';
-import { parseIdParam } from '../../_helpers.js';
+import {
+  parseSessionIdParam,
+} from '../../_helpers.js';
+import { isUuid } from '@mcp/session-storage';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import { mimeForExtension } from '@mcp/services/qa/parsers/mime-for-extension.js';
 import { rewritePlaywrightReportHtml } from '@mcp/services/qa/parsers/rewrite-playwright-report.js';
@@ -74,24 +77,24 @@ function normaliseService(raw: unknown): string {
  * contains the file. Returns null when nothing matches — caller falls
  * back to the live sandbox.
  *
- * Pure-ish: uses `qaTestRunStore.listRuns` + `fs.access`. Cap how many
+ * Pure-ish: uses `qaTestRunStore.listRuns` + filesystem probes. Cap how many
  * runs we look at so a session with thousands of runs doesn't fan out.
  */
 const PERSIST_LOOKUP_LIMIT = 20;
 
 async function findPersistedArtifact(
   deps: Pick<ServerDeps, 'qaTestRunStore'>,
-  opts: { sessionId: number; serviceId: string; relPath: string; hintRunId?: number },
-): Promise<{ absolute: string; runId: number } | null> {
-  const candidates: Array<{ runId: number; persistedPath: string }> = [];
-  if (typeof opts.hintRunId === 'number') {
-    const run = deps.qaTestRunStore.getRun(opts.hintRunId);
+  opts: { sessionId: string; serviceId: string; relPath: string; hintRunId?: string },
+): Promise<{ absolute: string; runId: string } | null> {
+  const candidates: Array<{ runId: string; persistedPath: string }> = [];
+  if (opts.hintRunId) {
+    const run = await deps.qaTestRunStore.getRun(opts.hintRunId);
     if (run?.report_persisted_path && run.company_session_id === opts.sessionId) {
       candidates.push({ runId: run.id, persistedPath: run.report_persisted_path });
     }
   }
   if (candidates.length === 0) {
-    const runs = deps.qaTestRunStore.listRuns({
+    const runs = await deps.qaTestRunStore.listRuns({
       company_session_id: opts.sessionId,
       service_id: opts.serviceId === 'main' ? undefined : opts.serviceId,
       limit: PERSIST_LOOKUP_LIMIT,
@@ -119,10 +122,8 @@ async function findPersistedArtifact(
   return null;
 }
 
-function parseHintRunId(raw: string | undefined): number | undefined {
-  if (!raw) return undefined;
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : undefined;
+function parseHintRunId(raw: string | undefined): string | undefined {
+  return raw && isUuid(raw) ? raw.toLowerCase() : undefined;
 }
 
 export function mountQaArtifactRoutes(app: Hono, deps: ServerDeps): void {
@@ -132,7 +133,7 @@ export function mountQaArtifactRoutes(app: Hono, deps: ServerDeps): void {
   // v4.5: tries the persisted host copy FIRST (survives sandbox
   // teardown), then falls back to the live sandbox.
   app.get('/api/company/sessions/:id/qa/artifact', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     const path = (c.req.query('path') ?? '').replace(/^\/+/, '');
     if (!isAllowedArtifactPath(path)) {
       return c.json(
@@ -206,7 +207,7 @@ export function mountQaArtifactRoutes(app: Hono, deps: ServerDeps): void {
   // GET /qa/playwright-report?service=&file=&run= — HTML/asset serve with rewrite.
   // v4.5: persisted host copy is tried first; sandbox is the fallback.
   app.get('/api/company/sessions/:id/qa/playwright-report', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     let serviceId: string;
     try {
       serviceId = normaliseService(c.req.query('service'));
@@ -291,7 +292,7 @@ export function mountQaArtifactRoutes(app: Hono, deps: ServerDeps): void {
   // /qa/artifact?service=main. Preserves tooling that hardcoded the old
   // URL (browser bookmarks, agent-generated links pre-v4.2).
   app.get('/api/company/sessions/:id/qa/trace', (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     const path = c.req.query('path') ?? '';
     const sp = new URLSearchParams();
     sp.set('service', 'main');

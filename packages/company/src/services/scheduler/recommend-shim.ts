@@ -1,3 +1,5 @@
+import type { CompanySessionId } from '@mcp/session-storage';
+
 /**
  * Worker-side recommender shim (Phase 2 — "brain → hands").
  *
@@ -13,7 +15,7 @@
  */
 
 export interface CompanyRecommendInput {
-  companySessionId: number;
+  companySessionId: CompanySessionId;
   /** The card's title + description — what we want a role for. */
   taskText: string;
   /** How many ranked roles to return (default 1). */

@@ -22,7 +22,7 @@ describe('renderPreflightHint', () => {
     expect(hint).toBe([
       '<preflight>',
       'task_kind: bugfix',
-      'goal_lifecycle: for non-trivial work, when both create_goal and update_goal are available, include create_goal in the first assistant tool-call batch before substantive tools; do not defer it until completion.',
+      'goal_lifecycle: optional durable context and telemetry only; it never authorizes tools or blocks completion. Use create_goal when cross-turn continuity is useful. update_goal completion persists immediately and any verification health is advisory.',
       'bug_workflow: reproduce the defect BEFORE touching production code. ' +
         '1) build a reproduction that fails for the expected reason; ' +
         '2) find the root cause with evidence; ' +

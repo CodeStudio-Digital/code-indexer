@@ -34,7 +34,10 @@ import {
   type PolicyContext,
   type PolicyDecision as LegacyPolicyDecision,
 } from './policy.js';
-import { shadowToLegacyDimension, type LegacyEffect } from '@mcp/store/control-plane/policy-decision-store.js';
+import {
+  shadowToLegacyDimension,
+  type LegacyPolicyEffect,
+} from './policy-shadow-persistence.js';
 
 export type PolicySourceType =
   | 'system'
@@ -85,7 +88,7 @@ export interface PolicyEvaluationRequest {
 }
 
 export interface PolicyComparison {
-  legacyEffect: LegacyEffect;
+  legacyEffect: LegacyPolicyEffect;
   shadowEffect: PolicyEffect;
   agreement: boolean;
 }
@@ -202,7 +205,7 @@ export function evaluatePolicyShadow(request: PolicyEvaluationRequest): PolicyEv
     },
   };
 
-  const legacyEffect: LegacyEffect = legacyResult.allowed ? 'allow' : 'block';
+  const legacyEffect: LegacyPolicyEffect = legacyResult.allowed ? 'allow' : 'block';
   const shadowEffect = effect;
   const comparison: PolicyComparison = {
     legacyEffect,

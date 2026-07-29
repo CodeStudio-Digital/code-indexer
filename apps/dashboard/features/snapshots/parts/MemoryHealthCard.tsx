@@ -33,7 +33,7 @@ interface DistillEntry {
 interface DryRunResult {
   ok: boolean;
   step?: string;
-  sessionId?: number;
+  sessionId?: string;
   binding?: { provider: string; kind: string; model: string; resolvedFrom: string } | null;
   diag?: { outcome: string; httpStatus?: number; errorSnippet?: string; rawChars: number; latencyMs: number };
   rawResponse?: string;

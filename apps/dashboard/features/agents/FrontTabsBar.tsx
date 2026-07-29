@@ -13,12 +13,12 @@ interface FrontTabsBarProps {
   /** Active sub-sessions (children of the parent). */
   children: CompanySession[];
   /** Currently-selected tab session id. Equals `parent.id` when Main is active. */
-  activeSessionId: number | null;
-  onSelect: (sessionId: number) => void;
+  activeSessionId: string | null;
+  onSelect: (sessionId: string) => void;
   onCreate: (name: string) => Promise<CompanySession | null> | CompanySession | null;
-  onArchive: (childId: number) => Promise<boolean> | boolean;
+  onArchive: (childId: string) => Promise<boolean> | boolean;
   /** Rename either a child OR the parent (uses sessionId, not childId). */
-  onRename: (sessionId: number, name: string) => Promise<boolean> | boolean;
+  onRename: (sessionId: string, name: string) => Promise<boolean> | boolean;
 }
 
 /**
@@ -54,12 +54,12 @@ export function FrontTabsBar({
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draftLabel, setDraftLabel] = useState('');
   /** Sessions whose mutation (rename/archive) is currently in flight. */
-  const [pending, setPending] = useState<Set<number>>(new Set());
+  const [pending, setPending] = useState<Set<string>>(new Set());
 
-  function markPending(id: number, on: boolean) {
+  function markPending(id: string, on: boolean) {
     setPending((prev) => {
       const next = new Set(prev);
       if (on) next.add(id);
@@ -68,7 +68,7 @@ export function FrontTabsBar({
     });
   }
 
-  async function commitRename(sessionId: number) {
+  async function commitRename(sessionId: string) {
     const trimmed = draftLabel.trim();
     if (!trimmed) {
       setRenamingId(null);
@@ -163,7 +163,7 @@ export function FrontTabsBar({
     }
   }
 
-  function handleSelect(sessionId: number) {
+  function handleSelect(sessionId: string) {
     // Defensive: a stale tab reference (e.g. between an archive request
     // and its server response) would route the stream hook at a deleted
     // session. Verify the id still exists locally before committing.
@@ -172,7 +172,7 @@ export function FrontTabsBar({
     onSelect(sessionId);
   }
 
-  // Render order: parent first (Main), then children by id.
+  // Render order: parent first (Main), then the already-canonical child order.
   const tabs: Array<{ session: CompanySession; isParent: boolean; label: string }> = [
     { session: parent, isParent: true, label: parent.name || t('fronts.main', 'Main') },
     ...children.map((c) => ({ session: c, isParent: false, label: c.name })),

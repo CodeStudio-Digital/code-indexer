@@ -7,8 +7,8 @@ import type { SnapshotFileSummary } from './types.js';
 
 interface Props {
   files: SnapshotFileSummary[];
-  selectedBaselineId: number | null;
-  onSelect: (baselineId: number) => void;
+  selectedBaselineId: string | null;
+  onSelect: (baselineId: string) => void;
   showClosed: boolean;
   onToggleShowClosed: (v: boolean) => void;
   /** When true, render the project name as a small label above the

@@ -1,10 +1,7 @@
-/**
- * buildVerifyEvidence only needs `.prepare(sql).all(...)` — a stub stands in
- * for better-sqlite3 (whose native binding is Electron-ABI in this repo and
- * cannot load under plain-node vitest).
- */
 import { describe, it, expect } from 'vitest';
+import { asSessionId } from '@mcp/session-storage';
 import { buildVerifyEvidence, formatVerifyEvidence } from '../review-evidence.js';
+import type { FsReviewEvidenceSource } from '../../sessions/fs-store/review-evidence-repository.js';
 
 type Row = {
   args_json: string;
@@ -13,20 +10,20 @@ type Row = {
   created_at: string;
 };
 
-function stubDb(toolCalls: Row[], editedFiles: Array<{ file_path: string; applied_at: string }>) {
+const SESSION_ID = asSessionId('00000000-0000-4000-8000-000000000001');
+
+function stubSource(
+  toolCalls: Row[],
+  editedFiles: Array<{ file_path: string; applied_at: string }>,
+): FsReviewEvidenceSource {
   return {
-    prepare(sql: string) {
-      if (sql.includes('coder_tool_calls')) {
-        return { all: () => [...toolCalls].reverse() }; // ORDER BY id DESC
-      }
-      return {
-        all: (_sessionId: number, after: string) =>
-          editedFiles
-            .filter((e) => e.applied_at >= after)
-            .map((e) => ({ file_path: e.file_path, applied_at: e.applied_at })),
-      };
+    async listReviewEvidenceToolCalls() {
+      return [...toolCalls].reverse();
     },
-  } as unknown as Parameters<typeof buildVerifyEvidence>[0];
+    async listReviewEvidenceEdits() {
+      return [...editedFiles];
+    },
+  };
 }
 
 const call = (command: string, at: string, result = 'done exit=0', isError = false): Row => ({
@@ -37,8 +34,8 @@ const call = (command: string, at: string, result = 'done exit=0', isError = fal
 });
 
 describe('buildVerifyEvidence', () => {
-  it('finds the last verify-ish command and parses its exit code', () => {
-    const db = stubDb(
+  it('finds the last verify-ish command and parses its exit code', async () => {
+    const source = stubSource(
       [
         call('ls -la', '2026-07-14 10:00:00'),
         call('pnpm test', '2026-07-14 10:05:00', 'suite ok exit=0'),
@@ -46,50 +43,56 @@ describe('buildVerifyEvidence', () => {
       ],
       [],
     );
-    const e = buildVerifyEvidence(db, 1)!;
+    const e = (await buildVerifyEvidence(source, SESSION_ID))!;
     expect(e.lastVerify).toMatchObject({ command: 'pnpm test', exitCode: 0 });
     expect(e.verifyCount).toBe(1);
     expect(e.filesEditedAfter).toEqual([]);
   });
 
-  it('reports files edited AFTER the last verify run as stale', () => {
-    const db = stubDb(
+  it('reports files edited AFTER the last verify run as stale', async () => {
+    const source = stubSource(
       [call('pnpm typecheck', '2026-07-14 10:00:00', 'exit=0')],
       [
         { file_path: 'src/before.ts', applied_at: '2026-07-14 09:59:00' },
         { file_path: 'src/after.ts', applied_at: '2026-07-14 10:01:00' },
       ],
     );
-    const e = buildVerifyEvidence(db, 1)!;
+    const e = (await buildVerifyEvidence(source, SESSION_ID))!;
     expect(e.filesEditedAfter).toEqual(['src/after.ts']);
     expect(formatVerifyEvidence(e)).toContain('STALE');
     expect(formatVerifyEvidence(e)).toContain('src/after.ts');
   });
 
-  it('reports same-second edits as ambiguous instead of silently fresh', () => {
-    const db = stubDb(
+  it('reports same-second edits as ambiguous instead of silently fresh', async () => {
+    const source = stubSource(
       [call('pnpm test', '2026-07-14 10:00:00', 'exit=0')],
       [{ file_path: 'src/same-second.ts', applied_at: '2026-07-14 10:00:00' }],
     );
-    const e = buildVerifyEvidence(db, 1)!;
+    const e = (await buildVerifyEvidence(source, SESSION_ID))!;
     expect(e.filesEditedAfter).toEqual([]);
     expect(e.filesEditedAtSameTime).toEqual(['src/same-second.ts']);
     expect(formatVerifyEvidence(e)).toContain('AMBIGUOUS');
     expect(formatVerifyEvidence(e)).toContain('rerun verification');
   });
 
-  it('declares the session unverified when no verify command ran', () => {
-    const e = buildVerifyEvidence(stubDb([call('ls', '2026-07-14 10:00:00')], []), 1)!;
+  it('declares the session unverified when no verify command ran', async () => {
+    const e = (await buildVerifyEvidence(
+      stubSource([call('ls', '2026-07-14 10:00:00')], []),
+      SESSION_ID,
+    ))!;
     expect(e.lastVerify).toBeNull();
     expect(formatVerifyEvidence(e)).toContain('UNVERIFIED');
   });
 
-  it('degrades to null on a store error instead of throwing', () => {
+  it('degrades to null on a store error instead of throwing', async () => {
     const broken = {
-      prepare() {
+      async listReviewEvidenceToolCalls() {
         throw new Error('no such table');
       },
-    } as unknown as Parameters<typeof buildVerifyEvidence>[0];
-    expect(buildVerifyEvidence(broken, 1)).toBeNull();
+      async listReviewEvidenceEdits() {
+        return [];
+      },
+    } satisfies FsReviewEvidenceSource;
+    await expect(buildVerifyEvidence(broken, SESSION_ID)).resolves.toBeNull();
   });
 });

@@ -15,11 +15,12 @@
  * renders it. The TOFU host-key flow lives here, in one place.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, X, AlertCircle, Server, Pencil, Trash2, Loader2, ChevronRight, TerminalSquare, ArrowRightLeft, Play, FolderOpen, ShieldCheck, RotateCw, Repeat, Search, Import, Share2 } from 'lucide-react';
 import type { SshConnectSpec, SshHostKeyInfo } from '@mcp/api-bus';
 import { ExponentialBackoff, sleep } from '@mcp/shared/sse/BackoffStrategy.js';
+import { isUnencryptedSecret } from '@mcp/secret-box';
 import { apiCall, electronApi } from '../../lib/api-client.js';
 import { cn } from '../../lib/utils.js';
 import { confirm } from '../../components/ui/prompt-dialog.js';
@@ -40,6 +41,7 @@ import {
   sshHostKey,
   type HostKeyDecision,
 } from './api.js';
+import { groupHosts, SHARED, UNGROUPED } from './host-grouping.js';
 import { HostEditDialog } from './HostEditDialog.js';
 import { HostKeyTrustPrompt } from './HostKeyTrustPrompt.js';
 import { TunnelsPanel } from './tunnels/TunnelsPanel.js';
@@ -56,8 +58,7 @@ interface SshPanelProps {
 }
 
 const EMPTY_SHELLS: readonly SshShell[] = Object.freeze([]);
-const UNGROUPED = ' ungrouped';
-const SHARED = ' shared';
+// Grouping rules live in host-grouping.ts so they can be memoized + tested.
 
 interface TrustRequest {
   info: SshHostKeyInfo;
@@ -298,31 +299,19 @@ export function SshPanel({ projectId }: SshPanelProps) {
     );
   }
 
-  // Filter by a free-text query over label / hostname / username / group / tags.
-  const q = hostQuery.trim().toLowerCase();
-  const filteredHosts = q
-    ? hosts.filter((h) =>
-        [h.label, h.hostname, h.username, h.group_name ?? '', h.tags_json]
-          .join(' ')
-          .toLowerCase()
-          .includes(q),
-      )
-    : hosts;
+  // Hosts whose credential columns hold something that was never encrypted —
+  // either an untagged legacy write (from when a missing keychain bridge
+  // silently passed plaintext through) or an opted-in `dev-plain:` blob. Those
+  // rows already sit on disk in the clear; nothing else surfaces them, because
+  // a raw password looks exactly like a password.
+  const insecureHosts = hosts.filter((h) =>
+    [h.enc_password, h.enc_private_key, h.enc_passphrase].some(isUnencryptedSecret),
+  ).length;
 
-  // Shared hosts (visible in every project) get a pinned group at the top; the
-  // rest group by group_name (null → ungrouped, sorted last).
-  const sharedHosts = filteredHosts.filter((h) => h.is_shared);
-  const localHosts = filteredHosts.filter((h) => !h.is_shared);
-  const groups = new Map<string, SshHost[]>();
-  for (const h of localHosts) {
-    const key = h.group_name?.trim() || UNGROUPED;
-    (groups.get(key) ?? groups.set(key, []).get(key)!).push(h);
-  }
-  if (sharedHosts.length > 0) groups.set(SHARED, sharedHosts);
-  const localKeys = [...groups.keys()]
-    .filter((k) => k !== SHARED)
-    .sort((a, b) => (a === UNGROUPED ? 1 : b === UNGROUPED ? -1 : a.localeCompare(b)));
-  const groupKeys = sharedHosts.length > 0 ? [SHARED, ...localKeys] : localKeys;
+  // Filter + group. Memoized because it ran in the render body on EVERY render
+  // — including once per keystroke in the search box, and once per progress
+  // frame while a transfer was streaming.
+  const { groups, groupKeys } = useMemo(() => groupHosts(hosts, hostQuery), [hosts, hostQuery]);
 
   return (
     <div className="h-full flex min-h-0">
@@ -360,6 +349,15 @@ export function SshPanel({ projectId }: SshPanelProps) {
             </button>
           </div>
         </div>
+        {insecureHosts > 0 && (
+          <div className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+            <div className="flex items-center gap-1 font-medium">
+              <AlertCircle className="h-3 w-3 shrink-0" />
+              {t('panel.insecureTitle')}
+            </div>
+            <p className="mt-0.5 text-muted-foreground">{t('panel.insecureBody', { count: insecureHosts })}</p>
+          </div>
+        )}
         {hosts.length > 4 && (
           <div className="shrink-0 border-b px-2 py-1.5">
             <div className="relative">

@@ -61,7 +61,7 @@ export interface AutoFixOptions {
   onRevalidate?: () => void;
 }
 
-export function useAutoFix(sessionId: number, problems: Problem[], opts?: AutoFixOptions) {
+export function useAutoFix(projectId: number, problems: Problem[], opts?: AutoFixOptions) {
   const [enabled, setEnabledState] = useState(readEnabled);
   const [mode, setModeState] = useState<AutoFixMode>(readMode);
   const [pendingFix, setPendingFix] = useState<PendingFix | null>(null);
@@ -99,13 +99,13 @@ export function useAutoFix(sessionId: number, problems: Problem[], opts?: AutoFi
     (target: Problem, via: 'auto' | 'review') => {
       attempts.current.set(target.signature, (attempts.current.get(target.signature) ?? 0) + 1);
       lastFireAt.current = Date.now();
-      recordAutoFix(sessionId, { ts: Date.now(), label: target.label, via });
+      recordAutoFix(projectId, { ts: Date.now(), label: target.label, via });
       requestStudioSend(
-        sessionId,
+        projectId,
         `Auto-fix: resolve this error, then confirm the preview compiles.\n\n${formatProblem(target.raw)}`,
       );
     },
-    [sessionId],
+    [projectId],
   );
 
   const acceptPendingFix = useCallback(() => {
@@ -133,7 +133,7 @@ export function useAutoFix(sessionId: number, problems: Problem[], opts?: AutoFi
     if (!enabled) return;
     const tick = () => {
       const now = Date.now();
-      const busyNow = isAgentBusy(sessionId);
+      const busyNow = isAgentBusy(projectId);
       const decision = decideAutoFix({
         problems,
         attempts: attempts.current,
@@ -161,7 +161,7 @@ export function useAutoFix(sessionId: number, problems: Problem[], opts?: AutoFi
     };
     const id = setInterval(tick, TICK_MS);
     return () => clearInterval(id);
-  }, [enabled, mode, problems, sessionId, dispatchFix]);
+  }, [enabled, mode, problems, projectId, dispatchFix]);
 
   return {
     autoFixEnabled: enabled,

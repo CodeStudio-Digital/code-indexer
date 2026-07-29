@@ -37,7 +37,7 @@ export type SupervisionState =
   | 'FAILED_RESURRECT';
 
 export interface BreakerStatusSnapshot {
-  agents: Array<{ agentRunId: number; recentAttempts: number; tripped: boolean }>;
+  agents: Array<{ agentRunId: string; recentAttempts: number; tripped: boolean }>;
   roles: Array<{ role: string; recentFailures: number; quarantinedUntilMs: number | null }>;
   globalIncidentsInWindow: number;
   readOnlyUntilMs: number | null;
@@ -55,7 +55,7 @@ export interface SupervisorStatus {
 }
 
 export interface SupervisorSessionStatus {
-  sessionId: number;
+  sessionId: string;
   status: SupervisorStatus | null;
 }
 
@@ -65,9 +65,9 @@ export interface StatusResponse {
 }
 
 export interface IncidentRow {
-  id: number;
-  agentRunId: number | null;
-  companySessionId: number | null;
+  id: string;
+  agentRunId: string | null;
+  companySessionId: string | null;
   incidentKind: string;
   fromState: SupervisionState | null;
   attemptedToState: SupervisionState | null;
@@ -81,9 +81,9 @@ export interface IncidentRow {
 
 /** Envelope shape from the SSE `incident` event. */
 export interface SupervisorIncidentEnvelope {
-  sessionId: number;
+  sessionId: string;
   kind: string;
-  agentRunId: number | null;
+  agentRunId: string | null;
   fromState?: string;
   attemptedTo?: string;
   detail: string;
@@ -97,39 +97,39 @@ export async function fetchSupervisorStatus(): Promise<StatusResponse> {
 }
 
 export async function fetchSupervisorIncidents(
-  sessionId: number,
+  sessionId: string,
   limit: number = 50,
-): Promise<{ sessionId: number; incidents: IncidentRow[] }> {
+): Promise<{ sessionId: string; incidents: IncidentRow[] }> {
   const r = await fetch(
     `${apiBaseUrl()}/api/admin/supervisor/incidents?sessionId=${sessionId}&limit=${limit}`,
   );
   if (!r.ok) throw new Error(`incidents ${r.status}`);
-  return (await r.json()) as { sessionId: number; incidents: IncidentRow[] };
+  return (await r.json()) as { sessionId: string; incidents: IncidentRow[] };
 }
 
 export async function releaseRoleQuarantine(
-  sessionId: number,
+  sessionId: string,
   role: string,
-): Promise<{ released: boolean; sessionId: number; role: string }> {
+): Promise<{ released: boolean; sessionId: string; role: string }> {
   const r = await fetch(`${apiBaseUrl()}/api/admin/supervisor/release-quarantine`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId, role }),
   });
   if (!r.ok) throw new Error(`release-quarantine ${r.status}`);
-  return (await r.json()) as { released: boolean; sessionId: number; role: string };
+  return (await r.json()) as { released: boolean; sessionId: string; role: string };
 }
 
 export async function releaseReadOnlyMode(
-  sessionId: number,
-): Promise<{ released: boolean; sessionId: number }> {
+  sessionId: string,
+): Promise<{ released: boolean; sessionId: string }> {
   const r = await fetch(`${apiBaseUrl()}/api/admin/supervisor/release-read-only`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ sessionId }),
   });
   if (!r.ok) throw new Error(`release-read-only ${r.status}`);
-  return (await r.json()) as { released: boolean; sessionId: number };
+  return (await r.json()) as { released: boolean; sessionId: string };
 }
 
 /**

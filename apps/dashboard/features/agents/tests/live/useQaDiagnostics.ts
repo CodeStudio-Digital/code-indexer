@@ -20,7 +20,7 @@ export interface UseQaDiagnosticsResult {
 }
 
 export function useQaDiagnostics(
-  sessionId: number,
+  sessionId: string,
   enabled: boolean,
 ): UseQaDiagnosticsResult {
   const [data, setData] = useState<QaDiagnostics | null>(null);

@@ -7,7 +7,7 @@ import { groupSkillsByNamespace } from '@mcp/code-agent/skills/namespace.js';
 import { cn } from '../../../lib/utils.js';
 
 interface SkillsSectionProps {
-  sessionId: number;
+  sessionId: string;
   selected: string[];
   onToggleSelect: (skillId: string) => void;
 }
@@ -106,7 +106,7 @@ const SkillGroup = memo(function SkillGroup({
   onToggleSelect,
   forceOpen,
 }: {
-  sessionId: number;
+  sessionId: string;
   namespace: string;
   items: SessionSkill[];
   selectedSet: Set<string>;

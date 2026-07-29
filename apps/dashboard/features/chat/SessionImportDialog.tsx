@@ -19,14 +19,14 @@ type PreviewReference = Omit<Reference, 'source'> & { source?: Source };
 interface Candidate {
   source: Source; external_id: string; title: string; cwd: string | null; updated_at: string | null;
   source_model: string | null; source_path: string; size_bytes: number; reference: Reference;
-  matches_project?: boolean; already_imported_session_id?: number | null;
+  matches_project?: boolean; already_imported_session_id?: string | null;
 }
 interface Preview extends Candidate {
   fingerprint: string; has_source_summary: boolean; reference: Reference & { fingerprint: string };
   stats: { message_count: number; user_count: number; assistant_count: number; tool_call_count: number; tool_result_count: number };
   warnings: Array<{ code: string; message: string; count?: number }>;
 }
-interface ImportResult { session_id: number; used_fallback_summary: boolean }
+interface ImportResult { session_id: string; used_fallback_summary: boolean }
 
 interface Props {
   open: boolean;
@@ -38,7 +38,7 @@ interface Props {
   model: string;
   agent: AgentPreset;
   providerOptions: ProviderOption[];
-  onImported: (sessionId: number) => void;
+  onImported: (sessionId: string) => void;
 }
 
 function displayDate(value: string | null): string {

@@ -11,7 +11,7 @@ import {
 } from './autofix-history.js';
 
 interface ProblemsBadgeProps {
-  sessionId: number;
+  projectId: number;
   problems: Problem[];
   errorCount: number;
   onDismiss: (id: string) => void;
@@ -27,10 +27,10 @@ interface ProblemsBadgeProps {
  * from the preview. "Fix" sends the error context to the builder agent
  * (which is instructed to self-heal); "Fix all" sends the batch. The
  * auto-fix controls (on/off + auto vs review dispatch) and the history of
- * fixes sent this session live in the popover header/footer.
+ * fixes sent for this project live in the popover header/footer.
  */
 export function ProblemsBadge({
-  sessionId,
+  projectId,
   problems,
   errorCount,
   onDismiss,
@@ -41,18 +41,18 @@ export function ProblemsBadge({
   onSetAutoFixMode,
 }: ProblemsBadgeProps) {
   const [open, setOpen] = useState(false);
-  const history = useAutoFixHistory(sessionId);
+  const history = useAutoFixHistory(projectId);
   if (problems.length === 0 && history.length === 0) return null;
 
   function fix(p: Problem) {
-    recordAutoFix(sessionId, { ts: Date.now(), label: p.label, via: 'manual' });
-    requestStudioSend(sessionId, `Fix this error:\n\n${formatProblem(p.raw)}`);
+    recordAutoFix(projectId, { ts: Date.now(), label: p.label, via: 'manual' });
+    requestStudioSend(projectId, `Fix this error:\n\n${formatProblem(p.raw)}`);
     onDismiss(p.id);
   }
   function fixAll() {
     const blocks = problems.map((p) => formatProblem(p.raw)).join('\n\n');
-    recordAutoFix(sessionId, { ts: Date.now(), label: `Fix all (${problems.length})`, via: 'manual' });
-    requestStudioSend(sessionId, `Fix these errors:\n\n${blocks}`);
+    recordAutoFix(projectId, { ts: Date.now(), label: `Fix all (${problems.length})`, via: 'manual' });
+    requestStudioSend(projectId, `Fix these errors:\n\n${blocks}`);
     onClear();
   }
 
@@ -156,12 +156,12 @@ export function ProblemsBadge({
   );
 }
 
-/** Live view of the per-session fix history (module store subscription). */
-function useAutoFixHistory(sessionId: number): AutoFixHistoryEntry[] {
-  const [list, setList] = useState<AutoFixHistoryEntry[]>(() => getAutoFixHistory(sessionId));
+/** Live view of the per-project fix history (module store subscription). */
+function useAutoFixHistory(projectId: number): AutoFixHistoryEntry[] {
+  const [list, setList] = useState<AutoFixHistoryEntry[]>(() => getAutoFixHistory(projectId));
   useEffect(() => {
-    setList(getAutoFixHistory(sessionId));
-    return subscribeAutoFixHistory(sessionId, () => setList([...getAutoFixHistory(sessionId)]));
-  }, [sessionId]);
+    setList(getAutoFixHistory(projectId));
+    return subscribeAutoFixHistory(projectId, () => setList([...getAutoFixHistory(projectId)]));
+  }, [projectId]);
   return list;
 }

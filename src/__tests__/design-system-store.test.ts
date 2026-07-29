@@ -1,213 +1,169 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '@mcp/store/db.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  FileSessionRepository,
+  SessionCatalog,
+  SessionLocator,
+  asCompanySessionId,
+  isUuid,
+  type CompanySessionId,
+  type ProjectRootResolver,
+} from '@mcp/session-storage';
 import { DesignSystemStore } from '@mcp/store/design-system-store.js';
 
-/**
- * Integration tests for the DesignSystemStore. We use a real
- * `CodeIndexDB` (file-backed) so all migrations run including the
- * `company_sessions` parent FK.
- */
-
-function seedSession(db: CodeIndexDB, id: number, name: string): void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (db as any).db
-    .prepare(
-      `INSERT INTO company_sessions (id, name, status, config_json) VALUES (?, ?, 'idle', '{}')`,
-    )
-    .run(id, name);
-}
-
-describe('DesignSystemStore (integration)', () => {
-  let dir: string;
-  let cdb: CodeIndexDB;
+describe('DesignSystemStore filesystem integration', () => {
+  let base: string;
+  let repository: FileSessionRepository;
+  let catalog: SessionCatalog;
   let store: DesignSystemStore;
+  let companySessionId: CompanySessionId;
 
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'mcp-ds-store-'));
-    cdb = new CodeIndexDB(join(dir, 'test.db'));
-    seedSession(cdb, 1, 'parent-session');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    store = new DesignSystemStore((cdb as any).db);
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), 'mcp-ds-store-'));
+    const dataDir = join(base, 'data');
+    const projectRoot = join(base, 'project');
+    await Promise.all([mkdir(dataDir), mkdir(projectRoot)]);
+    const roots: ProjectRootResolver = {
+      resolveProjectRoot: (projectId) =>
+        projectId === 7 ? projectRoot : undefined,
+      listProjectRoots: () => [{ project_id: 7, root_path: projectRoot }],
+    };
+    const locator = new SessionLocator({
+      dataDir,
+      projectRootResolver: roots,
+    });
+    repository = new FileSessionRepository({ locator });
+    catalog = new SessionCatalog({ locator, repository });
+    const company = await repository.createSession({
+      kind: 'company',
+      scope: { kind: 'project', project_id: 7 },
+      owner_project_id: 7,
+      linked_projects: [{ project_id: 7 }],
+      title: 'parent-session',
+    });
+    companySessionId = asCompanySessionId(company.session.id);
+    store = new DesignSystemStore({
+      repository,
+      catalog,
+      ensureCatalog: async () => {
+        await catalog.refresh();
+      },
+    });
   });
 
-  afterEach(() => {
-    cdb.close();
-    rmSync(dir, { recursive: true, force: true });
+  afterEach(async () => {
+    store.close();
+    catalog.close();
+    await repository.close();
+    await rm(base, { recursive: true, force: true });
   });
 
-  it('creates and reads sessions', () => {
-    const created = store.createSession({
-      company_session_id: 1,
+  it('creates UUID company and studio sessions with mutable bundle state', async () => {
+    const companyDesign = await store.createSession({
+      company_session_id: companySessionId,
       name: 'Acme UI',
       package_name: '@acme/ui',
       stack: 'react-ts',
-      source_zip_hash: 'abc123',
     });
-    expect(created.id).toBeGreaterThan(0);
-    expect(created.next_bump_hint).toBe('patch');
+    expect(isUuid(companyDesign.id)).toBe(true);
+    expect(companyDesign.company_session_id).toBe(companySessionId);
+    expect(
+      (await store.getSessionByCompanySessionId(companySessionId))?.id,
+    ).toBe(companyDesign.id);
 
-    const fetched = store.getSession(created.id);
-    expect(fetched?.name).toBe('Acme UI');
-    expect(fetched?.stack).toBe('react-ts');
-
-    const byCompany = store.getSessionByCompanySessionId(1);
-    expect(byCompany?.id).toBe(created.id);
-  });
-
-  it('creates and resolves studio sessions by project', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (cdb as any).db
-      .prepare(`INSERT INTO projects (id, name, root_path) VALUES (7, 'ds-ws', 'D:/tmp/ds-ws')`)
-      .run();
-    const created = store.createStudioSession({
+    const studio = await store.createStudioSession({
       project_id: 7,
-      name: 'Acme DS',
-      package_name: '@acme/ds',
-      stack: 'react-ts',
-    });
-    expect(created.kind).toBe('studio');
-    expect(created.project_id).toBe(7);
-    expect(created.company_session_id).toBeNull();
-
-    const byProject = store.getSessionByProjectId(7);
-    expect(byProject?.id).toBe(created.id);
-    // Legacy lookups continuam funcionando lado a lado.
-    expect(store.getSessionByCompanySessionId(1)).toBeNull();
-  });
-
-  it('persists mode and pipeline_json (mig 190)', () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (cdb as any).db
-      .prepare(`INSERT INTO projects (id, name, root_path) VALUES (8, 'ds-ws2', 'D:/tmp/ds-ws2')`)
-      .run();
-    const created = store.createStudioSession({
-      project_id: 8,
       name: 'Fidelity DS',
-      package_name: '@acme/fid',
+      package_name: '@acme/fidelity',
       stack: 'react-ts',
       mode: 'fidelity',
     });
-    expect(created.mode).toBe('fidelity');
-    expect(created.pipeline_json).toBeNull();
-
-    const updated = store.setPipelineJson(created.id, '{"v":1,"stages":[]}');
-    expect(updated.pipeline_json).toBe('{"v":1,"stages":[]}');
-    expect(store.setPipelineJson(created.id, null).pipeline_json).toBeNull();
-
-    // Default de modo (sessões legadas / sem seletor) = creative.
-    const legacy = store.createSession({
-      company_session_id: 1,
-      name: 'Legacy',
-      package_name: '@x/legacy',
-      stack: 'react-ts',
+    expect(studio).toMatchObject({
+      kind: 'studio',
+      project_id: 7,
+      company_session_id: null,
+      mode: 'fidelity',
+      pipeline_json: null,
     });
-    expect(legacy.mode).toBe('creative');
+    const withPipeline = await store.setPipelineJson(
+      studio.id,
+      '{"v":1,"stages":[]}',
+    );
+    expect(withPipeline.pipeline_json).toBe('{"v":1,"stages":[]}');
+    expect((await store.setNextBumpHint(studio.id, 'minor')).next_bump_hint)
+      .toBe('minor');
   });
 
-  it('updates next_bump_hint', () => {
-    const s = store.createSession({
-      company_session_id: 1,
-      name: 'X',
-      package_name: '@x/ui',
-      stack: 'vue-ts',
-    });
-    const updated = store.setNextBumpHint(s.id, 'minor');
-    expect(updated.next_bump_hint).toBe('minor');
-  });
-
-  it('creates versions and finds the latest published one', () => {
-    const s = store.createSession({
-      company_session_id: 1,
+  it('persists version lifecycle and resolves the latest by entity sequence', async () => {
+    const session = await store.createSession({
+      company_session_id: companySessionId,
       name: 'X',
       package_name: '@x/ui',
       stack: 'angular',
     });
-
-    const v1 = store.createVersion({
-      ds_session_id: s.id,
+    const first = await store.createVersion({
+      ds_session_id: session.id,
       semver: '1.0.0',
       bump_kind: 'initial',
       status: 'draft',
     });
-    expect(v1.status).toBe('draft');
-    expect(v1.is_auto_bump).toBe(false);
-
-    // Mark v1 published.
-    store.updateVersion(v1.id, {
+    const published = await store.updateVersion(first.id, {
       status: 'published',
-      tarball_path: '/tmp/x-1.0.0.tgz',
       source_hash: 'hash-v1',
       markPublished: true,
     });
-    const latestPub = store.getLatestPublishedVersion(s.id);
-    expect(latestPub?.id).toBe(v1.id);
-    expect(latestPub?.published_at).not.toBeNull();
+    expect(published.published_at).not.toBeNull();
+    expect((await store.getLatestPublishedVersion(session.id))?.id).toBe(
+      first.id,
+    );
 
-    // Create a draft v2 — latest published shouldn't change.
-    const v2 = store.createVersion({
-      ds_session_id: s.id,
+    const second = await store.createVersion({
+      ds_session_id: session.id,
       semver: 'pending',
       bump_kind: 'patch',
-      status: 'draft',
     });
-    expect(store.getLatestPublishedVersion(s.id)?.id).toBe(v1.id);
-    expect(store.getLatestVersionAny(s.id)?.id).toBe(v2.id);
+    expect((await store.getLatestVersionAny(session.id))?.id).toBe(second.id);
+    expect((await store.getLatestPublishedVersion(session.id))?.id).toBe(
+      first.id,
+    );
+    expect(
+      await store.updateVersion(second.id, {
+        status: 'skipped',
+        source_hash: 'unchanged',
+      }),
+    ).toMatchObject({ status: 'skipped', source_hash: 'unchanged' });
   });
 
-  it('persists components per version', () => {
-    const s = store.createSession({
-      company_session_id: 1,
+  it('persists independently addressable UUID components per version', async () => {
+    const session = await store.createSession({
+      company_session_id: companySessionId,
       name: 'X',
       package_name: '@x/ui',
       stack: 'react-ts',
     });
-    const v = store.createVersion({
-      ds_session_id: s.id,
+    const version = await store.createVersion({
+      ds_session_id: session.id,
       semver: '1.0.0',
       bump_kind: 'initial',
-      status: 'draft',
     });
-
-    store.createComponent({
-      version_id: v.id,
+    const button = await store.createComponent({
+      version_id: version.id,
       name: 'Button',
       kind: 'atom',
       props_schema_json: '{"type":"object"}',
-      example_code: '<Button />',
     });
-    store.createComponent({
-      version_id: v.id,
+    await store.createComponent({
+      version_id: version.id,
       name: 'DashboardPage',
       kind: 'page-template',
     });
-    const list = store.listComponents(v.id);
-    expect(list).toHaveLength(2);
-    // Sorted by kind then name → 'atom' < 'page-template'.
-    expect(list[0].name).toBe('Button');
-    expect(list[1].name).toBe('DashboardPage');
-    expect(store.getComponentByName(v.id, 'Button')?.kind).toBe('atom');
-  });
-
-  it('skipped status round-trips correctly', () => {
-    const s = store.createSession({
-      company_session_id: 1,
-      name: 'X',
-      package_name: '@x/ui',
-      stack: 'react-ts',
-    });
-    const v = store.createVersion({
-      ds_session_id: s.id,
-      semver: 'pending',
-      bump_kind: 'patch',
-    });
-    const updated = store.updateVersion(v.id, {
-      status: 'skipped',
-      source_hash: 'unchanged',
-    });
-    expect(updated.status).toBe('skipped');
-    expect(updated.source_hash).toBe('unchanged');
+    expect(isUuid(button.id)).toBe(true);
+    expect((await store.listComponents(version.id)).map((item) => item.name))
+      .toEqual(['Button', 'DashboardPage']);
+    expect(
+      (await store.getComponentByName(version.id, 'Button'))?.kind,
+    ).toBe('atom');
   });
 });

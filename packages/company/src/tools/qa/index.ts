@@ -39,7 +39,7 @@ export type * from '@mcp/company/tools/qa/qa-event-types.js';
 export function buildQaTools(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
-  agentRunId: number | null,
+  agentRunId: string | null,
 ): CoderTool[] {
   return [
     qaStartRun(orchestrator, agentRole, agentRunId),

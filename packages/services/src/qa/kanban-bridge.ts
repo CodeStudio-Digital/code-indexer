@@ -6,25 +6,25 @@
  *     via `kanban_create_card`. In practice subordinates skip the step,
  *     duplicate the card across reruns, or never link it to the feature
  *     card. Operators end up babysitting the board.
- *   - There's no FK between `qa_test_results` and `kanban_cards`, so the
+ *   - QA-result and Kanban-card entities are related by UUID, so the
  *     dashboard can't deep-link from a failure row to "the bug card".
  *
  * What this bridge does on every `qa_run_completed`:
  *   1. For each failing/timed-out/interrupted result, upsert a Kanban
  *      card with `tag='bug'` and stamp the card id back on the result
- *      row (`qa_test_results.kanban_card_id`). Idempotent across reruns:
+ *      result entity (`kanban_card_id`). Idempotent across reruns:
  *      we look up the most recent result for the same
  *      `(spec_file, test_name)` and reuse its `kanban_card_id` if the
  *      card still exists, appending a "failure recurred" comment
  *      instead of minting a duplicate.
- *   2. When `qa_test_runs.kanban_feature_card_id` is set, transition the
+ *   2. When the QA-run entity's `kanban_feature_card_id` is set, transition the
  *      feature card based on the run's verdict:
  *        - all green → move to `done`, comment "QA verde — run #<id>".
  *        - any red    → move to `in_progress` (if not already there or
  *                       past it) and comment "QA red — see run #<id>".
  *
- * The bridge depends ONLY on the persistence layer (CompanyStore +
- * QaTestResultStore) so it can run from `test-event.ts` even when the
+ * The bridge depends ONLY on the filesystem-backed Kanban adapter +
+ * QaTestResultStore, so it can run from `test-event.ts` even when the
  * per-session orchestrator has been evicted (the QA agent finished the
  * suite but the operator already navigated away).
  *
@@ -33,19 +33,46 @@
  * a kanban link is a soft failure; the run completion must always
  * succeed.
  */
-import type { CompanyStore } from '@mcp/store/company-store.js';
+import type {
+  KanbanCard,
+  KanbanComment,
+  KanbanCardDependency,
+} from '@mcp/company/types.js';
 import type { IQaTestResultStore } from './store/interfaces.js';
 import type { QaRun, QaTestResult } from './types.js';
 
+type Awaitable<T> = T | Promise<T>;
+
+export interface QaKanbanStore {
+  createKanbanCard(
+    sessionId: string,
+    input: {
+      title: string;
+      description?: string;
+      column?: 'backlog' | 'todo' | 'in_progress' | 'review' | 'done';
+      tag?: 'bug' | 'feature' | 'refactor' | 'documentation' | null;
+      created_by?: string;
+    },
+  ): Awaitable<KanbanCard>;
+  getKanbanCard(cardId: string): Awaitable<KanbanCard | null>;
+  addKanbanComment(
+    cardId: string,
+    authorRole: string,
+    agentRunId: string | null,
+    content: string,
+  ): Awaitable<KanbanComment>;
+  addCardDependency(
+    cardId: string,
+    dependsOnId: string,
+  ): Awaitable<KanbanCardDependency>;
+  moveKanbanCard(
+    cardId: string,
+    toColumn: 'backlog' | 'todo' | 'in_progress' | 'review' | 'done',
+  ): Awaitable<KanbanCard>;
+}
+
 export interface KanbanBridgeDeps {
-  companyStore: Pick<
-    CompanyStore,
-    | 'createKanbanCard'
-    | 'getKanbanCard'
-    | 'addKanbanComment'
-    | 'addCardDependency'
-    | 'moveKanbanCard'
-  >;
+  companyStore: QaKanbanStore;
   qaResultStore: Pick<IQaTestResultStore, 'findRecentResultByName' | 'setKanbanCardId'>;
 }
 
@@ -57,7 +84,7 @@ export interface KanbanBridgeDeps {
 export type EvidenceUrlBuilder = (relPath: string) => string;
 
 export interface UpsertBugCardOpts {
-  sessionId: number;
+  sessionId: string;
   run: QaRun;
   result: QaTestResult;
   buildEvidenceUrl: EvidenceUrlBuilder;
@@ -66,7 +93,7 @@ export interface UpsertBugCardOpts {
 }
 
 export interface UpsertBugCardOutcome {
-  cardId: number | null;
+  cardId: string | null;
   /** True when this call created the card; false when it reused. */
   created: boolean;
   warnings: string[];
@@ -74,24 +101,24 @@ export interface UpsertBugCardOutcome {
 
 /**
  * Idempotent: insert OR update the bug card for a `(suite, test)` pair.
- * Stamps `qa_test_results.kanban_card_id` on success.
+ * Stamps the QA-result entity's `kanban_card_id` on success.
  */
-export function upsertBugCard(
+export async function upsertBugCard(
   deps: KanbanBridgeDeps,
   opts: UpsertBugCardOpts,
-): UpsertBugCardOutcome {
+): Promise<UpsertBugCardOutcome> {
   const out: UpsertBugCardOutcome = { cardId: null, created: false, warnings: [] };
 
   // 1) Idempotency lookup — the same test failing in a prior run already
   //    has an open card; reuse it instead of duplicating.
-  let reuseCardId: number | null = null;
+  let reuseCardId: string | null = null;
   try {
-    const prior = deps.qaResultStore.findRecentResultByName({
+    const prior = await deps.qaResultStore.findRecentResultByName({
       spec_file: opts.result.spec_file,
       test_name: opts.result.test_name,
     });
     if (prior?.kanban_card_id) {
-      const existing = deps.companyStore.getKanbanCard(prior.kanban_card_id);
+      const existing = await deps.companyStore.getKanbanCard(prior.kanban_card_id);
       if (existing) reuseCardId = existing.id;
     }
   } catch (e) {
@@ -100,7 +127,7 @@ export function upsertBugCard(
 
   if (reuseCardId !== null) {
     try {
-      deps.companyStore.addKanbanComment(
+      await deps.companyStore.addKanbanComment(
         reuseCardId,
         'qa-bridge',
         null,
@@ -110,7 +137,7 @@ export function upsertBugCard(
       out.warnings.push(`addKanbanComment failed: ${errMsg(e)}`);
     }
     try {
-      deps.qaResultStore.setKanbanCardId(opts.result.id, reuseCardId);
+      await deps.qaResultStore.setKanbanCardId(opts.result.id, reuseCardId);
     } catch (e) {
       out.warnings.push(`setKanbanCardId failed: ${errMsg(e)}`);
     }
@@ -119,9 +146,9 @@ export function upsertBugCard(
   }
 
   // 2) Mint a fresh card.
-  let cardId: number | null = null;
+  let cardId: string | null = null;
   try {
-    const card = deps.companyStore.createKanbanCard(opts.sessionId, {
+    const card = await deps.companyStore.createKanbanCard(opts.sessionId, {
       title: renderBugTitle(opts),
       description: renderBugDescription(opts),
       column: 'todo',
@@ -140,7 +167,7 @@ export function upsertBugCard(
   //    block the bridge.
   if (opts.run.kanban_feature_card_id != null) {
     try {
-      deps.companyStore.addCardDependency(cardId, opts.run.kanban_feature_card_id);
+      await deps.companyStore.addCardDependency(cardId, opts.run.kanban_feature_card_id);
     } catch (e) {
       out.warnings.push(`addCardDependency failed: ${errMsg(e)}`);
     }
@@ -148,7 +175,7 @@ export function upsertBugCard(
 
   // 4) Stamp the FK on the result row.
   try {
-    deps.qaResultStore.setKanbanCardId(opts.result.id, cardId);
+    await deps.qaResultStore.setKanbanCardId(opts.result.id, cardId);
   } catch (e) {
     out.warnings.push(`setKanbanCardId failed: ${errMsg(e)}`);
   }
@@ -158,7 +185,7 @@ export function upsertBugCard(
 }
 
 export interface SyncFeatureCardOpts {
-  featureCardId: number;
+  featureCardId: string;
   run: QaRun;
   /** Already aggregated by the test-event handler before calling. */
   passed: number;
@@ -178,13 +205,13 @@ export interface SyncFeatureCardOutcome {
  * is missing or already in the target column. Side-effect: appends a
  * comment so the operator sees the QA verdict in context.
  */
-export function syncFeatureCard(
+export async function syncFeatureCard(
   deps: KanbanBridgeDeps,
   opts: SyncFeatureCardOpts,
-): SyncFeatureCardOutcome {
+): Promise<SyncFeatureCardOutcome> {
   const out: SyncFeatureCardOutcome = { column: null, warnings: [] };
 
-  const card = deps.companyStore.getKanbanCard(opts.featureCardId);
+  const card = await deps.companyStore.getKanbanCard(opts.featureCardId);
   if (!card) {
     out.warnings.push(`feature card ${opts.featureCardId} missing — skipping sync`);
     return out;
@@ -197,13 +224,13 @@ export function syncFeatureCard(
   // Don't move done cards back; let the operator decide.
   if (allGreen && card.column !== 'done') {
     try {
-      const moved = deps.companyStore.moveKanbanCard(opts.featureCardId, 'done');
+      const moved = await deps.companyStore.moveKanbanCard(opts.featureCardId, 'done');
       out.column = moved.column;
     } catch (e) {
       out.warnings.push(`moveKanbanCard(done) failed: ${errMsg(e)}`);
     }
     try {
-      deps.companyStore.addKanbanComment(
+      await deps.companyStore.addKanbanComment(
         opts.featureCardId,
         'qa-bridge',
         null,
@@ -217,14 +244,14 @@ export function syncFeatureCard(
     // operator sees QA red without having to dig the history.
     if (card.column !== 'in_progress') {
       try {
-        const moved = deps.companyStore.moveKanbanCard(opts.featureCardId, 'in_progress');
+        const moved = await deps.companyStore.moveKanbanCard(opts.featureCardId, 'in_progress');
         out.column = moved.column;
       } catch (e) {
         out.warnings.push(`moveKanbanCard(in_progress) failed: ${errMsg(e)}`);
       }
     }
     try {
-      deps.companyStore.addKanbanComment(
+      await deps.companyStore.addKanbanComment(
         opts.featureCardId,
         'qa-bridge',
         null,

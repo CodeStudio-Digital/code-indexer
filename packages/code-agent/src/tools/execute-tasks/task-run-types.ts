@@ -10,13 +10,14 @@
  */
 import type { ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { CoderTask, TaskKind, TaskStatus } from '@mcp/code-agent/sessions/types.js';
+import { newSessionId } from '@mcp/session-storage';
 
 // ─── Persistence facade (implementation in task-run-persistence.ts) ──
 
 /**
  * Write-through hook fired by the orchestrator at every lifecycle
  * point. The default is a no-op (test mode); the real implementation
- * proxies to `SessionStore.createTaskRun/...` synchronously.
+ * proxies to the file-backed session repository.
  */
 export interface TaskRunPersist {
   recordRunStarted(args: {
@@ -25,7 +26,7 @@ export interface TaskRunPersist {
     startedAt: string;
     budgetTokens?: number | null;
     budgetUsdCents?: number | null;
-  }): void;
+  }): Promise<void>;
   recordTaskStarted(args: {
     runId: string;
     task: CoderTask;
@@ -33,7 +34,7 @@ export interface TaskRunPersist {
     startedAt: string;
     /** Attempt index (0 = first try, 1 = first retry, ...). Default 0. */
     attempt?: number;
-  }): void;
+  }): Promise<void>;
   recordTaskFinished(args: {
     runId: string;
     task: CoderTask;
@@ -47,22 +48,22 @@ export interface TaskRunPersist {
     skipReason?: string;
     inputsFingerprint?: string;
     attempt?: number;
-  }): void;
+  }): Promise<void>;
   recordRunFinished(args: {
     runId: string;
     status: 'completed' | 'failed' | 'aborted';
     finishedAt: string;
     totalUsage: ChatUsage;
     rejectReason?: string;
-  }): void;
+  }): Promise<void>;
 }
 
-/** No-op persistence used by tests and contexts without a SessionStore. */
+/** No-op persistence used by tests and contexts without a bundle store. */
 export const NOOP_PERSIST: TaskRunPersist = {
-  recordRunStarted: () => {},
-  recordTaskStarted: () => {},
-  recordTaskFinished: () => {},
-  recordRunFinished: () => {},
+  recordRunStarted: async () => {},
+  recordTaskStarted: async () => {},
+  recordTaskFinished: async () => {},
+  recordRunFinished: async () => {},
 };
 
 // ─── Run-level types ────────────────────────────────────────────
@@ -120,7 +121,7 @@ export interface TaskRunResult {
 // ─── Pure helpers ───────────────────────────────────────────────
 
 export function makeTaskRunId(): string {
-  return `taskrun_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return newSessionId();
 }
 
 export function taskKind(task: CoderTask): TaskKind {

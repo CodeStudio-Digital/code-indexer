@@ -9,7 +9,7 @@
  */
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
 import { extractLastAssistantText } from '@mcp/code-agent/tools/implement-subagent.js';
 
 export const EXPLORE_SYSTEM_PROMPT = `You are the EXPLORE subagent. A parent coder agent delegated a focused investigation to you.
@@ -86,9 +86,9 @@ export interface SubagentDeps {
   parentTools: CoderTool[];
   /**
    * Optional — when present, every sub-agent system prompt is mirrored
-   * into `coder_session_inputs` on the parent session for the Input tab.
+   * into the parent bundle's input records for the Input tab.
    */
-  sessionStore?: SessionStore;
+  sessionStore?: FsSessionStore;
   /**
    * When set, subagents use this provider (possibly from a different
    * provider family) instead of the parent's. Created from admin

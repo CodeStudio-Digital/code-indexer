@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -25,7 +25,9 @@ afterEach(() => {
 });
 
 describe('TypeScript service routing in a global workspace', () => {
-  it('uses the linked project tsconfig instead of the synthetic union root', () => {
+  it('uses the linked real project tsconfig without a junction', () => {
+    const primaryRoot = join(tempRoot, 'primary-project');
+    mkdirSync(primaryRoot);
     const projectRoot = join(tempRoot, 'real-project');
     const sourceRoot = join(projectRoot, 'src');
     const libraryRoot = join(sourceRoot, 'lib');
@@ -49,25 +51,24 @@ describe('TypeScript service routing in a global workspace', () => {
       "import { fixtureValue } from '@fixture/value';\nexport const result = fixtureValue;\n",
     );
 
-    const workspaceRoot = join(tempRoot, 'global-workspace');
-    mkdirSync(workspaceRoot);
     const slug = 'linked-project';
-    const linkedRoot = join(workspaceRoot, slug);
-    symlinkSync(projectRoot, linkedRoot, process.platform === 'win32' ? 'junction' : 'dir');
-    const linkedMain = join(linkedRoot, 'src', 'main.ts');
+    const linkedMain = join(projectRoot, 'src', 'main.ts');
 
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      const service = getTsServiceForFile(workspaceRoot, linkedMain, [{ slug }]);
+      const service = getTsServiceForFile(primaryRoot, linkedMain, [{
+        slug,
+        rootPath: projectRoot,
+      }]);
       const diagnostic = service.diagnose(linkedMain);
       expect(diagnostic.tsconfigPath ? canonical(diagnostic.tsconfigPath) : null).toBe(
-        `${canonical(linkedRoot)}/tsconfig.json`,
+        `${canonical(projectRoot)}/tsconfig.json`,
       );
       expect(diagnostic.nodeModulesPresent).toBe(true);
 
       const definition = service.getDefinition(linkedMain, 1, 10);
       expect(definition.targets).toHaveLength(1);
-      expect(definition.targets[0]?.file).toMatch(/linked-project\/src\/lib\/value\.ts$/);
+      expect(definition.targets[0]?.file).toMatch(/real-project\/src\/lib\/value\.ts$/);
     } finally {
       log.mockRestore();
     }

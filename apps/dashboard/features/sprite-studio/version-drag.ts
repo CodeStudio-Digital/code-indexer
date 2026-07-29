@@ -8,9 +8,9 @@
 export const SPRITE_VERSION_MIME = 'application/x-sprite-version';
 
 export interface SpriteVersionDragPayload {
-  versionId: number;
+  versionId: string;
   /** Owning asset — drop targets MUST reject payloads from another asset. */
-  assetId: number;
+  assetId: string;
   /** Sequential version number (v013 label material). */
   version: number;
   /** Preformatted label, e.g. "v013". */
@@ -34,12 +34,12 @@ export function readVersionDragData(dt: DataTransfer): SpriteVersionDragPayload 
     const raw = dt.getData(SPRITE_VERSION_MIME);
     if (!raw) return null;
     const o = JSON.parse(raw) as Partial<SpriteVersionDragPayload>;
-    if (!Number.isInteger(o.versionId) || !Number.isInteger(o.assetId)) return null;
+    if (typeof o.versionId !== 'string' || !o.versionId || typeof o.assetId !== 'string' || !o.assetId) return null;
     if (!Number.isInteger(o.version) || typeof o.label !== 'string') return null;
     return {
       versionId: o.versionId,
       assetId: o.assetId,
-      version: o.version,
+      version: o.version!,
       label: o.label,
     };
   } catch {

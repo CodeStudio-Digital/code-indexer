@@ -74,8 +74,22 @@ export { loadPty };
  * returned from `spawn`. A buffered fan-out per terminal lets multiple
  * consumers attach (Electron renderer + later debug viewer, e.g.).
  */
+/**
+ * Human-facing description of what a PTY is for. Purely diagnostic: it exists
+ * so the task manager can say "Terminal: my-app" instead of "node.exe", which
+ * `listPids()` alone could never do — it returns bare numbers, losing the
+ * id↔pid↔cwd correlation this registry is the only place to hold.
+ */
+export interface PtyMeta {
+  label: string;
+  cwd?: string;
+  kind: 'terminal' | 'runner' | 'ssh' | 'agent';
+}
+
 export interface PtyEntry {
   pty: IPty;
+  /** Diagnostics only — never read on the terminal hot path. */
+  meta?: PtyMeta;
   buffer: TerminalOutputChunk[];
   /** Running byte total of `data` chunks in `buffer` — drives replay trimming. */
   bufferBytes: number;
@@ -135,6 +149,8 @@ export class PtyManager {
      * short automatic reap used by the generic terminal lifecycle.
      */
     retainOnExit?: boolean;
+    /** Diagnostic label for the task manager (see `PtyMeta`). */
+    meta?: PtyMeta;
   }): { id: string; entry: PtyEntry } {
     const pty = loadPty();
     const shell = opts.shell ?? defaultShell();
@@ -182,7 +198,13 @@ export class PtyManager {
       ...(isWindows && inElectron ? { useConpty: false } : {}),
     });
 
-    return this.register(child, opts.retainOnExit === true);
+    return this.register(child, opts.retainOnExit === true, opts.meta ?? {
+      // Fall back to the working directory so an unlabelled PTY still reads as
+      // something better than "node.exe" in the task manager.
+      label: `Terminal: ${opts.cwd.split(/[\\/]/).filter(Boolean).pop() ?? opts.cwd}`,
+      cwd: opts.cwd,
+      kind: 'terminal',
+    });
   }
 
   /**
@@ -192,9 +214,14 @@ export class PtyManager {
    * both `spawn` (node-pty) and `registerExternalPty` (e.g. an SSH channel)
    * share identical buffering/exit/reap semantics.
    */
-  private register(child: IPty, retainOnExit = false): { id: string; entry: PtyEntry } {
+  private register(
+    child: IPty,
+    retainOnExit = false,
+    meta?: PtyMeta,
+  ): { id: string; entry: PtyEntry } {
     const entry: PtyEntry = {
       pty: child,
+      meta,
       buffer: [],
       bufferBytes: 0,
       listeners: new Set(),
@@ -272,9 +299,9 @@ export class PtyManager {
    */
   registerExternalPty(
     pty: IPty,
-    options: { retainOnExit?: boolean } = {},
+    options: { retainOnExit?: boolean; meta?: PtyMeta } = {},
   ): { id: string; entry: PtyEntry } {
-    return this.register(pty, options.retainOnExit === true);
+    return this.register(pty, options.retainOnExit === true, options.meta);
   }
 
   /**
@@ -365,13 +392,23 @@ export class PtyManager {
    * direct shell, not the dev server it spawned.
    */
   listPids(): number[] {
-    const pids: number[] = [];
-    for (const entry of this.entries.values()) {
+    return this.listEntries().map((entry) => entry.pid);
+  }
+
+  /**
+   * Live PTYs with their id, pid and `meta`. Unlike `listPids()` this keeps the
+   * correlation intact, which is what lets the task manager label a pid as a
+   * specific terminal AND kill it through `kill(id)` (graceful, tree-first)
+   * instead of a blind tree kill.
+   */
+  listEntries(): Array<{ id: string; pid: number; meta?: PtyMeta }> {
+    const out: Array<{ id: string; pid: number; meta?: PtyMeta }> = [];
+    for (const [id, entry] of this.entries) {
       if (entry.exited) continue;
       const pid = entry.pty.pid;
-      if (typeof pid === 'number' && pid > 0) pids.push(pid);
+      if (typeof pid === 'number' && pid > 0) out.push({ id, pid, meta: entry.meta });
     }
-    return pids;
+    return out;
   }
 
   /**

@@ -49,6 +49,32 @@ describe('DocStore project ↔ collection links', () => {
     expect(linked[0].description).toBe('React 19');
   });
 
+  // The batched form replaced an N+1 loop in GET /api/projects/semantic/status.
+  // It must agree with the single-project query for every project, including
+  // ones with no links at all (which must still get an entry, not be missing).
+  it('batches many projects into one query with identical results', () => {
+    const a = h.db.createProject('batch-a', 'D:/tmp/batch-a');
+    const b = h.db.createProject('batch-b', 'D:/tmp/batch-b');
+    const empty = h.db.createProject('batch-empty', 'D:/tmp/batch-empty');
+    const colA = h.store.createCollection({ name: 'aaa-docs' });
+    const colB = h.store.createCollection({ name: 'zzz-docs' });
+    h.store.linkProjectCollection(a.id, colA.id);
+    h.store.linkProjectCollection(a.id, colB.id);
+    h.store.linkProjectCollection(b.id, colB.id);
+
+    const batched = h.store.listCollectionsForProjects([a.id, b.id, empty.id]);
+    for (const id of [a.id, b.id, empty.id]) {
+      expect(batched.get(id)).toEqual(h.store.listCollectionsForProject(id));
+    }
+    expect(batched.get(a.id)?.map((c) => c.name)).toEqual(['aaa-docs', 'zzz-docs']);
+    expect(batched.get(empty.id)).toEqual([]);
+  });
+
+  it('returns an entry for an unknown project id and handles an empty input', () => {
+    expect(h.store.listCollectionsForProjects([]).size).toBe(0);
+    expect(h.store.listCollectionsForProjects([9999]).get(9999)).toEqual([]);
+  });
+
   it('is idempotent and the first origin wins', () => {
     const project = h.db.createProject('proj-b', 'D:/tmp/proj-b');
     const col = h.store.createCollection({ name: 'col-b' });

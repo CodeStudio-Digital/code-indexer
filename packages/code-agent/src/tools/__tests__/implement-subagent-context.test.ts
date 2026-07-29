@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
+import { asAgentRunId, newSessionId } from '@mcp/session-storage';
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import { runSubagent } from '../implement-subagent.js';
 import { buildExpandTools } from '../expand.js';
+
+const PARENT_RUN_ID = asAgentRunId(
+  '11111111-1111-4111-8111-111111111111',
+);
 
 function captureProvider(): ChatProvider {
   let turn = 0;
@@ -128,6 +134,7 @@ describe('runSubagent context inheritance', () => {
   });
 
   it('passes global workspace and execution context fields to subagent tools', async () => {
+    const sessionId = newSessionId();
     let seenContext: ToolContext | undefined;
     const captureTool: CoderTool = {
       name: 'capture_context',
@@ -144,28 +151,37 @@ describe('runSubagent context inheritance', () => {
     const ports = { fs: { kind: 'fs-port' }, shell: { kind: 'shell-port' } } as unknown as ToolContext['ports'];
     const runtimeEnv = { env: { PHP_VERSION: '8.3' } } as unknown as ToolContext['runtimeEnv'];
     const globalWorkspace: NonNullable<ToolContext['globalWorkspace']> = {
-      syntheticProjectName: '__global_abc',
-      rootPath: '/tmp/global',
-      projects: [{
-        projectId: 11,
-        name: 'Backend Loyalty',
-        slug: 'backend_loyalty',
-        rootPath: '/repo/backend',
-        isPrimary: true,
-      }],
+      sessionTitle: 'Global abc',
+      primaryRootPath: '/repo/backend',
+      projects: [
+        {
+          projectId: 11,
+          name: 'Backend Loyalty',
+          slug: 'backend_loyalty',
+          rootPath: '/repo/backend',
+          isPrimary: true,
+        },
+        {
+          projectId: 12,
+          name: 'Intranet',
+          slug: 'intranet',
+          rootPath: '/repo/intranet',
+          isPrimary: false,
+        },
+      ],
     };
 
     const parentContext = {
-      cwd: '/tmp/global',
-      projectName: '__global_abc',
+      cwd: '/repo/backend',
+      projectName: 'Backend Loyalty',
       globalWorkspace,
       roots: [{ projectId: 12, name: 'Intranet', slug: 'intranet', rootPath: '/repo/intranet' }],
       overlayByRoot,
-      projectId: 99,
+      projectId: 11,
       projectIndexed: true,
       runtimeEnv,
       ports,
-      sessionId: 1234,
+      sessionId,
     } as ToolContext;
 
     const result = await runSubagent(
@@ -173,7 +189,7 @@ describe('runSubagent context inheritance', () => {
         provider: captureProvider(),
         tools: [captureTool],
         ctx: parentContext,
-        sessionId: 1234,
+        sessionId,
       },
       {
         systemPrompt: 'You are a test subagent.',
@@ -185,28 +201,57 @@ describe('runSubagent context inheritance', () => {
     );
 
     expect(result.reason).toBe('completed');
-    expect(seenContext?.cwd).toBe('/tmp/global');
-    expect(seenContext?.projectName).toBe('__global_abc');
+    expect(seenContext?.cwd).toBe('/repo/backend');
+    expect(seenContext?.projectName).toBe('Backend Loyalty');
     expect(seenContext?.globalWorkspace).toBe(globalWorkspace);
     expect(seenContext?.roots).toBe(parentContext.roots);
     expect(seenContext?.overlayByRoot).toBe(overlayByRoot);
-    expect(seenContext?.projectId).toBe(99);
+    expect(seenContext?.projectId).toBe(11);
     expect(seenContext?.projectIndexed).toBe(true);
     expect(seenContext?.runtimeEnv).toBe(runtimeEnv);
     expect(seenContext?.ports).toBe(ports);
-    expect(seenContext?.sessionId).toBe(1234);
+    expect(seenContext?.sessionId).toBe(sessionId);
   });
 
   it('persists every child turn and correlates parent, spawn, run and profile', async () => {
+    const sessionId = newSessionId();
     const turns: Array<Record<string, unknown>> = [];
     const starts: Array<Record<string, unknown>> = [];
     const calls: Array<Record<string, unknown>> = [];
     const completions: Array<Record<string, unknown>> = [];
+    const bundlePath = join(process.cwd(), '.tmp', 'subagent-telemetry', sessionId);
     const fakeStore = {
-      recordTurnTelemetry(input: Record<string, unknown>) { turns.push(input); return turns.length; },
-      startSubagentRun(input: Record<string, unknown>) { starts.push(input); },
-      recordSubagentToolCall(input: Record<string, unknown>) { calls.push(input); },
-      completeSubagentRun(input: Record<string, unknown>) { completions.push(input); },
+      async getSession() {
+        return { id: sessionId };
+      },
+      catalog: {
+        get() {
+          return { location: { bundle_path: bundlePath } };
+        },
+      },
+      repository: {
+        async writeEntity(
+          _location: unknown,
+          _directory: string,
+          _id: string,
+          data: Record<string, unknown>,
+        ) {
+          turns.push(data);
+        },
+      },
+      async startSubagentRun(input: Record<string, unknown>) {
+        starts.push(input);
+        return {
+          session_id: sessionId,
+          run_id: String(input.run_id),
+          entity_id: newSessionId(),
+          fence_token: newSessionId(),
+        };
+      },
+      async heartbeatSubagentRun() {},
+      async assertSubagentRunFence() {},
+      async recordSubagentToolCall(input: Record<string, unknown>) { calls.push(input); },
+      async completeSubagentRun(input: Record<string, unknown>) { completions.push(input); },
     };
     const captureTool: CoderTool = {
       name: 'capture_context',
@@ -216,7 +261,7 @@ describe('runSubagent context inheritance', () => {
       parallelSafe: true,
       handler: async () => ({ content: 'new symbol: TelemetryProbe' }),
     };
-    const parentRunner = { runId: 'parent-run-1', emit() {} };
+    const parentRunner = { runId: PARENT_RUN_ID, emit() {} };
     const result = await runSubagent({
       provider: captureProvider(),
       tools: [captureTool],
@@ -225,7 +270,7 @@ describe('runSubagent context inheritance', () => {
         projectName: 'test',
         runner: parentRunner,
       } as unknown as ToolContext,
-      sessionId: 77,
+      sessionId,
       sessionStore: fakeStore as never,
     }, {
       systemPrompt: 'You are a telemetry test subagent.',
@@ -240,10 +285,10 @@ describe('runSubagent context inheritance', () => {
     expect(result.reason).toBe('completed');
     expect(turns).toHaveLength(2);
     expect(turns.every((turn) => turn.is_subagent === true)).toBe(true);
-    expect(turns.every((turn) => turn.parent_run_id === 'parent-run-1')).toBe(true);
+    expect(turns.every((turn) => turn.parent_run_id === PARENT_RUN_ID)).toBe(true);
     expect(turns.every((turn) => turn.subagent_profile === 'explore')).toBe(true);
     expect(starts).toHaveLength(1);
-    expect(starts[0]).toMatchObject({ parent_run_id: 'parent-run-1', spawn_id: 'spawn-abc', profile: 'explore' });
+    expect(starts[0]).toMatchObject({ parent_run_id: PARENT_RUN_ID, spawn_id: 'spawn-abc', profile: 'explore' });
     expect(calls).toHaveLength(1);
     expect(calls[0].run_id).toBe(starts[0].run_id);
     expect(calls[0].logical_operation_id).toEqual(expect.any(String));

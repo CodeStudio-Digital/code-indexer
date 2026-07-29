@@ -34,6 +34,13 @@ describe('structural index pipeline', () => {
     expect(result.aborted).toBeUndefined();
     expect(result.indexed).toBe(2);
     expect(result.errorCount).toBe(0);
+    expect(result.phaseTimings).toEqual({
+      scanMs: expect.any(Number),
+      parseMs: expect.any(Number),
+      writeMs: expect.any(Number),
+      sweepMs: expect.any(Number),
+    });
+    expect(result.peakRssMb).toBeGreaterThan(0);
 
     const project = h.db.getProject(h.projectId)!;
     expect(project.structural_indexed_at).toBeTruthy();
@@ -46,9 +53,17 @@ describe('structural index pipeline', () => {
     expect(h.db.countFileContents(h.projectId)).toBe(2);
     expect(h.db.searchFileContents(h.projectId, 'betaFn').map((m) => m.path)).toEqual(['beta.ts']);
 
-    expect(h.db.getRun(result.runId!)).toMatchObject({
+    const persistedRun = h.db.getRun(result.runId!);
+    expect(persistedRun).toMatchObject({
       project_id: h.projectId,
       status: 'completed',
+      peak_rss_mb: result.peakRssMb,
+    });
+    expect(JSON.parse(persistedRun!.phase_timings_json!)).toEqual({
+      scan_ms: result.phaseTimings.scanMs,
+      parse_ms: result.phaseTimings.parseMs,
+      write_ms: result.phaseTimings.writeMs,
+      sweep_ms: result.phaseTimings.sweepMs,
     });
     const costs = h.db.raw().prepare('SELECT COUNT(*) as c FROM costs WHERE project_id = ?')
       .get(h.projectId) as { c: number };
@@ -63,6 +78,35 @@ describe('structural index pipeline', () => {
     expect(result.aborted).toBe('too_large');
     expect(h.db.getProject(h.projectId)!.structural_indexed_at).toBeNull();
     expect(h.db.listFiles(h.projectId)).toHaveLength(0);
+  });
+
+  it('reports exact scan deltas before the first structural mutation', async () => {
+    const observed: Array<{ path: string; kind: 'upsert' | 'delete' }> = [];
+    const result = await runStructuralIndex(h.db, h.projectId, {
+      concurrency: 1,
+      onChanges: (events) => {
+        observed.push(...events);
+        expect(h.db.listFiles(h.projectId)).toHaveLength(0);
+      },
+    });
+
+    expect(result.indexed).toBe(2);
+    expect(observed.sort((a, b) => a.path.localeCompare(b.path))).toEqual([
+      { path: 'alpha.ts', kind: 'upsert' },
+      { path: 'beta.ts', kind: 'upsert' },
+    ]);
+  });
+
+  it('does not mutate structural rows when the semantic delta fence fails', async () => {
+    await expect(runStructuralIndex(h.db, h.projectId, {
+      concurrency: 1,
+      onChanges: () => {
+        throw new Error('semantic fence unavailable');
+      },
+    })).rejects.toThrow('semantic fence unavailable');
+
+    expect(h.db.listFiles(h.projectId)).toHaveLength(0);
+    expect(h.db.getRuns(h.projectId)).toHaveLength(0);
   });
 
   it('records no history item for a stat-first reconciliation with no changes', async () => {

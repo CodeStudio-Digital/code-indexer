@@ -30,7 +30,7 @@ let envStore: CompanySessionEnvStore | null = null;
  */
 let qaPreviewConfig: {
   httpApiPort: number;
-  hasQaPlaywrightSkill: (sessionId: number) => boolean;
+  hasQaPlaywrightSkill: (sessionId: string) => boolean;
 } | null = null;
 
 export function setCompanySandboxStore(store: CompanySandboxStore | null): void {
@@ -59,7 +59,7 @@ export function setCompanySessionEnvStore(
 export function setQaPreviewConfig(
   cfg: {
     httpApiPort: number;
-    hasQaPlaywrightSkill: (sessionId: number) => boolean;
+    hasQaPlaywrightSkill: (sessionId: string) => boolean;
   } | null,
 ): void {
   qaPreviewConfig = cfg;
@@ -77,6 +77,9 @@ export function resolveSessionEnvs(sessionId: string, serviceId?: string): Recor
 }
 
 /** Passes the module-level envStore into the pure helper. */
-export function importDotEnvIntoStore(hostWorkdirMount: string, sessionId: string): void {
-  importDotEnvIntoStoreFrom(envStore, hostWorkdirMount, sessionId);
+export function importDotEnvIntoStore(
+  hostWorkdirMount: string,
+  sessionId: string,
+): Promise<void> {
+  return importDotEnvIntoStoreFrom(envStore, hostWorkdirMount, sessionId);
 }

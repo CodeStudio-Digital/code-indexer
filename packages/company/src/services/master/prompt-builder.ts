@@ -81,7 +81,7 @@ export function buildPromptRoster(
  */
 export async function buildMasterPromptInputs(
   ctx: SessionContext,
-  agentRunId: number,
+  agentRunId: string,
   roleConfigs: readonly RoleConfig[],
   allowedModels: readonly AllowedModel[],
   orchestratorRef: unknown,
@@ -136,7 +136,7 @@ export async function buildMasterPromptInputs(
     // verbatim. The same text reaches every subordinate (see spawn/resume),
     // so the master enforces rather than re-pastes them into each task.
     operationalRules: readOperationalRules(
-      ctx.companyStore.getCompanySession(ctx.companySessionId)?.config_json,
+      ctx.companyFiles.getSession().config_json,
     ),
     runtimeKind: ctx.capabilities.promptProfile,
   });

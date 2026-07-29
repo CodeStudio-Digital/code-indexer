@@ -8,7 +8,8 @@ import type {
 } from '@mcp/shared/types.js';
 import { Database, type DB, type PathAlias } from './db/types.js';
 import { applyTuningPragmas } from './db/pragmas.js';
-import { rmSync } from 'node:fs';
+import { installSqlTiming } from './db/sql-timing.js';
+import { existsSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { projectDbFlags, type ProjectDbFlags } from '@mcp/shared/utils/config.js';
 import type { EditorSettingsOverride } from '@mcp/shared/editor-settings.js';
@@ -45,6 +46,11 @@ import * as deps from './db/dependencies.js';
 import * as maintenance from './db/maintenance.js';
 import { loadTsconfigPathAliases } from './db/path-resolver.js';
 import { ReadCache } from './db/read-cache.js';
+import {
+  assertNoSessionMigrationMaintenanceLock,
+  assertSessionScopedSqliteAbsent,
+  assertSessionStorageLayoutReady,
+} from './session-layout-guard.js';
 
 /** Short-TTL caches for the synchronous reads that freeze the main thread on
  *  project open. Bounded staleness self-heals against cross-process worker
@@ -107,16 +113,42 @@ export class CodeIndexDB {
       externalCheckpointer?: boolean;
       /** Fire-and-forget project DB checkpoint scheduler owned by a worker. */
       projectDbCheckpoint?: (dbPath: string) => void;
+      /**
+       * Busy-wait ceiling for this connection, ms. Defaults to the shared 5s.
+       * The Electron-main handle passes a small value: better-sqlite3 waits for
+       * a contended lock INSIDE a synchronous native call, so on that thread the
+       * ceiling is a hard bound on how long the whole app can freeze. Callers
+       * that genuinely need to wait re-raise it per operation via
+       * `withBusyTimeout`.
+       */
+      busyTimeoutMs?: number;
     } = {},
   ) {
+    const isMemoryDatabase =
+      dbPath === ':memory:' || dbPath.startsWith('file::memory:');
+    const allowFreshBootstrap =
+      isMemoryDatabase ||
+      !existsSync(dbPath) ||
+      statSync(dbPath).size === 0;
+    assertNoSessionMigrationMaintenanceLock(dbPath);
     this.centralDbPath = dbPath;
     this.checkpointOwner = !!opts.checkpointOwner;
     this.db = new Database(dbPath);
+    try {
+      assertSessionStorageLayoutReady(this.db, { allowFreshBootstrap });
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
+    // Prototype patch, idempotent and inert until a sink is installed. Done
+    // here so every connection in the process is covered regardless of which
+    // one opened first.
+    installSqlTiming(this.db);
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('synchronous = NORMAL');
     this.db.pragma('cache_size = 10000');
     this.db.pragma('foreign_keys = ON');
-    applyTuningPragmas(this.db);
+    applyTuningPragmas(this.db, { busyTimeoutMs: opts.busyTimeoutMs });
     // WAL checkpoint ownership (anti-freeze). Heavy worker writes + constant
     // main-thread polling readers starve SQLite's auto-checkpointer, so the
     // central `-wal` grows unbounded and every read pages through an ever-larger
@@ -138,6 +170,12 @@ export class CodeIndexDB {
     // Schema must exist before migrations that ALTER it.
     initSchema(this.db);
     runMigrations(this.db);
+    try {
+      assertSessionScopedSqliteAbsent(this.db);
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
     this.bootedAt = (this.db.prepare(`SELECT datetime('now') AS t`).get() as { t: string }).t;
 
     this.pdbFlags = projectDbFlags();
@@ -232,6 +270,11 @@ export class CodeIndexDB {
 
   /** The pooled handle for a project's own DB (opens it on first use). */
   forProject(projectId: number): ProjectDb { return this.projectPool.get(projectId); }
+
+  /** Open pooled project handles + the pool cap. For the perf memory ledger. */
+  get projectPoolStats(): { open: number; maxOpen: number } {
+    return { open: this.projectPool.size, maxOpen: this.pdbFlags.maxOpen };
+  }
 
   /** Close + checkpoint all pooled project handles (shutdown / before file ops). */
   closeProjectPool(): void { this.projectPool.closeAll(); }
@@ -454,54 +497,26 @@ export class CodeIndexDB {
   listProjects(): Project[] {
     return this.readCache.get('projects:list', LIST_CACHE_TTL_MS, () => projects.list(this.db));
   }
-  /** Synthetic global-session union projects (hidden from listProjects). */
+  /** Legacy synthetic rows are forbidden after the filesystem cutover. */
   listSyntheticProjects(): Project[] { return projects.listSynthetic(this.db); }
   /** Projects for the GLOBAL-session picker: real projects + loose ad-hoc
    *  folders (mig 176), minus the synthetic unions. Superset of listProjects. */
   listProjectsForGlobalPicker(): Project[] { return projects.listForGlobalPicker(this.db); }
-  /** Loose ad-hoc folders (mig 176) referenced by no global session — for boot GC. */
+  /** Bundle-aware GC owns loose-folder reachability; SQLite cannot decide it. */
   listOrphanLooseProjects(): Project[] { return projects.listOrphanLoose(this.db); }
   /**
-   * Real constituent projects of a SYNTHETIC union project (global session),
-   * deduped from the `coder_session_projects` junction rows of ANY session on
-   * it, primary first. Mirrors `listUnionProjects` in code-agent's sessions
-   * store; lives here so the runtime resolver and the host memory adapters can
-   * expand a union from just its project id (all tables are central). Empty
-   * when no session references the union.
+   * Synthetic union projects were removed by the filesystem-session cutover.
+   * Global bundles carry their linked roots directly; reaching this method
+   * proves that a forbidden legacy project escaped migration.
    */
   listUnionProjectIds(syntheticProjectId: number): UnionProjectLink[] {
-    const rows = this.db
-      .prepare(
-        `SELECT csp.project_id      AS project_id,
-                p.name              AS name,
-                p.root_path         AS root_path,
-                MAX(csp.is_primary) AS is_primary
-           FROM coder_session_projects csp
-           JOIN coder_sessions s ON s.id = csp.coder_session_id
-           JOIN projects p       ON p.id = csp.project_id
-          WHERE s.project_id = ?
-          GROUP BY csp.project_id
-          ORDER BY is_primary DESC, csp.project_id ASC`,
-      )
-      .all(syntheticProjectId) as Array<{
-        project_id: number;
-        name: string;
-        root_path: string;
-        is_primary: number;
-      }>;
-    return rows.map((r) => ({
-      project_id: r.project_id,
-      name: r.name,
-      root_path: r.root_path,
-      is_primary: !!r.is_primary,
-    }));
+    throw new Error(
+      `Synthetic project ${syntheticProjectId} is unsupported after the filesystem-session cutover`,
+    );
   }
   /**
-   * Memory WRITE target for a project id: for a SYNTHETIC union project, its
-   * PRIMARY real constituent (deterministic, persists past the ephemeral union
-   * directory that gets swept when orphaned); for an ordinary project, itself.
-   * Used by the host memory adapters so distill/save_note in a global session
-   * land on the primary, never on the throwaway synthetic project.
+   * Memory writes use the real owning project. A synthetic row is a migration
+   * invariant violation and is rejected by `listUnionProjectIds`.
    */
   resolveMemoryWriteProject(projectId: number): { id: number; name: string } {
     const project = this.getProject(projectId);
@@ -766,6 +781,8 @@ export class CodeIndexDB {
   replaceAgentMemory(id: number, data: agentMemory.CreateAgentMemoryData): AgentMemoryRow { return agentMemory.replace(this.db, id, data); }
   listAgentMemoryLive(scope: AgentMemoryScope, projectId: number, opts: { includeArchived?: boolean; limit?: number } = {}): AgentMemoryRow[] { return agentMemory.listLive(this.db, scope, projectId, opts); }
   getAgentMemoryById(id: number): AgentMemoryRow | undefined { return agentMemory.getById(this.db, id); }
+  /** Batched hydration; unspecified row order — see agentMemory.getByIds. */
+  getAgentMemoriesByIds(ids: readonly number[]): AgentMemoryRow[] { return agentMemory.getByIds(this.db, ids); }
   getAgentMemoryByName(scope: AgentMemoryScope, projectId: number, name: string): AgentMemoryRow | undefined { return agentMemory.getByName(this.db, scope, projectId, name); }
   listAgentMemoryIndex(scope: AgentMemoryScope, projectId: number, limit = 12, type?: AgentMemoryType): agentMemory.AgentMemoryIndexEntry[] { return agentMemory.listMemoryIndex(this.db, scope, projectId, limit, type); }
   searchAgentMemoryFts(scope: AgentMemoryScope, projectId: number, query: string, limit = 15): AgentMemoryRow[] { return agentMemory.searchFts(this.db, scope, projectId, query, limit); }
@@ -787,8 +804,8 @@ export class CodeIndexDB {
   decayColdAgentMemoryNotes(scope: AgentMemoryScope, projectId: number): number { return agentMemoryConsolidation.decayColdNotes(this.db, scope, projectId); }
   /** WS10 — aggregate memory-health stats (live counts + telemetry by event). */
   getAgentMemoryStats(projectId?: number): agentMemory.AgentMemoryStats { return agentMemory.getStats(this.db, projectId); }
-  /** Effectiveness KPIs (30d window, pure SQL) — AgentMemoryHealthCard chips. */
-  getMemoryEffectivenessKpis(projectId: number): agentMemoryKpis.AgentMemoryKpis { return agentMemoryKpis.getMemoryEffectivenessKpis(this.db, projectId); }
+  /** Effectiveness KPIs over shared memory SQL plus session bundle counters. */
+  getMemoryEffectivenessKpis(projectId: number, session: agentMemoryKpis.SessionMemoryKpis): agentMemoryKpis.AgentMemoryKpis { return agentMemoryKpis.getMemoryEffectivenessKpis(this.db, projectId, session); }
   /** Per-project memory toggle (migration 115). Default ON. */
   getProjectMemoryEnabled(projectId: number): boolean {
     const row = this.db.prepare('SELECT memory_enabled FROM projects WHERE id = ?')
@@ -820,7 +837,7 @@ export class CodeIndexDB {
   setSnapshotAccessStats(id: number, accessCount: number, lastAccessedAt: string | null): void { snapshotsArchive.setAccessStats(this.db, id, accessCount, lastAccessedAt); }
   countArchivedSnapshots(projectId: number): number { return snapshotsArchive.countArchived(this.db, projectId); }
   listArchivedSnapshots(projectId: number, limit = 50): ContextSnapshot[] { return snapshotsArchive.listArchived(this.db, projectId, limit); }
-  listConsolidationCandidates(idleSeconds: number, limit: number): memoryConsolidation.ConsolidationCandidate[] { return memoryConsolidation.listConsolidationCandidates(this.db, idleSeconds, limit); }
+  listConsolidationCandidates(): memoryConsolidation.ConsolidationCandidate[] { return memoryConsolidation.listConsolidationCandidates(this.db); }
 
   // ─── Memory distillation diagnostics (migration 136) ────────────
   insertMemoryDistillLog(projectId: number, entry: memoryDistillLog.MemoryDistillLogEntry): void { memoryDistillLog.insert(this.db, projectId, entry); }

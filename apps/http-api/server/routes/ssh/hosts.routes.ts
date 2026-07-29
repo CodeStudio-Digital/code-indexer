@@ -105,8 +105,10 @@ export function mountSshHostRoutes(app: Hono, deps: ServerDeps): void {
     // `is_shared = 0` and `listSharedHosts` reads only the central DB, so a row
     // flipped in place would be excluded from BOTH lists and vanish from the UI.
     // The id is preserved so `saved:<id>` terminal refs, jump-host FKs and the
-    // edit dialog's `initial.id` keep resolving; the TOFU `known_host_sha256`
-    // and all other columns travel with the row (no re-trust prompt).
+    // edit dialog's `initial.id` keep resolving; all other columns travel with
+    // the row. No re-trust prompt fires because the ENDPOINT is unchanged and
+    // host-key trust lives in `<dataDir>/ssh/known_hosts.json` keyed by
+    // `host:port` — NOT in `known_host_sha256`, which nothing writes at runtime.
     if (willBeShared !== wasShared) {
       // shared → local: the row must return to its ORIGIN project's store, not
       // the caller's — a shared host is visible from every project, and only the

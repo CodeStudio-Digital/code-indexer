@@ -227,7 +227,7 @@ Playwright captures evidence on EVERY test (pass or fail) when the bundled `play
 
 The reporter custom (`tests/e2e/reporter.ts`) indexes screenshot/video/trace + summary.md paths into `qa_test_results`. The operator navigates **Tab Testes → row do test → ícones 📷 / 🎬 / 🔍 / 📄** plus a 🐞 link to the auto-created bug card when applicable. Header has "Open full HTML report" linking to `/qa/playwright-report?service=<id>`.
 
-**Disk retention** (v4.5): each call to `qa_start_run` prunes old `data/qa-reports/<sessionId>/<runId>/` directories on the host so only the last `MCP_QA_RETAIN_RUNS` (default 5) survive — and wipes `tests/e2e/test-results/` + `tests/e2e/playwright-report/` inside the sandbox before the new run starts. Disk usage stays bounded run after run.
+**Disk retention**: each completed run is copied to `<session bundle>/company/qa-artifacts/<runUuid>/` and remains there until the owning session is deleted. `qa_start_run` still wipes the sandbox-local `tests/e2e/test-results/` + `tests/e2e/playwright-report/` before a new run so evidence from separate runs is never mixed.
 
 You don't need to do anything special — capture is on by default, the reporter wires the rest.
 
@@ -425,7 +425,6 @@ Confirm `playwright.config.ts` still has `globalSetup: require.resolve('./tests/
 
 | Env var | Default | Effect |
 | --- | --- | --- |
-| `MCP_QA_RETAIN_RUNS` | 5 | How many `data/qa-reports/<sessionId>/<runId>/` dirs to keep on the host before pruning the oldest. |
 | `MCP_QA_PERSIST_MAX_BYTES_PER_RUN` | 1 GiB | Total cap of the host-side persisted copy per run. Files past the cap are skipped with a warning. |
 | `MCP_QA_PER_TEST_MAX_BYTES` | 25 MiB | Cap on `summary.md` + truncated stdout/stderr per test. |
 | `MCP_PUBLIC_URL` | (unset) | When set, the reporter posts back here. When unset, the runtime fallback (`host.docker.internal` / `host.containers.internal`) is used and Tab Testes shows an amber chip warning. |

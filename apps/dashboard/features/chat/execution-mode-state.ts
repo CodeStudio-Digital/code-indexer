@@ -3,6 +3,7 @@ import type {
   EnrichedProviderModel,
   ExecutionMode,
   ProviderOption,
+  SessionId,
   SessionData,
 } from './types.js';
 
@@ -48,7 +49,7 @@ export function isLegacyUltraEffort(value: unknown): boolean {
  */
 export function hydratedExecutionMode(
   session: CoderSession | null | undefined,
-  selectedId: number | null,
+  selectedId: SessionId | null,
 ): ExecutionMode | null {
   if (!session || selectedId == null || session.id !== selectedId) return null;
   if (session.execution_mode_override === 'ultra' || isLegacyUltraEffort(session.reasoning_effort_override)) {
@@ -60,7 +61,7 @@ export function hydratedExecutionMode(
 /** Never expose the legacy product marker as a provider-native wire effort. */
 export function hydratedReasoningEffort(
   session: CoderSession | null | undefined,
-  selectedId: number | null,
+  selectedId: SessionId | null,
 ): string | null | undefined {
   if (!session || selectedId == null || session.id !== selectedId) return undefined;
   const effort = normalizedValue(session.reasoning_effort_override);
@@ -107,8 +108,8 @@ export function ultraManagesThinking(
 export function executionModeChangeLocked(
   streaming: boolean,
   sessionStatus: string | null | undefined,
-  payloadSessionId?: number | null,
-  selectedId?: number | null,
+  payloadSessionId?: SessionId | null,
+  selectedId?: SessionId | null,
 ): boolean {
   const payloadMatchesSelection = payloadSessionId == null
     || selectedId == null
@@ -119,7 +120,7 @@ export function executionModeChangeLocked(
 /** Merge a mutation response/event only into the matching session cache. */
 export function mergeExecutionModeSessionData(
   data: SessionData,
-  sessionId: number,
+  sessionId: SessionId,
   mode: ExecutionMode,
   response?: CoderSession | null,
 ): SessionData {

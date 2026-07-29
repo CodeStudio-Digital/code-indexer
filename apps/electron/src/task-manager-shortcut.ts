@@ -1,6 +1,14 @@
 import type { BrowserWindow, Input } from 'electron';
 
-export const TASK_MANAGER_ROUTE = '/admin?section=perf';
+/**
+ * Its own popout window, like Chrome's — the task manager is something you
+ * watch WHILE working, so taking over the current window would defeat it.
+ * Admin → Performance still exists for the forensic memory/profiling view.
+ */
+export const TASK_MANAGER_ROUTE = '/popout/task-manager';
+
+/** Roughly Chrome's task-manager window; wide enough for the command tooltip. */
+export const TASK_MANAGER_WINDOW = { width: 820, height: 560 } as const;
 
 /** Chrome-compatible, app-scoped shortcut for the process metrics panel. */
 export function isTaskManagerShortcut(input: Pick<

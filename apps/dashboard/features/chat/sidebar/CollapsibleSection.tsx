@@ -4,7 +4,7 @@ import { cn } from '../../../lib/utils.js';
 
 interface CollapsibleSectionProps {
   id: string;
-  sessionId: number;
+  sessionId: string;
   title: string;
   icon?: ReactNode;
   /** Right-aligned header content (badge, count, status pip). */

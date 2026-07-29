@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { classifyQaFailure } from '../parsers/error-classifier.js';
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000009';
+
 describe('classifyQaFailure — sidecar_down', () => {
   it.each([
     'browserType.connect: connect ECONNREFUSED 127.0.0.1:9223',
@@ -21,7 +23,7 @@ describe('classifyQaFailure — reporter_unreachable', () => {
   it('detects failures aimed at the test-event endpoint', () => {
     expect(
       classifyQaFailure(
-        'fetch failed: POST http://host.docker.internal:7333/api/company/sessions/9/qa/test-event',
+        `fetch failed: POST http://host.docker.internal:7333/api/company/sessions/${COMPANY_SESSION_ID}/qa/test-event`,
       ),
     ).toBe('reporter_unreachable');
   });

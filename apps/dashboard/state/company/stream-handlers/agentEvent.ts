@@ -32,7 +32,7 @@ import {
 
 export interface AgentEventEnvelope {
   agent: string;
-  agentRunId: number;
+  agentRunId: string;
   event: string;
   data: unknown;
 }

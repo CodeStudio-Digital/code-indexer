@@ -3,17 +3,25 @@ import type { ServerDeps } from '../../deps.js';
 import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import { activeOrchestrators } from './stream.js';
 import { evictCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
-import { parseIdParam, parseJsonBody, notFound, resolveRootSessionId } from '../_helpers.js';
+import {
+  parseIdParam,
+  parseJsonBody,
+  parseSessionIdParam,
+  parseSessionRecordIdParam,
+  notFound,
+} from '../_helpers.js';
+import {
+  asCompanySessionId,
+  isUuid,
+  type CompanySessionId,
+} from '@mcp/session-storage';
 import { validatePipelineGraph } from '@mcp/company/services/PipelineService.js';
 import { generateAiPipeline } from '@mcp/api-handlers';
 import type {
   PipelineGraph,
   PipelineExecutionStatus,
 } from '@mcp/company/types.js';
-import {
-  companySurfaceConflict,
-  resolveCompanyRouteRuntime,
-} from './runtime-capabilities.js';
+import { companySurfaceConflict } from './runtime-capabilities.js';
 
 /**
  * HTTP routes for the Pipeline Builder + Executor.
@@ -28,48 +36,75 @@ import {
  *     events through the session orchestrator's metaBus.
  */
 export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore } = deps;
-
-  const pipelinesUnavailable = (sessionId: number): boolean => {
-    const runtime = resolveCompanyRouteRuntime(companyStore, sessionId);
-    return runtime != null && !runtime.capabilities.allowCompanyPipelines;
+  const { companyStore, operationalSessionFiles } = deps;
+  const pipelineIdParam = (
+    c: Parameters<typeof parseIdParam>[0],
+    name = 'id',
+  ): number | string => {
+    const raw = c.req.param(name);
+    return isUuid(raw) ? raw.toLowerCase() : parseIdParam(c, name);
   };
 
-  const pipelineOwnerUnavailable = (pipeline: { company_session_id: number | null }): boolean =>
-    pipeline.company_session_id != null && pipelinesUnavailable(pipeline.company_session_id);
+  const resolveRoot = async (
+    sessionId: string,
+  ): Promise<CompanySessionId> => {
+    let current = asCompanySessionId(sessionId);
+    const seen = new Set<string>();
+    while (!seen.has(current)) {
+      seen.add(current);
+      const session =
+        await operationalSessionFiles.getCompanySession(current);
+      if (!session?.parent_session_id) return current;
+      current = asCompanySessionId(session.parent_session_id);
+    }
+    throw new Error(`Company parent cycle detected for ${sessionId}`);
+  };
 
-  const executionOwnerUnavailable = (executionId: number): boolean => {
-    const execution = companyStore.getPipelineExecution(executionId);
+  const pipelinesUnavailable = async (sessionId: string): Promise<boolean> => {
+    const session =
+      await operationalSessionFiles.getCompanySession(sessionId);
+    return session?.runtime_kind === 'app_studio';
+  };
+
+  const pipelineOwnerUnavailable = async (
+    pipeline: { company_session_id: string | null },
+  ): Promise<boolean> =>
+    pipeline.company_session_id != null &&
+    await pipelinesUnavailable(pipeline.company_session_id);
+
+  const executionOwnerUnavailable = async (
+    executionId: string,
+  ): Promise<boolean> => {
+    const execution = await companyStore.getPipelineExecution(executionId);
     return execution?.company_session_id != null &&
-      pipelinesUnavailable(execution.company_session_id);
+      await pipelinesUnavailable(execution.company_session_id);
   };
 
   // ─── Pipeline CRUD ───────────────────────────────────────────
 
-  app.get('/api/company/pipelines', (c) => {
+  app.get('/api/company/pipelines', async (c) => {
     const sessionRaw = c.req.query('company_session_id');
     const templateRaw = c.req.query('template_id');
-    const opts: { companySessionId?: number | null; templateId?: number | null } = {};
+    const opts: { companySessionId?: string | null; templateId?: number | null } = {};
     if (sessionRaw === 'null') opts.companySessionId = null;
     else if (sessionRaw != null) {
-      const n = parseInt(sessionRaw, 10);
-      if (Number.isFinite(n)) {
-        if (pipelinesUnavailable(n)) return c.json([]);
-        opts.companySessionId = n;
+      if (isUuid(sessionRaw)) {
+        if (await pipelinesUnavailable(sessionRaw)) return c.json([]);
+        opts.companySessionId = asCompanySessionId(sessionRaw);
       }
     }
     if (templateRaw != null) {
       const n = parseInt(templateRaw, 10);
       if (Number.isFinite(n)) opts.templateId = n;
     }
-    return c.json(companyStore.listPipelines(opts));
+    return c.json(await companyStore.listPipelines(opts));
   });
 
-  app.get('/api/company/pipelines/:id', (c) => {
-    const id = parseIdParam(c);
-    const pipeline = companyStore.getPipeline(id);
+  app.get('/api/company/pipelines/:id', async (c) => {
+    const id = pipelineIdParam(c);
+    const pipeline = await companyStore.getPipeline(id);
     if (!pipeline) return notFound(c, 'Pipeline not found');
-    if (pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
+    if (await pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
     return c.json(pipeline);
   });
 
@@ -78,15 +113,15 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
       name: string;
       description?: string;
       graph: PipelineGraph;
-      company_session_id?: number | null;
+      company_session_id?: string | null;
       template_id?: number | null;
     }>(c);
 
     if (!body.name) return c.json({ error: 'name is required' }, 400);
     if (!body.graph) return c.json({ error: 'graph is required' }, 400);
     if (
-      typeof body.company_session_id === 'number' &&
-      pipelinesUnavailable(body.company_session_id)
+      typeof body.company_session_id === 'string' &&
+      await pipelinesUnavailable(body.company_session_id)
     ) {
       return companySurfaceConflict(c, 'pipelines');
     }
@@ -96,7 +131,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     const validation = validatePipelineGraph(body.graph, null);
     if (!validation.ok) return c.json({ error: 'invalid graph', issues: validation.errors }, 400);
 
-    const created = companyStore.createPipeline({
+    const created = await companyStore.createPipeline({
       name: body.name,
       description: body.description,
       graph: body.graph,
@@ -107,7 +142,9 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     // Best-effort live notify — when the pipeline is bound to an active
     // session, the dashboard's pipelines list refresh listens for this.
     if (created.company_session_id != null) {
-      const orchestrator = activeOrchestrators.get(created.company_session_id);
+      const orchestrator = activeOrchestrators.get(
+        asCompanySessionId(created.company_session_id),
+      );
       if (orchestrator) {
         try { orchestrator.metaBus; } catch { /* no-op */ }
       }
@@ -116,10 +153,10 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.patch('/api/company/pipelines/:id', async (c) => {
-    const id = parseIdParam(c);
-    const current = companyStore.getPipeline(id);
+    const id = pipelineIdParam(c);
+    const current = await companyStore.getPipeline(id);
     if (!current) return notFound(c, 'Pipeline not found');
-    if (pipelineOwnerUnavailable(current)) return companySurfaceConflict(c, 'pipelines');
+    if (await pipelineOwnerUnavailable(current)) return companySurfaceConflict(c, 'pipelines');
     const body = await parseJsonBody<{
       name?: string;
       description?: string;
@@ -133,7 +170,7 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     }
 
     try {
-      const updated = companyStore.updatePipeline(id, {
+      const updated = await companyStore.updatePipeline(id, {
         name: body.name,
         description: body.description,
         graph: body.graph,
@@ -149,12 +186,12 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
     }
   });
 
-  app.delete('/api/company/pipelines/:id', (c) => {
-    const id = parseIdParam(c);
-    const pipeline = companyStore.getPipeline(id);
+  app.delete('/api/company/pipelines/:id', async (c) => {
+    const id = pipelineIdParam(c);
+    const pipeline = await companyStore.getPipeline(id);
     if (!pipeline) return notFound(c, 'Pipeline not found');
-    if (pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
-    const ok = companyStore.deletePipeline(id);
+    if (await pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
+    const ok = await companyStore.deletePipeline(id);
     if (!ok) return notFound(c, 'Pipeline not found');
     return c.json({ ok: true });
   });
@@ -177,23 +214,25 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/pipelines/:id/validate', async (c) => {
-    const id = parseIdParam(c);
-    const body = await parseJsonBody<{ graph?: PipelineGraph; session_id?: number }>(c);
+    const id = pipelineIdParam(c);
+    const body = await parseJsonBody<{ graph?: PipelineGraph; session_id?: string }>(c);
 
     let graph: PipelineGraph | undefined = body.graph;
     if (!graph) {
-      const pipeline = companyStore.getPipeline(id);
+      const pipeline = await companyStore.getPipeline(id);
       if (!pipeline) return notFound(c, 'Pipeline not found');
-      if (pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
+      if (await pipelineOwnerUnavailable(pipeline)) return companySurfaceConflict(c, 'pipelines');
       graph = pipeline.graph;
     }
 
     let validRoles: ReadonlySet<string> | null = null;
-    if (typeof body.session_id === 'number') {
-      if (pipelinesUnavailable(body.session_id)) {
+    if (typeof body.session_id === 'string') {
+      if (await pipelinesUnavailable(body.session_id)) {
         return companySurfaceConflict(c, 'pipelines');
       }
-      const orchestrator = activeOrchestrators.get(body.session_id);
+      const orchestrator = activeOrchestrators.get(
+        asCompanySessionId(body.session_id),
+      );
       if (orchestrator) {
         const roleSummary = await orchestrator.pipelineValidate(graph);
         return c.json(roleSummary);
@@ -208,11 +247,11 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/company/sessions/:id/pipelines/:pid/start', async (c) => {
     // Pipelines are project-wide (migration 067): a child tab routes to
     // the root so the same orchestrator + execution rows are used.
-    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
-    const pipelineId = parseIdParam(c, 'pid');
-    if (pipelinesUnavailable(sessionId)) return companySurfaceConflict(c, 'pipelines');
-    const pipeline = companyStore.getPipeline(pipelineId);
-    if (pipeline && pipelineOwnerUnavailable(pipeline)) {
+    const sessionId = await resolveRoot(parseSessionIdParam(c));
+    const pipelineId = pipelineIdParam(c, 'pid');
+    if (await pipelinesUnavailable(sessionId)) return companySurfaceConflict(c, 'pipelines');
+    const pipeline = await companyStore.getPipeline(pipelineId);
+    if (pipeline && await pipelineOwnerUnavailable(pipeline)) {
       return companySurfaceConflict(c, 'pipelines');
     }
     const body = await parseJsonBody<{ initial_input?: string }>(c);
@@ -246,31 +285,44 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:id/pipelines/executions', async (c) => {
-    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
-    if (pipelinesUnavailable(sessionId)) return c.json([]);
+    const sessionId = await resolveRoot(parseSessionIdParam(c));
+    if (await pipelinesUnavailable(sessionId)) return c.json([]);
     const orchestrator = activeOrchestrators.get(sessionId);
     const status = c.req.query('status') as PipelineExecutionStatus | undefined;
     const pipelineRaw = c.req.query('pipeline_id');
-    const pipelineId = pipelineRaw ? parseInt(pipelineRaw, 10) : undefined;
+    const pipelineId = pipelineRaw
+      ? isUuid(pipelineRaw)
+        ? pipelineRaw.toLowerCase()
+        : Number.parseInt(pipelineRaw, 10)
+      : undefined;
+    const validPipelineId =
+      typeof pipelineId === 'string' ||
+      (
+        typeof pipelineId === 'number' &&
+        Number.isSafeInteger(pipelineId) &&
+        pipelineId > 0
+      )
+        ? pipelineId
+        : undefined;
 
     if (orchestrator) {
       return c.json(await orchestrator.pipelineListExecutions({
-        pipelineId: Number.isFinite(pipelineId ?? NaN) ? pipelineId : undefined,
+        pipelineId: validPipelineId,
         status,
       }));
     }
     // Read-only fallback when the session orchestrator isn't loaded.
-    return c.json(companyStore.listPipelineExecutions({
+    return c.json(await companyStore.listPipelineExecutions({
       companySessionId: sessionId,
-      pipelineId: Number.isFinite(pipelineId ?? NaN) ? pipelineId : undefined,
+      pipelineId: validPipelineId,
       status,
     }));
   });
 
   app.get('/api/company/sessions/:id/pipelines/executions/:execId', async (c) => {
-    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
-    const execId = parseIdParam(c, 'execId');
-    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+    const sessionId = await resolveRoot(parseSessionIdParam(c));
+    const execId = parseSessionRecordIdParam(c, 'execId');
+    if (await pipelinesUnavailable(sessionId) || await executionOwnerUnavailable(execId)) {
       return companySurfaceConflict(c, 'pipelines');
     }
 
@@ -280,16 +332,16 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
       if (!result) return notFound(c, 'Execution not found');
       return c.json(result);
     }
-    const execution = companyStore.getPipelineExecution(execId);
+    const execution = await companyStore.getPipelineExecution(execId);
     if (!execution) return notFound(c, 'Execution not found');
-    const nodes = companyStore.listPipelineNodeExecutions(execId);
+    const nodes = await companyStore.listPipelineNodeExecutions(execId);
     return c.json({ execution, nodes });
   });
 
   app.post('/api/company/sessions/:id/pipelines/executions/:execId/abort', async (c) => {
-    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
-    const execId = parseIdParam(c, 'execId');
-    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+    const sessionId = await resolveRoot(parseSessionIdParam(c));
+    const execId = parseSessionRecordIdParam(c, 'execId');
+    if (await pipelinesUnavailable(sessionId) || await executionOwnerUnavailable(execId)) {
       return companySurfaceConflict(c, 'pipelines');
     }
     const body = await parseJsonBody<{ reason?: string }>(c);
@@ -318,9 +370,9 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/pipelines/executions/:execId/pause', async (c) => {
-    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
-    const execId = parseIdParam(c, 'execId');
-    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+    const sessionId = await resolveRoot(parseSessionIdParam(c));
+    const execId = parseSessionRecordIdParam(c, 'execId');
+    if (await pipelinesUnavailable(sessionId) || await executionOwnerUnavailable(execId)) {
       return companySurfaceConflict(c, 'pipelines');
     }
     const orchestrator = activeOrchestrators.get(sessionId);
@@ -345,9 +397,9 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/pipelines/executions/:execId/resume', async (c) => {
-    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
-    const execId = parseIdParam(c, 'execId');
-    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+    const sessionId = await resolveRoot(parseSessionIdParam(c));
+    const execId = parseSessionRecordIdParam(c, 'execId');
+    if (await pipelinesUnavailable(sessionId) || await executionOwnerUnavailable(execId)) {
       return companySurfaceConflict(c, 'pipelines');
     }
     const orchestrator = activeOrchestrators.get(sessionId);
@@ -373,9 +425,9 @@ export function mountCompanyPipelineRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:id/pipelines/executions/:execId/confirm', async (c) => {
-    const sessionId = resolveRootSessionId(companyStore, parseIdParam(c));
-    const execId = parseIdParam(c, 'execId');
-    if (pipelinesUnavailable(sessionId) || executionOwnerUnavailable(execId)) {
+    const sessionId = await resolveRoot(parseSessionIdParam(c));
+    const execId = parseSessionRecordIdParam(c, 'execId');
+    if (await pipelinesUnavailable(sessionId) || await executionOwnerUnavailable(execId)) {
       return companySurfaceConflict(c, 'pipelines');
     }
     const orchestrator = activeOrchestrators.get(sessionId);

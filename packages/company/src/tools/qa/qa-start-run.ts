@@ -2,7 +2,7 @@
  * Tool: `qa_start_run`. Called by a QA subordinate **before** invoking
  * `npx playwright test ...`. It:
  *
- *   1. Inserts a `qa_test_runs` row in `running` state (via the
+ *   1. Creates an independent QA-run JSON entity in `running` state (via the
  *      injected `IQaTestRunStore`).
  *   2. Returns the new `run_id` plus the env vars (`PLAYWRIGHT_QA_RUN_ID`,
  *      `PLAYWRIGHT_QA_ENDPOINT`) the agent must export so the bundled
@@ -25,6 +25,7 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import type { IQaTestRunStore } from '@mcp/services/qa/store/interfaces.js';
 import type { QaRunTrigger } from '@mcp/services/qa/types.js';
+import { assertUuid } from '@mcp/session-storage';
 import { getResolvedRuntime, getSandboxManager } from '@mcp/services/sandbox/index.js';
 import {
   restoreQaWorkspace,
@@ -105,7 +106,7 @@ export function resolveEndpointBase(
   return { base, fallback: true };
 }
 
-export function buildEndpointPath(sessionId: number): string {
+export function buildEndpointPath(sessionId: string): string {
   return `/api/company/sessions/${sessionId}/qa/test-event`;
 }
 
@@ -142,7 +143,7 @@ const PARAMETERS: JsonSchema = {
         'Optional microservice id this run targets (default "main"). Use the service_id from `list_services` when running specs against a sibling container — the dashboard\'s Tab Testes filters by this so the operator can audit QA per service.',
     },
     kanban_feature_card_id: {
-      type: 'number',
+      type: 'string',
       description:
         'Optional id of the "QA: <feature>" Kanban card this run is auditing. When set, the server-side bridge auto-moves that card on completion: `done` if all green, `in_progress` if any red. Use the id of the kanban card you were spawned for (`kanban_read_my_card` returns it).',
     },
@@ -156,15 +157,13 @@ const PARAMETERS: JsonSchema = {
  * integer so the agent gets a clear error instead of silently losing
  * the linkage on a typo.
  */
-export function normaliseFeatureCardId(raw: unknown): number | null {
+export function normaliseFeatureCardId(raw: unknown): string | null {
   if (raw === undefined || raw === null) return null;
-  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) return raw;
-  if (typeof raw === 'string' && raw.trim() !== '') {
-    const n = Number(raw);
-    if (Number.isInteger(n) && n > 0) return n;
+  if (typeof raw === 'string') {
+    return assertUuid(raw, 'kanban_feature_card_id');
   }
   throw new Error(
-    `Invalid kanban_feature_card_id ${JSON.stringify(raw)} — must be a positive integer.`,
+    `Invalid kanban_feature_card_id ${JSON.stringify(raw)} — must be a UUID.`,
   );
 }
 
@@ -199,7 +198,7 @@ export function formatConfigRefusal(v: QaConfigValidation): string {
 export function qaStartRun(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
-  agentRunId: number | null,
+  agentRunId: string | null,
 ): CoderTool {
   return {
     name: 'qa_start_run',
@@ -254,7 +253,7 @@ export function qaStartRun(
           return err(`qa_start_run refused (error_class=sidecar_down): ${preflight.message}`);
         }
 
-        const run = store.startRun({
+        const run = await store.startRun({
           company_session_id: sessionId,
           agent_run_id: agentRunId,
           suite,
@@ -308,7 +307,7 @@ function mustString(v: unknown, field: string): string {
  *   5. Optional fallback note (when MCP_PUBLIC_URL is missing).
  */
 export function formatStartRunReply(
-  run: { id: number; suite: string; service_id: string },
+  run: { id: string; suite: string; service_id: string },
   endpoint: string,
   report: WorkspaceRestoreReport,
   note: string,

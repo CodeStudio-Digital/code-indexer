@@ -3,8 +3,8 @@
  *
  * Converts the five `CODER_*` flags into the `policyShadow` port consumed by
  * `dispatchTools` (executing-dispatch.ts). This is the ONLY place where the
- * Fase 2 modules (capability catalog, policy engine, hook bus, stores) are
- * wired together for production runs.
+ * Fase 2 modules (capability catalog, policy engine, hook bus and the injected
+ * host persistence port) are wired together for production runs.
  *
  * Contract:
  *   - With every flag off, `createPolicyShadowPort` returns `null` — the port
@@ -18,12 +18,13 @@
  *   - Only `CODER_POLICY_ENGINE_ENFORCE=1` (dormant; a human gate) lets the
  *     port refuse a call, and only when the shadow decision is not `allow`.
  */
-import { randomUUID } from 'node:crypto';
-import type DatabaseConstructor from 'better-sqlite3';
 import {
-  CapabilityStore,
-  PolicyDecisionStore,
-} from '@mcp/store/control-plane/index.js';
+  asAgentRunId,
+  isUuid,
+  newAgentRunId,
+  type AgentRunId,
+  type SessionId,
+} from '@mcp/session-storage';
 import type { CoderTool } from './tool.js';
 import type { ToolRegistry } from './registry.js';
 import type { PolicyContext } from './policy.js';
@@ -33,8 +34,7 @@ import {
 } from './capability-catalog.js';
 import { evaluatePolicyShadow, type PolicySourceVote } from './policy-engine.js';
 import type { HookBus } from './hook-bus.js';
-
-type DB = InstanceType<typeof DatabaseConstructor>;
+import type { PolicyShadowPersistencePort } from './policy-shadow-persistence.js';
 
 export type PolicyShadowPort = (input: {
   tool: CoderTool | null;
@@ -49,16 +49,16 @@ export interface PolicyShadowSessionContext {
   getLegacyContext: () => PolicyContext;
   /** True for a background (non-interactive) run — ask becomes deny. */
   background: boolean;
-  sessionId?: string;
-  agentRunId?: string;
+  sessionId: SessionId;
+  agentRunId?: AgentRunId | string;
   /** Late-bound for child runners whose run id is assigned in construction. */
-  getAgentRunId?: () => string | undefined;
+  getAgentRunId?: () => AgentRunId | string | undefined;
   /** Actual filtered tool surface for this scoped run. */
   capabilityRegistry?: ToolRegistry;
 }
 
 export interface PolicyShadowDeps {
-  db: DB;
+  persistence: PolicyShadowPersistencePort;
   registry: ToolRegistry;
   sessionContext: PolicyShadowSessionContext;
   /** Optional hook bus — consulted only when CODER_HOOK_BUS_V1=1. */
@@ -99,31 +99,49 @@ export function createPolicyShadowPort(
   if (!anyFlagOn()) return null;
 
   const metrics: PolicyShadowMetrics = { evaluations: 0, refusals: 0, errors: 0 };
-  const decisions = new PolicyDecisionStore(deps.db);
-  const capabilities = new CapabilityStore(deps.db);
   const warn = (msg: string): void => deps.log?.('warn', `[policy-shadow] ${msg}`);
 
   const createScopedPort = (sessionContext: PolicyShadowSessionContext): PolicyShadowPort => {
     // Lazy, once per scoped run. Child ports share authority and persistence,
     // but record their own resolved capability-set identity.
     let capabilitySetRecorded = false;
-    const recordCapabilitySetOnce = (): void => {
+    let capabilitySetRecording: Promise<void> | null = null;
+    const generatedAgentRunId = newAgentRunId();
+    const resolveAgentRunId = (): AgentRunId => {
+      const candidate =
+        sessionContext.getAgentRunId?.() ?? sessionContext.agentRunId;
+      return candidate && isUuid(candidate)
+        ? asAgentRunId(candidate)
+        : generatedAgentRunId;
+    };
+    const recordCapabilitySetOnce = async (): Promise<void> => {
       if (capabilitySetRecorded || !catalogEnabled()) return;
-      capabilitySetRecorded = true;
-      try {
-        const agentRunId = (
-          sessionContext.getAgentRunId?.()
-          ?? sessionContext.agentRunId
-          ?? `run:${randomUUID()}`
-        ) as never;
-        const registry = sessionContext.capabilityRegistry ?? deps.registry;
-        const { set, descriptors } = resolveCapabilitySet(registry.list(), { agentRunId });
-        capabilities.recordDescriptors(descriptors, set.catalogVersion, set.resolvedAt);
-        capabilities.recordResolvedSet(set);
-      } catch (error) {
-        metrics.errors += 1;
-        warn(`capability set snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (!capabilitySetRecording) {
+        capabilitySetRecording = (async () => {
+          try {
+            const agentRunId = resolveAgentRunId();
+            const registry =
+              sessionContext.capabilityRegistry ?? deps.registry;
+            const { set, descriptors } = resolveCapabilitySet(
+              registry.list(),
+              { agentRunId },
+            );
+            await deps.persistence.recordCapabilitySet({
+              sessionId: sessionContext.sessionId,
+              agentRunId,
+              set,
+              descriptors,
+            });
+            capabilitySetRecorded = true;
+          } catch (error) {
+            metrics.errors += 1;
+            warn(`capability set snapshot failed: ${error instanceof Error ? error.message : String(error)}`);
+          } finally {
+            capabilitySetRecording = null;
+          }
+        })();
       }
+      await capabilitySetRecording;
     };
 
     return async (input) => {
@@ -132,7 +150,7 @@ export function createPolicyShadowPort(
         return { refuse: false };
       }
       try {
-        recordCapabilitySetOnce();
+        await recordCapabilitySetOnce();
 
         const tool = input.tool;
         if (!tool) return { refuse: false }; // unknown tool — legacy path decides
@@ -183,7 +201,7 @@ export function createPolicyShadowPort(
         }
 
         const startedAt = performance.now();
-        const agentRunId = sessionContext.getAgentRunId?.() ?? sessionContext.agentRunId;
+        const agentRunId = resolveAgentRunId();
         const result = evaluatePolicyShadow({
           tool,
           capabilityId: descriptor.capabilityId,
@@ -199,9 +217,10 @@ export function createPolicyShadowPort(
         const evaluationMs = performance.now() - startedAt;
         metrics.evaluations += 1;
 
-        // Persistence is best-effort and never blocks the invocation.
+        // Persistence is awaited for durability, but a write failure never
+        // changes the shadow decision or triggers a compatibility write.
         try {
-          decisions.record({
+          await deps.persistence.recordDecision({
             decision: result.decision,
             sessionId: sessionContext.sessionId,
             agentRunId,
@@ -211,14 +230,17 @@ export function createPolicyShadowPort(
             policyVersion: result.decision.audit.policyVersion,
             background: sessionContext.background,
           });
-          decisions.recordComparison({
-            comparisonId: `cmp:${result.decision.decisionId}`,
+          await deps.persistence.recordComparison({
+            comparisonId: `comparison:${result.decision.decisionId}`,
             decisionId: result.decision.decisionId,
             sessionId: sessionContext.sessionId,
+            agentRunId,
             capabilityId: descriptor.capabilityId,
             toolUseId: input.toolUseId,
             legacyEffect: result.comparison.legacyEffect,
             shadowEffect: result.comparison.shadowEffect,
+            comparedAt:
+              result.decision.audit.decidedAt ?? new Date().toISOString(),
             evaluationMs,
           });
         } catch (error) {

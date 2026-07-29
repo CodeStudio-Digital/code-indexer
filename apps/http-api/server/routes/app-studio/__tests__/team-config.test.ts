@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest';
+import { asCompanySessionId } from '@mcp/session-storage';
 import { applyAppTeamConfigPatch, readAppTeamConfig, type AppTeamRoleConfig } from '../team-config.js';
+
+const APP_ID = '00000029-0000-4000-8000-000000000000';
+const COMPANY_ID = asCompanySessionId(
+  '0000005a-0000-4000-8000-000000000000',
+);
 
 const initialConfig = JSON.stringify({
   runtime_kind: 'app_studio',
-  app_session_id: 41,
+  app_session_id: APP_ID,
   work_source: 'app_studio_workflow',
   autonomy: { scheduler: true },
   master_provider: 'openai',
@@ -34,9 +40,9 @@ const initialConfig = JSON.stringify({
 
 describe('App team config facade', () => {
   it('projects the Master and specialists from the canonical Company config', () => {
-    const view = readAppTeamConfig(initialConfig, 90, 'running');
+    const view = readAppTeamConfig(initialConfig, COMPANY_ID, 'running');
     expect(view).toMatchObject({
-      company_session_id: 90,
+      company_session_id: COMPANY_ID,
       status: 'running',
       operational_rules: 'Never skip tests.',
     });
@@ -79,7 +85,7 @@ describe('App team config facade', () => {
     const stored = JSON.parse(result.configJson) as Record<string, unknown>;
     expect(stored).toMatchObject({
       runtime_kind: 'app_studio',
-      app_session_id: 41,
+      app_session_id: APP_ID,
       master_provider: 'google',
       master_model: 'gemini-primary',
       master_tier: 'navigate',
@@ -112,7 +118,7 @@ describe('App team config facade', () => {
   });
 
   it('rejects duplicate roles and a fallback equal to the primary model', () => {
-    const view = readAppTeamConfig(initialConfig, 90, 'idle');
+    const view = readAppTeamConfig(initialConfig, COMPANY_ID, 'idle');
     expect(() => applyAppTeamConfigPatch(initialConfig, { roles: [...view.roles, view.roles[1]] })).toThrow('role names must be unique');
     const invalid = view.roles.map((role) => role.role === 'frontend'
       ? { ...role, fallbackModels: [{ provider: role.provider, model: role.model }] }

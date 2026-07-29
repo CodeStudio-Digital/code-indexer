@@ -81,6 +81,52 @@ describe('off-loop watchdog', () => {
     expect(readFileSync(path, 'utf8')).toBe('');
   });
 
+  // Regression: the watchdog used to name suspects[0] unconditionally, so a
+  // handler that stays in flight for its whole job (api:files:archive runs the
+  // zip in a worker but the handler awaits it throughout) became the standing
+  // suspect for every unrelated hang during that window.
+  it('does not blame a handler that was already in flight long before the stall', async () => {
+    const runDir = tempRun();
+    const path = join(runDir, 'offloop-watchdog.jsonl');
+    startOffloopWatchdog(runDir, { thresholdMs: 100, pollMs: 25, repeatMs: 1_000 });
+    // Entered 30s ago: far longer-lived than any stall this test can produce.
+    enterOffloopHandler(11, 'api:files:archive', Date.now() - 30_000);
+
+    const rows = await waitForFreezeRows(path, (row) => row.event?.source === 'offloop');
+    await stopOffloopWatchdog();
+
+    for (const row of rows) {
+      expect(row.event?.channel).toBeFalsy();
+      // The activity is still recorded for forensics — only the blame is withheld.
+      expect(row.event?.suspects).toEqual(
+        expect.arrayContaining([expect.objectContaining({ channel: 'api:files:archive' })]),
+      );
+    }
+  });
+
+  it('shares one hangId across re-reports of a single ongoing stall', async () => {
+    const runDir = tempRun();
+    const path = join(runDir, 'offloop-watchdog.jsonl');
+    startOffloopWatchdog(runDir, { thresholdMs: 100, pollMs: 25, repeatMs: 150 });
+    enterOffloopHandler(13, 'api:slow', Date.now());
+
+    const rows = await waitForFreezeRows(
+      path,
+      (row) => typeof row.event?.reportSeq === 'number' && row.event.reportSeq >= 3,
+    );
+    await stopOffloopWatchdog();
+
+    const offloop = rows.filter((r) => r.event?.source === 'offloop');
+    const ids = new Set(offloop.map((r) => r.event?.hangId));
+    // One continuous stall → one id, and a strictly increasing report counter,
+    // so a consumer can collapse instead of summing cumulative durations.
+    expect(ids.size).toBe(1);
+    expect([...ids][0]).toBeTruthy();
+    const seqs = offloop.map((r) => Number(r.event?.reportSeq));
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+    expect(new Set(seqs).size).toBe(seqs.length);
+  });
+
   it('persists the kind of a registered background activity', async () => {
     const runDir = tempRun();
     const path = join(runDir, 'offloop-watchdog.jsonl');

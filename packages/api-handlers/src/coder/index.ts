@@ -18,6 +18,7 @@
 
 import {
   ApiError,
+  asSessionGroupId,
   type CoderApi,
   type CoderProvider,
   type CoderSession,
@@ -25,9 +26,14 @@ import {
   type ExecutionMode,
   type SendMessageInput,
   type ContinueSessionInput,
+  type SessionGroupId,
 } from '@mcp/api-bus';
 import { selectRuntimeModelMetadata } from '@mcp/provider-sdk';
 import type { HandlerDeps } from '../types.js';
+
+type CoderSessionProjection = NonNullable<
+  Awaited<ReturnType<HandlerDeps['sessionStore']['getSession']>>
+>;
 
 const EXECUTION_MODES = ['standard', 'ultra'] as const satisfies readonly ExecutionMode[];
 
@@ -37,6 +43,61 @@ function isExecutionMode(value: unknown): value is ExecutionMode {
 
 function normalizeEffort(value: unknown): string | null {
   return typeof value === 'string' ? value.trim() || null : null;
+}
+
+function optionalNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isSafeInteger(value)
+    ? value
+    : null;
+}
+
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function optionalSessionGroupId(value: unknown): SessionGroupId | null {
+  if (typeof value !== 'string') return null;
+  try {
+    return asSessionGroupId(value);
+  } catch {
+    return null;
+  }
+}
+
+function toCoderSession(session: CoderSessionProjection): CoderSession {
+  const runtimeValue = session.state.extra.runtime;
+  const runtime: Readonly<Record<string, unknown>> =
+    runtimeValue
+    && typeof runtimeValue === 'object'
+    && !Array.isArray(runtimeValue)
+      ? runtimeValue as Readonly<Record<string, unknown>>
+      : {};
+  const executionMode = runtime.execution_mode_override;
+  const unrestrictedToolOutput = runtime.unrestricted_tool_output;
+  return {
+    id: session.id,
+    project_id: session.project_id,
+    title: session.title,
+    provider: session.provider,
+    model: session.model,
+    model_mode: optionalString(runtime.model_mode) ?? undefined,
+    execution_mode_override:
+      executionMode === 'ultra' ? 'ultra' : 'standard',
+    status: session.status,
+    total_input_tokens: session.total_input_tokens,
+    total_output_tokens: session.total_output_tokens,
+    group_id: optionalSessionGroupId(session.group_id),
+    is_archived: session.is_archived,
+    is_favorite: session.is_favorite,
+    phase_profile_id: optionalNumber(session.metadata.phase_profile_id),
+    unrestricted_tool_output:
+      typeof unrestrictedToolOutput === 'boolean'
+        ? unrestrictedToolOutput
+        : undefined,
+    tool_output_cap_level: optionalString(runtime.tool_output_cap_level),
+    created_at: session.created_at,
+    updated_at: session.updated_at,
+  };
 }
 
 export function createCoderHandlers(deps: HandlerDeps): CoderApi {
@@ -66,31 +127,33 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
           throw new ApiError('bad_input', 400, 'projectId required');
         }
         const archivedArg = archived === undefined ? false : archived;
-        const sessions = sessionStore.listSessions(projectId, {
+        const sessions = await sessionStore.listSessions(projectId, {
           archived: archivedArg ? true : false,
         });
         // listSessions doesn't filter by favorite — apply post hoc.
         const filtered = favorite === true ? sessions.filter((s) => s.is_favorite) : sessions;
-        return filtered as unknown as CoderSession[];
+        return filtered.map(toCoderSession);
       },
 
       async recent({ limit }) {
         const cap = Math.max(1, Math.min(50, limit ?? 10));
-        return sessionStore.listRecentSessionsGlobal(cap) as unknown as CoderSession[];
+        return (await sessionStore.listRecentSessionsGlobal(cap)).map(
+          toCoderSession,
+        );
       },
 
       async get({ id, includeMessages }) {
         if (includeMessages) {
-          const data = sessionStore.loadSessionWithMessages(id);
+          const data = await sessionStore.loadSessionWithMessages(id);
           if (!data) throw new ApiError('not_found', 404, 'session not found');
           return {
-            session: data.session as unknown as CoderSession,
-            messages: data.messages as unknown[],
+            session: toCoderSession(data.session),
+            messages: data.messages,
           };
         }
-        const session = sessionStore.getSession(id);
+        const session = await sessionStore.getSession(id);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
-        return { session: session as unknown as CoderSession };
+        return { session: toCoderSession(session) };
       },
 
       async create(input) {
@@ -113,46 +176,62 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
           ?? (legacyUltra ? 'ultra' : 'standard');
         const reasoningEffort = legacyUltra ? null : requestedEffort;
         validateReasoningEffort(input.provider, input.model, reasoningEffort);
-        const session = sessionStore.createSession({
+        const session = await sessionStore.createSession({
           project_id: input.project_id,
           title: input.title,
           provider: input.provider,
           model: input.model ?? '',
           agent: input.agent ?? null,
-          phase_profile_id: input.phase_profile_id ?? null,
+          metadata: {
+            phase_profile_id: input.phase_profile_id ?? null,
+          },
         });
-        sessionStore.setSessionExecutionMode(session.id, executionMode);
-        sessionStore.setSessionReasoningEffort(session.id, reasoningEffort);
-        const fresh = sessionStore.getSession(session.id);
+        await sessionStore.setSessionExecutionMode(session.id, executionMode);
+        await sessionStore.setSessionReasoningEffort(
+          session.id,
+          reasoningEffort,
+        );
+        const fresh = await sessionStore.getSession(session.id);
         if (!fresh) throw new ApiError('not_found', 404, 'session not found');
-        return fresh as unknown as CoderSession;
+        return toCoderSession(fresh);
       },
 
       async update({ id, ...patch }) {
-        const existing = sessionStore.getSession(id);
+        const existing = await sessionStore.getSession(id);
         if (!existing) throw new ApiError('not_found', 404, 'session not found');
-        if (patch.title !== undefined) sessionStore.setSessionTitle(id, patch.title);
-        if (patch.is_archived !== undefined) sessionStore.setSessionArchived(id, patch.is_archived);
-        if (patch.is_favorite !== undefined) sessionStore.setSessionFavorite(id, patch.is_favorite);
-        if (patch.group_id !== undefined) sessionStore.setSessionGroup(id, patch.group_id);
-        if (patch.unrestricted_tool_output !== undefined) {
-          sessionStore.setSessionUnrestrictedToolOutput(id, patch.unrestricted_tool_output ?? null);
+        if (patch.title !== undefined) {
+          await sessionStore.setSessionTitle(id, patch.title);
         }
-        const fresh = sessionStore.getSession(id);
+        if (patch.is_archived !== undefined) {
+          await sessionStore.setSessionArchived(id, patch.is_archived);
+        }
+        if (patch.is_favorite !== undefined) {
+          await sessionStore.setSessionFavorite(id, patch.is_favorite);
+        }
+        if (patch.group_id !== undefined) {
+          await sessionStore.setSessionGroup(id, patch.group_id);
+        }
+        if (patch.unrestricted_tool_output !== undefined) {
+          await sessionStore.setSessionUnrestrictedToolOutput(
+            id,
+            patch.unrestricted_tool_output ?? null,
+          );
+        }
+        const fresh = await sessionStore.getSession(id);
         if (!fresh) throw new ApiError('not_found', 404, 'session not found');
-        return fresh as unknown as CoderSession;
+        return toCoderSession(fresh);
       },
 
       async setExecutionMode({ id, mode }) {
         if (!isExecutionMode(mode)) {
           throw new ApiError('bad_input', 400, `mode: one of ${EXECUTION_MODES.join('|')} required`);
         }
-        const existing = sessionStore.getSession(id);
+        const existing = await sessionStore.getSession(id);
         if (!existing) throw new ApiError('not_found', 404, 'session not found');
-        sessionStore.setSessionExecutionMode(id, mode);
-        const fresh = sessionStore.getSession(id);
+        await sessionStore.setSessionExecutionMode(id, mode);
+        const fresh = await sessionStore.getSession(id);
         if (!fresh) throw new ApiError('not_found', 404, 'session not found');
-        return fresh as unknown as CoderSession;
+        return toCoderSession(fresh);
       },
 
       async setReasoningEffort({ id, effort: rawEffort }) {
@@ -160,54 +239,60 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
           throw new ApiError('bad_input', 400, 'effort:string|null required');
         }
         const effort = normalizeEffort(rawEffort);
-        const existing = sessionStore.getSession(id);
+        const existing = await sessionStore.getSession(id);
         if (!existing) throw new ApiError('not_found', 404, 'session not found');
 
         // Pre-241 clients exposed Ultra as a pseudo-effort. Preserve their
         // intent without ever storing or forwarding that unsupported sentinel.
         if (effort?.toLowerCase() === 'ultra') {
-          sessionStore.setSessionExecutionMode(id, 'ultra');
-          sessionStore.setSessionReasoningEffort(id, null);
+          await sessionStore.setSessionExecutionMode(id, 'ultra');
+          await sessionStore.setSessionReasoningEffort(id, null);
         } else {
           validateReasoningEffort(existing.provider, existing.model, effort);
           // The legacy effort route is a complete control surface: selecting a
           // native effort or provider default must also leave a prior Ultra mode.
-          if (existing.execution_mode_override === 'ultra') {
-            sessionStore.setSessionExecutionMode(id, 'standard');
+          if (toCoderSession(existing).execution_mode_override === 'ultra') {
+            await sessionStore.setSessionExecutionMode(id, 'standard');
           }
-          sessionStore.setSessionReasoningEffort(id, effort);
+          await sessionStore.setSessionReasoningEffort(id, effort);
         }
 
-        const fresh = sessionStore.getSession(id);
+        const fresh = await sessionStore.getSession(id);
         if (!fresh) throw new ApiError('not_found', 404, 'session not found');
-        return fresh as unknown as CoderSession;
+        return toCoderSession(fresh);
       },
 
       async delete({ id }) {
-        sessionStore.deleteSession(id);
+        await sessionStore.deleteSession(id);
         return { ok: true as const };
       },
 
       async messages({ id, cursor, limit }) {
-        const session = sessionStore.getSession(id);
+        const session = await sessionStore.getSession(id);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
-        const beforeId = cursor ? Number(cursor) : 0;
         const cap = Math.max(1, Math.min(100, limit ?? 40));
-        if (!beforeId) {
+        if (cursor == null) {
           // First page — load tail (recent N).
-          const data = sessionStore.loadSessionMessagesTail(id, cap);
+          const data = await sessionStore.loadSessionMessagesTail(id, cap);
           if (!data) return { items: [], nextCursor: null };
           const oldest = data.message_rows[0];
           return {
-            items: data.messages as unknown[],
-            nextCursor: oldest ? String(oldest.id) : null,
+            items: data.messages,
+            nextCursor: oldest?.seq ?? null,
           };
         }
-        const data = sessionStore.loadMessagesBefore(id, beforeId, cap);
+        if (!Number.isSafeInteger(cursor) || cursor <= 0) {
+          throw new ApiError(
+            'bad_input',
+            400,
+            'cursor must be a positive message sequence',
+          );
+        }
+        const data = await sessionStore.loadMessagesBefore(id, cursor, cap);
         const oldest = data.message_rows[0];
         return {
-          items: data.messages as unknown[],
-          nextCursor: oldest ? String(oldest.id) : null,
+          items: data.messages,
+          nextCursor: oldest?.seq ?? null,
         };
       },
     },
@@ -224,7 +309,7 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
       },
 
       async setActive({ sessionId, provider: _p, model: _m }) {
-        const session = sessionStore.getSession(sessionId);
+        const session = await sessionStore.getSession(sessionId);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
         // SessionStore exposes only `setSessionFallback`; switching the
         // primary provider/model on an existing session isn't supported
@@ -258,11 +343,11 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
       continueSession(_input: ContinueSessionInput): AsyncIterable<CoderEvent> {
         throw new ApiError('not_implemented', 501, 'coder.stream.continueSession lands in Dia 3');
       },
-      attach(_input: { sessionId: number; since?: number }): AsyncIterable<CoderEvent> {
+      attach(_input): AsyncIterable<CoderEvent> {
         throw new ApiError('not_implemented', 501, 'coder.stream.attach lands in Dia 3');
       },
       async state({ sessionId }) {
-        const session = sessionStore.getSession(sessionId);
+        const session = await sessionStore.getSession(sessionId);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
         // `alive` requires the activeRuns map which lives in CoderRuntime —
         // we surface it as `false` here and let the Hono route override
@@ -275,13 +360,11 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
         };
       },
       async toolStats({ sessionId, recent }) {
-        const session = sessionStore.getSession(sessionId);
+        const session = await sessionStore.getSession(sessionId);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
         const cap = Math.max(1, Math.min(200, recent ?? 30));
-        const stats = sessionStore.getToolCallStats(sessionId, cap);
-        // Cast — store shape mirrors the contract closely enough for the
-        // dashboard, which already consumes it.
-        return { sessionId, ...stats } as unknown as ReturnType<CoderApi['stream']['toolStats']> extends Promise<infer R> ? R : never;
+        const stats = await sessionStore.getToolCallStats(sessionId, cap);
+        return { sessionId, ...stats };
       },
     },
 
@@ -299,17 +382,26 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
 
     groups: {
       async list({ projectId }) {
-        return sessionStore.listGroups(projectId) as Array<{ id: number; name: string; project_id: number }>;
+        return (await sessionStore.listGroups(projectId)).map((group) => ({
+          id: asSessionGroupId(group.id),
+          name: group.name,
+          project_id: group.project_id ?? projectId,
+        }));
       },
       async create({ projectId, name }) {
-        const group = sessionStore.createGroup({ project_id: projectId, name });
-        return { id: group.id };
+        const group = await sessionStore.createGroup(projectId, {
+          name,
+        });
+        return { id: asSessionGroupId(group.id) };
       },
-      async update({ id, name }) {
-        sessionStore.updateGroup(id, { name });
+      async update({ projectId, id, name }) {
+        const updated = await sessionStore.updateGroup(projectId, id, { name });
+        if (!updated) throw new ApiError('not_found', 404, 'session group not found');
       },
-      async delete({ id }) {
-        sessionStore.deleteGroup(id);
+      async delete({ projectId, id }) {
+        if (!(await sessionStore.deleteGroup(projectId, id))) {
+          throw new ApiError('not_found', 404, 'session group not found');
+        }
       },
     },
 
@@ -323,27 +415,17 @@ export function createCoderHandlers(deps: HandlerDeps): CoderApi {
         return skill;
       },
       async activeForSession({ sessionId }) {
-        // Stored on the session as a JSON column; reading via session row.
-        const session = sessionStore.getSession(sessionId);
+        const session = await sessionStore.getSession(sessionId);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
-        const raw = (session as unknown as { active_skills_json?: string }).active_skills_json;
-        if (!raw) return [];
-        try {
-          const parsed = JSON.parse(raw);
-          return Array.isArray(parsed) ? parsed.map(String) : [];
-        } catch {
-          return [];
-        }
+        const active = session.state.tools.active_skills;
+        return Array.isArray(active)
+          ? active.filter((id): id is string => typeof id === 'string')
+          : [];
       },
       async setActiveForSession({ sessionId, skillIds }) {
-        const session = sessionStore.getSession(sessionId);
+        const session = await sessionStore.getSession(sessionId);
         if (!session) throw new ApiError('not_found', 404, 'session not found');
-        const setter = (sessionStore as unknown as { setSessionActiveSkills?: (id: number, ids: string[]) => void }).setSessionActiveSkills;
-        if (typeof setter === 'function') {
-          setter(sessionId, skillIds);
-        } else {
-          throw new ApiError('not_implemented', 501, 'sessionStore.setSessionActiveSkills not available');
-        }
+        await sessionStore.setSessionActiveSkills(sessionId, skillIds);
       },
     },
   };

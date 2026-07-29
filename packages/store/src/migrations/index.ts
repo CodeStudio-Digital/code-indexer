@@ -268,6 +268,8 @@ import { coderOrchestrationCheckpoints259 } from './259_coder_orchestration_chec
 import { masterPromptDeliveryAuthority260 } from './260_master_prompt_delivery_authority.js';
 import { pipelineBindingCleanup261 } from './261_pipeline_binding_cleanup.js';
 import { retireQualityClassifiers262 } from './262_retire_quality_classifiers.js';
+import { filesystemSessionCutover263 } from './263_filesystem_session_cutover.js';
+import { structuralRunPhaseTelemetry264 } from './264_structural_run_phase_telemetry.js';
 import { structuralLastChecked231 } from './231_structural_last_checked.js';
 import { removeCodeLlmIndex232 } from './232_remove_code_llm_index.js';
 import { removeLegacyVectorLedgers233 } from './233_remove_legacy_vector_ledgers.js';
@@ -566,6 +568,8 @@ export const MIGRATIONS: Migration[] = [
   masterPromptDeliveryAuthority260,
   pipelineBindingCleanup261,
   retireQualityClassifiers262,
+  filesystemSessionCutover263,
+  structuralRunPhaseTelemetry264,
 ];
 
 /**

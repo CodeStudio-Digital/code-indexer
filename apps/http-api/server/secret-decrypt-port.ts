@@ -15,9 +15,22 @@
  * worker_threads, so the worker side must always RPC here.
  */
 
-export type SecretDecryptor = (blob: string) => string;
+/**
+ * Returns plaintext, or a promise of it.
+ *
+ * The async arm exists for a host where the real decryptor lives in ANOTHER
+ * process: `safeStorage` is an Electron main-process API, so once the backend
+ * moves into a `utilityProcess` this port is satisfied by an RPC back to main
+ * rather than a direct call. Both existing consumers already tolerate a
+ * promise — `DbSecretDecryptor` (packages/code-agent/src/tools/db/store-binding.ts)
+ * is declared `Promise<string> | string`, and the worker bridge handler awaits
+ * its return — so widening it here is not a breaking change today.
+ */
+export type SecretDecryptor = (blob: string) => string | Promise<string>;
+export type SecretEncryptor = (plaintext: string) => string | Promise<string>;
 
 let mainDecryptor: SecretDecryptor | null = null;
+let mainEncryptor: SecretEncryptor | null = null;
 
 /**
  * Fallback for a process where no Electron decryptor was injected. Mirrors the
@@ -45,4 +58,19 @@ export function setMainSecretDecryptor(fn: SecretDecryptor | null): void {
 /** Always returns a usable function — the injected decryptor, else the fallback. */
 export function getMainSecretDecryptor(): SecretDecryptor {
   return mainDecryptor ?? fallbackDecrypt;
+}
+
+function fallbackEncrypt(_plaintext: string): never {
+  throw new Error(
+    'OS keychain encryption is unavailable — refusing to persist a Company session secret',
+  );
+}
+
+export function setMainSecretEncryptor(fn: SecretEncryptor | null): void {
+  mainEncryptor = fn;
+}
+
+/** Fail-closed counterpart to getMainSecretDecryptor. */
+export function getMainSecretEncryptor(): SecretEncryptor {
+  return mainEncryptor ?? fallbackEncrypt;
 }

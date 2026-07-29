@@ -7,6 +7,7 @@
  */
 import { WorkerHost, type MessageBridge } from '@mcp/orchestrator-host';
 import type {
+  DirtyEvent,
   IndexFilesSummary,
   StructuralExecutor,
   StructuralProgressFrame,
@@ -32,6 +33,10 @@ export class IndexerWorkerClient implements StructuralExecutor {
   private inflight = 0;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
   private progressHandlers = new Map<number, (p: StructuralProgressFrame) => void>();
+  private changeHandlers = new Map<
+    number,
+    (events: readonly DirtyEvent[]) => void | Promise<void>
+  >();
 
   constructor(
     private opts: IndexerWorkerClientOpts,
@@ -40,17 +45,29 @@ export class IndexerWorkerClient implements StructuralExecutor {
 
   async runStructuralIndex(
     projectId: number,
-    opts: { maxFiles?: number; allowEmptyWipe?: boolean; onProgress?: (p: StructuralProgressFrame) => void },
+    opts: {
+      maxFiles?: number;
+      allowEmptyWipe?: boolean;
+      onProgress?: (p: StructuralProgressFrame) => void;
+      onChanges?: (events: readonly DirtyEvent[]) => void | Promise<void>;
+    },
   ): Promise<StructuralRunSummary> {
     if (opts.onProgress) this.progressHandlers.set(projectId, opts.onProgress);
+    if (opts.onChanges) this.changeHandlers.set(projectId, opts.onChanges);
     try {
       return await this.request<StructuralRunSummary>(
         'structuralIndex',
-        { projectId, maxFiles: opts.maxFiles, allowEmptyWipe: opts.allowEmptyWipe },
+        {
+          projectId,
+          maxFiles: opts.maxFiles,
+          allowEmptyWipe: opts.allowEmptyWipe,
+          reportChanges: Boolean(opts.onChanges),
+        },
         RUN_TIMEOUT_MS,
       );
     } finally {
       this.progressHandlers.delete(projectId);
+      this.changeHandlers.delete(projectId);
     }
   }
 
@@ -134,6 +151,17 @@ export class IndexerWorkerClient implements StructuralExecutor {
       bridge.on('structural.progress', (data) => {
         const p = data as StructuralProgressFrame & { projectId: number };
         this.progressHandlers.get(p.projectId)?.(p);
+      });
+      bridge.handle('structural.changes', async (data) => {
+        const payload = data as { projectId: number; events: DirtyEvent[] };
+        const handler = this.changeHandlers.get(payload.projectId);
+        if (!handler) {
+          throw new Error(
+            `no structural change handler registered for project ${payload.projectId}`,
+          );
+        }
+        await handler(payload.events);
+        return { ok: true };
       });
       this.boundBridge = bridge;
     }

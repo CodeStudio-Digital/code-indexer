@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Activity, Bot, ListChecks, Loader2, Sparkles, Wrench } from 'lucide-react';
 import type { ActiveProcess } from '../../../hooks/agent-stream/types.js';
 import { selectVisibleActiveProcesses } from '../../../hooks/agent-stream/active-processes.js';
+import { useNow } from '../../../lib/perf/shared-clock.js';
 import { cn } from '../../../lib/utils.js';
 import { CollapsibleSection } from './CollapsibleSection.js';
 
 interface ActiveProcessesSectionProps {
-  sessionId: number;
+  sessionId: string;
   processes: ActiveProcess[];
 }
 
@@ -17,14 +18,9 @@ export function ActiveProcessesSection({ sessionId, processes }: ActiveProcesses
   const visible = useMemo(() => (
     selectVisibleActiveProcesses(processes).sort((a, b) => a.startedAt - b.startedAt)
   ), [processes]);
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (visible.length === 0) return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [visible.length]);
+  // Shared app-wide 1 Hz clock, subscribed only while something is actually
+  // running. Empty list → no subscription → no timer anywhere.
+  const now = useNow(visible.length > 0);
 
   if (visible.length === 0) return null;
 

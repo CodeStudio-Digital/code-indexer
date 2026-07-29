@@ -25,14 +25,14 @@ export function FrameRerollPopover({
   children,
 }: {
   projectId: number;
-  assetId: number;
-  versionId: number;
+  assetId: string;
+  versionId: string;
   prompt: string | null;
   refresh: () => void;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
-  const [target, setTarget] = useState<{ index: number; track: number; versionId: number } | null>(null);
+  const [target, setTarget] = useState<{ index: number; track: number; versionId: string } | null>(null);
   const onOpenChange = (next: boolean) => {
     if (next) {
       const s = useAnimateSession.getState();
@@ -64,16 +64,16 @@ function RerollContent({
   projectId, assetId, versionId, prompt, refresh, target, onClose,
 }: {
   projectId: number;
-  assetId: number;
-  versionId: number;
+  assetId: string;
+  versionId: string;
   prompt: string | null;
   refresh: () => void;
-  target: { index: number; track: number; versionId: number } | null;
+  target: { index: number; track: number; versionId: string } | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const { jobs, start } = useSpriteJobs(projectId);
-  const [jobId, setJobId] = useState<number | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
   const startedRef = useRef(false);

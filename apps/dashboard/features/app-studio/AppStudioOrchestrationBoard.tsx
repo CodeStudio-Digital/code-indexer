@@ -72,12 +72,12 @@ export function currentWorkAttempt(item: AppWorkItemView): AppWorkAttemptView | 
   if (item.active_attempt) return item.active_attempt;
   if (item.latest_attempt) return item.latest_attempt;
   if (!item.attempts?.length) return null;
-  return [...item.attempts].sort((a, b) => b.attempt - a.attempt || b.id - a.id)[0] ?? null;
+  return [...item.attempts].sort((a, b) => b.attempt - a.attempt || b.seq - a.seq)[0] ?? null;
 }
 
 export interface AppWorkRuntimeSummary {
   role: string;
-  agentRunId: number | null;
+  agentRunId: string | null;
   attempt: number | null;
 }
 
@@ -85,11 +85,11 @@ export function workRuntimeSummary(item: AppWorkItemView, events: AppRecentEvent
   const attempt = currentWorkAttempt(item);
   if (attempt) return { role: attempt.role || item.owner_role, agentRunId: attempt.company_agent_run_id, attempt: attempt.attempt };
   const dispatch = [...events]
-    .sort((a, b) => b.id - a.id)
+    .sort((a, b) => b.seq - a.seq)
     .find((event) => recentEventKind(event) === 'agents.specialist_dispatched' && event.payload?.work_item_id === item.id);
   if (!dispatch) return null;
   const role = typeof dispatch.payload?.role === 'string' ? dispatch.payload.role : item.owner_role;
-  const agentRunId = typeof dispatch.payload?.company_agent_run_id === 'number' ? dispatch.payload.company_agent_run_id : null;
+  const agentRunId = typeof dispatch.payload?.company_agent_run_id === 'string' ? dispatch.payload.company_agent_run_id : null;
   const attemptNumber = typeof dispatch.payload?.attempt === 'number' ? dispatch.payload.attempt : null;
   return { role, agentRunId, attempt: attemptNumber };
 }
@@ -98,7 +98,7 @@ export function recentEventKind(event: AppRecentEventView): string {
   return event.kind ?? event.event_type ?? 'workflow.updated';
 }
 
-function DecisionCard({ appId, decision, onChanged }: { appId: number; decision: AppDecisionView; onChanged: () => void }) {
+function DecisionCard({ appId, decision, onChanged }: { appId: string; decision: AppDecisionView; onChanged: () => void }) {
   const { t } = useTranslation('appStudio');
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);
@@ -192,7 +192,7 @@ function eventSummary(event: AppRecentEventView): string | null {
 
 function Timeline({ events }: { events: AppRecentEventView[] }) {
   const { t } = useTranslation('appStudio');
-  const rows = [...events].sort((a, b) => b.id - a.id).slice(0, 12);
+  const rows = [...events].sort((a, b) => b.seq - a.seq).slice(0, 12);
   if (!rows.length) return null;
   return (
     <section className="space-y-2">

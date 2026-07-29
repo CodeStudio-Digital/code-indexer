@@ -31,6 +31,8 @@
  * mid-run which is worse UX than truncation.
  */
 
+import { isUuid } from '@mcp/session-storage/types.js';
+
 export type SubagentMemoKind = 'observation' | 'decision' | 'warning' | 'progress';
 
 export interface SubagentMemo {
@@ -51,7 +53,7 @@ export interface SubagentSnapshotRef {
 
 export interface SubagentBoardPostRef {
   /** Board post id, when the underlying store returned one. */
-  id?: string | number;
+  id?: string;
   /** Kind of board post (deliverable/message/risk/…). */
   kind: string;
   /** First 200 chars of the post body. */
@@ -97,10 +99,13 @@ export class SubagentCollector {
     return true;
   }
 
-  recordBoardPost(kind: string, body: string, id?: string | number): boolean {
+  recordBoardPost(kind: string, body: string, id?: string): boolean {
+    if (id !== undefined && !isUuid(id)) {
+      throw new TypeError('board post id must be a canonical UUID');
+    }
     if (this._boardPosts.length >= MAX_BOARD_POSTS) return false;
     this._boardPosts.push({
-      id,
+      id: id?.toLowerCase(),
       kind,
       preview: body.length > 200 ? body.slice(0, 197) + '...' : body,
       timestamp: new Date().toISOString(),

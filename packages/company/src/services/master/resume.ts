@@ -23,7 +23,6 @@ import {
 } from '@mcp/code-agent/index.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IBoardPoster } from '@mcp/company/services/ports.js';
 import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
@@ -147,8 +146,8 @@ export interface MasterResumeDeps {
   board: IBoardPoster;
   orchestratorRef: unknown;
   state: MasterStartStateMutators;
-  wireRunner: (runner: CoderRunner, runId: number) => void;
-  attachCompletion: (handle: RunCoderHandle, runId: number) => void;
+  wireRunner: (runner: CoderRunner, runId: string) => void;
+  attachCompletion: (handle: RunCoderHandle, runId: string) => void;
 }
 
 export async function resumeMaster(
@@ -158,7 +157,8 @@ export async function resumeMaster(
   if (deps.state.hasHandle) throw new Error('Master already started');
 
   const ctx = deps.ctx;
-  const agentRuns = ctx.companyStore.listAgentRuns(ctx.companySessionId);
+  const fsSessionStore = ctx.companyFiles.sessionStore;
+  const agentRuns = await ctx.companyFiles.listAgentRuns();
   const masterRun = agentRuns.filter((r) => r.role === 'master').pop();
   if (!masterRun) throw new Error('No master agent_run found — use start instead');
 
@@ -179,50 +179,51 @@ export async function resumeMaster(
   let resumedProvider = masterRun.provider;
   let resumedModel = masterRun.model;
   if (ctx.runtimeKind === 'app_studio') {
-    const sessionStore = new SessionStore(ctx.db.raw());
-    try {
-      const coderSession = sessionStore.getSession(masterRun.coder_session_id);
-      if (!coderSession) {
-        throw new Error(`App Master coder session ${masterRun.coder_session_id} was not found`);
-      }
-      const runtime = resolveAppMasterResumeRuntime({
-        configuredProvider: opts.provider ?? '',
-        configuredModel: opts.model ?? '',
-        persistedConfiguredProvider: masterRun.configured_provider,
-        persistedConfiguredModel: masterRun.configured_model,
-        persistedFallbackReason: masterRun.fallback_reason,
-        sessionProvider: coderSession.provider,
-        sessionModel: coderSession.model,
-        fallbackModels: opts.fallbackModels ?? [],
-      });
-      resumedProvider = runtime.effectiveProvider;
-      resumedModel = runtime.effectiveModel;
-      if (
-        coderSession.provider !== runtime.effectiveProvider
-        || coderSession.model !== runtime.effectiveModel
-      ) {
-        sessionStore.updateSessionProvider(
-          masterRun.coder_session_id,
-          runtime.effectiveProvider,
-          runtime.effectiveModel,
-        );
-      }
-      if (runtime.resetResponseState) {
-        // Response ids are provider/model-specific. The transcript remains;
-        // runCoder reconstructs the next request from persisted messages.
-        sessionStore.setLastResponseState(masterRun.coder_session_id, null, null);
-      }
-      ctx.companyStore.updateAgentRunRuntimeSnapshot(masterRun.id, {
-        configuredProvider: runtime.configuredProvider,
-        configuredModel: runtime.configuredModel,
-        effectiveProvider: runtime.effectiveProvider,
-        effectiveModel: runtime.effectiveModel,
-        dispatchSource: 'app_studio',
-        fallbackReason: runtime.fallbackReason,
-      });
-    } finally {
-      sessionStore.close();
+    const coderSession = await fsSessionStore.getSession(
+      masterRun.coder_session_id,
+    );
+    if (!coderSession) {
+      throw new Error(`App Master coder session ${masterRun.coder_session_id} was not found`);
     }
+    const runtime = resolveAppMasterResumeRuntime({
+      configuredProvider: opts.provider ?? '',
+      configuredModel: opts.model ?? '',
+      persistedConfiguredProvider: masterRun.configured_provider,
+      persistedConfiguredModel: masterRun.configured_model,
+      persistedFallbackReason: masterRun.fallback_reason,
+      sessionProvider: coderSession.provider,
+      sessionModel: coderSession.model,
+      fallbackModels: opts.fallbackModels ?? [],
+    });
+    resumedProvider = runtime.effectiveProvider;
+    resumedModel = runtime.effectiveModel;
+    if (
+      coderSession.provider !== runtime.effectiveProvider
+      || coderSession.model !== runtime.effectiveModel
+    ) {
+      await fsSessionStore.updateSessionProvider(
+        masterRun.coder_session_id,
+        runtime.effectiveProvider,
+        runtime.effectiveModel,
+      );
+    }
+    if (runtime.resetResponseState) {
+      // Response ids are provider/model-specific. The transcript remains;
+      // runCoder reconstructs the next request from persisted messages.
+      await fsSessionStore.setLastResponseState(
+        masterRun.coder_session_id,
+        null,
+        null,
+      );
+    }
+    await ctx.companyFiles.updateAgentRunRuntimeSnapshot(masterRun.id, {
+      configuredProvider: runtime.configuredProvider,
+      configuredModel: runtime.configuredModel,
+      effectiveProvider: runtime.effectiveProvider,
+      effectiveModel: runtime.effectiveModel,
+      dispatchSource: 'app_studio',
+      fallbackReason: runtime.fallbackReason,
+    });
   }
 
   // ── Fast path (awaited inside the RPC): cheap DB writes + board post ──
@@ -237,10 +238,11 @@ export async function resumeMaster(
   deps.state.setRoleConfigs((opts.roleConfigs ?? []) as RoleConfig[]);
   deps.state.loadConfigFromDb();
 
-  ctx.companyStore.updateAgentRunStatus(masterRun.id, 'running');
-  ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'running');
-  // P15c — clear the recovery flag set by `recoverStaleAgentRuns()` on boot.
-  ctx.companyStore.clearSessionRecoveryFlag(ctx.companySessionId);
+  await Promise.all([
+    ctx.companyFiles.updateAgentRunStatus(masterRun.id, 'running'),
+    ctx.companyFiles.updateSessionStatus('running'),
+    ctx.companyFiles.clearRecoveryFlag(),
+  ]);
 
   deps.board.post(
     'system',
@@ -263,11 +265,11 @@ export async function resumeMaster(
       { masterSystemPromptOverride: opts.systemPromptOverride },
     );
 
-    configureMasterSkills({
+    await configureMasterSkills({
       roleConfigs: deps.state.roleConfigs,
       configuredStack: inputs.configuredStack,
       coderSessionId: masterRun.coder_session_id,
-      primaryProjectId: ctx.projects[0]?.project_id,
+      sessionStore: fsSessionStore,
       masterSkills: opts.skills,
     });
 
@@ -313,7 +315,7 @@ export async function resumeMaster(
   };
 
   const promise = doResume()
-    .catch((e) => {
+    .catch(async (e) => {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[company s=${ctx.companySessionId}] master resume background task failed:`, msg);
       // Surface as a board message instead of an unhandled rejection — the
@@ -322,8 +324,10 @@ export async function resumeMaster(
         deps.board.post('system', null, 'message', `Master resume failed: ${msg}`);
       } catch { /* best-effort */ }
       try {
-        ctx.companyStore.updateAgentRunStatus(masterRun.id, 'error');
-        ctx.companyStore.updateCompanySessionStatus(ctx.companySessionId, 'error');
+        await Promise.all([
+          ctx.companyFiles.updateAgentRunStatus(masterRun.id, 'error'),
+          ctx.companyFiles.updateSessionStatus('error'),
+        ]);
       } catch { /* best-effort */ }
     })
     .finally(() => {

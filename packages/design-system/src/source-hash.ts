@@ -5,7 +5,7 @@
  * excluding directories that don't represent semantic source
  * (`node_modules`, `dist`, `storybook-static`, `.git`, `.cache`, etc.).
  *
- * The hash is stored on `design_system_versions.source_hash`. When the
+ * The hash is stored on the bundle-local Design version JSON. When the
  * master concludes a round and the new hash equals the previous
  * published version's hash, the orchestrator skips the publish (records
  * the version with status='skipped' so the UI can show that nothing

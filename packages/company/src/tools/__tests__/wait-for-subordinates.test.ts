@@ -12,7 +12,11 @@ import { describe, it, expect } from 'vitest';
 import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
 import { buildMasterTools, summarizeSubordinates } from '@mcp/company/tools/master-tools.js';
 
-type SubInfo = { agentRunId: number; role: string; status: string };
+const FRONTEND_RUN_ID = '00000000-0000-4000-8000-000000000001';
+const BACKEND_RUN_ID = '00000000-0000-4000-8000-000000000002';
+const QA_RUN_ID = '00000000-0000-4000-8000-000000000003';
+
+type SubInfo = { agentRunId: string; role: string; status: string };
 
 /** Minimal orchestrator stub: a Proxy so `buildMasterTools` can construct every
  *  sibling tool, while we control only the three methods the wait handler uses. */
@@ -42,7 +46,11 @@ describe('wait_for_subordinates — return-shape contract', () => {
   it('returns a soft continuation (NOT an error) when its own deadline elapses', async () => {
     const orch = fakeOrchestrator({
       hasRunningSubordinates: () => true,
-      listSubordinates: (): SubInfo[] => [{ agentRunId: 1, role: 'backend', status: 'running' }],
+      listSubordinates: (): SubInfo[] => [{
+        agentRunId: BACKEND_RUN_ID,
+        role: 'backend',
+        status: 'running',
+      }],
       // Never fires — forces the internal setTimeout path to win.
       onSubordinateAttention: () => () => undefined,
     });
@@ -56,11 +64,20 @@ describe('wait_for_subordinates — return-shape contract', () => {
   it('wakes and returns guidance when the human sends a message mid-wait', async () => {
     const orch = fakeOrchestrator({
       hasRunningSubordinates: () => true,
-      listSubordinates: (): SubInfo[] => [{ agentRunId: 1, role: 'backend', status: 'running' }],
+      listSubordinates: (): SubInfo[] => [{
+        agentRunId: BACKEND_RUN_ID,
+        role: 'backend',
+        status: 'running',
+      }],
       // Fire a user_message attention event asynchronously (after the wait
       // loop has wired `off`/`timer`) — mirrors MasterLifecycle.sendUserMessage.
-      onSubordinateAttention: (listener: (ev: { kind: string; agentRunId: number; role: string }) => void) => {
-        setTimeout(() => listener({ kind: 'user_message', agentRunId: 0, role: 'human' }), 0);
+      onSubordinateAttention: (
+        listener: (ev: { kind: string; agentRunId: string | null; role: string }) => void,
+      ) => {
+        setTimeout(
+          () => listener({ kind: 'user_message', agentRunId: null, role: 'human' }),
+          0,
+        );
         return () => undefined;
       },
     });
@@ -76,11 +93,20 @@ describe('wait_for_subordinates — return-shape contract', () => {
   it('wakes and returns guidance when a subordinate notification arrives mid-wait', async () => {
     const orch = fakeOrchestrator({
       hasRunningSubordinates: () => true,
-      listSubordinates: (): SubInfo[] => [{ agentRunId: 1, role: 'backend', status: 'running' }],
+      listSubordinates: (): SubInfo[] => [{
+        agentRunId: BACKEND_RUN_ID,
+        role: 'backend',
+        status: 'running',
+      }],
       // Fire a generic `notify` attention event (emitted by MasterLifecycle.notify
       // for every subordinate notification) after the wait loop subscribes.
-      onSubordinateAttention: (listener: (ev: { kind: string; agentRunId: number; role: string }) => void) => {
-        setTimeout(() => listener({ kind: 'notify', agentRunId: 0, role: 'system' }), 0);
+      onSubordinateAttention: (
+        listener: (ev: { kind: string; agentRunId: string | null; role: string }) => void,
+      ) => {
+        setTimeout(
+          () => listener({ kind: 'notify', agentRunId: null, role: 'system' }),
+          0,
+        );
         return () => undefined;
       },
     });
@@ -119,9 +145,9 @@ describe('summarizeSubordinates — failed runs surface a recovery hint', () => 
   it('flags failed statuses with resume/abort guidance and counts them', () => {
     const orch = fakeOrchestrator({
       listSubordinates: (): SubInfo[] => [
-        { agentRunId: 1, role: 'frontend', status: 'completed' },
-        { agentRunId: 2, role: 'backend', status: 'error' },
-        { agentRunId: 3, role: 'qa', status: 'aborted' },
+        { agentRunId: FRONTEND_RUN_ID, role: 'frontend', status: 'completed' },
+        { agentRunId: BACKEND_RUN_ID, role: 'backend', status: 'error' },
+        { agentRunId: QA_RUN_ID, role: 'qa', status: 'aborted' },
       ],
     });
     const out = summarizeSubordinates(orch);
@@ -129,12 +155,16 @@ describe('summarizeSubordinates — failed runs surface a recovery hint', () => 
     expect(out).toContain('resume_subordinate');
     expect(out).toContain('abort_subordinate_agent');
     // Clean runs carry no hint.
-    expect(out).toMatch(/frontend \(run=1\): completed$/m);
+    expect(out).toContain(`frontend (run=${FRONTEND_RUN_ID}): completed`);
   });
 
   it('uses the all-done header when every run is clean', () => {
     const orch = fakeOrchestrator({
-      listSubordinates: (): SubInfo[] => [{ agentRunId: 1, role: 'frontend', status: 'completed' }],
+      listSubordinates: (): SubInfo[] => [{
+        agentRunId: FRONTEND_RUN_ID,
+        role: 'frontend',
+        status: 'completed',
+      }],
     });
     expect(summarizeSubordinates(orch)).toContain('All subordinates finished:');
   });

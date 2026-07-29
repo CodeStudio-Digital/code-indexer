@@ -575,7 +575,7 @@ function makeHarness(options: {
     embedAndUpsert: vi.fn(async () => ({ ok: true })),
   };
   const investigationSemanticIndex = {
-    listProject: vi.fn((_projectId: number): Array<Record<string, unknown>> => []),
+    listProject: vi.fn(async (_projectId: number): Promise<Array<Record<string, unknown>>> => []),
     backfillProject: vi.fn(async () => ({ embedded: 0, skipped: 0, failed: 0, total: 0 })),
     embedAndUpsert: vi.fn(async () => ({ ok: true })),
   };
@@ -2455,10 +2455,11 @@ describe('SemanticIndexCoordinator code generations', () => {
   });
 
   it('includes project investigations in Memory generation coverage', async () => {
+    const investigationId = 'cd394975-bcc4-4b46-a148-f3406884d1dc';
     const investigation = {
-      id: 17,
+      id: investigationId,
       project_id: 1,
-      session_id: 4,
+      session_id: '50505c2f-6d28-4ca6-9ed9-fc14bdd60812',
       topic: 'local vector routing',
       summary: 'investigations share the project Memory namespace',
       body: 'details',
@@ -2471,12 +2472,12 @@ describe('SemanticIndexCoordinator code generations', () => {
     const h = makeHarness({
       semanticItems: {
         'memory:project:p1': [{
-          item_key: 'investigation:17', source_hash: hash, vector_id: 'inv17',
+          item_key: `investigation:${investigationId}`, source_hash: hash, vector_id: 'inv17',
           chunk_index: 0, status: 'indexed',
         }],
       },
     });
-    h.investigationSemanticIndex.listProject.mockReturnValue([investigation]);
+    h.investigationSemanticIndex.listProject.mockResolvedValue([investigation]);
     const verify = (h.coordinator as unknown as {
       verifyMemoryVectorCoverage(
         scope: 'project' | 'user', projectId: number, generationId: number, namespace: string,

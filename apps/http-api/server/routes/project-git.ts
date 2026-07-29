@@ -135,11 +135,11 @@ export function mountProjectGitRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/projects/:id/git/checkout', async (c) => {
     try {
-      const body = await c.req.json<{ name: string; create?: boolean }>();
+      const body = await c.req.json<{ name: string; create?: boolean; from?: string }>();
       if (!body.name) return c.json({ error: 'name required' }, 400);
       return c.json(
         await h.branchCheckout(
-          { projectId: parseIdParam(c), name: body.name, create: body.create },
+          { projectId: parseIdParam(c), name: body.name, create: body.create, from: body.from },
           createContext(),
         ),
       );

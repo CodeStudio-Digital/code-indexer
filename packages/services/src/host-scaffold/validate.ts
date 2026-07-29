@@ -6,6 +6,7 @@
  */
 import { isTemplateId } from './templates/registry.js';
 import type { TemplateId } from './templates/types.js';
+import { asSessionId, isUuid, type SessionId } from '@mcp/session-storage';
 
 export interface ScaffoldInput {
   template: TemplateId;
@@ -21,7 +22,7 @@ export interface ScaffoldInput {
   builder?: boolean;
   /** Published Design System (DS Studio session id) to link after the
    *  builder scaffold. Only meaningful when `builder` is true. */
-  dsSessionId?: number;
+  dsSessionId?: SessionId;
 }
 
 export class ScaffoldValidationError extends Error {
@@ -61,10 +62,10 @@ export function validateScaffoldInput(body: unknown): ScaffoldInput {
   // Builder is only meaningful for the React+Vite template (the only stack
   // with a source-stamp plugin today).
   const builder = b.builder === true && template === 'react-vite';
-  // DS link rides on builder mode only; anything non-positive-int is dropped.
+  // DS link rides on builder mode only; legacy numeric ids are rejected.
   const dsSessionId =
-    builder && typeof b.dsSessionId === 'number' && Number.isInteger(b.dsSessionId) && b.dsSessionId > 0
-      ? b.dsSessionId
+    builder && typeof b.dsSessionId === 'string' && isUuid(b.dsSessionId)
+      ? asSessionId(b.dsSessionId)
       : undefined;
 
   return { template, name, description, repoUrl, gitInit, builder, dsSessionId };

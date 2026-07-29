@@ -66,15 +66,10 @@ import {
   planMemoryRecall,
   buildConversationTail,
 } from '../memory-query.js';
-import { maybePlanNudge, maybeGoalCompletionRefusal } from './executing-plan-gate.js';
+import { maybePlanNudge, scheduleGoalCompletionAdvisory } from './executing-plan-gate.js';
 import {
-  evaluateGoalLifecycleAtFinish,
-  goalLifecycleRefusalBeforeTool,
-} from './executing-goal-gate.js';
-import {
+  buildGoalCompletionAdvisory,
   evaluateVerificationReadinessAtFinish,
-  maybeVerificationCompletionRefusal,
-  maybeVerificationNudge,
 } from './executing-verification-gate.js';
 import { consumeStream, thinkingOnlyBudgetMs } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
@@ -277,6 +272,24 @@ export class ExecutingNode implements BehaviorNode {
     };
     await Promise.all([recallProjectMemory(), recallConversationChapters()]);
 
+    let durableConversationChapterIndex: Awaited<
+      ReturnType<
+        NonNullable<
+          NonNullable<typeof ctx.bridge>['getConversationChapterIndex']
+        >
+      >
+    > = null;
+    try {
+      durableConversationChapterIndex =
+        (await ctx.bridge?.getConversationChapterIndex?.()) ?? null;
+    } catch (e) {
+      dbg(
+        'conversation-chapter-index load failed',
+        (e as Error).message,
+      );
+    }
+    const selfReviewNudgeForTurn = await computeSelfReviewNudge(ctx);
+
     // Correction nudge — the user's last message looks like a correction or a
     // durable preference: suggest remember() THIS turn. Cheap regex, throttled
     // (once per distinct message hash, ≤3/run — see injectionState docs).
@@ -320,7 +333,7 @@ export class ExecutingNode implements BehaviorNode {
       // self_review nudge — gated (Fix A) so it fires only for UNREVIEWED
       // pending changes and hard-stops after a cap / explicit user decline,
       // instead of every turn while any snapshot is pending (the doom-loop).
-      const selfReviewNudge = computeSelfReviewNudge(ctx);
+      const selfReviewNudge = selfReviewNudgeForTurn;
       // Session State Block — the always-alive structured state (goal/plan/
       // todos/notes/files/recall) rendered from persisted data, sized and
       // paced by the window-scaled policy. Replaces the old per-field drive
@@ -354,7 +367,7 @@ export class ExecutingNode implements BehaviorNode {
         }
         if (policy.chapterIndexChars > 0) {
           try {
-            const chapterIndex = ctx.bridge?.getConversationChapterIndex?.() ?? null;
+            const chapterIndex = durableConversationChapterIndex;
             const text = chapterIndex
               ? renderConversationChapterIndex(
                   chapterIndex.entries,
@@ -585,6 +598,9 @@ export class ExecutingNode implements BehaviorNode {
               timestampMs: entry.timestampMs,
               ok: !entry.isError,
             })),
+          ...(ctx.opts.sessionId == null
+            ? {}
+            : { sessionId: ctx.opts.sessionId }),
           protectedToolNames: new Set([
             ...toolsBuilt.protectedToolNames,
             ...ctx.pinnedTools,
@@ -780,7 +796,7 @@ export class ExecutingNode implements BehaviorNode {
             usageForEstimate,
           )
         : 0;
-      ctx.opts.sessionStore?.recordProviderAttempt({
+      const persistAttempt = ctx.opts.sessionStore?.recordProviderAttempt({
         session_id: ctx.opts.sessionId ?? null,
         run_id: ctx.runId,
         turn: ctx.turn,
@@ -805,6 +821,12 @@ export class ExecutingNode implements BehaviorNode {
         error_code: attempt.errorCode ?? null,
         error_message: attempt.errorMessage ?? null,
         duration_ms: attempt.durationMs,
+      });
+      void Promise.resolve(persistAttempt).catch((error) => {
+        dbg(
+          'provider attempt metric persistence failed',
+          error instanceof Error ? error.message : String(error),
+        );
       });
     };
     let result!: Awaited<ReturnType<typeof consumeStream>>;
@@ -870,6 +892,11 @@ export class ExecutingNode implements BehaviorNode {
     const STREAM_HEARTBEAT_MS =
       Number(process.env.CODER_STREAM_HEARTBEAT_MS ?? '10000') || 10_000;
     const streamStartedAt = Date.now();
+    // How much THIS attempt streamed. Only meaningful if it dies mid-stream:
+    // the partial output never reaches `assistantContent`, so consumers have to
+    // retract exactly this much before the retry streams its replacement.
+    let attemptTextChars = 0;
+    let attemptThinkingChars = 0;
     const streamHeartbeat = setInterval(() => {
       const snapshot = ctx.operations.heartbeat(providerOpId, {
         phase: 'streaming',
@@ -902,10 +929,12 @@ export class ExecutingNode implements BehaviorNode {
           // a second `operation_progress` event. The 10s stream heartbeat
           // above remains the sampled progress signal for diagnostics/UI.
           ctx.operations.touch(providerOpId, { phase: 'text_delta' });
+          attemptTextChars += text.length;
           ctx.emit('text_delta', text);
         },
         onThinkingDelta: (text) => {
           ctx.operations.touch(providerOpId, { phase: 'thinking_delta' });
+          attemptThinkingChars += text.length;
           ctx.emit('thinking_delta', text);
         },
       });
@@ -942,6 +971,19 @@ export class ExecutingNode implements BehaviorNode {
         phase: 'streaming',
         note: e instanceof Error ? e.message : String(e),
       });
+      // Retract this attempt's partial output before Recovering re-enters
+      // Executing. Nothing here was persisted, and the retry re-reasons from
+      // the same transcript — without the retraction the discarded attempt
+      // stays on screen and its near-identical replacement renders underneath.
+      // Deliberately NOT done on the abort path above: the user stopped the
+      // run and the partial answer is what they stopped to read.
+      if (attemptTextChars > 0 || attemptThinkingChars > 0) {
+        ctx.emit('stream_rollback', {
+          textChars: attemptTextChars,
+          thinkingChars: attemptThinkingChars,
+          reason: e instanceof Error ? e.name : 'UnknownError',
+        });
+      }
       return providerErrorEvent(e);
     } finally {
       clearInterval(streamHeartbeat);
@@ -1163,57 +1205,9 @@ export class ExecutingNode implements BehaviorNode {
         ctx.messages.push({ role: 'user', content: [{ type: 'text', text: planNudge }] });
         return events.turnSucceeded({ hasToolCalls: false });
       }
-      const verificationReadiness =
-        ctx.opts.verificationEvidenceEnabled || ctx.bridge?.verifyGoalCompletion
-          ? evaluateVerificationReadinessAtFinish(ctx)
-          : undefined;
-      if (ctx.opts.verificationEvidenceEnabled && verificationReadiness) {
-        const verificationNudge = maybeVerificationNudge(ctx, verificationReadiness);
-        if (verificationNudge) {
-          // Audit the intervention (no raw commands — only classified signals)
-          // so the offline eval can measure whether the nudge corrects the next
-          // turn without inflating cost/loops.
-          if (ctx.opts.sessionId != null) {
-            try {
-              ctx.opts.sessionStore?.recordSessionInput({
-                session_id: ctx.opts.sessionId,
-                kind: 'system_reminder',
-                source_label: 'reminder:finish-evidence',
-                content: verificationNudge,
-                meta: {
-                  status: verificationReadiness.status,
-                  source: verificationReadiness.source,
-                  changed_files: verificationReadiness.changedFiles.length,
-                  validation_signals: verificationReadiness.validationSignals,
-                  turn: ctx.turn,
-                },
-              });
-            } catch { /* audit trail is best-effort */ }
-          }
-          ctx.messages.push({ role: 'user', content: [{ type: 'text', text: verificationNudge }] });
-          return events.turnSucceeded({ hasToolCalls: false });
-        }
-      }
-      // Goal lifecycle is runtime-owned at the stop boundary. The model still
-      // creates/completes goals through visible tools, but a ToolCallLedger-
-      // proven work run cannot silently clean-finish after skipping that
-      // lifecycle. The gate is bounded; exhausting it terminates as an error
-      // rather than lying to the transport with `completed`.
-      const goalLifecycle = evaluateGoalLifecycleAtFinish(ctx, {
-        effectiveToolNames: new Set(toolsForModel.map((tool) => tool.name)),
-      });
-      if (goalLifecycle?.kind === 'nudge') {
-        ctx.messages.push({ role: 'user', content: [{ type: 'text', text: goalLifecycle.text }] });
-        return events.turnSucceeded({ hasToolCalls: false });
-      }
-      if (goalLifecycle?.kind === 'violation') {
-        runPersistTelemetry([]);
-        ctx.stopReason = 'error';
-        ctx.error = new Error(goalLifecycle.message);
-        return events.aborted();
-      }
       // Text-only assistant turn ends the run — no tool_use means the
-      // model is delivering its final reply.
+      // model is delivering its final reply. Goal state and verification
+      // freshness are telemetry, not execution authority.
       runPersistTelemetry([]);
       // Telemetry accuracy: if plan mode is active and no plan was ever
       // approved (the one-shot nudge was already spent), the run finished
@@ -1263,29 +1257,6 @@ export class ExecutingNode implements BehaviorNode {
       toolGate: async (name, input) => {
         const bridgeRefusal = ctx.bridge?.toolGate?.(name, input);
         if (bridgeRefusal != null) return bridgeRefusal;
-        const goalRefusal = goalLifecycleRefusalBeforeTool(
-          ctx,
-          name,
-          input,
-          { effectiveToolNames },
-        );
-        if (goalRefusal != null) return goalRefusal;
-        const completesGoal =
-          name === 'update_goal'
-          && input
-          && typeof input === 'object'
-          && !Array.isArray(input)
-          && (input as Record<string, unknown>).status === 'complete';
-        if (ctx.opts.verificationEvidenceEnabled && completesGoal) {
-          const evidenceRefusal = maybeVerificationCompletionRefusal(ctx);
-          if (evidenceRefusal != null) return evidenceRefusal;
-        }
-        if (completesGoal) {
-          return maybeGoalCompletionRefusal(
-            ctx,
-            evaluateVerificationReadinessAtFinish(ctx),
-          );
-        }
         return null;
       },
       enforcePreRead: ctx.bridge?.enforcePreRead,
@@ -1326,7 +1297,55 @@ export class ExecutingNode implements BehaviorNode {
       consumeInjectedToolError: ctx.bridge?.consumeInjectedToolError,
       reduceToolResult: ctx.bridge?.reduceToolResult,
       finalizeToolResult: ctx.bridge?.finalizeToolResult,
-      postProcessToolResult: ctx.bridge?.postProcessToolResult,
+      postProcessToolResult: async (args) => {
+        let content = args.content;
+        let isError = args.isError;
+        const bridged = await ctx.bridge?.postProcessToolResult?.(args);
+        if (bridged) {
+          content = bridged.content;
+          isError = bridged.isError ?? isError;
+        }
+
+        const persistedCompletion =
+          args.name === 'update_goal'
+          && !isError
+          && args.input.status === 'complete'
+          && args.rawContent.startsWith('Goal marked complete');
+        if (!persistedCompletion) {
+          return bridged ? { content, isError } : null;
+        }
+
+        const readiness = await evaluateVerificationReadinessAtFinish(ctx);
+        const advisory = buildGoalCompletionAdvisory(readiness);
+        if (ctx.opts.sessionId != null) {
+          try {
+            await ctx.opts.sessionStore?.recordSessionInput({
+              session_id: ctx.opts.sessionId,
+              kind: 'system_reminder',
+              source_label: 'advisory:goal-completion',
+              content: advisory.text,
+              meta: {
+                health: advisory.health,
+                evidence_status: readiness.status,
+                source: readiness.source,
+                changed_files: readiness.changedFiles.length,
+                validation_signals: readiness.validationSignals,
+                turn: ctx.turn,
+              },
+            });
+          } catch {
+            // Completion is already durable; advisory persistence is best-effort.
+          }
+        }
+        const reviewScheduled = scheduleGoalCompletionAdvisory(ctx, readiness);
+        const reviewText = reviewScheduled
+          ? ' Independent completion review was scheduled asynchronously and cannot revoke completion.'
+          : '';
+        return {
+          content: `${content}\n\n${advisory.text}${reviewText}`,
+          isError,
+        };
+      },
       detectPollingStuck: ctx.bridge?.detectPollingStuck,
       onToolCallStart: (id, name, input) => {
         ctx.operations.start({

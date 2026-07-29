@@ -1,70 +1,13 @@
 import { createEventHandlers } from './handlers.js';
-import type { StreamBlock, UpdateSession, WorkerLogEntry } from './types.js';
+import type { SessionId, StreamBlock, UpdateSession } from './types.js';
 import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
 import type { SSEEvent } from '@mcp/shared/sse/SSEFramer.js';
 import { apiBaseUrl } from '../../lib/api-client.js';
 import { noteWorkerLogBus, pushWorkerLog } from './worker-log-store.js';
-import { createWorkerLogCapturePolicy } from './worker-log-policy.js';
+import { isAlreadyAppliedDelta } from './stream-seq-dedup.js';
+import { buildLogEntry, createWorkerLogCapturePolicy } from './worker-log-policy.js';
 import type { NotificationSourceContext } from '../../features/notifications/index.js';
-
-/**
- * Derive `{level, category, message}` for the worker-log entry from the
- * raw SSE event name + payload. Most events flow through this fallback;
- * the `worker_log` event itself carries those fields explicitly and is
- * special-cased.
- */
-function buildLogEntry(eventName: string, data: Record<string, unknown>): WorkerLogEntry {
-  if (eventName === 'worker_log') {
-    const w = data as {
-      ts?: number;
-      level?: WorkerLogEntry['level'];
-      category?: WorkerLogEntry['category'];
-      message?: string;
-    };
-    return {
-      ts: typeof w.ts === 'number' ? w.ts : Date.now(),
-      event: 'worker_log',
-      level: w.level ?? 'info',
-      category: w.category ?? 'other',
-      message: w.message ?? '(no message)',
-      data,
-    };
-  }
-  // Coarse mapping: keep this table tiny — categories are for filtering,
-  // not for forensics. The full event name stays in `event` for power users.
-  let category: WorkerLogEntry['category'] = 'other';
-  let level: WorkerLogEntry['level'] = 'info';
-  if (eventName.startsWith('tool_') || eventName.startsWith('task_run_')) category = 'tool';
-  else if (eventName.startsWith('operation_') || eventName === 'bt_state_dwell') category = 'runner';
-  else if (eventName.startsWith('quality_') || eventName === 'tool_loop_intervention')
-    category = 'quality';
-  else if (
-    eventName === 'provider_call' ||
-    eventName === 'provider_swapped' ||
-    eventName === 'fallback_activated'
-  )
-    category = 'provider';
-  else if (
-    eventName === 'turn_start' ||
-    eventName === 'message_complete' ||
-    eventName === 'history_compacted' ||
-    eventName === 'auto_continue'
-  )
-    category = 'lifecycle';
-  else if (eventName === 'text' || eventName === 'thinking') category = 'message';
-  else if (eventName === 'run_started' || eventName === 'done') category = 'runner';
-  if (eventName === 'error') level = 'error';
-  else if (eventName === 'warning' || eventName === 'tool_loop_intervention') level = 'warn';
-  return {
-    ts: Date.now(),
-    event: eventName,
-    level,
-    category,
-    message: eventName,
-    data,
-  };
-}
 
 /**
  * Events processed per drain batch before yielding the main thread back to
@@ -99,7 +42,7 @@ export interface OpenStreamOpts {
 
 export interface OpenStreamDeps {
   updateSession: UpdateSession;
-  abortMap: Map<number, AbortController>;
+  abortMap: Map<SessionId, AbortController>;
   notificationContext?: NotificationSourceContext;
   /**
    * Persisted highest SSE id per sid, used as Last-Event-ID on reattach.
@@ -107,9 +50,9 @@ export interface OpenStreamDeps {
    * single event — writing it to `SessionState` would re-render the chat
    * 50+/s for a value nothing renders.
    */
-  lastSeenSeqMap: Map<number, number>;
+  lastSeenSeqMap: Map<SessionId, number>;
   /** Bus instance paired with each persisted sequence cursor. */
-  lastSeenBusIdMap: Map<number, string>;
+  lastSeenBusIdMap: Map<SessionId, string>;
 }
 
 /**
@@ -123,7 +66,7 @@ export interface OpenStreamDeps {
  * the event pipeline into the session state slot.
  */
 export async function openStream(
-  sid: number,
+  sid: SessionId,
   opts: OpenStreamOpts,
   deps: OpenStreamDeps,
   onMessageComplete?: () => void,
@@ -344,6 +287,12 @@ export async function openStream(
     if (!preflightCleared) {
       preflightCleared = true;
       updateSession(sid, { preflight: null });
+    }
+    // A replay re-delivers deltas already folded into `blocks`; re-applying one
+    // duplicates its content in place. See stream-seq-dedup.ts.
+    if (isAlreadyAppliedDelta(ev.event, ev.id, lastSeenSeq)) {
+      commitCursor();
+      return;
     }
     const handler = handlers[ev.event];
     if (handler) handler(data, ev.event);

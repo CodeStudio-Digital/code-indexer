@@ -20,13 +20,14 @@ type SessionInputKind =
   | 'preflight';
 
 interface SessionInputRow {
-  id: number;
-  session_id: number;
+  id: string;
+  seq: number;
+  session_id: string;
   kind: SessionInputKind;
   source_label: string;
   content: string;
   content_hash: string;
-  meta_json: string | null;
+  meta: Readonly<Record<string, unknown>> | null;
   created_at: string;
 }
 
@@ -65,12 +66,12 @@ export interface SessionLike {
 interface SessionDetailsModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  sessionId: number | null;
+  sessionId: string | null;
   session: SessionLike | null;
   stats: SessionStatsLike | null;
 }
 
-function useSessionInputs(sessionId: number | null, active: boolean) {
+function useSessionInputs(sessionId: string | null, active: boolean) {
   const inputsUrl = active && sessionId ? `/coder/sessions/${sessionId}/inputs` : '';
   return useApi<SessionInputRow[]>(inputsUrl);
 }
@@ -87,7 +88,7 @@ export function SessionDetailsView({
   stats,
   active,
 }: {
-  sessionId: number | null;
+  sessionId: string | null;
   session: SessionLike | null;
   stats: SessionStatsLike | null;
   active: boolean;
@@ -270,7 +271,7 @@ export function SessionInputsView({
   sessionId,
   active,
 }: {
-  sessionId: number | null;
+  sessionId: string | null;
   active: boolean;
 }) {
   const { data: inputs, loading } = useSessionInputs(sessionId, active);
@@ -459,20 +460,15 @@ function InputItem({ entry }: { entry: SessionInputRow }) {
               />
             ))}
           </div>
-          {entry.meta_json && <InputMeta json={entry.meta_json} />}
+          {entry.meta && <InputMeta value={entry.meta} />}
         </div>
       )}
     </div>
   );
 }
 
-function InputMeta({ json }: { json: string }) {
-  let pretty = json;
-  try {
-    pretty = JSON.stringify(JSON.parse(json), null, 2);
-  } catch {
-    /* keep raw */
-  }
+function InputMeta({ value }: { value: Readonly<Record<string, unknown>> }) {
+  const pretty = JSON.stringify(value, null, 2);
   const [open, setOpen] = useState(false);
   return (
     <div className="border-t mt-1.5 pt-1.5">

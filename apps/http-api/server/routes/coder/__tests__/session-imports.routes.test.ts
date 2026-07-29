@@ -9,6 +9,8 @@ const codexFixture = fileURLToPath(new URL(
   '../../../../../../packages/code-agent/src/sessions/import/__fixtures__/codex-rollout.jsonl',
   import.meta.url,
 ));
+const IMPORTED_SESSION_ID = '11111111-1111-4111-8111-111111111111';
+const DUPLICATE_SESSION_ID = '22222222-2222-4222-8222-222222222222';
 
 function setup(rootPath = 'D:\\MCP', persist?: (input: PersistExternalSessionInput) => unknown) {
   const imported: PersistExternalSessionInput[] = [];
@@ -21,7 +23,9 @@ function setup(rootPath = 'D:\\MCP', persist?: (input: PersistExternalSessionInp
         imported.push(input);
         if (persist) return persist(input);
         return {
-          session_id: 55, source: input.source, external_id: input.reference.external_id,
+          session_id: IMPORTED_SESSION_ID,
+          source: input.source,
+          external_id: input.reference.external_id,
           fingerprint: input.document.fingerprint, imported_messages: input.document.messages.length,
           warnings: input.document.warnings, used_fallback_summary: true,
         };
@@ -68,7 +72,10 @@ describe('coder external session import routes', () => {
       project_id: 1, provider: 'definitely-missing-provider', model: 'missing-model', agent: 'build',
     });
     expect(response.status).toBe(201);
-    expect(await response.json()).toMatchObject({ session_id: 55, used_fallback_summary: true });
+    expect(await response.json()).toMatchObject({
+      session_id: IMPORTED_SESSION_ID,
+      used_fallback_summary: true,
+    });
     expect(imported).toHaveLength(1);
     expect(imported[0].summary.version).toBe(3);
     expect(imported[0].summary.resume.current_focus).toContain('Implement the API');
@@ -77,13 +84,20 @@ describe('coder external session import routes', () => {
 
   it('returns the stable duplicate_import error', async () => {
     const { app } = setup('D:\\MCP', () => {
-      throw new ExternalSessionError('duplicate_import', 'already imported', { session_id: 7 });
+      throw new ExternalSessionError(
+        'duplicate_import',
+        'already imported',
+        { session_id: DUPLICATE_SESSION_ID },
+      );
     });
     const response = await post(app, '/api/coder/session-imports/import', {
       source: 'codex', source_path: codexFixture, external_id: 'codex-session-1',
       project_id: 1, provider: 'missing-provider', model: 'missing-model', agent: 'build',
     });
     expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ error: 'duplicate_import', details: { session_id: 7 } });
+    expect(await response.json()).toMatchObject({
+      error: 'duplicate_import',
+      details: { session_id: DUPLICATE_SESSION_ID },
+    });
   });
 });

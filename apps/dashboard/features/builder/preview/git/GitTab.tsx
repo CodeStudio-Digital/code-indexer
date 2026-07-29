@@ -9,7 +9,7 @@ import { GitLogSection } from './GitLogSection.js';
 import { CommitBox } from './CommitBox.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projects: SessionProject[];
 }
 

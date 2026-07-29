@@ -21,6 +21,10 @@ vi.mock('@mcp/company/services/master/configure-skills.js', () => ({
 
 import { resumeMaster } from '@mcp/company/services/master/resume.js';
 
+const COMPANY_SESSION_ID = 'c0000000-0000-4000-8000-000000000042';
+const MASTER_AGENT_RUN_ID = 'a0000000-0000-4000-8000-000000000007';
+const MASTER_CODER_SESSION_ID = 'd0000000-0000-4000-8000-000000000555';
+
 /** A promise plus its resolve handle, so a test can control when it settles. */
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
   let resolve!: (v: T) => void;
@@ -29,9 +33,9 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 }
 
 const MASTER_RUN = {
-  id: 7,
+  id: MASTER_AGENT_RUN_ID,
   role: 'master',
-  coder_session_id: 555,
+  coder_session_id: MASTER_CODER_SESSION_ID,
   provider: 'anthropic',
   model: 'claude-sonnet-4-6',
 };
@@ -42,7 +46,7 @@ function makeDeps() {
     board: [] as string[],
     setHandle: 0,
     attachCompletion: 0,
-    agentRunStatus: [] as Array<[number, string]>,
+    agentRunStatus: [] as Array<[string, string]>,
     sessionStatus: [] as string[],
   };
   const resumeQueue: Array<{ message: string; attachments?: unknown[] }> = [];
@@ -56,13 +60,19 @@ function makeDeps() {
 
   const deps = {
     ctx: {
-      companySessionId: 42,
+      companySessionId: COMPANY_SESSION_ID,
       projects: [{ project_id: 1 }],
-      companyStore: {
-        listAgentRuns: () => [MASTER_RUN],
-        updateAgentRunStatus: (id: number, s: string) => calls.agentRunStatus.push([id, s]),
-        updateCompanySessionStatus: (_id: number, s: string) => calls.sessionStatus.push(s),
-        clearSessionRecoveryFlag: () => undefined,
+      runtimeKind: 'company',
+      companyFiles: {
+        sessionStore: {},
+        listAgentRuns: async () => [MASTER_RUN],
+        updateAgentRunStatus: async (id: string, s: string) => {
+          calls.agentRunStatus.push([id, s]);
+        },
+        updateSessionStatus: async (s: string) => {
+          calls.sessionStatus.push(s);
+        },
+        clearRecoveryFlag: async () => undefined,
       },
     },
     board: { post: (_a: string, _b: unknown, _c: string, msg: string) => calls.board.push(msg) },
@@ -72,6 +82,7 @@ function makeDeps() {
       roleConfigs: [],
       allowedModels: [],
       setAgentRunId: () => undefined,
+      setRuntimeSnapshot: () => undefined,
       setRoleConfigs: () => undefined,
       loadConfigFromDb: () => undefined,
       setCompanyContext: () => undefined,
@@ -100,14 +111,19 @@ describe('resumeMaster — decoupled background provision', () => {
   it('returns the ack BEFORE the sandbox provision (buildMasterPromptInputs) resolves', async () => {
     const provision = deferred<{ companyContext: unknown; promptBlock: string; configuredStack: null }>();
     mockBuildInputs.mockReturnValue(provision.promise);
-    mockRunCoder.mockResolvedValue({ session: { id: 555 }, runner: {}, done: Promise.resolve(), indexStatus: null });
+    mockRunCoder.mockResolvedValue({
+      session: { id: MASTER_CODER_SESSION_ID },
+      runner: {},
+      done: Promise.resolve(),
+      indexStatus: null,
+    });
 
     const { deps } = makeDeps();
     const ack = await resumeMaster({ userMessage: 'continue' } as never, deps);
 
     // The RPC-facing call resolved with the ids even though provisioning is
     // still pending — this is the fix: no blocking on the cold rebuild.
-    expect(ack).toEqual({ masterSessionId: 555, indexStatus: null });
+    expect(ack).toEqual({ masterSessionId: MASTER_CODER_SESSION_ID, indexStatus: null });
     expect(mockRunCoder).not.toHaveBeenCalled(); // gated behind the unresolved provision
 
     // Now let provisioning finish; the background task should boot the runner.
@@ -119,7 +135,7 @@ describe('resumeMaster — decoupled background provision', () => {
     mockBuildInputs.mockReturnValue(deferred().promise); // never resolves this test
     const { deps, calls } = makeDeps();
     await resumeMaster({ userMessage: 'go' } as never, deps);
-    expect(calls.agentRunStatus).toContainEqual([7, 'running']);
+    expect(calls.agentRunStatus).toContainEqual([MASTER_AGENT_RUN_ID, 'running']);
     expect(calls.sessionStatus).toContain('running');
     expect(calls.board.some((m) => m.includes('Master resumed from existing session'))).toBe(true);
   });
@@ -134,7 +150,7 @@ describe('resumeMaster — decoupled background provision', () => {
     const ack2 = await resumeMaster({ userMessage: 'second' } as never, deps);
     // No second provision; the message is queued for the in-flight task.
     expect(mockBuildInputs).toHaveBeenCalledOnce();
-    expect(ack2).toEqual({ masterSessionId: 555, indexStatus: null });
+    expect(ack2).toEqual({ masterSessionId: MASTER_CODER_SESSION_ID, indexStatus: null });
     expect(resumeQueue).toEqual([{ message: 'second', attachments: undefined }]);
   });
 
@@ -142,7 +158,12 @@ describe('resumeMaster — decoupled background provision', () => {
     const provision = deferred<{ companyContext: unknown; promptBlock: string; configuredStack: null }>();
     mockBuildInputs.mockReturnValue(provision.promise);
     const { deps, fakeRunner } = makeDeps();
-    mockRunCoder.mockResolvedValue({ session: { id: 555 }, runner: fakeRunner, done: Promise.resolve(), indexStatus: null });
+    mockRunCoder.mockResolvedValue({
+      session: { id: MASTER_CODER_SESSION_ID },
+      runner: fakeRunner,
+      done: Promise.resolve(),
+      indexStatus: null,
+    });
 
     await resumeMaster({ userMessage: 'first' } as never, deps);
     // A turn arrives during the provision window.
@@ -155,7 +176,12 @@ describe('resumeMaster — decoupled background provision', () => {
   it('clears the in-flight promise after the background task settles', async () => {
     const provision = deferred<{ companyContext: unknown; promptBlock: string; configuredStack: null }>();
     mockBuildInputs.mockReturnValue(provision.promise);
-    mockRunCoder.mockResolvedValue({ session: { id: 555 }, runner: { pushUserMessage: vi.fn(), pushUserContent: vi.fn() }, done: Promise.resolve(), indexStatus: null });
+    mockRunCoder.mockResolvedValue({
+      session: { id: MASTER_CODER_SESSION_ID },
+      runner: { pushUserMessage: vi.fn(), pushUserContent: vi.fn() },
+      done: Promise.resolve(),
+      indexStatus: null,
+    });
 
     const { deps, getResumingPromise } = makeDeps();
     await resumeMaster({ userMessage: 'go' } as never, deps);
@@ -170,7 +196,9 @@ describe('resumeMaster — decoupled background provision', () => {
     const { deps, calls } = makeDeps();
 
     await resumeMaster({ userMessage: 'go' } as never, deps);
-    await vi.waitFor(() => expect(calls.agentRunStatus).toContainEqual([7, 'error']));
+    await vi.waitFor(() =>
+      expect(calls.agentRunStatus).toContainEqual([MASTER_AGENT_RUN_ID, 'error']),
+    );
     expect(calls.sessionStatus).toContain('error');
     expect(calls.board.some((m) => m.includes('Master resume failed'))).toBe(true);
   });

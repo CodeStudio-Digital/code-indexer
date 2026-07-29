@@ -17,8 +17,8 @@ export type DsSessionKind = 'company' | 'studio';
 export type DsSessionMode = 'fidelity' | 'creative';
 
 export interface DesignSystemSession {
-  id: number;
-  company_session_id: number | null;
+  id: string;
+  company_session_id: string | null;
   project_id: number | null;
   kind: DsSessionKind;
   name: string;
@@ -89,8 +89,8 @@ export interface DesignSystemSessionListEntry extends DesignSystemSession {
 }
 
 export interface DesignSystemVersion {
-  id: number;
-  ds_session_id: number;
+  id: string;
+  ds_session_id: string;
   semver: string;
   bump_kind: DsBumpKind;
   is_auto_bump: boolean;
@@ -107,8 +107,8 @@ export interface DesignSystemVersion {
 }
 
 export interface DesignSystemComponent {
-  id: number;
-  version_id: number;
+  id: string;
+  version_id: string;
   name: string;
   kind: DsComponentKind;
   props_schema_json: string | null;
@@ -147,7 +147,7 @@ export interface DesignSystemSessionDetail {
   pipeline: DsPipelineView | null;
 }
 
-export async function getDesignSystemSession(id: number): Promise<DesignSystemSessionDetail> {
+export async function getDesignSystemSession(id: string): Promise<DesignSystemSessionDetail> {
   const r = await fetch(`/api/design-system/sessions/${id}`);
   return unwrap(r);
 }
@@ -163,7 +163,7 @@ export interface ReExtractResult {
  * Pass a fresh `zip` File to replace the persisted one; omit it to re-extract
  * the existing zip (useful when the on-disk folder was tampered with).
  */
-export async function reExtractDesignSystem(id: number, zip?: File): Promise<ReExtractResult> {
+export async function reExtractDesignSystem(id: string, zip?: File): Promise<ReExtractResult> {
   const init: RequestInit = { method: 'POST' };
   if (zip) {
     const form = new FormData();
@@ -174,7 +174,7 @@ export async function reExtractDesignSystem(id: number, zip?: File): Promise<ReE
   return unwrap(r);
 }
 
-export async function setNextBumpHint(id: number, hint: DsBumpHint): Promise<DesignSystemSession> {
+export async function setNextBumpHint(id: string, hint: DsBumpHint): Promise<DesignSystemSession> {
   const r = await fetch(`/api/design-system/sessions/${id}/next-bump-hint`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -185,7 +185,7 @@ export async function setNextBumpHint(id: number, hint: DsBumpHint): Promise<Des
 }
 
 export async function patchPipelineStage(
-  id: number,
+  id: string,
   stageId: DsStageId,
   action: DsStageAction,
   feedback?: string,
@@ -200,24 +200,24 @@ export async function patchPipelineStage(
 }
 
 /** Backfill do pipeline em sessões studio pré-feature. */
-export async function initPipeline(id: number): Promise<void> {
+export async function initPipeline(id: string): Promise<void> {
   const r = await fetch(`/api/design-system/sessions/${id}/pipeline/init`, { method: 'POST' });
   await unwrap(r);
 }
 
-export async function analyzeImportDs(id: number): Promise<DsThemeDigestSummary> {
+export async function analyzeImportDs(id: string): Promise<DsThemeDigestSummary> {
   const r = await fetch(`/api/design-system/sessions/${id}/analyze-import`, { method: 'POST' });
   const body = await unwrap<{ digest: DsThemeDigestSummary }>(r);
   return body.digest;
 }
 
-export async function deleteDesignSystemSession(id: number): Promise<void> {
+export async function deleteDesignSystemSession(id: string): Promise<void> {
   const r = await fetch(`/api/design-system/sessions/${id}`, { method: 'DELETE' });
   await unwrap(r);
 }
 
 export async function listVersionComponents(
-  sessionId: number,
+  sessionId: string,
   semver: string,
 ): Promise<DesignSystemComponent[]> {
   const r = await fetch(
@@ -227,7 +227,7 @@ export async function listVersionComponents(
   return body.components;
 }
 
-export async function fetchVersionDocs(sessionId: number, semver: string): Promise<string> {
+export async function fetchVersionDocs(sessionId: string, semver: string): Promise<string> {
   const r = await fetch(
     `/api/design-system/sessions/${sessionId}/versions/${encodeURIComponent(semver)}/docs`,
   );
@@ -235,12 +235,12 @@ export async function fetchVersionDocs(sessionId: number, semver: string): Promi
   return r.text();
 }
 
-export function storybookSrc(sessionId: number, semver: string): string {
+export function storybookSrc(sessionId: string, semver: string): string {
   return `/api/design-system/sessions/${sessionId}/versions/${encodeURIComponent(semver)}/storybook/index.html`;
 }
 
 export async function installDesignSystemMcp(
-  sessionId: number,
+  sessionId: string,
   semver: string,
 ): Promise<{ ok: boolean; mcp_server_config_id: string; server_js_path: string }> {
   const r = await fetch(

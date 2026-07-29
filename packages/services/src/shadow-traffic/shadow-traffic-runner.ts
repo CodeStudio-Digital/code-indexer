@@ -130,15 +130,18 @@ export class ShadowTrafficRunner<Q> {
 
     for (const result of results) {
       const row: CounterfactualLogInsert = {
-        session_id: shadowQuery.sessionId ?? null,
-        company_session_id: shadowQuery.companySessionId ?? null,
         pipeline_name: this.cfg.pipelineName,
         shadow_variant: result.variantName,
         query_hash: shadowQuery.queryHash,
         production_choice: productionChoice,
         shadow_prediction: result.prediction,
       };
-      try { this.cfg.store.insert(row); } catch { /* never throw from shadow */ }
+      // SQLite retains only genuinely global observations. Session-owned
+      // observations are emitted below with their UUID so a filesystem sink
+      // can commit them to the owning bundle without creating a global copy.
+      if (shadowQuery.sessionId == null && shadowQuery.companySessionId == null) {
+        try { this.cfg.store.insert(row); } catch { /* never throw from shadow */ }
+      }
       if (result.error) this.errorsLastFlush++;
 
       // Telemetry per variant: emits a side_effect event tagged with the
@@ -150,6 +153,16 @@ export class ShadowTrafficRunner<Q> {
         durationMs: result.durationMs,
         durationBucket: durationToBucket(result.durationMs),
         errors: result.error ? 1 : 0,
+        diag: {
+          query_hash: shadowQuery.queryHash,
+          production_choice: productionChoice,
+          shadow_prediction: result.prediction,
+          error: result.error ?? null,
+        },
+        ...(shadowQuery.sessionId == null ? {} : { sessionId: shadowQuery.sessionId }),
+        ...(shadowQuery.companySessionId == null
+          ? {}
+          : { companySessionId: shadowQuery.companySessionId }),
       };
       try { this.cfg.telemetry.emit(event); } catch { /* never throw */ }
     }

@@ -8,6 +8,9 @@ import {
   type WorkspaceRestoreReport,
 } from '@mcp/company/tools/qa/qa-start-run.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const RUN_ID = '00000000-0000-4000-8000-000000000012';
+
 describe('resolveEndpointBase', () => {
   it('uses MCP_PUBLIC_URL when set', () => {
     const r = resolveEndpointBase({ MCP_PUBLIC_URL: 'https://example.test' });
@@ -72,7 +75,9 @@ describe('resolveEndpointBase', () => {
 
 describe('buildEndpointPath', () => {
   it('returns the canonical reporter endpoint path', () => {
-    expect(buildEndpointPath(42)).toBe('/api/company/sessions/42/qa/test-event');
+    expect(buildEndpointPath(SESSION_ID)).toBe(
+      `/api/company/sessions/${SESSION_ID}/qa/test-event`,
+    );
   });
 });
 
@@ -95,17 +100,17 @@ describe('normaliseTrigger', () => {
 
 describe('renderRunConfigFile', () => {
   it('emits parseable JSON with the expected shape', () => {
-    const out = renderRunConfigFile(42, 'http://example.test/api/x');
+    const out = renderRunConfigFile(RUN_ID, 'http://example.test/api/x');
     const parsed = JSON.parse(out);
-    expect(parsed.runId).toBe('42');
+    expect(parsed.runId).toBe(RUN_ID);
     expect(parsed.endpoint).toBe('http://example.test/api/x');
     expect(typeof parsed.startedAt).toBe('string');
     expect(() => new Date(parsed.startedAt)).not.toThrow();
   });
 
-  it('coerces numeric runId to string', () => {
-    const parsed = JSON.parse(renderRunConfigFile(7, 'x'));
-    expect(parsed.runId).toBe('7');
+  it('preserves the opaque UUID runId', () => {
+    const parsed = JSON.parse(renderRunConfigFile(RUN_ID, 'x'));
+    expect(parsed.runId).toBe(RUN_ID);
   });
 });
 
@@ -124,12 +129,12 @@ function emptyReport(): WorkspaceRestoreReport {
 }
 
 describe('formatStartRunReply', () => {
-  const run = { id: 12, suite: 'login', service_id: 'main' };
+  const run = { id: RUN_ID, suite: 'login', service_id: 'main' };
   const endpoint = 'http://host.containers.internal:7333/api/.../qa/test-event';
 
   it('omits the restore section on the happy path with no side-effects to report', () => {
     const out = formatStartRunReply(run, endpoint, emptyReport(), '');
-    expect(out).toContain('Started qa_test_run id=12');
+    expect(out).toContain(`Started qa_test_run id=${RUN_ID}`);
     expect(out).not.toContain('Workspace restore:');
     expect(out).toContain('npx playwright test');
     // Canonical command line itself must NOT carry --reporter (the

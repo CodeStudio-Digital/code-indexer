@@ -2,9 +2,9 @@
  * Claude Code OAuth and wire helpers.
  *
  * Source of truth checked at implementation time:
- *   @anthropic-ai/claude-code@2.1.215
- *   build: 2026-07-19T00:01:04Z
- *   git:   316ce99628e89900bf0b1328fed3b8fec0c0c92d
+ *   @anthropic-ai/claude-code@2.1.219
+ *   build: 2026-07-24T03:24:19Z
+ *   git:   7006c4c3acac98e554d3997baeda6a7fa4d1ff7c
  *
  * The official client uses PKCE OAuth and then calls Anthropic's normal
  * `/v1/messages` API with either:
@@ -20,9 +20,9 @@ import nodeFetch, { type RequestInit as NodeFetchRequestInit } from 'node-fetch'
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { ProviderStore } from '@mcp/store/provider-store.js';
 
-export const CLAUDE_CODE_PACKAGE_VERSION = '2.1.215';
-export const CLAUDE_CODE_BUILD_TIME = '2026-07-19T00:01:04Z';
-export const CLAUDE_CODE_GIT_SHA = '316ce99628e89900bf0b1328fed3b8fec0c0c92d';
+export const CLAUDE_CODE_PACKAGE_VERSION = '2.1.219';
+export const CLAUDE_CODE_BUILD_TIME = '2026-07-24T03:24:19Z';
+export const CLAUDE_CODE_GIT_SHA = '7006c4c3acac98e554d3997baeda6a7fa4d1ff7c';
 
 export const CLAUDE_CODE_BASE_URL =
   process.env.CLAUDE_CODE_API_BASE_URL ?? 'https://api.anthropic.com';
@@ -37,19 +37,24 @@ export const CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA = 'context-management-2025-06-2
 export const CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA = 'prompt-caching-scope-2026-01-05';
 export const CLAUDE_CODE_EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
 export const CLAUDE_CODE_CONTEXT_1M_BETA = 'context-1m-2025-08-07';
+export const CLAUDE_CODE_MID_CONVERSATION_SYSTEM_BETA =
+  'mid-conversation-system-2026-04-07';
 export const CLAUDE_CODE_ANTHROPIC_VERSION = '2023-06-01';
 export const CLAUDE_CODE_SMALL_FAST_MODEL =
   process.env.ANTHROPIC_SMALL_FAST_MODEL ?? 'claude-haiku-4-5-20251001';
 export const CLAUDE_CODE_DEFAULT_SONNET_MODEL =
   process.env.ANTHROPIC_DEFAULT_SONNET_MODEL ?? 'claude-sonnet-5';
 export const CLAUDE_CODE_DEFAULT_OPUS_MODEL =
-  process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? 'claude-opus-4-8';
+  process.env.ANTHROPIC_DEFAULT_OPUS_MODEL ?? 'claude-opus-5';
 export const CLAUDE_CODE_DEFAULT_FABLE_MODEL =
   process.env.ANTHROPIC_DEFAULT_FABLE_MODEL ?? 'claude-fable-5';
 export const CLAUDE_CODE_CONFIGURED_REDIRECT_PORT = process.env.CLAUDE_CODE_OAUTH_PORT
   ? Number(process.env.CLAUDE_CODE_OAUTH_PORT)
   : null;
-export const CLAUDE_CODE_REDIRECT_PORT = CLAUDE_CODE_CONFIGURED_REDIRECT_PORT ?? 1456;
+// Claude Code 2.1.219 binds port 0 by default and puts the actual ephemeral
+// port in the PKCE redirect URI. A configured port remains available for
+// locked-down environments.
+export const CLAUDE_CODE_REDIRECT_PORT = CLAUDE_CODE_CONFIGURED_REDIRECT_PORT ?? 0;
 export const CLAUDE_CODE_AUTHORIZE_URL = 'https://claude.com/cai/oauth/authorize';
 export const CLAUDE_CODE_CONSOLE_AUTHORIZE_URL = 'https://platform.claude.com/oauth/authorize';
 export const CLAUDE_CODE_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
@@ -192,7 +197,7 @@ export type ClaudeCodeModelAlias =
   | 'opus[1m]'
   | string;
 
-export type ClaudeCodeEffort = 'low' | 'medium' | 'high' | 'xhigh';
+export type ClaudeCodeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface ClaudeCodeAccountInfo {
   subscriptionType?: string | null;
@@ -597,6 +602,8 @@ export function normalizeClaudeCodeModelAlias(model: string | null | undefined):
     case 'fable':
     case 'opus':
     case 'opus[1m]':
+    case 'opus-4-8':
+    case 'opus-4-8[1m]':
     case 'sonnet-4-6':
     case 'sonnet-4-6[1m]':
     case 'opus-4-7':
@@ -644,6 +651,10 @@ export function resolveClaudeCodeRequestedModel(
       return CLAUDE_CODE_DEFAULT_OPUS_MODEL;
     case 'opus[1m]':
       return `${CLAUDE_CODE_DEFAULT_OPUS_MODEL}[1m]`;
+    case 'opus-4-8':
+      return 'claude-opus-4-8';
+    case 'opus-4-8[1m]':
+      return 'claude-opus-4-8[1m]';
     case 'sonnet-4-6':
       return 'claude-sonnet-4-6';
     case 'sonnet-4-6[1m]':
@@ -668,6 +679,7 @@ function claudeCodeModelFamily(model: string): string {
 function isClaudeCodeNativeOneMillionModel(model: string): boolean {
   const cleanModel = claudeCodeModelFamily(model);
   return (
+    cleanModel.includes('claude-opus-5') ||
     cleanModel.includes('claude-opus-4-8') ||
     cleanModel.includes('claude-opus-4-7') ||
     cleanModel.includes('claude-sonnet-5') ||
@@ -679,6 +691,7 @@ function isClaudeCodeNativeOneMillionModel(model: string): boolean {
 export function supportsClaudeCodeAdaptiveThinking(model: string): boolean {
   const cleanModel = claudeCodeModelFamily(model);
   return (
+    cleanModel.includes('claude-opus-5') ||
     cleanModel.includes('claude-opus-4-7') ||
     cleanModel.includes('claude-opus-4-8') ||
     cleanModel.includes('claude-opus-4-6') ||
@@ -699,6 +712,7 @@ function parseClaudeCodeEffort(value: string | null | undefined): ClaudeCodeEffo
     case 'medium':
     case 'high':
     case 'xhigh':
+    case 'max':
       return value!.trim().toLowerCase() as ClaudeCodeEffort;
     default:
       return null;
@@ -715,6 +729,7 @@ function getClaudeCodeEffort(
     requestedEffort === 'auto' ? null : requestedEffort ?? parseClaudeCodeEffort(process.env.CLAUDE_CODE_EFFORT_LEVEL);
   const effort = configured ?? (cleanModel.includes('claude-opus-4-7') ? 'xhigh' : 'high');
   const supportsXHigh =
+    cleanModel.includes('claude-opus-5') ||
     cleanModel.includes('claude-opus-4-8') ||
     cleanModel.includes('claude-opus-4-7') ||
     cleanModel.includes('claude-sonnet-5') ||
@@ -727,6 +742,7 @@ function getClaudeCodeEffort(
 export function getClaudeCodeDefaultMaxTokens(model: string): number {
   const cleanModel = claudeCodeModelFamily(model);
   const usesLargeOutput =
+    cleanModel.includes('claude-opus-5') ||
     cleanModel.includes('claude-opus-4-8') ||
     cleanModel.includes('claude-opus-4-7') ||
     cleanModel.includes('claude-opus-4-6') ||
@@ -750,8 +766,8 @@ export function getClaudeCodeDefaultMaxTokens(model: string): number {
 function getClaudeCodeDisplayName(alias: string, requestedModel: string): string {
   const lowerAlias = alias.toLowerCase();
   const cleanModel = claudeCodeModelFamily(requestedModel);
-  if (lowerAlias === 'default' && cleanModel.includes('claude-opus-4-8')) {
-    return 'Opus 4.8 (automatic, 1M context)';
+  if (lowerAlias === 'default' && cleanModel.includes('claude-opus-5')) {
+    return 'Opus 5 (automatic, 1M context)';
   }
   if (lowerAlias === 'default') {
     return 'Sonnet 5 (automatic)';
@@ -760,7 +776,13 @@ function getClaudeCodeDisplayName(alias: string, requestedModel: string): string
   if (lowerAlias === 'sonnet[1m]' || (oneMillion && cleanModel.includes('claude-sonnet-5'))) {
     return 'Sonnet 5 (1M context)';
   }
-  if (lowerAlias === 'opus[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-8'))) {
+  if (lowerAlias === 'opus[1m]' || (oneMillion && cleanModel.includes('claude-opus-5'))) {
+    return 'Opus 5 (1M context)';
+  }
+  if (
+    lowerAlias === 'opus-4-8[1m]' ||
+    (oneMillion && cleanModel.includes('claude-opus-4-8'))
+  ) {
     return 'Opus 4.8 (1M context)';
   }
   if (lowerAlias === 'opus-4-6[1m]' || (oneMillion && cleanModel.includes('claude-opus-4-6'))) {
@@ -768,6 +790,7 @@ function getClaudeCodeDisplayName(alias: string, requestedModel: string): string
   }
   if (cleanModel.includes('claude-haiku-4-5')) return 'Haiku 4.5';
   if (cleanModel.includes('claude-fable-5')) return 'Fable 5';
+  if (cleanModel.includes('claude-opus-5')) return 'Opus 5';
   if (cleanModel.includes('claude-opus-4-8')) return 'Opus 4.8';
   if (cleanModel.includes('claude-opus-4-7')) return 'Opus 4.7';
   if (cleanModel.includes('claude-opus-4-6')) return 'Opus 4.6';
@@ -804,6 +827,15 @@ export function getClaudeCodeBetasForModel(
     betas.push(CLAUDE_CODE_CONTEXT_MANAGEMENT_BETA);
   }
   if (!experimentalBetasDisabled) betas.push(CLAUDE_CODE_PROMPT_CACHING_SCOPE_BETA);
+  const supportsMidConversationSystem =
+    cleanModel.includes('claude-opus-5') ||
+    cleanModel.includes('claude-opus-4-8') ||
+    cleanModel.includes('claude-sonnet-5') ||
+    cleanModel.includes('claude-fable-5') ||
+    cleanModel.includes('claude-mythos-5');
+  if (supportsMidConversationSystem && !experimentalBetasDisabled) {
+    betas.push(CLAUDE_CODE_MID_CONVERSATION_SYSTEM_BETA);
+  }
   if (opts?.promptCacheTtl === '1h') betas.push(CLAUDE_CODE_EXTENDED_CACHE_TTL_BETA);
   return betas;
 }

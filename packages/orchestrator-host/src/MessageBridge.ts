@@ -28,6 +28,7 @@ import type {
   RequestEnvelope,
   ResponseEnvelope,
 } from './protocol.js';
+import { performance } from 'node:perf_hooks';
 import { isEvent, isRequest, isResponse } from './protocol.js';
 
 /**
@@ -49,6 +50,14 @@ export interface MessageBridgeOpts {
   defaultTimeoutMs?: number;
   /** Best-effort listener error sink. */
   onListenerError?: (err: unknown, context: 'request' | 'event') => void;
+  /**
+   * Optional timing hook for synchronous inline dispatch. Listeners run on the
+   * receiving thread's event loop, so on the Electron main process every worker
+   * event and RPC dispatch is main-thread blocking time. Reporting it is what
+   * lets a freeze be attributed to `bus.event:<type>` instead of coming back
+   * unattributed. Not called when unset — zero cost for every other consumer.
+   */
+  onDispatch?: (type: string, ms: number) => void;
 }
 
 interface PendingEntry {
@@ -126,6 +135,7 @@ export class MessageBridge {
   private readonly port: MessagePortLike;
   private readonly defaultTimeoutMs: number;
   private readonly onListenerError: (err: unknown, context: 'request' | 'event') => void;
+  private readonly onDispatch: ((type: string, ms: number) => void) | undefined;
   private readonly pending = new Map<string, PendingEntry>();
   private readonly handlers = new Map<string, RequestHandler>();
   private readonly listeners = new Map<string, Set<EventListener>>();
@@ -137,6 +147,7 @@ export class MessageBridge {
     this.port = opts.port;
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 0;
     this.onListenerError = opts.onListenerError ?? (() => undefined);
+    this.onDispatch = opts.onDispatch;
     this.port.on('message', (msg) => this.handleMessage(msg));
     this.port.on('close', () => this.dispose());
   }
@@ -344,6 +355,8 @@ export class MessageBridge {
   private dispatchEvent(env: EventEnvelope): void {
     const set = this.listeners.get(env.type);
     if (!set || set.size === 0) return;
+    const onDispatch = this.onDispatch;
+    const start = onDispatch ? performance.now() : 0;
     for (const listener of set) {
       try {
         listener(env.payload, env);
@@ -351,5 +364,6 @@ export class MessageBridge {
         this.onListenerError(err, 'event');
       }
     }
+    onDispatch?.(env.type, performance.now() - start);
   }
 }

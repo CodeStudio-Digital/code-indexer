@@ -118,10 +118,8 @@ export async function reconcilePrimaryForSession(
   sessionId: string,
   deps: ReconcileDeps,
 ): Promise<ReconcileResult | null> {
-  const numericId = Number(sessionId);
-  if (!Number.isFinite(numericId)) return null;
   if (!deps.store) return null;
-  const row = deps.store.get(numericId);
+  const row = deps.store.get(sessionId);
   if (!row || row.status === 'destroyed') return null;
   return reconcilePrimaryRowFromDb(driver, row, deps);
 }
@@ -189,11 +187,9 @@ export async function reconcileServicesForSession(
   sessionId: string,
   deps: ReconcileDeps,
 ): Promise<ReconcileResult[]> {
-  const numericId = Number(sessionId);
-  if (!Number.isFinite(numericId)) return [];
   if (!deps.servicesStore) return [];
   const results: ReconcileResult[] = [];
-  for (const row of deps.servicesStore.listBySession(numericId)) {
+  for (const row of deps.servicesStore.listBySession(sessionId)) {
     if (row.status === 'destroyed') continue;
     results.push(await reconcileServiceRowFromDb(driver, row, deps));
   }
@@ -206,10 +202,8 @@ export async function reconcileServiceForSession(
   serviceId: string,
   deps: ReconcileDeps,
 ): Promise<ReconcileResult | null> {
-  const numericId = Number(sessionId);
-  if (!Number.isFinite(numericId)) return null;
   if (!deps.servicesStore) return null;
-  const row = deps.servicesStore.get(numericId, serviceId);
+  const row = deps.servicesStore.get(sessionId, serviceId);
   if (!row || row.status === 'destroyed') return null;
   return reconcileServiceRowFromDb(driver, row, deps);
 }

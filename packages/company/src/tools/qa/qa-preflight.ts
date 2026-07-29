@@ -50,9 +50,9 @@ export function planRetry(outcomes: readonly ProbeOutcome[], nowMs: number): Ret
 // ─── Per-session circuit breaker (module-level) ──────────────────
 
 export const BREAKER_WINDOW_MS = 60_000;
-const breakerBySession = new Map<number, number>(); // sessionId → trippedAtMs
+const breakerBySession = new Map<string, number>(); // sessionId → trippedAtMs
 
-export function isBreakerOpen(sessionId: number, nowMs: number): boolean {
+export function isBreakerOpen(sessionId: string, nowMs: number): boolean {
   const at = breakerBySession.get(sessionId);
   if (at == null) return false;
   if (nowMs - at >= BREAKER_WINDOW_MS) {
@@ -62,11 +62,11 @@ export function isBreakerOpen(sessionId: number, nowMs: number): boolean {
   return true;
 }
 
-export function tripBreaker(sessionId: number, nowMs: number): void {
+export function tripBreaker(sessionId: string, nowMs: number): void {
   breakerBySession.set(sessionId, nowMs);
 }
 
-export function clearBreaker(sessionId: number): void {
+export function clearBreaker(sessionId: string): void {
   breakerBySession.delete(sessionId);
 }
 
@@ -111,7 +111,7 @@ interface ChromeServicePort {
 }
 
 export interface PreflightDeps {
-  sessionId: number;
+  sessionId: string;
   /** Test seams — production callers pass only `sessionId`. */
   getChromeService?: () => ChromeServicePort | null;
   envStore?: CompanySessionEnvStore | null;

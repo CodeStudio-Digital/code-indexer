@@ -6,7 +6,7 @@
  *   3. registra o projeto com `builder_json {stack, port, kind:'ds',
  *      packageName}` — é isso que liga preview, agente `builder`, tools
  *      `ds_*` e o bloco de prompt do studio;
- *   4. cria a row `design_system_sessions` (kind='studio');
+ *   4. cria o bundle `kind=design`;
  *   5. cria a sessão de chat inicial (`agent: 'builder'`).
  *
  * Espelha o contrato emit-driven de `projects/scaffold.ts`: registro só
@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Project } from '@mcp/shared/types.js';
+import type { SessionId } from '@mcp/session-storage';
 import {
   scaffoldDsStudioWorkspace,
   type DsStudioStack,
@@ -62,7 +63,11 @@ export type DsStudioStreamEvent =
   | { event: 'log'; data: { stream: 'stdout' | 'stderr'; chunk: string } }
   | {
       event: 'done';
-      data: { project: Project; ds_session: DesignSystemSession; coder_session_id: number };
+      data: {
+        project: Project;
+        ds_session: DesignSystemSession;
+        coder_session_id: SessionId;
+      };
     }
   | { event: 'error'; data: { message: string; stderrTail?: string } };
 
@@ -170,7 +175,7 @@ export async function runDsStudioScaffoldStream(
     const finalProject = deps.db.getProject(project.id) ?? project;
 
     const mode = input.mode ?? 'creative';
-    let dsSession = deps.designSystemStore.createStudioSession({
+    let dsSession = await deps.designSystemStore.createStudioSession({
       project_id: project.id,
       name: outcome.name,
       package_name: packageName,
@@ -183,7 +188,7 @@ export async function runDsStudioScaffoldStream(
     // candidatos do theme digest (escrito pelo scaffold em import/_analysis).
     // Falha aqui nunca derruba a criação — a UI oferece pipeline/init.
     try {
-      dsSession = deps.designSystemStore.setPipelineJson(
+      dsSession = await deps.designSystemStore.setPipelineJson(
         dsSession.id,
         serializePipelineState(buildInitialPipelineState(outcome.targetPath, mode)),
       );
@@ -191,7 +196,7 @@ export async function runDsStudioScaffoldStream(
       emit({ event: 'log', data: { stream: 'stderr', chunk: `pipeline init failed (non-fatal): ${(e as Error).message}\n` } });
     }
 
-    const coderSession = deps.sessionStore.createSession({
+    const coderSession = await deps.sessionStore.createSession({
       project_id: project.id,
       title: outcome.name,
       provider: input.provider.trim(),

@@ -23,12 +23,12 @@ const MAX_LINES = 2_000;
  * in tests without the binding) this returns an empty map and the listing
  * silently omits health columns — same tolerant posture as the supervisor.
  */
-function readHealthByService(sessionId: number | undefined): Map<
+function readHealthByService(sessionId: string | undefined): Map<
   string,
   { health: string; restartCount: number; lastHealthAtMs: number | null }
 > {
   const out = new Map<string, { health: string; restartCount: number; lastHealthAtMs: number | null }>();
-  if (typeof sessionId !== 'number') return out;
+  if (typeof sessionId !== 'string') return out;
   try {
     const rows = getServiceSupervisorStores()?.services?.listBySessionAll(sessionId) ?? [];
     for (const r of rows) {

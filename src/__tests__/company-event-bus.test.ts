@@ -1,6 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CompanyEventBus, type CompanyInternalEvent } from '@mcp/company/services/CompanyEventBus.js';
 import { IdleController } from '@mcp/company/services/IdleController.js';
+import { asCompanySessionId } from '@mcp/session-storage';
+
+const COMPANY_SESSION_ID = asCompanySessionId(
+  'c0000000-0000-4000-8000-000000000042',
+);
 
 describe('CompanyEventBus — primitive pub/sub', () => {
   it('starts with zero subscribers on every channel', () => {
@@ -102,15 +107,15 @@ function makeIdleHarness(overrides?: {
   const bus = new CompanyEventBus();
   const publish = vi.fn();
   const markEnded = vi.fn();
-  const updateStatus = vi.fn();
+  const updateStatus = vi.fn(async () => undefined);
   const onAutoContinue = overrides?.onAutoContinue ?? vi.fn();
   const consumeMasterShouldContinue =
     overrides?.consumeMasterShouldContinue ?? (() => false);
 
   const idle = new IdleController({
     ctx: {
-      companySessionId: 42,
-      companyStore: { updateCompanySessionStatus: updateStatus },
+      companySessionId: COMPANY_SESSION_ID,
+      companyFiles: { updateSessionStatus: updateStatus },
       isAborted: false,
       isBusEnded: false,
     } as never,
@@ -131,7 +136,10 @@ describe('CompanyEventBus + IdleController integration', () => {
   it('master.ended via bus triggers checkIdle (publishes session_idle when no running subs)', () => {
     const { bus, publish } = makeIdleHarness({ hasEnded: true, runningCount: 0 });
     bus.emit({ type: 'master.ended' });
-    expect(publish).toHaveBeenCalledWith('session_idle', { reason: 'waiting_for_input' });
+    expect(publish).toHaveBeenCalledWith(
+      'session_idle',
+      expect.objectContaining({ reason: 'waiting_for_input' }),
+    );
   });
 
   it('master.ended does NOT publish session_idle when subordinates still running', () => {
@@ -143,7 +151,10 @@ describe('CompanyEventBus + IdleController integration', () => {
   it('subordinates.changed via bus triggers checkIdle just like master.ended', () => {
     const { bus, publish } = makeIdleHarness({ hasEnded: true, runningCount: 0 });
     bus.emit({ type: 'subordinates.changed' });
-    expect(publish).toHaveBeenCalledWith('session_idle', { reason: 'waiting_for_input' });
+    expect(publish).toHaveBeenCalledWith(
+      'session_idle',
+      expect.objectContaining({ reason: 'waiting_for_input' }),
+    );
   });
 
   it('master.resurrected via bus cancels the idle timer (clear()) — no publish', () => {
@@ -165,10 +176,13 @@ describe('CompanyEventBus + IdleController integration', () => {
       runningCount: 0,
     });
     bus.emit({ type: 'master.ended' });
-    expect(publish).toHaveBeenCalledWith('session_idle', {
-      reason: 'master_error',
-      errorDetail: 'aborted',
-    });
+    expect(publish).toHaveBeenCalledWith(
+      'session_idle',
+      expect.objectContaining({
+        reason: 'master_error',
+        errorDetail: 'aborted',
+      }),
+    );
   });
 
   it('consumeMasterShouldContinue=true triggers onAutoContinue instead of session_idle', () => {
@@ -187,7 +201,7 @@ describe('CompanyEventBus + IdleController integration', () => {
   it('updates session status to "paused" when transitioning to idle', () => {
     const { bus, updateStatus } = makeIdleHarness({ hasEnded: true, runningCount: 0 });
     bus.emit({ type: 'master.ended' });
-    expect(updateStatus).toHaveBeenCalledWith(42, 'paused');
+    expect(updateStatus).toHaveBeenCalledWith('paused');
   });
 
   it('dispose() removes all bus subscriptions', () => {

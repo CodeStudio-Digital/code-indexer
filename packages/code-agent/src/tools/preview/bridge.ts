@@ -109,7 +109,7 @@ export function previewRpcTimeoutMs(req: PreviewInvoke): number {
  */
 export function previewKey(ctx: ToolContext): string {
   const cc = ctx.companyContext as
-    | { agentRunId?: number; companySessionId?: number }
+    | { agentRunId?: string; companySessionId?: string }
     | undefined;
   if (cc?.agentRunId != null && cc.companySessionId != null) {
     return `company-session-${cc.companySessionId}-agent-${cc.agentRunId}`;

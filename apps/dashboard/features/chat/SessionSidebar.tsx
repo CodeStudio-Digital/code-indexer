@@ -12,6 +12,7 @@ import {
   FolderX,
   FileInput,
   Inbox,
+  Loader2,
   MessageSquareCode,
   MoreHorizontal,
   Pencil,
@@ -49,34 +50,35 @@ export type SessionView = 'active' | 'archived';
 interface SessionSidebarProps {
   sessions: CoderSession[] | null;
   groups: CoderSessionGroup[] | null;
-  selectedId: number | null;
+  selectedId: string | null;
   view: SessionView;
   onViewChange: (view: SessionView) => void;
-  onSelect: (id: number) => void;
+  onSelect: (id: string) => void;
   onNew: () => void;
+  creating?: boolean;
   onImport?: () => void;
-  onDelete: (id: number) => void;
-  onRename: (id: number, currentTitle: string) => void;
-  onDuplicate: (id: number) => Promise<void> | void;
-  onBatchDelete: (ids: number[]) => Promise<void> | void;
+  onDelete: (id: string) => void;
+  onRename: (id: string, currentTitle: string) => void;
+  onDuplicate: (id: string) => Promise<void> | void;
+  onBatchDelete: (ids: string[]) => Promise<void> | void;
   onDeleteAll: () => Promise<void> | void;
-  onArchive: (id: number, archived: boolean) => Promise<void> | void;
-  onFavorite: (id: number, favorite: boolean) => Promise<void> | void;
+  onArchive: (id: string, archived: boolean) => Promise<void> | void;
+  onFavorite: (id: string, favorite: boolean) => Promise<void> | void;
   /** Toggle a Pinned Tab for this session (optional — enables the Pin menu item). */
-  onTogglePin?: (id: number) => void;
+  onTogglePin?: (id: string) => void;
   /** Deterministic pin id for a session id — lets a row reflect pinned state. */
-  sessionPinId?: (id: number) => string;
-  onBatchArchive: (ids: number[], archived: boolean) => Promise<void> | void;
-  onMoveToGroup: (id: number, groupId: number | null) => Promise<void> | void;
-  onBatchMoveToGroup: (ids: number[], groupId: number | null) => Promise<void> | void;
+  sessionPinId?: (id: string) => string;
+  onBatchArchive: (ids: string[], archived: boolean) => Promise<void> | void;
+  onMoveToGroup: (id: string, groupId: string | null) => Promise<void> | void;
+  onBatchMoveToGroup: (ids: string[], groupId: string | null) => Promise<void> | void;
   onCreateGroup: () => void;
   onRenameGroup: (group: CoderSessionGroup) => void;
   onDeleteGroup: (group: CoderSessionGroup) => void;
   projectName: string;
   /**
    * How to bucket the list. `'group'` (default) — the per-project named folders
-   * (`group_id`). `'workspace'` — Sessões Globais: auto-group by the virtual
-   * workspace (`project_id`, the synthetic union), header = `workspace_label`,
+   * (`group_id`). `'workspace'` — Sessões Globais: auto-group by the primary
+   * linked project (`project_id`), header = `workspace_label`,
    * each workspace gets a stable accent color. Manual-group controls are hidden
    * in `'workspace'` mode (groups are per-project).
    */
@@ -120,6 +122,7 @@ export const SessionSidebar = memo(function SessionSidebar({
   onViewChange,
   onSelect,
   onNew,
+  creating = false,
   onImport,
   onDelete,
   onRename,
@@ -157,11 +160,11 @@ export const SessionSidebar = memo(function SessionSidebar({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [docked, mobileOpen, onMobileClose]);
-  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
 
   // Stable so `memo(SessionRow)` isn't defeated — passed straight to every row.
-  const toggleSelected = useCallback((id: number) => {
+  const toggleSelected = useCallback((id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
@@ -197,7 +200,7 @@ export const SessionSidebar = memo(function SessionSidebar({
   const grouped = useMemo<GroupEntry[]>(() => {
     const list = sessions ?? [];
 
-    // Sessões Globais: bucket by the virtual workspace (synthetic project_id),
+    // Sessões Globais: bucket by their primary real project,
     // in first-appearance order (the list is already sorted by favorite+recency).
     if (groupBy === 'workspace') {
       const byWs = new Map<string, CoderSession[]>();
@@ -384,12 +387,20 @@ export const SessionSidebar = memo(function SessionSidebar({
                 variant="ghost"
                 className="h-7 w-7"
                 onClick={onNew}
+                disabled={creating}
+                aria-busy={creating}
                 aria-label={t('chat:sidebar.new')}
               >
-                <Plus className="h-3.5 w-3.5" />
+                {creating
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <Plus className="h-3.5 w-3.5" />}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{t('chat:sidebar.new')}</TooltipContent>
+            <TooltipContent>
+              {creating
+                ? t('chat:sessionLaunch.creating')
+                : t('chat:sidebar.new')}
+            </TooltipContent>
           </Tooltip>
         </div>
       </div>
@@ -611,18 +622,18 @@ const SessionRow = memo(function SessionRow({
   checked: boolean;
   // Stable parent callbacks (id-taking) — the row binds its own session.id, so
   // the parent never allocates a per-row closure and the memo holds.
-  onToggle: (id: number) => void;
-  onSelect: (id: number) => void;
-  onDelete: (id: number) => void;
-  onRename: (id: number, currentTitle: string) => void;
-  onDuplicate: (id: number) => Promise<void> | void;
-  onArchive: (id: number, archived: boolean) => Promise<void> | void;
-  onFavorite: (id: number, favorite: boolean) => Promise<void> | void;
-  onTogglePin?: (id: number) => void;
-  sessionPinId?: (id: number) => string;
+  onToggle: (id: string) => void;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+  onRename: (id: string, currentTitle: string) => void;
+  onDuplicate: (id: string) => Promise<void> | void;
+  onArchive: (id: string, archived: boolean) => Promise<void> | void;
+  onFavorite: (id: string, favorite: boolean) => Promise<void> | void;
+  onTogglePin?: (id: string) => void;
+  sessionPinId?: (id: string) => string;
   isArchivedView: boolean;
   groups: CoderSessionGroup[];
-  onMoveToGroup: (id: number, groupId: number | null) => Promise<void> | void;
+  onMoveToGroup: (id: string, groupId: string | null) => Promise<void> | void;
   /** Per-project named groups don't apply in global (workspace) mode. */
   showGroups: boolean;
   /** Workspace accent — paints a ring on the avatar so a session visually ties

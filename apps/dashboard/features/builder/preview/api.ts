@@ -44,7 +44,7 @@ export interface GitLogEntry {
   subject: string;
 }
 
-function base(sessionId: number, projectId: number): string {
+function base(sessionId: string, projectId: number): string {
   return `/api/company/sessions/${sessionId}/projects/${projectId}`;
 }
 
@@ -90,46 +90,46 @@ export interface SuggestedCommitGroup {
 }
 
 export const workspaceApi = {
-  tree: (sid: number, pid: number, path: string) =>
+  tree: (sid: string, pid: number, path: string) =>
     getJson<TreeResponse>(`${base(sid, pid)}/tree?path=${encodeURIComponent(path)}`),
-  file: (sid: number, pid: number, path: string) =>
+  file: (sid: string, pid: number, path: string) =>
     getJson<FileReadResponse>(`${base(sid, pid)}/file?path=${encodeURIComponent(path)}`),
-  gitStatus: (sid: number, pid: number) =>
+  gitStatus: (sid: string, pid: number) =>
     getJson<GitStatusResponse>(`${base(sid, pid)}/git/status`),
-  gitDiff: (sid: number, pid: number, path?: string, staged?: boolean) => {
+  gitDiff: (sid: string, pid: number, path?: string, staged?: boolean) => {
     const q = new URLSearchParams();
     if (path) q.set('path', path);
     if (staged) q.set('staged', 'true');
     return getJson<GitDiffResponse>(`${base(sid, pid)}/git/diff?${q.toString()}`);
   },
-  gitLog: (sid: number, pid: number, limit = 30) =>
+  gitLog: (sid: string, pid: number, limit = 30) =>
     getJson<{ entries: GitLogEntry[] }>(`${base(sid, pid)}/git/log?limit=${limit}`),
-  gitPushPreview: (sid: number, pid: number) =>
+  gitPushPreview: (sid: string, pid: number) =>
     getJson<GitPushPreview>(`${base(sid, pid)}/git/push-preview`),
-  gitCommitDetail: (sid: number, pid: number, sha: string) =>
+  gitCommitDetail: (sid: string, pid: number, sha: string) =>
     getJson<GitCommitDetail>(`${base(sid, pid)}/git/commit-detail?sha=${encodeURIComponent(sha)}`),
-  gitCommitFileDiff: (sid: number, pid: number, sha: string, path: string) =>
+  gitCommitFileDiff: (sid: string, pid: number, sha: string, path: string) =>
     getJson<GitDiffResponse>(`${base(sid, pid)}/git/commit-file-diff?sha=${encodeURIComponent(sha)}&path=${encodeURIComponent(path)}`),
-  gitInit: (sid: number, pid: number) =>
+  gitInit: (sid: string, pid: number) =>
     postJson<{ ok: boolean; status: GitStatusResponse }>(`${base(sid, pid)}/git/init`),
-  gitAdd: (sid: number, pid: number, paths: string[]) =>
+  gitAdd: (sid: string, pid: number, paths: string[]) =>
     postJson<{ ok: boolean; status: GitStatusResponse }>(`${base(sid, pid)}/git/add`, { paths }),
-  gitReset: (sid: number, pid: number, paths: string[]) =>
+  gitReset: (sid: string, pid: number, paths: string[]) =>
     postJson<{ ok: boolean; status: GitStatusResponse }>(`${base(sid, pid)}/git/reset`, { paths }),
-  gitDiscard: (sid: number, pid: number, paths: string[]) =>
+  gitDiscard: (sid: string, pid: number, paths: string[]) =>
     postJson<{ ok: boolean; status: GitStatusResponse }>(`${base(sid, pid)}/git/discard`, { paths }),
-  gitCommit: (sid: number, pid: number, message: string) =>
+  gitCommit: (sid: string, pid: number, message: string) =>
     postJson<{ ok: boolean; hash: string | null; status: GitStatusResponse }>(
       `${base(sid, pid)}/git/commit`,
       { message },
     ),
-  gitPush: (sid: number, pid: number, options?: { remote?: string; branch?: string; targetBranch?: string; expectedHead?: string; setUpstream?: boolean; pushTags?: boolean }) =>
+  gitPush: (sid: string, pid: number, options?: { remote?: string; branch?: string; targetBranch?: string; expectedHead?: string; setUpstream?: boolean; pushTags?: boolean }) =>
     postJson<{ ok: boolean; message: string; setUpstream: boolean; updatedBeforePush: boolean; status: GitStatusResponse }>(
       `${base(sid, pid)}/git/push`,
       options,
     ),
-  suggestCommitMessage: (sid: number, pid: number) =>
+  suggestCommitMessage: (sid: string, pid: number) =>
     postJson<{ message: string }>(`${base(sid, pid)}/git/suggest-commit-message`),
-  suggestStaging: (sid: number, pid: number) =>
+  suggestStaging: (sid: string, pid: number) =>
     postJson<{ groups: SuggestedCommitGroup[] }>(`${base(sid, pid)}/git/suggest-staging`),
 };

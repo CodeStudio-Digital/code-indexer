@@ -10,6 +10,10 @@ import { ServiceSupervisor, type ServiceSupervisorDeps, type SupervisedSandboxLi
 import type { ProbeDriverLike } from '../probes.js';
 import type { LocalProbeIo } from '../health-target.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000012';
+const TRANSITION_ID = '00000000-0000-4000-8000-000000000101';
+const LOCAL_SERVICE_ID = `local:${SESSION_ID}`;
+
 function deadDriver(): ProbeDriverLike {
   return {
     isPortListening: async () => false,
@@ -41,12 +45,12 @@ function makeSupervisor(opts: {
     restartDevServer: vi.fn(async () => {}),
     updateHealth: vi.fn(() => true),
     bumpRestartCount: vi.fn(() => 1),
-    record: vi.fn((_input?: unknown) => 1),
+    record: vi.fn((_input?: unknown) => TRANSITION_ID),
     notify: vi.fn(),
     boardPost: vi.fn(),
   };
   const deps: ServiceSupervisorDeps = {
-    sessionId: 12,
+    sessionId: SESSION_ID,
     publisher: { publish: (event, data) => published.push({ event, data }) },
     incidents: {
       notifyMaster: calls.notify,
@@ -102,7 +106,11 @@ describe('ServiceSupervisor.tick', () => {
       services: [{ serviceId: 'api', sandbox: sandbox() }],
     });
     await supervisor.tick();
-    expect(calls.updateHealth).toHaveBeenCalledWith(12, 'api', expect.objectContaining({ health: 'down' }));
+    expect(calls.updateHealth).toHaveBeenCalledWith(
+      SESSION_ID,
+      'api',
+      expect.objectContaining({ health: 'down' }),
+    );
     expect(calls.record).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'health', fromState: 'unknown', toState: 'down', actor: 'supervisor' }),
     );
@@ -126,7 +134,11 @@ describe('ServiceSupervisor.tick', () => {
       services: [{ serviceId: 'web', sandbox: sandbox({ hostPort: port }) }],
     });
     await supervisor.tick();
-    expect(calls.updateHealth).toHaveBeenCalledWith(12, 'web', expect.objectContaining({ health: 'healthy' }));
+    expect(calls.updateHealth).toHaveBeenCalledWith(
+      SESSION_ID,
+      'web',
+      expect.objectContaining({ health: 'healthy' }),
+    );
     expect(calls.restartService).not.toHaveBeenCalled();
   });
 
@@ -136,7 +148,11 @@ describe('ServiceSupervisor.tick', () => {
       services: [{ serviceId: 'web', sandbox: sandbox({ hostPort: port }) }],
     });
     await supervisor.tick();
-    expect(calls.updateHealth).toHaveBeenCalledWith(12, 'web', expect.objectContaining({ health: 'degraded' }));
+    expect(calls.updateHealth).toHaveBeenCalledWith(
+      SESSION_ID,
+      'web',
+      expect.objectContaining({ health: 'degraded' }),
+    );
     expect(calls.restartService).not.toHaveBeenCalled();
   });
 
@@ -145,8 +161,8 @@ describe('ServiceSupervisor.tick', () => {
       services: [{ serviceId: 'api', sandbox: sandbox() }],
     });
     await supervisor.tick();
-    expect(calls.restartService).toHaveBeenCalledWith('12', 'api');
-    expect(calls.bumpRestartCount).toHaveBeenCalledWith(12, 'api');
+    expect(calls.restartService).toHaveBeenCalledWith(SESSION_ID, 'api');
+    expect(calls.bumpRestartCount).toHaveBeenCalledWith(SESSION_ID, 'api');
     expect(calls.record).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'status', toState: 'restarted', actor: 'supervisor' }),
     );
@@ -156,7 +172,7 @@ describe('ServiceSupervisor.tick', () => {
   it('routes the primary through restartDevServer under serviceId main', async () => {
     const { supervisor, calls } = makeSupervisor({ primary: sandbox() });
     await supervisor.tick();
-    expect(calls.restartDevServer).toHaveBeenCalledWith('12');
+    expect(calls.restartDevServer).toHaveBeenCalledWith(SESSION_ID);
     expect(calls.restartService).not.toHaveBeenCalled();
   });
 
@@ -192,7 +208,11 @@ describe('ServiceSupervisor.tick', () => {
     await supervisor.tick();
     // Only the attached one is probeable; it gets health but never a restart.
     expect(calls.updateHealth).toHaveBeenCalledTimes(1);
-    expect(calls.updateHealth).toHaveBeenCalledWith(12, 'attached', expect.anything());
+    expect(calls.updateHealth).toHaveBeenCalledWith(
+      SESSION_ID,
+      'attached',
+      expect.anything(),
+    );
     expect(calls.restartService).not.toHaveBeenCalled();
   });
 
@@ -226,7 +246,7 @@ describe('ServiceSupervisor.tick', () => {
     const healthEvents = published.filter((p) => p.event === 'sandbox.service.health');
     expect(healthEvents).toHaveLength(1);
     expect(healthEvents[0]!.data).toMatchObject({
-      serviceId: 'local:12',
+      serviceId: LOCAL_SERVICE_ID,
       health: 'down',
       detail: 'process 4242 not running',
     });
@@ -242,7 +262,7 @@ describe('ServiceSupervisor.tick', () => {
       published.some(
         (p) =>
           p.event === 'sandbox.service.incident' &&
-          (p.data as { serviceId?: string }).serviceId === 'local:12',
+          (p.data as { serviceId?: string }).serviceId === LOCAL_SERVICE_ID,
       ),
     ).toBe(true);
     // …and dedupes per down-episode.
@@ -258,7 +278,10 @@ describe('ServiceSupervisor.tick', () => {
     await supervisor.tick();
     const healthEvents = published.filter((p) => p.event === 'sandbox.service.health');
     expect(healthEvents).toHaveLength(1);
-    expect(healthEvents[0]!.data).toMatchObject({ serviceId: 'local:12', health: 'healthy' });
+    expect(healthEvents[0]!.data).toMatchObject({
+      serviceId: LOCAL_SERVICE_ID,
+      health: 'healthy',
+    });
     expect(calls.notify).not.toHaveBeenCalled();
     expect(calls.updateHealth).not.toHaveBeenCalled();
   });
@@ -281,7 +304,10 @@ describe('ServiceSupervisor.tick', () => {
     // Local pass still ran: port open but HTTP mute ⇒ degraded event.
     const healthEvents = published.filter((p) => p.event === 'sandbox.service.health');
     expect(healthEvents).toHaveLength(1);
-    expect(healthEvents[0]!.data).toMatchObject({ serviceId: 'local:12', health: 'degraded' });
+    expect(healthEvents[0]!.data).toMatchObject({
+      serviceId: LOCAL_SERVICE_ID,
+      health: 'degraded',
+    });
   });
 
   it('destroyed/absent local rows produce no local target', async () => {

@@ -14,7 +14,7 @@ import type {
  * because the route shapes are mirrored on the server. The `scope` arg picks
  * the prefix.
  */
-function base(scope: SessionScope, sessionId: number): string {
+function base(scope: SessionScope, sessionId: string): string {
   return `/${scope}/sessions/${sessionId}/snapshot`;
 }
 
@@ -30,7 +30,7 @@ async function readError(res: Response, fallback: string): Promise<Error> {
 
 export async function fetchSnapshotList(
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
   opts: { includeClosed?: boolean } = {},
 ): Promise<{ files: SnapshotFileSummary[] }> {
   const qs = opts.includeClosed ? '?includeClosed=1' : '';
@@ -41,8 +41,8 @@ export async function fetchSnapshotList(
 
 export async function fetchFileDiff(
   scope: SessionScope,
-  sessionId: number,
-  baselineId: number,
+  sessionId: string,
+  baselineId: string,
   opts: { context?: number; contextBefore?: number; contextAfter?: number } = {},
 ): Promise<SnapshotFileDiff> {
   const qs = new URLSearchParams();
@@ -57,7 +57,7 @@ export async function fetchFileDiff(
 
 export async function fetchRoundSnapshotList(
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
   roundMessageId: number,
   signal?: AbortSignal,
 ): Promise<{
@@ -76,9 +76,9 @@ export async function fetchRoundSnapshotList(
 
 export async function fetchRoundFileDiff(
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
   roundMessageId: number,
-  roundSnapshotId: number,
+  roundSnapshotId: string,
   opts: { context?: number; contextBefore?: number; contextAfter?: number } = {},
 ): Promise<SnapshotFileDiff> {
   const qs = new URLSearchParams();
@@ -95,9 +95,9 @@ export async function fetchRoundFileDiff(
 
 export const acceptRoundHunk = (
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
   roundMessageId: number,
-  roundSnapshotId: number,
+  roundSnapshotId: string,
   fingerprint: string,
 ) => apiPost<{ ok: boolean; closed: boolean; reason?: string }>(
   `${base(scope, sessionId)}/round/${roundMessageId}/file/${roundSnapshotId}/accept-hunk`,
@@ -106,9 +106,9 @@ export const acceptRoundHunk = (
 
 export const revertRoundHunk = (
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
   roundMessageId: number,
-  roundSnapshotId: number,
+  roundSnapshotId: string,
   fingerprint: string,
 ) => apiPost<{ ok: boolean; closed: boolean; reason?: string }>(
   `${base(scope, sessionId)}/round/${roundMessageId}/file/${roundSnapshotId}/revert-hunk`,
@@ -117,7 +117,7 @@ export const revertRoundHunk = (
 
 export const revertRoundAll = (
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
   roundMessageId: number,
 ) => apiPost<{
   ok: boolean;
@@ -127,7 +127,7 @@ export const revertRoundAll = (
 
 export const runRoundAutoReview = (
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
   roundMessageId: number,
 ) => apiPost<{ reviews: RoundSnapshotReviewFinding[]; message?: string }>(
   `${base(scope, sessionId)}/round/${roundMessageId}/review`,
@@ -136,8 +136,8 @@ export const runRoundAutoReview = (
 
 export const acceptHunk = (
   scope: SessionScope,
-  sessionId: number,
-  baselineId: number,
+  sessionId: string,
+  baselineId: string,
   fingerprint: string,
 ) =>
   apiPost<{ ok: boolean; closed: boolean; reason?: string }>(
@@ -147,8 +147,8 @@ export const acceptHunk = (
 
 export const revertHunk = (
   scope: SessionScope,
-  sessionId: number,
-  baselineId: number,
+  sessionId: string,
+  baselineId: string,
   fingerprint: string,
 ) =>
   apiPost<{ ok: boolean; closed: boolean; reason?: string }>(
@@ -156,21 +156,21 @@ export const revertHunk = (
     { fingerprint },
   );
 
-export const acceptFile = (scope: SessionScope, sessionId: number, baselineId: number) =>
+export const acceptFile = (scope: SessionScope, sessionId: string, baselineId: string) =>
   apiPost<{ ok: boolean }>(`${base(scope, sessionId)}/file/${baselineId}/accept`, {});
 
-export const revertFile = (scope: SessionScope, sessionId: number, baselineId: number) =>
+export const revertFile = (scope: SessionScope, sessionId: string, baselineId: string) =>
   apiPost<{ ok: boolean; reason?: string }>(`${base(scope, sessionId)}/file/${baselineId}/revert`, {});
 
-export const acceptAll = (scope: SessionScope, sessionId: number) =>
+export const acceptAll = (scope: SessionScope, sessionId: string) =>
   apiPost<{ closed: number }>(`${base(scope, sessionId)}/accept-all`, {});
 
-export const revertAll = (scope: SessionScope, sessionId: number) =>
+export const revertAll = (scope: SessionScope, sessionId: string) =>
   apiPost<{ closed: number }>(`${base(scope, sessionId)}/revert-all`, { confirm: true });
 
 export async function fetchSnapshotReviews(
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
 ): Promise<SnapshotReviewsResponse> {
   const r = await fetch(`/api${base(scope, sessionId)}/reviews`);
   if (!r.ok) throw await readError(r, 'Could not load snapshot reviews');
@@ -179,9 +179,9 @@ export async function fetchSnapshotReviews(
 
 export const createReviewComment = (
   scope: SessionScope,
-  sessionId: number,
+  sessionId: string,
   body: {
-    baselineId: number;
+    baselineId: string;
     filePath: string;
     hunkFingerprint?: string | null;
     oldLine?: number | null;
@@ -196,8 +196,8 @@ export const createReviewComment = (
 
 export const patchReviewComment = (
   scope: SessionScope,
-  sessionId: number,
-  commentId: number,
+  sessionId: string,
+  commentId: string,
   body: Partial<Pick<SnapshotReviewComment, 'status' | 'body' | 'severity'>> & { suggestedFix?: string | null },
 ) =>
   apiPatch<{ comment: SnapshotReviewComment }>(
@@ -205,13 +205,13 @@ export const patchReviewComment = (
     body,
   );
 
-export const runAutoReview = (scope: SessionScope, sessionId: number) =>
+export const runAutoReview = (scope: SessionScope, sessionId: string) =>
   apiPost<{ comments: SnapshotReviewComment[]; message?: string }>(`${base(scope, sessionId)}/reviews/auto`, {});
 
 export const submitReviewComments = (
   scope: SessionScope,
-  sessionId: number,
-  commentIds: number[],
+  sessionId: string,
+  commentIds: string[],
 ) =>
   apiPost<{
     message: string;

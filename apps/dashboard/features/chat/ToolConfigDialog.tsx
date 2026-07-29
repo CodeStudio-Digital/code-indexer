@@ -97,7 +97,7 @@ function TierGroup({
 }
 
 interface ToolConfigDialogProps {
-  sessionId: number | null;
+  sessionId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
@@ -108,7 +108,7 @@ interface ToolConfigDialogProps {
  * The hook owns its fetch lifecycle; pass `sessionId=null` to suspend it
  * (e.g. while the panel is collapsed).
  */
-export function ToolConfigView({ sessionId }: { sessionId: number | null }) {
+export function ToolConfigView({ sessionId }: { sessionId: string | null }) {
   const { t } = useTranslation(['chat', 'common']);
   const {
     byTier,

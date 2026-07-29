@@ -5,7 +5,7 @@ import { DistillLlmError } from '@mcp/services/memory/distill-call.js';
 import { runDistillOnce } from '@mcp/services/memory/distiller.js';
 import { generalDefaultAsFallback } from '@mcp/services/pipelines/general-fallback.js';
 import type { ServerDeps } from '../deps.js';
-import { parseIdParam } from './_helpers.js';
+import { parseIdParam, parseSessionIdValue } from './_helpers.js';
 
 /**
  * Memory pipeline diagnostics — the one-click answer to "why is my agent
@@ -21,20 +21,33 @@ const SPAN_MESSAGE_CAP = 200;
 export function mountMemoryDiagnosticsRoutes(app: Hono, deps: ServerDeps): void {
   app.post('/api/projects/:id/memory/distill-dry-run', async (c) => {
     const projectId = parseIdParam(c);
-    const body = await c.req.json<{ sessionId?: number }>().catch(() => ({} as { sessionId?: number }));
+    const body = await c.req
+      .json<{ sessionId?: string }>()
+      .catch(() => ({} as { sessionId?: string }));
     const startedAt = Date.now();
 
-    const session = body.sessionId
-      ? deps.sessionStore.getSession(body.sessionId)
-      : deps.sessionStore.listSessions(projectId).find((s) =>
-          deps.sessionStore.listMessagesAfter(s.id, 0).messages.length > 0) ?? null;
+    let session = body.sessionId
+      ? await deps.sessionStore.getSession(
+          parseSessionIdValue(body.sessionId, 'sessionId'),
+        )
+      : null;
+    if (!body.sessionId) {
+      for (const candidate of await deps.sessionStore.listSessions(projectId)) {
+        if ((await deps.sessionStore.listMessagesAfter(candidate.id, 0)).messages.length > 0) {
+          session = candidate;
+          break;
+        }
+      }
+    }
     if (!session) return c.json({ error: 'no session with messages found for this project' }, 404);
 
     // Same span the sweeper would take (past the distill mark); fall back to
     // the whole transcript when the mark already covers everything.
-    const mark = deps.sessionStore.getMemoryDistilledBoundary(session.id);
-    let span = deps.sessionStore.listMessagesAfter(session.id, mark);
-    if (span.messages.length === 0) span = deps.sessionStore.listMessagesAfter(session.id, 0);
+    const mark = await deps.sessionStore.getMemoryDistilledBoundary(session.id);
+    let span = await deps.sessionStore.listMessagesAfter(session.id, mark);
+    if (span.messages.length === 0) {
+      span = await deps.sessionStore.listMessagesAfter(session.id, 0);
+    }
     if (span.messages.length === 0) return c.json({ error: `session ${session.id} has no messages` }, 404);
     const messages = span.messages.slice(-SPAN_MESSAGE_CAP);
 

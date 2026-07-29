@@ -32,13 +32,13 @@ import { selectAutonomy, useCompanyStore } from '../../state/company/index.js';
 import type { AutonomyConfigLike } from '../../state/company/index.js';
 
 interface KanbanTabProps {
-  companySessionId: number;
+  companySessionId: string;
 }
 
 /** Debounce for the auto recompute + role-suggestion refresh (C3). */
 const AUTO_RECOMPUTE_DEBOUNCE_MS = 1_500;
 
-const autoRecomputeStorageKey = (sessionId: number): string =>
+const autoRecomputeStorageKey = (sessionId: string): string =>
   `mcp.kanban.autoRecompute.${sessionId}`;
 
 export function KanbanTab({ companySessionId }: KanbanTabProps) {
@@ -64,8 +64,8 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
     try { return localStorage.getItem(autoRecomputeStorageKey(companySessionId)) !== '0'; }
     catch { return true; }
   });
-  const [roleSuggestions, setRoleSuggestions] = useState<Map<number, string>>(new Map());
-  const [dispatchingIds, setDispatchingIds] = useState<Set<number>>(new Set());
+  const [roleSuggestions, setRoleSuggestions] = useState<Map<string, string>>(new Map());
+  const [dispatchingIds, setDispatchingIds] = useState<Set<string>>(new Set());
   const [dispatchNotice, setDispatchNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   // C3 — WIP limits live in the session autonomy config.
   const autonomyState = useCompanyStore((s) => selectAutonomy(s, companySessionId));
@@ -74,7 +74,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
 
   const priorityScores = useMemo(() => {
     if (!priorityDiag) return undefined;
-    const m = new Map<number, number>();
+    const m = new Map<string, number>();
     for (const d of priorityDiag) m.set(d.id, d.score);
     return m;
   }, [priorityDiag]);
@@ -126,7 +126,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
   }, [companySessionId]);
 
   // ─── C3: quick dispatch (suggestion chip click) ─────────────
-  const handleQuickDispatch = useCallback(async (cardId: number, role: string) => {
+  const handleQuickDispatch = useCallback(async (cardId: string, role: string) => {
     setDispatchingIds((prev) => new Set(prev).add(cardId));
     try {
       const res = await dispatchKanbanCard(companySessionId, cardId, role);
@@ -198,13 +198,13 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
   }
 
   const titleById = useMemo(() => {
-    const m = new Map<number, string>();
+    const m = new Map<string, string>();
     for (const c of kanban.cards) m.set(c.id, c.title);
     return m;
   }, [kanban.cards]);
 
   const handleDrop = useCallback(
-    (cardId: number, column: KanbanColumnType) => {
+    (cardId: string, column: KanbanColumnType) => {
       kanban.moveCard(cardId, column);
     },
     [kanban.moveCard],
@@ -215,7 +215,7 @@ export function KanbanTab({ companySessionId }: KanbanTabProps) {
   }, []);
 
   // C3 — blocked_by chips open the BLOCKER's modal.
-  const handleOpenCardById = useCallback((cardId: number) => {
+  const handleOpenCardById = useCallback((cardId: string) => {
     const card = kanban.cards.find((c) => c.id === cardId);
     if (card) setSelectedCard(card);
   }, [kanban.cards]);

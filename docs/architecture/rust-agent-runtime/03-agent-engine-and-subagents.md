@@ -75,15 +75,18 @@ created
   -> composing
   -> provider_stream
   -> capability_dispatch | composing | compacting
-  -> waiting | stopping | terminalizing
-  -> terminal
+  -> waiting | provider_fallback | stopping | terminalizing
+  -> attempt_exit | completed | failed | aborted | interrupted
 ```
 
-Subestados podem repetir, mas transições são validadas.
+Subestados podem repetir, mas transições são validadas. `detached` não é estado
+do engine: é projeção host-owned de um `AgentRun` waiting sem caller anexado.
+Um run background que continua trabalhando permanece `running`.
 
 ### ENG-005
 
-O único caminho de sucesso é `terminalizing -> completed`.
+O único terminal lógico de sucesso é `terminalizing -> completed`.
+`attempt_exit` preserva o `AgentRun` não terminal.
 
 ### ENG-006
 
@@ -151,8 +154,10 @@ campos inferidos do texto.
 
 ### ENG-014
 
-Provider fallback cria attempt nova quando a policy de recovery exigir nova
-execução física. Não reusa operação ou fence antiga.
+Retry físico do adapter permanece dentro da mesma provider operation. Fallback
+lógico que troca provider/model checkpointa, recebe `AttemptExitCommitted` e
+cria obrigatoriamente attempt `provider_fallback` com epoch maior. Ele não reusa
+operation ou fence antiga.
 
 ## 6. Context manager
 
@@ -342,8 +347,8 @@ concorrência global.
 
 ### ENG-037
 
-Cancelamento propaga root → descendants. Child detached só sobrevive se o host
-persistir transferência explícita de owner e budget.
+Cancelamento propaga root → descendants. Transferência de owner/budget de child
+é proibida na V1.
 
 ### ENG-038
 
@@ -366,6 +371,12 @@ checkpoint e reaper permanecem obrigatórios.
 
 Resultado background não coletado permanece artifact durável sob TTL/quota; não
 fica como string ilimitada no supervisor/runner pai.
+
+### ENG-048
+
+`waitMode` é snapshot imutável e controla somente a espera do caller.
+Disconnect/timeout do caller não altera sozinho o engine, não cancela a attempt
+e não autoriza o runner a propor `detached`.
 
 ## 13. Ultra e presets
 
@@ -442,4 +453,3 @@ como sucesso.
 | Subagentes | fan-out/fan-in, crash, detach, cancel e recovery |
 | Terminal | somente um terminal e barrier ordering |
 | Leak lógico | task/channel/collection counters retornam a zero |
-

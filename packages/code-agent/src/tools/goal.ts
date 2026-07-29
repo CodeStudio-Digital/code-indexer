@@ -9,11 +9,10 @@
  * a structured slot they can re-read fixes that.
  *
  * Persistence: when `ctx.getGoalState` / `ctx.upsertGoalState` are wired
- * (by `runCoder` against the session store), the goal lives in
- * `coder_sessions.goal_*` columns and survives runner restarts and
- * dashboard reloads. When those callbacks are absent (tests, ephemeral
- * subagents), the tool falls back to a per-runner WeakMap so existing
- * call-sites continue to work without a database.
+ * (by `runCoder` against the filesystem session store), the goal lives in the
+ * bundle state projection and survives runner restarts and dashboard reloads.
+ * When those callbacks are absent (tests, ephemeral subagents), the tool falls
+ * back to a per-runner WeakMap.
  */
 import type {
   CoderTool,
@@ -35,47 +34,18 @@ interface GoalState {
 
 const GOAL_BY_RUNNER = new WeakMap<object, GoalState>();
 
-/**
- * Per-runner burst tracker for redundant create_goal calls against the SAME
- * active objective. It is reset whenever a goal is created or closed, so
- * several legitimate objectives completed inside 90 seconds never consume
- * one another's quota.
- */
-const CREATE_BURST_BY_RUNNER = new WeakMap<object, { count: number; lastAt: number }>();
-const CREATE_BURST_THRESHOLD = 3;
-const CREATE_BURST_WINDOW_MS = 90_000;
-
 function readKey(ctx: ToolContext): object | null {
   return (ctx.runner as unknown as object) ?? null;
 }
 
-/**
- * Bump the create_goal call counter for this runner. Returns the new
- * count after applying the window-reset rule. Caller refuses the call
- * when the count exceeds CREATE_BURST_THRESHOLD.
- */
-function bumpCreateBurst(ctx: ToolContext): { count: number; sinceMs: number } {
-  const key = readKey(ctx);
-  if (!key) return { count: 0, sinceMs: 0 };
-  const now = Date.now();
-  const prior = CREATE_BURST_BY_RUNNER.get(key);
-  if (!prior || now - prior.lastAt > CREATE_BURST_WINDOW_MS) {
-    CREATE_BURST_BY_RUNNER.set(key, { count: 1, lastAt: now });
-    return { count: 1, sinceMs: 0 };
-  }
-  const next = { count: prior.count + 1, lastAt: now };
-  CREATE_BURST_BY_RUNNER.set(key, next);
-  return { count: next.count, sinceMs: now - prior.lastAt };
+/** Test-only compatibility hook retained after redundant creates became idempotent. */
+export function _resetCreateBurstForKey(_key: object): void {
+  // No burst state remains.
 }
 
-/** Test-only hook to reset the burst counter for a runner key. */
-export function _resetCreateBurstForKey(key: object): void {
-  CREATE_BURST_BY_RUNNER.delete(key);
-}
-
-function readGoal(ctx: ToolContext): GoalState | null {
+async function readGoal(ctx: ToolContext): Promise<GoalState | null> {
   if (ctx.getGoalState) {
-    const persisted = ctx.getGoalState();
+    const persisted = await ctx.getGoalState();
     if (persisted) {
       return {
         text: persisted.text,
@@ -121,25 +91,35 @@ async function writeGoal(
   GOAL_BY_RUNNER.set(key, goal);
 }
 
-function resetCreateBurst(ctx: ToolContext): void {
-  const key = readKey(ctx);
-  if (key) CREATE_BURST_BY_RUNNER.delete(key);
+/**
+ * Idempotent success path: the call is durable evidence of a goal tool that
+ * deliberately staged no mutation. The runtime pairs successful goal rows with
+ * staged mutations, so an unannounced no-op reads as a dropped write and fails
+ * the turn's persistence.
+ */
+function noteGoalUnchanged(
+  ctx: ToolContext,
+  toolName: 'create_goal' | 'update_goal',
+): void {
+  const toolUseId = ctx.currentToolUseId;
+  if (!ctx.noteGoalUnchanged || !toolUseId) return;
+  ctx.noteGoalUnchanged({ toolUseId, toolName });
 }
 
 const CREATE_GOAL_DESC =
-  'For non-trivial top-level work, record the session goal in the FIRST assistant tool-call batch, before substantive tools. ' +
-  'Call this ONCE per objective. If a goal is already in_progress, do NOT call it again — execute the task; after an explicit user pivot, close the old goal with update_goal(status="superseded") first. ' +
-  'Survives turn boundaries (and compaction) so the original ask is recoverable. ' +
-  'Bootstrap in ONE turn: emit create_goal and task_list together in the same assistant tool-call batch when a checklist is useful, instead of spending a turn on each.';
+  'Optionally record a durable session objective for continuity, telemetry, and recovery after compaction. ' +
+  'Goal tracking never authorizes tools or blocks a final response. If a goal is already in_progress, this call succeeds idempotently without replacing it. ' +
+  'After an explicit user pivot, close the old goal with update_goal(status="superseded") before recording a replacement.';
 
 const GET_GOAL_DESC =
-  'Return the current session goal and its status. Use BEFORE making a non-trivial decision to confirm you are still aligned with the original objective. ' +
+  'Return the optional durable session goal and its status when that context is useful. ' +
   'Returns "(no goal set)" when none has been created.';
 
 const UPDATE_GOAL_DESC =
-  'Close the session goal. Use status="complete" ONLY when the objective has actually been achieved AND no required follow-up work remains. ' +
+  'Persist a terminal session-goal state immediately. Completion evidence is reported afterward as verified, unverified, or completed_with_warnings; it never refuses or revokes completion. ' +
+  'Use status="complete" when the objective has been achieved. ' +
   'Use status="superseded" only after the user explicitly pivots to a different objective; include a short reason and then create_goal for the new objective. ' +
-  'If you are stuck, use the escalation tool available to your role (ask_user or ask_master) instead of claiming completion.';
+  'Schema, attribution, transition, and persistence errors still fail.';
 
 const createGoal: CoderTool = {
   name: 'create_goal',
@@ -176,35 +156,20 @@ const createGoal: CoderTool = {
 
     let existing: GoalState | null;
     try {
-      existing = readGoal(ctx);
+      existing = await readGoal(ctx);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       return err(`create_goal: failed to read persisted goal state: ${reason}`);
     }
 
-    // A goal already in_progress is NOT superseded silently. `create_goal`
-    // stays visible the whole run (so the tool array — and thus the prompt
-    // cache prefix — is byte-stable), which means the model CAN still call it
-    // redundantly; we reject firmly here instead. This is the primary loop
-    // guard now that the tool is no longer hidden from the surface: re-stating
-    // the goal is not progress. To genuinely pivot, the model must close the
-    // current goal with update_goal(status=superseded) first.
+    // Never replace an active objective implicitly. A redundant create is an
+    // idempotent state read, not an execution failure.
     if (existing && existing.status === 'in_progress') {
-      const burst = bumpCreateBurst(ctx);
-      if (burst.count > CREATE_BURST_THRESHOLD) {
-        return err(
-          `Refused: create_goal has been called ${burst.count} times in the last ${Math.round(CREATE_BURST_WINDOW_MS / 1000)}s ` +
-            `against the same active goal. The goal is already set — call get_goal to re-read it if needed, ` +
-            `then EXECUTE the actual task (write files, run commands, edit code). ` +
-            `Calling create_goal more is not progress; it is a stuck-loop signal. ` +
-            `Stop revising the goal and start the work.`,
-        );
-      }
       const oldPreview = existing.text.length > 120 ? `${existing.text.slice(0, 120)}…` : existing.text;
-      return err(
-        `Refused: a goal is already in_progress ("${oldPreview}"). Do NOT call create_goal again — ` +
-          `execute the actual task now. To replace the objective (a real pivot), call ` +
-          `update_goal(status="superseded", note="<reason>") first, then create the new goal.`,
+      noteGoalUnchanged(ctx, 'create_goal');
+      return ok(
+        `Goal already in_progress and left unchanged ("${oldPreview}"). ` +
+          'Goal tracking is advisory; continue the task normally.',
       );
     }
 
@@ -223,11 +188,6 @@ const createGoal: CoderTool = {
       const reason = e instanceof Error ? e.message : String(e);
       return err(`create_goal: failed to persist goal state: ${reason}`);
     }
-    resetCreateBurst(ctx);
-    // Quiet success message. The redundant-call loop is handled by the
-    // in_progress rejection above plus `bumpCreateBurst`, so no nudge is
-    // needed in the result body (an in-body nudge paradoxically reinforced
-    // the loop by keeping the tool name fresh in the model's context).
     return ok(
       `Goal set. Status: in_progress${budget ? ` (budget: ${budget} tokens)` : ''}.`,
     );
@@ -248,7 +208,7 @@ const getGoal: CoderTool = {
     }
     let g: GoalState | null;
     try {
-      g = readGoal(ctx);
+      g = await readGoal(ctx);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       return err(`get_goal: failed to read persisted goal state: ${reason}`);
@@ -291,7 +251,7 @@ const updateGoal: CoderTool = {
       status: {
         type: 'string',
         enum: ['complete', 'superseded'],
-        description: 'Use "complete" only when verified; use "superseded" only for an explicit user pivot.',
+        description: 'Use "complete" when achieved; verification health is advisory. Use "superseded" only for an explicit user pivot.',
       },
       note: { type: 'string', description: 'Completion note, or required reason when superseding.' },
     },
@@ -319,18 +279,23 @@ const updateGoal: CoderTool = {
     }
     let g: GoalState | null;
     try {
-      g = readGoal(ctx);
+      g = await readGoal(ctx);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       return err(`update_goal: failed to read persisted goal state: ${reason}`);
     }
     if (!g) {
       return err(
-        'No goal set. Do NOT finish with prose. In the next assistant turn call create_goal first. ' +
-          'If the objective is already achieved, call update_goal(status="complete") second in the SAME assistant tool-call batch.',
+        'No goal set. Call create_goal first if you want to track this objective.',
       );
     }
-    if (g.status !== 'in_progress') return err(`Goal is already ${g.status}.`);
+    if (g.status === requestedStatus) {
+      noteGoalUnchanged(ctx, 'update_goal');
+      return ok(`Goal is already ${g.status}; no state change was needed.`);
+    }
+    if (g.status !== 'in_progress') {
+      return err(`Cannot change a ${g.status} goal to ${requestedStatus}.`);
+    }
     if (
       requestedStatus === 'superseded'
       && (
@@ -355,7 +320,6 @@ const updateGoal: CoderTool = {
       const reason = e instanceof Error ? e.message : String(e);
       return err(`update_goal: failed to persist goal state: ${reason}`);
     }
-    resetCreateBurst(ctx);
     return ok(
       requestedStatus === 'complete'
         ? `Goal marked complete${updated.completionNote ? `: ${updated.completionNote}` : '.'}`

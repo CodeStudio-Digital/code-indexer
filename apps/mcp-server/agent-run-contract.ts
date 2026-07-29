@@ -24,6 +24,15 @@ export interface McpAgentSessionCreatePayload {
   agent: string;
   execution_mode: McpAgentExecutionMode;
   reasoning_effort?: string;
+  metadata?: {
+    mcp_agent_run: {
+      schema_version: 1;
+      principal: string;
+      profile_id: string | null;
+      agent_id: string;
+      task_preview: string;
+    };
+  };
 }
 
 /**
@@ -47,6 +56,10 @@ export function parseMcpAgentExecutionMode(value: unknown): McpAgentExecutionMod
 export function buildMcpAgentSessionCreatePayload(
   input: StartMcpAgentRunInput,
   projectId: number,
+  runMetadata?: {
+    principal: string;
+    profileId: string | null;
+  },
 ): McpAgentSessionCreatePayload {
   const normalizedEffort = input.reasoningEffort?.trim() || undefined;
   const legacyUltra = normalizedEffort?.toLowerCase() === 'ultra';
@@ -59,5 +72,18 @@ export function buildMcpAgentSessionCreatePayload(
     agent: input.agentId,
     execution_mode: input.executionMode ?? (legacyUltra ? 'ultra' : 'standard'),
     ...(!legacyUltra && normalizedEffort ? { reasoning_effort: normalizedEffort } : {}),
+    ...(runMetadata
+      ? {
+          metadata: {
+            mcp_agent_run: {
+              schema_version: 1 as const,
+              principal: runMetadata.principal,
+              profile_id: runMetadata.profileId,
+              agent_id: input.agentId,
+              task_preview: input.task.slice(0, 500),
+            },
+          },
+        }
+      : {}),
   };
 }

@@ -18,7 +18,7 @@ interface AgentDetailModalProps {
   agent: ParallelAgent;
   resultSource?: AgentsGroupResultSource;
   /** P1: enables the retained-transcript fetch (worker realm, ~45min TTL). */
-  transcriptSource?: { sessionId: number; groupId: string };
+  transcriptSource?: { sessionId: string; groupId: string };
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }

@@ -16,7 +16,7 @@ import { useRunHistory } from './useRunHistory.js';
 import { RunDetailModal } from './RunDetailModal.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   serviceId?: string;
 }
 

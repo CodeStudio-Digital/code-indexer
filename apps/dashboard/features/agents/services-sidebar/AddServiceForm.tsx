@@ -23,7 +23,7 @@ import {
 } from './types.js';
 
 export interface AddServiceFormProps {
-  sessionId: number;
+  sessionId: string;
   onCancel: () => void;
   onCreated: () => Promise<void>;
   onError: (msg: string) => void;

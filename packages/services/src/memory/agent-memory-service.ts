@@ -545,12 +545,23 @@ export class AgentMemoryService {
             namespace,
             generationId,
           });
+          // Collect the distinct ref_ids IN MATCH ORDER first, then hydrate them
+          // in one batch. The old shape ran one synchronous point query per
+          // match — up to 60 per turn (retrieve) and 144 per recall_memory —
+          // each blocking the Electron main thread, which shares this handle.
           const seen = new Set<number>();
+          const refIds: number[] = [];
           for (const m of matches) {
             const refId = m.metadata.ref_id ? parseInt(m.metadata.ref_id, 10) : 0;
             if (!refId || seen.has(refId)) continue;
             seen.add(refId);
-            const row = this.db.getAgentMemoryById(refId);
+            refIds.push(refId);
+          }
+          // The batch returns rows in database order; rank is what feeds the RRF
+          // score below, so match order must be re-imposed explicitly here.
+          const byId = new Map(this.db.getAgentMemoriesByIds(refIds).map((row) => [row.id, row]));
+          for (const refId of refIds) {
+            const row = byId.get(refId);
             if (
               row &&
               row.scope === scope &&

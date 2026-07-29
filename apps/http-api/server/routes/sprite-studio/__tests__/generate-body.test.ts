@@ -14,6 +14,8 @@ import {
 } from '../generate-body.js';
 
 const PNG = Buffer.from('fake-png-bytes');
+const id = (n: number): string =>
+  `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 describe('editKindOf', () => {
   it('routes only inpaint/enhance to the edit flow', () => {
@@ -38,16 +40,16 @@ describe('clampVariantCount', () => {
 describe('editRequestSnapshot', () => {
   it('persists the edit provenance (kind, versionId, hasMask)', () => {
     const snap = editRequestSnapshot('inpaint', {
-      prompt: 'swap the sword for an axe', n: 2, assetId: 7, versionId: 31,
+      prompt: 'swap the sword for an axe', n: 2, assetId: id(7), versionId: id(31),
       maskBase64: 'AAAA', rawPrompt: true,
     });
     expect(snap).toEqual({
-      n: 2, rawPrompt: true, seed: null, kind: 'inpaint', versionId: 31, hasMask: true,
+      n: 2, rawPrompt: true, seed: null, kind: 'inpaint', versionId: id(31), hasMask: true,
     });
   });
 
   it('records maskless enhance + reserved strength when provided', () => {
-    const snap = editRequestSnapshot('enhance', { prompt: 'p', versionId: 3, strength: 0.6 });
+    const snap = editRequestSnapshot('enhance', { prompt: 'p', versionId: id(3), strength: 0.6 });
     expect(snap).toMatchObject({ n: 1, kind: 'enhance', hasMask: false, strength: 0.6 });
   });
 });
@@ -55,7 +57,7 @@ describe('editRequestSnapshot', () => {
 describe('buildEditJobParams', () => {
   it('rides the version PNG as reference, attaches the mask, disables packing', () => {
     const params = buildEditJobParams(
-      { prompt: 'more contrast', n: 3, versionId: 5, maskBase64: 'QUJD', rawPrompt: true, seed: 42 },
+      { prompt: 'more contrast', n: 3, versionId: id(5), maskBase64: 'QUJD', rawPrompt: true, seed: 42 },
       DEFAULT_SPRITE_STYLE,
       PNG,
     );
@@ -72,7 +74,7 @@ describe('buildEditJobParams', () => {
 
   it('omits the mask when absent and clamps n to 4', () => {
     const params = buildEditJobParams(
-      { prompt: 'p', n: 99, versionId: 5, seed: null },
+      { prompt: 'p', n: 99, versionId: id(5), seed: null },
       DEFAULT_SPRITE_STYLE,
       PNG,
     );
@@ -84,36 +86,41 @@ describe('buildEditJobParams', () => {
 });
 
 describe('buildGenerationRefs', () => {
-  const png = (id: number) => Buffer.from(`png-${id}`);
-  const reader = (ok: number[]) => (id: number) => (ok.includes(id) ? png(id) : null);
+  const png = (versionId: string) => Buffer.from(`png-${versionId}`);
+  const reader = (ok: string[]) => (versionId: string) =>
+    (ok.includes(versionId) ? png(versionId) : null);
 
-  it('orders current → referenceIds → uploads and caps at 3', () => {
-    const refs = buildGenerationRefs(
+  it('orders current → referenceIds → uploads and caps at 3', async () => {
+    const refs = await buildGenerationRefs(
       {
         useCurrentAsRef: true,
-        referenceIds: [10, 11],
+        referenceIds: [id(10), id(11)],
         uploadRefs: [{ base64: 'dXA=', mediaType: 'image/png' }],
       },
-      reader([5, 10, 11]),
-      5,
+      reader([id(5), id(10), id(11)]),
+      id(5),
     );
     expect(refs).toHaveLength(3);
-    expect(Buffer.from(refs[0].base64, 'base64').toString()).toBe('png-5');
-    expect(Buffer.from(refs[1].base64, 'base64').toString()).toBe('png-10');
-    expect(Buffer.from(refs[2].base64, 'base64').toString()).toBe('png-11');
+    expect(Buffer.from(refs[0].base64, 'base64').toString()).toBe(`png-${id(5)}`);
+    expect(Buffer.from(refs[1].base64, 'base64').toString()).toBe(`png-${id(10)}`);
+    expect(Buffer.from(refs[2].base64, 'base64').toString()).toBe(`png-${id(11)}`);
   });
 
-  it('dedupes the current version against referenceIds and skips unreadable versions', () => {
-    const refs = buildGenerationRefs(
-      { useCurrentAsRef: true, referenceIds: [5, 99], uploadRefs: [{ base64: 'dXA=', mediaType: 'image/webp' }] },
-      reader([5]),
-      5,
+  it('dedupes the current version against referenceIds and skips unreadable versions', async () => {
+    const refs = await buildGenerationRefs(
+      {
+        useCurrentAsRef: true,
+        referenceIds: [id(5), id(99)],
+        uploadRefs: [{ base64: 'dXA=', mediaType: 'image/webp' }],
+      },
+      reader([id(5)]),
+      id(5),
     );
     expect(refs).toHaveLength(2); // 5 once + upload; 99 unreadable (wrong project) dropped
     expect(refs[1].mediaType).toBe('image/webp');
   });
 
-  it('returns [] with no inputs (legacy generation unchanged)', () => {
-    expect(buildGenerationRefs({}, reader([]), null)).toHaveLength(0);
+  it('returns [] with no inputs (legacy generation unchanged)', async () => {
+    await expect(buildGenerationRefs({}, reader([]), null)).resolves.toHaveLength(0);
   });
 });

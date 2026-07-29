@@ -20,9 +20,9 @@
 export interface ShadowQuery {
   /** Stable per-request hash so variants share a key. */
   queryHash: string;
-  /** Optional session id for scoped analytics. */
-  sessionId?: number | null;
-  companySessionId?: number | null;
+  /** Optional UUIDs route the observation to a filesystem session sink. */
+  sessionId?: string | null;
+  companySessionId?: string | null;
   /** Free-form payload — the pipeline-specific query object. */
   payload: unknown;
 }

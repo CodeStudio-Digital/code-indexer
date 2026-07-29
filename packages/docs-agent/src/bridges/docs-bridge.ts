@@ -16,8 +16,8 @@
  *   - The coder runner picks up the tool via `onRunnerReady` (see
  *     apps/http-api/workers/coder-worker.ts). Zero edits to @mcp/code-agent.
  */
-import type DatabaseConstructor from 'better-sqlite3';
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { DocStore } from '@mcp/store/doc-store.js';
 import type { DocHybridSearch } from '@mcp/services/services/docs/index.js';
@@ -27,11 +27,10 @@ import type {
 } from '@mcp/services/pipelines/index.js';
 import { runDocsAgent } from '../index.js';
 import type { DocsResearchResult } from '../types.js';
-
-type DB = InstanceType<typeof DatabaseConstructor>;
+import type { SessionId } from '@mcp/session-storage';
 
 export interface DocsResearchBridgeDeps {
-  db: DB;
+  sessionStore: FsSessionStore;
   docStore: DocStore;
   docHybridSearch: DocHybridSearch;
   pipelineResolver: PipelineProviderResolver;
@@ -40,7 +39,7 @@ export interface DocsResearchBridgeDeps {
 export interface RunResearchInput {
   query: string;
   collections?: string[];
-  parentCoderSessionId?: number | null;
+  parentCoderSessionId?: SessionId | null;
   maxTurns?: number;
   signal?: AbortSignal;
   resolveContext?: ResolveContext;
@@ -154,9 +153,10 @@ export const docsDeepResearchTool: CoderTool = {
       result = await bridge.runResearch({
         query,
         collections: collections.length > 0 ? collections : undefined,
-        // Pull the parent coder session id from the ToolContext if the
+        // Pull the parent coder session UUID from the ToolContext if the
         // host wired it (sub-runners and standalone runs leave it undefined).
-        parentCoderSessionId: (ctx as { sessionId?: number }).sessionId ?? null,
+        parentCoderSessionId:
+          (ctx as { sessionId?: SessionId }).sessionId ?? null,
         maxTurns,
         signal: ctx.signal,
       });
@@ -165,8 +165,8 @@ export const docsDeepResearchTool: CoderTool = {
     }
 
     // Render the result back to the coder. The dashboard renders a richer
-    // version (clickable footnotes) by reading `docs_research_sessions`
-    // directly; the tool-result content here is what the coder LLM sees,
+    // version (clickable footnotes) by reading the docs bundle; the
+    // tool-result content here is what the coder LLM sees,
     // so we keep it text-only with chunk_id back-references.
     const header = `# Research result (confidence: ${result.confidence ?? 'low'}, session ${result.sessionId})`;
     const footer = result.chunks_cited.length > 0

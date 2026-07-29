@@ -13,13 +13,13 @@
  *   quiet IN THIS REPO while critical findings are never suppressed.
  */
 import type {
-  SessionFileReviewStore,
   SnapshotReviewComment,
-} from '@mcp/store/session-file-review-store.js';
+  SessionReviewStorePort,
+} from './session-snapshot-port.js';
 import type {
   ReviewFateOutcome,
-  ReviewIntelStore,
-} from '@mcp/store/review-intel-store.js';
+  ReviewIntelPort,
+} from './review-intel-port.js';
 import type { FileDiff } from './session-snapshots.js';
 
 /** Explicit verdicts below this precision (with enough samples) get the
@@ -30,7 +30,7 @@ const FEW_SHOT_DISMISSALS = 3;
 const MAX_PRIORS_CHARS = 2_000;
 
 function fateOf(
-  comment: SnapshotReviewComment,
+  comment: SnapshotReviewComment<string>,
   fingerprintsByFile: Map<string, Set<string>>,
 ): ReviewFateOutcome {
   if (comment.status === 'accepted') return 'accepted';
@@ -47,15 +47,18 @@ function fateOf(
  * CURRENT diffs. Called at review time, before the new run — cheap, idempotent
  * (latest observation wins), best-effort.
  */
-export function recordSessionFates(
-  reviewStore: SessionFileReviewStore,
-  intelStore: ReviewIntelStore,
+export async function recordSessionFates<
+  SessionKey extends string,
+  RecordId extends string,
+>(
+  reviewStore: SessionReviewStorePort<SessionKey, RecordId>,
+  intelStore: ReviewIntelPort<SessionKey, RecordId>,
   sessionKind: string,
-  sessionId: number,
-  diffs: FileDiff[],
-): void {
+  sessionId: SessionKey,
+  diffs: FileDiff<RecordId>[],
+): Promise<void> {
   try {
-    const comments = reviewStore.listComments(sessionKind, sessionId);
+    const comments = await reviewStore.listComments(sessionKind, sessionId);
     if (comments.length === 0) return;
     const fingerprintsByFile = new Map<string, Set<string>>();
     for (const diff of diffs) {
@@ -65,7 +68,7 @@ export function recordSessionFates(
       );
     }
     for (const comment of comments) {
-      intelStore.recordFate({
+      await intelStore.recordFate({
         comment_id: comment.id,
         session_kind: sessionKind,
         session_id: sessionId,
@@ -86,13 +89,16 @@ export function recordSessionFates(
  * recent explicit dismissals as few-shot negatives. Null when there is no
  * signal yet (cold start behaves exactly like today).
  */
-export function buildReviewPriors(
-  intelStore: ReviewIntelStore,
+export async function buildReviewPriors<
+  SessionKey extends string,
+  RecordId extends string,
+>(
+  intelStore: ReviewIntelPort<SessionKey, RecordId>,
   projectId?: number,
-): string | null {
+): Promise<string | null> {
   try {
     const lines: string[] = [];
-    for (const agg of intelStore.aggregateFates(projectId)) {
+    for (const agg of await intelStore.aggregateFates(projectId)) {
       if (agg.severity === 'critical') continue; // never suppress critical
       const verdicts = agg.accepted + agg.dismissed;
       if (verdicts < SUPPRESS_MIN_SAMPLES) continue;
@@ -104,7 +110,10 @@ export function buildReviewPriors(
           'line evidence and a concrete failure scenario.',
       );
     }
-    const dismissals = intelStore.recentDismissals(FEW_SHOT_DISMISSALS, projectId);
+    const dismissals = await intelStore.recentDismissals(
+      FEW_SHOT_DISMISSALS,
+      projectId,
+    );
     if (dismissals.length > 0) {
       lines.push('Recently dismissed by the owner (do NOT repeat without new evidence):');
       for (const d of dismissals) {

@@ -1,6 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { OpenDatabaseTab } from '../../../state/workspace.js';
-import { DatabaseEditorStack, DatabaseEditorView } from '../DatabaseEditorView.js';
+
+/**
+ * These tests call the components as plain functions to inspect the element
+ * tree they return — no renderer, so React's hook dispatcher is null and the
+ * component's `useWorkspaceStore(...)` selector throws "Invalid hook call".
+ * Stub just that hook (the assertions are about keys and props, not the store)
+ * and leave the rest of the module intact for anything else in the graph.
+ */
+vi.mock('../../../state/workspace.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  useWorkspaceStore: (selector: (state: Record<string, unknown>) => unknown) =>
+    selector({ updateDatabaseTab: () => undefined }),
+}));
+
+const { DatabaseEditorStack, DatabaseEditorView } = await import('../DatabaseEditorView.js');
 
 function dataTab(table: string): OpenDatabaseTab {
   const id = `data:1:app:${table}`;

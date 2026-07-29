@@ -33,9 +33,9 @@ export const AssetCard = memo(function AssetCard({
 }: {
   asset: SpriteAsset;
   active: boolean;
-  onSelect: (id: number) => void;
+  onSelect: (id: string) => void;
   /** Double-click — will open the asset in the editor (M3). */
-  onOpen?: (id: number) => void;
+  onOpen?: (id: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   return (

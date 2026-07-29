@@ -9,6 +9,9 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
+
+const SESSION_ID = asSessionId('22222222-2222-4222-8222-222222222222');
 
 const { poolMock } = vi.hoisted(() => ({
   poolMock: {
@@ -34,31 +37,39 @@ function liveBus() {
 }
 
 function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
-  const appendCalls: Array<{ id: number; msg: unknown }> = [];
+  const appendCalls: Array<{
+    session_id: SessionId;
+    operation_id: string;
+    message: unknown;
+  }> = [];
   const bus = opts.live === false ? null : liveBus();
-  poolMock.getBus.mockImplementation((id: number) => id === 1 ? bus : null);
+  poolMock.getBus.mockImplementation((id: SessionId) => id === SESSION_ID ? bus : null);
   poolMock.isWaitingForInput.mockResolvedValue(!!opts.waiting);
   poolMock.interruptWait.mockResolvedValue(undefined);
-  poolMock.pushUserMessage.mockResolvedValue(undefined);
+  poolMock.pushUserMessage.mockResolvedValue(42);
 
   const deps = {
     sessionStore: {
-      appendMessage: (id: number, msg: unknown) => {
-        appendCalls.push({ id, msg });
+      appendMessage: async (input: {
+        session_id: SessionId;
+        operation_id: string;
+        message: unknown;
+      }) => {
+        appendCalls.push(input);
         return 42;
       },
     },
   } as unknown as ServerDeps;
   const runtime = {
     activeRuns: new Map(),
-    findPendingInteraction: () => null,
-    findDanglingToolUse: () => null,
+    findPendingInteraction: async () => null,
+    findDanglingToolUse: async () => null,
   } as unknown as CoderRuntime;
 
   const app = new Hono();
   mountCoderInteractionRoutes(app, deps, runtime);
 
-  const inject = (id: number, body: unknown) =>
+  const inject = (id: SessionId, body: unknown) =>
     app.request(`/api/coder/sessions/${id}/inject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -73,16 +84,21 @@ beforeEach(() => vi.clearAllMocks());
 describe('coder POST /sessions/:id/inject', () => {
   it('enqueues into a live run and returns injected', async () => {
     const h = setup({ live: true });
-    const r = await h.inject(1, { content: 'follow-up', selected_skill_ids: ['s1'] });
+    const r = await h.inject(SESSION_ID, { content: 'follow-up', selected_skill_ids: ['s1'] });
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ injected: true });
-    expect(h.appendCalls).toHaveLength(1);
-    expect(poolMock.pushUserMessage).toHaveBeenCalledWith(1, 'follow-up', ['s1'], 42);
+    expect(h.appendCalls).toHaveLength(0);
+    expect(poolMock.pushUserMessage).toHaveBeenCalledWith(
+      SESSION_ID,
+      'follow-up',
+      ['s1'],
+      expect.stringMatching(/^interaction:inject:/),
+    );
   });
 
   it('returns noActiveRun when there is no live run', async () => {
     const h = setup({ live: false });
-    const r = await h.inject(1, { content: 'hello' });
+    const r = await h.inject(SESSION_ID, { content: 'hello' });
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ noActiveRun: true });
     expect(h.appendCalls).toHaveLength(0);
@@ -91,23 +107,23 @@ describe('coder POST /sessions/:id/inject', () => {
 
   it('400s on empty content', async () => {
     const h = setup({ live: true });
-    const r = await h.inject(1, { content: '   ' });
+    const r = await h.inject(SESSION_ID, { content: '   ' });
     expect(r.status).toBe(400);
     expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
   });
 
   it('returns waiting when blocked and interject is not set', async () => {
     const h = setup({ live: true, waiting: true });
-    const r = await h.inject(1, { content: 'hi' });
+    const r = await h.inject(SESSION_ID, { content: 'hi' });
     expect(await r.json()).toEqual({ waiting: true });
     expect(poolMock.pushUserMessage).not.toHaveBeenCalled();
   });
 
   it('interrupts the wait and injects when interject is set', async () => {
     const h = setup({ live: true, waiting: true });
-    const r = await h.inject(1, { content: 'hi', interject: true });
+    const r = await h.inject(SESSION_ID, { content: 'hi', interject: true });
     expect(await r.json()).toEqual({ injected: true });
-    expect(poolMock.interruptWait).toHaveBeenCalledWith(1);
+    expect(poolMock.interruptWait).toHaveBeenCalledWith(SESSION_ID);
     expect(poolMock.pushUserMessage).toHaveBeenCalledTimes(1);
   });
 });

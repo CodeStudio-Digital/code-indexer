@@ -31,6 +31,8 @@ const baseReq: ChatRequest = {
   ],
 };
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+
 async function collect(provider: KimiCodeChatProvider, req: ChatRequest = baseReq): Promise<ChatDelta[]> {
   const out: ChatDelta[] = [];
   for await (const d of provider.chat(req)) out.push(d);
@@ -107,12 +109,12 @@ describe('KimiCodeChatProvider stream handler', () => {
       chunks({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
       'kimi-k2.6',
     );
-    await collect(provider, { ...baseReq, thinking: true, sessionId: 42 });
+    await collect(provider, { ...baseReq, thinking: true, sessionId: SESSION_ID });
 
     const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
     expect(args.stream).toBe(true);
     expect(args.stream_options).toEqual({ include_usage: true });
-    expect(args.prompt_cache_key).toBe('coder-session-42');
+    expect(args.prompt_cache_key).toBe(`coder-session-${SESSION_ID}`);
     expect(args.thinking).toEqual({ type: 'enabled' });
     const tools = args.tools as Array<{ function: { parameters: Record<string, unknown> } }>;
     expect(tools[0].function.parameters.type).toBe('object');

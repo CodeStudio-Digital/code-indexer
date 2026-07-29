@@ -45,7 +45,7 @@ export function buildRailPin(a: {
 
 export function buildSessionPin(a: {
   scope: SessionScope;
-  sessionId: number;
+  sessionId: string;
   projectId?: number;
   title?: string | null;
   /** For company scope, the full canonical pathname (preserves zone/tab). */
@@ -94,8 +94,8 @@ export function describeCurrentPin(input: DescribeInput): Pin | null {
 
   // Company session — the whole state (front/zone/tab) is in the URL.
   if (view.page === 'agents' && pathname.startsWith('/company/sessions/')) {
-    const rootId = Number(pathname.split('/')[3]);
-    if (!Number.isFinite(rootId)) return null;
+    const rootId = pathname.split('/')[3];
+    if (!rootId) return null;
     return buildSessionPin({
       scope: 'company',
       sessionId: rootId,

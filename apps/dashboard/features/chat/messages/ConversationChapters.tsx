@@ -76,7 +76,7 @@ export function chapterPreviewText(chapter: ConversationChapter): string {
   ].find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() ?? '';
 }
 
-export function useConversationChapters(sessionId: number, query = ''): ChapterIndexState {
+export function useConversationChapters(sessionId: string, query = ''): ChapterIndexState {
   const [chapters, setChapters] = useState<ConversationChapter[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -203,7 +203,7 @@ const EMPTY_SOURCE: SourceState = {
 };
 
 interface ConversationChaptersTimelineProps extends ChapterIndexState {
-  sessionId: number;
+  sessionId: string;
   fallbackSummary?: string | null;
   embedded?: boolean;
 }
@@ -221,10 +221,10 @@ export function ConversationChaptersTimeline({
   embedded = false,
 }: ConversationChaptersTimelineProps) {
   const { t, i18n } = useTranslation('chat');
-  const [openId, setOpenId] = useState<number | null>(null);
-  const [details, setDetails] = useState<Record<number, ConversationChapter>>({});
-  const [detailLoading, setDetailLoading] = useState<Set<number>>(new Set());
-  const [sources, setSources] = useState<Record<number, SourceState>>({});
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [details, setDetails] = useState<Record<string, ConversationChapter>>({});
+  const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
+  const [sources, setSources] = useState<Record<string, SourceState>>({});
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildError, setRebuildError] = useState(false);
   const hasLegacy = chapters.some((chapter) => chapter.source === 'legacy' && !chapter.superseded_at);
@@ -277,7 +277,7 @@ export function ConversationChaptersTimeline({
 
   useEffect(() => {
     const selectFromTranscript = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId: number; chapterId: number }>).detail;
+      const detail = (event as CustomEvent<{ sessionId: string; chapterId: string }>).detail;
       if (!detail || detail.sessionId !== sessionId) return;
       if (!chapters.some((chapter) => chapter.id === detail.chapterId)) return;
       setOpenId(detail.chapterId);
@@ -289,7 +289,7 @@ export function ConversationChaptersTimeline({
     return () => window.removeEventListener('coder:chapter-selected', selectFromTranscript);
   }, [chapters, sessionId]);
 
-  const loadSource = useCallback(async (chapterId: number, cursor?: string) => {
+  const loadSource = useCallback(async (chapterId: string, cursor?: string) => {
     setSources((current) => ({
       ...current,
       [chapterId]: { ...(current[chapterId] ?? EMPTY_SOURCE), open: true, loading: true, error: false },
@@ -455,7 +455,7 @@ export function ConversationChaptersTimeline({
                   )}
                   <div className="mt-1.5 flex flex-wrap gap-x-2 text-[9px] text-muted-foreground/80">
                     <span>{t(`messages.chapterSource.${chapter.source}`, { defaultValue: chapter.source })}</span>
-                    <span>#{chapter.start_message_id}–#{chapter.end_message_id}</span>
+                    <span>#{chapter.start_message_seq}–#{chapter.end_message_seq}</span>
                     {formattedDate && <span>{formattedDate}</span>}
                   </div>
                 </div>
@@ -523,8 +523,8 @@ export function ConversationChaptersTimeline({
                         detail: {
                           sessionId,
                           chapterId: item.id,
-                          startMessageId: item.start_message_id,
-                          endMessageId: item.end_message_id,
+                          startMessageSeq: item.start_message_seq,
+                          endMessageSeq: item.end_message_seq,
                         },
                       }))}
                       className="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary/10 px-2 text-[10px] font-medium text-primary transition-colors hover:bg-primary/15"
@@ -539,7 +539,7 @@ export function ConversationChaptersTimeline({
                       {source.items.map((message) => (
                         <div key={message.id} className="text-xs">
                           <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                            {t(`messages.chapterRole.${message.role}`, { defaultValue: message.role })} · #{message.id}
+                            {t(`messages.chapterRole.${message.role}`, { defaultValue: message.role })} · #{message.seq}
                           </div>
                             <div className="max-h-32 overflow-hidden whitespace-pre-wrap break-words border-l border-border/70 pl-2.5 text-foreground/75">
                             {sourceMessageText(message) || t('messages.chapterEmptyMessage')}
@@ -592,7 +592,7 @@ export function ConversationChaptersPanel({
   sessionStatus,
   fallbackSummary,
 }: {
-  sessionId: number;
+  sessionId: string;
   sessionStatus?: string | null;
   fallbackSummary?: string | null;
 }) {
@@ -661,7 +661,7 @@ export function ConversationChaptersPanel({
         </div>
         <div className="grid grid-cols-2 gap-1.5 text-[9px] text-muted-foreground">
           <span className="rounded-md border border-border/50 bg-background/45 px-2 py-1.5">{t('messages.chapterUnsummarized', { count: status?.unsummarized_messages ?? 0 })}</span>
-          <span className="rounded-md border border-border/50 bg-background/45 px-2 py-1.5">{t('messages.chapterBoundary', { id: status?.boundary_id ?? '—' })}</span>
+          <span className="rounded-md border border-border/50 bg-background/45 px-2 py-1.5">{t('messages.chapterBoundary', { id: status?.boundary_seq ?? '—' })}</span>
           <span className="rounded-md border border-border/50 bg-background/45 px-2 py-1.5">{t('messages.chapterLlmCount', { count: status?.counters.summarized ?? 0 })}</span>
           <span className="rounded-md border border-border/50 bg-background/45 px-2 py-1.5">{t('messages.chapterFallbackCount', { count: status?.counters.deterministic_fallbacks ?? 0 })}</span>
         </div>
@@ -724,7 +724,7 @@ export function ConversationChapterDivider({
 }: {
   chapter: ConversationChapter;
   active?: boolean;
-  onActivate?: (chapterId: number) => void;
+  onActivate?: (chapterId: string) => void;
 }) {
   const { t } = useTranslation('chat');
   const kind = resolvedChapterKind(chapter);
@@ -798,7 +798,7 @@ export function ConversationChapterDivider({
                 {t(`messages.chapterKind.${kind}`)}
               </span>
               <span className="text-[9px] tabular-nums text-muted-foreground">
-                #{chapter.start_message_id}–#{chapter.end_message_id}
+                #{chapter.start_message_seq}–#{chapter.end_message_seq}
               </span>
             </div>
             <p className="text-xs font-semibold leading-5 text-foreground">{title}</p>

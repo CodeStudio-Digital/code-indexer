@@ -10,7 +10,7 @@
  * run-scoped diagnostics — they don't survive a reload, same as the
  * `SessionState.toolLoopInterventions` array they replace.
  *
- * Keyed by `coder:<sessionId>` so the number-keyed coder space never collides
+ * Keyed by `coder:<sessionId>` so the coder space never collides
  * with the company-session space if this is ever reused there.
  */
 import { useSyncExternalStore } from 'react';
@@ -71,7 +71,7 @@ let counter = 0;
 
 const EMPTY: readonly SessionNotification[] = Object.freeze([]);
 
-function keyFor(sessionId: number): string {
+function keyFor(sessionId: string): string {
   return `coder:${sessionId}`;
 }
 
@@ -119,7 +119,7 @@ function deriveLoop(severity: ToolLoopIntervention['severity']): {
 
 /** Append a notification (newest LAST). Returns the created entry's id. */
 export function pushNotification(
-  sessionId: number,
+  sessionId: string,
   payload: SessionNotificationPayload,
   options: PushNotificationOptions = {},
 ): string {
@@ -147,7 +147,7 @@ export function pushNotification(
 }
 
 /** Mark one notification dismissed (leaves it in history). */
-export function dismissNotification(sessionId: number, id: string): void {
+export function dismissNotification(sessionId: string, id: string): void {
   const key = keyFor(sessionId);
   const cur = byKey.get(key);
   if (!cur) return;
@@ -165,7 +165,7 @@ export function dismissNotification(sessionId: number, id: string): void {
 }
 
 /** Dismiss every still-active notification (banner → empty). */
-export function dismissAllActive(sessionId: number): void {
+export function dismissAllActive(sessionId: string): void {
   const key = keyFor(sessionId);
   const cur = byKey.get(key);
   if (!cur || cur.every((n) => n.dismissed)) return;
@@ -174,7 +174,7 @@ export function dismissAllActive(sessionId: number): void {
 }
 
 /** Clear the unread badge — call when the panel opens. */
-export function markAllRead(sessionId: number): void {
+export function markAllRead(sessionId: string): void {
   const key = keyFor(sessionId);
   const cur = byKey.get(key);
   if (!cur || cur.every((n) => n.read)) return;
@@ -183,31 +183,31 @@ export function markAllRead(sessionId: number): void {
 }
 
 /** Drop the whole history for a session. */
-export function clearNotifications(sessionId: number): void {
+export function clearNotifications(sessionId: string): void {
   const key = keyFor(sessionId);
   if (!byKey.has(key) || byKey.get(key)!.length === 0) return;
   byKey.set(key, []);
   notify(key);
 }
 
-export function getNotifications(sessionId: number): readonly SessionNotification[] {
+export function getNotifications(sessionId: string): readonly SessionNotification[] {
   return byKey.get(keyFor(sessionId)) ?? EMPTY;
 }
 
 export function getActiveNotifications(
-  sessionId: number,
+  sessionId: string,
 ): readonly SessionNotification[] {
   return getNotifications(sessionId).filter((n) => !n.dismissed);
 }
 
-export function getUnreadCount(sessionId: number): number {
+export function getUnreadCount(sessionId: string): number {
   let n = 0;
   for (const item of getNotifications(sessionId)) if (!item.read) n += 1;
   return n;
 }
 
 export function subscribeNotifications(
-  sessionId: number,
+  sessionId: string,
   cb: () => void,
 ): () => void {
   const key = keyFor(sessionId);
@@ -227,7 +227,7 @@ export function subscribeNotifications(
  * the snapshot identity-stable is required by `useSyncExternalStore`.
  */
 export function useSessionNotifications(
-  sessionId: number,
+  sessionId: string,
 ): readonly SessionNotification[] {
   return useSyncExternalStore(
     (cb) => subscribeNotifications(sessionId, cb),
@@ -237,10 +237,10 @@ export function useSessionNotifications(
 }
 
 /** Unread count for the rail badge. */
-export function useUnreadNotificationCount(sessionId: number): number {
+export function useUnreadNotificationCount(sessionId: string | null): number {
   return useSyncExternalStore(
-    (cb) => subscribeNotifications(sessionId, cb),
-    () => getUnreadCount(sessionId),
+    (cb) => sessionId == null ? () => undefined : subscribeNotifications(sessionId, cb),
+    () => sessionId == null ? 0 : getUnreadCount(sessionId),
     () => 0,
   );
 }

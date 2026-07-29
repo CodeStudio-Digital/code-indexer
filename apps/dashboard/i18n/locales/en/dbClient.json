@@ -186,7 +186,10 @@
     "noRelations": "No foreign keys relate to this row.",
     "copyCsv": "Copy as CSV",
     "copy": "Copy",
-    "copied": "Copied to clipboard"
+    "copied": "Copied to clipboard",
+    "rowsShown": "{{n}} row(s)",
+    "truncated": "truncated",
+    "truncatedHint": "The server capped this result set — narrow the query or raise the row limit."
   },
   "node": {
     "viewData": "View data",
@@ -405,8 +408,8 @@
     "done": "Inserted {{n}} rows",
     "doneErrors": "Inserted {{ok}}, {{errors}} failed",
     "errorsN": "{{n}} errors"
-  }
-  ,"edit.primaryKey": "PK",
+  },
+  "edit.primaryKey": "PK",
   "edit.null": "NULL",
   "edit.true": "true",
   "edit.false": "false"

@@ -7,15 +7,14 @@
  * `orchestrator.driveStore.list()` synchronously → got a Promise → Hono
  * serialized it as `{}` → the dashboard saw `files: {}` and threw
  * "Unexpected drive response shape" for any running session. The fix always
- * uses a fresh in-process `CompanyDriveStore` (coherent via SQLite + FS) and
+ * uses a fresh in-process `CompanyDriveStore` over the session bundle and
  * only borrows the live session's bus to broadcast mutations over SSE.
  *
- * NOTE: DB-backed (better-sqlite3). In an environment with the native ABI
- * mismatch (ERR_DLOPEN_FAILED 130 vs 127) run `pnpm node:rebuild` first.
+ * The fixture is filesystem-only and never opens SQLite.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -29,41 +28,80 @@ vi.mock('../../../../sse/workerPoolSingleton.js', () => ({
   getWorkerOrchestratorPool: () => ({ get: () => liveEntry }),
 }));
 
-import { CodeIndexDB } from '@mcp/store/db.js';
-import { CompanyStore } from '@mcp/store/company-store.js';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { JsonValue } from '@mcp/session-storage';
 import { mountCompanyDriveRoutes } from '../drive.js';
 import type { ServerDeps } from '../../../deps.js';
 
 interface Handle {
   app: Hono;
-  db: CodeIndexDB;
-  companyStore: CompanyStore;
-  sessionId: number;
+  sessionStore: FsSessionStore;
+  sessionId: string;
   dir: string;
 }
 
-function setup(): Handle {
+async function setup(): Promise<Handle> {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-drive-routes-'));
-  const dbPath = join(dir, 'test.db');
-  const db = new CodeIndexDB(dbPath);
-  const companyStore = new CompanyStore(dbPath);
-  const session = companyStore.createCompanySession({ name: 'drive-test', config_json: '{}' });
+  const dataDir = join(dir, 'data');
+  const projectRoot = join(dir, 'project');
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(projectRoot, { recursive: true });
+  const sessionStore = FsSessionStore.fromRoots({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) =>
+        projectId === 7 ? projectRoot : null,
+      listProjectRoots: () => [{
+        project_id: 7,
+        root_path: projectRoot,
+      }],
+    },
+    projectInfoResolver: (projectId) =>
+      projectId === 7
+        ? { project_id: 7, name: 'Drive', root_path: projectRoot }
+        : null,
+  });
+  const session = await sessionStore.repository.createSession({
+    kind: 'company',
+    scope: { kind: 'project', project_id: 7 },
+    owner_project_id: 7,
+    linked_projects: [{ project_id: 7, root_path: projectRoot }],
+    title: 'drive-test',
+    status: 'idle',
+    metadata: {
+      company: {
+        name: 'drive-test',
+        template_id: null,
+        runtime_kind: 'company',
+        config_json: '{}',
+        master_session_id: null,
+        project_labels: { 7: null },
+        recovered_at: null,
+        recovered_reason: null,
+      },
+    } as unknown as Record<string, JsonValue>,
+  });
+  await sessionStore.refresh();
 
   const app = new Hono();
-  const deps = { db, companyStore } as unknown as ServerDeps;
+  const deps = { sessionStore } as unknown as ServerDeps;
   mountCompanyDriveRoutes(app, deps);
-  return { app, db, companyStore, sessionId: session.id, dir };
+  return {
+    app,
+    sessionStore,
+    sessionId: session.session.id,
+    dir,
+  };
 }
 
 function teardown(h: Handle): void {
-  try { h.db.close(); } catch { /* */ }
   try { rmSync(h.dir, { recursive: true, force: true }); } catch { /* */ }
 }
 
 describe('company /drive routes — synchronous shape regardless of session liveness', () => {
   let h: Handle;
-  beforeEach(() => {
-    h = setup();
+  beforeEach(async () => {
+    h = await setup();
     liveEntry = null;
     fakeBus.buffer.length = 0;
     fakeBus.nextSeq = 0;

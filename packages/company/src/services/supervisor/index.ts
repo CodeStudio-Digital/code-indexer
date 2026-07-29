@@ -57,7 +57,7 @@ export type {
   PersistedIncident,
   IncidentQueryRow,
 } from './persistence.js';
-export { SqliteSupervisionPersistence } from './persistence-sqlite.js';
+export { FileSupervisionPersistence } from './persistence-file.js';
 
 // Phase 3.4 — Anomaly detection / per-tool baselines
 export {

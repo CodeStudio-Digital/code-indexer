@@ -20,25 +20,25 @@ import { VersionPickerPopover } from './VersionPickerPopover.js';
 
 export interface TrackRowProps {
   projectId: number;
-  assetId: number;
+  assetId: string;
   track: TrackMeta;
   cells: Array<AnimFrame | null>;
   activeTrack: number;
   selectedIndex: number;
   fps: number;
-  versionById: Map<number, AssetVersion>;
+  versionById: Map<string, AssetVersion>;
   onActivateTrack: (id: number) => void;
   onRenameTrack: (id: number, name: string) => void;
   onToggleVisible: (id: number, visible: boolean) => void;
   onDeleteTrack: (id: number) => void;
   onSelect: (track: number, col: number) => void;
-  onSetCell: (track: number, col: number, versionId: number) => void;
+  onSetCell: (track: number, col: number, versionId: string) => void;
   onClearCell: (track: number, col: number) => void;
   onDuration: (col: number, ms: number | null) => void;
   onColumnDrag: (from: number, to: number) => void;
   onCellDrag: (track: number, from: number, to: number) => void;
   onDuplicateColumn: (col: number) => void;
-  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
+  onEditVersion?: (versionId: string, frameIndex: number, track: number) => void;
   dragFrom: React.MutableRefObject<{ track: number; col: number } | null>;
 }
 
@@ -65,7 +65,7 @@ export function TrackRow(p: TrackRowProps) {
   const onCellSelect = useCallback((i: number) => onSelect(trackId, i), [onSelect, trackId]);
   const onCellDelete = useCallback((i: number) => onClearCell(trackId, i), [onClearCell, trackId]);
   const onCellReplace = useCallback(
-    (i: number, versionId: number) => onSetCell(trackId, i, versionId),
+    (i: number, versionId: string) => onSetCell(trackId, i, versionId),
     [onSetCell, trackId],
   );
   const onCellDragStart = useCallback((i: number) => {

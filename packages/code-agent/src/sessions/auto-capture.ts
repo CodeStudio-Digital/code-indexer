@@ -1,11 +1,13 @@
+import type { SessionId } from '@mcp/session-storage';
+
 /**
  * Auto-captured session notes — cheap, LLM-free hooks that write durable
- * working-memory notes (`coder_session_memory`) at key lifecycle events, so
+ * working-memory entities under the owning session bundle at lifecycle events, so
  * the Session State Block stays useful even when the model never calls
  * `save_note` on its own (the old opt-in-only failure mode).
  *
  * Anti-pollution by design:
- *   - canonical titles + the table's UNIQUE(session_id, title) upsert →
+ *   - canonical titles + the repository's per-session title upsert →
  *     re-events UPDATE the same note instead of stacking copies;
  *   - `kind` carries an `auto:` prefix so `memoryForState` can cap how many
  *     auto notes enter the block (they never evict deliberate notes);
@@ -18,9 +20,9 @@
 
 export interface AutoCaptureStore {
   rememberMemory(
-    sessionId: number,
+    sessionId: SessionId,
     input: { title: string; body: string; kind?: string; pinned?: boolean },
-  ): { title: string };
+  ): Promise<{ title: string }>;
 }
 
 export interface AutoCapture {
@@ -52,7 +54,7 @@ function excerpt(text: string, cap: number): string {
 
 export function buildAutoCapture(args: {
   store: AutoCaptureStore;
-  sessionId: number;
+  sessionId: SessionId;
   enabled: boolean;
   /** Polling/repeatable tools fail-then-succeed by design — exempt from streak notes. */
   isRepeatable?: (toolName: string) => boolean;
@@ -62,7 +64,7 @@ export function buildAutoCapture(args: {
   const save = (input: { title: string; body: string; kind: string; pinned?: boolean }): void => {
     if (!args.enabled) return;
     try {
-      store.rememberMemory(sessionId, input);
+      void store.rememberMemory(sessionId, input).catch(() => undefined);
     } catch {
       /* auto-capture must never break the turn */
     }

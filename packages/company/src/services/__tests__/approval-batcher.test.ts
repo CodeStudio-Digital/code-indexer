@@ -10,6 +10,9 @@ import {
   planTitle,
 } from '../approval-batcher.js';
 
+const BACKEND_RUN_ID = '00000000-0000-4000-8000-000000000012';
+const FRONTEND_RUN_ID = '00000000-0000-4000-8000-000000000013';
+
 /** Manual scheduler: captures the callback + delay, fires on demand. */
 function fakeSchedule() {
   const pending: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
@@ -44,12 +47,24 @@ describe('planTitle', () => {
 describe('formatPendingPlansSummary', () => {
   it('aggregates N plans into one [SYSTEM] message with per-plan lines', () => {
     const msg = formatPendingPlansSummary([
-      { agentRunId: 12, role: 'backend', planText: 'Add auth API\ndetails…' },
-      { agentRunId: 13, role: 'frontend', planText: 'Build login form' },
+      {
+        agentRunId: BACKEND_RUN_ID,
+        role: 'backend',
+        planText: 'Add auth API\ndetails…',
+      },
+      {
+        agentRunId: FRONTEND_RUN_ID,
+        role: 'frontend',
+        planText: 'Build login form',
+      },
     ]);
     expect(msg).toContain('2 subordinate plans are awaiting your approval');
-    expect(msg).toContain('@backend (agent_run_id=12): "Add auth API"');
-    expect(msg).toContain('@frontend (agent_run_id=13): "Build login form"');
+    expect(msg).toContain(
+      `@backend (agent_run_id=${BACKEND_RUN_ID}): "Add auth API"`,
+    );
+    expect(msg).toContain(
+      `@frontend (agent_run_id=${FRONTEND_RUN_ID}): "Build login form"`,
+    );
     expect(msg).toContain('approve_subordinate_plans');
   });
 });

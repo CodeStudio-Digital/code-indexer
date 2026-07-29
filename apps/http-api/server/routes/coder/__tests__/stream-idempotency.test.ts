@@ -3,7 +3,7 @@
  *
  * A `ReconnectingSSEClient` retry re-POSTs the body (with a stable
  * `client_msg_id`). These tests assert the retry is deduped into a bus replay
- * instead of re-running the append/push/spawn side effects, and that the
+ * instead of re-running the worker-persist/push/spawn side effects, and that the
  * /continue live-run hardening never spins a second concurrent runner.
  *
  * The route is mounted against fake deps/runtime (no DB, no real worker). The
@@ -11,9 +11,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
+import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 
 const { poolMock, workerEntries } = vi.hoisted(() => ({
-  workerEntries: new Map<number, unknown>(),
+  workerEntries: new Map<SessionId, unknown>(),
   poolMock: {
     getBus: vi.fn(),
     runFresh: vi.fn(),
@@ -35,6 +36,8 @@ import { RecentMessageKeys } from '../../recent-message-keys.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
+const SESSION_ID = asSessionId('77777777-7777-4777-8777-777777777777');
+
 function makeRunner() {
   const state = { waiting: false };
   const pushCalls: string[] = [];
@@ -54,7 +57,7 @@ function makeRunner() {
   };
 }
 
-const runners = new Map<number, ReturnType<typeof makeRunner>>();
+const runners = new Map<SessionId, ReturnType<typeof makeRunner>>();
 
 function preflightHash(value: string): string {
   let hash = 5381;
@@ -75,7 +78,7 @@ function setup(
     globalFresh?: boolean;
     projectFresh?: boolean;
     pendingTransition?: {
-      sessionId: number;
+      sessionId: SessionId;
       fromAgent: string | null;
       toAgent: string | null;
       updatedAt: string;
@@ -94,7 +97,7 @@ function setup(
 ) {
   const appendCalls: unknown[] = [];
   const inputCalls: unknown[] = [];
-  const consumeTransitionCalls: number[] = [];
+  const consumeTransitionCalls: SessionId[] = [];
   const acceptCalls: unknown[] = [];
   const controlPlaneCommands =
     opts.controlPlaneCommands ?? new Map<string, Record<string, unknown>>();
@@ -105,7 +108,7 @@ function setup(
   const preflightSeedWrites: Array<string | null> = [];
   const taskPreflightRun = opts.taskPreflightRun ?? vi.fn(async () => ({ status: 'unconfigured' }));
   const sessionStore = {
-    getSession: (id: number) => ({
+    getSession: (id: SessionId) => ({
       id,
       project_id: projectId,
       status: 'idle',
@@ -115,12 +118,12 @@ function setup(
       preflight_seed_json: preflightSeedJson,
     }),
     getMessageCount: () => messageCount,
-    appendMessage: (_id: number, msg: unknown) => {
-      appendCalls.push(msg);
+    appendMessage: (input: { session_id: SessionId; message: unknown }) => {
+      appendCalls.push(input.message);
       messageCount += 1;
       return appendCalls.length;
     },
-    consumePendingAgentTransition: (id: number) => {
+    consumePendingAgentTransition: (id: SessionId) => {
       consumeTransitionCalls.push(id);
       const transition = pendingTransition;
       pendingTransition = null;
@@ -130,11 +133,11 @@ function setup(
       inputCalls.push(input);
       return input;
     },
-    setSessionPreflightSeed: (_id: number, value: string | null) => {
+    setSessionPreflightSeed: (_id: SessionId, value: string | null) => {
       preflightSeedJson = value;
       preflightSeedWrites.push(value);
     },
-    loadSessionWithMessages: (id: number) => ({
+    loadSessionWithMessages: (id: SessionId) => ({
       session: { id, project_id: projectId, agent: opts.sessionAgent ?? null },
       messages: [{ role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1' }] }],
     }),
@@ -233,9 +236,9 @@ function setup(
   } as unknown as ServerDeps;
 
   const runtime = {
-    activeRuns: new Map<number, CoderRunBus>(),
-    findPendingInteraction: () => null,
-    findDanglingToolUse: () => null,
+    activeRuns: new Map<SessionId, CoderRunBus>(),
+    findPendingInteraction: async () => null,
+    findDanglingToolUse: async () => null,
     coderPipelineRegistry: {},
     recentMessageKeys,
   } as unknown as CoderRuntime;
@@ -254,7 +257,7 @@ function setup(
     app,
     deps,
     runtime,
-    activeRuns: workerEntries as Map<number, CoderRunBus>,
+    activeRuns: workerEntries as Map<SessionId, CoderRunBus>,
     appendCalls,
     inputCalls,
     preflightSeedWrites,
@@ -267,7 +270,7 @@ function setup(
 }
 
 /** Seed a live worker run and its mocked control surface. */
-function seedLiveRun(activeRuns: Map<number, CoderRunBus>, id: number) {
+function seedLiveRun(activeRuns: Map<SessionId, CoderRunBus>, id: SessionId) {
   const bus = createBus(new AbortController());
   const r = makeRunner();
   activeRuns.set(id, bus);
@@ -279,24 +282,26 @@ beforeEach(() => {
   vi.clearAllMocks();
   workerEntries.clear();
   runners.clear();
-  poolMock.getBus.mockImplementation((id: number) => workerEntries.get(id) ?? null);
-  poolMock.runFresh.mockImplementation(async (id: number) => {
+  poolMock.getBus.mockImplementation((id: SessionId) => workerEntries.get(id) ?? null);
+  poolMock.runFresh.mockImplementation(async (id: SessionId) => {
     const bus = createBus(new AbortController());
     workerEntries.set(id, bus);
     return bus;
   });
-  poolMock.isWaitingForInput.mockImplementation(async (id: number) => runners.get(id)?.state.waiting ?? false);
-  poolMock.interruptWait.mockImplementation(async (id: number) => {
+  poolMock.isWaitingForInput.mockImplementation(async (id: SessionId) => runners.get(id)?.state.waiting ?? false);
+  poolMock.interruptWait.mockImplementation(async (id: SessionId) => {
     const runner = runners.get(id);
     if (runner) runner.state.waiting = false;
   });
   poolMock.pushUserMessage.mockImplementation(async (
-    id: number,
+    id: SessionId,
     content: string,
     selectedSkillIds?: string[],
-    roundMessageId?: number,
+    _operationId?: string,
   ) => {
+    const roundMessageId = 42;
     runners.get(id)?.runner.pushUserMessage(content, { selectedSkillIds, roundMessageId });
+    return roundMessageId;
   });
   vi.stubEnv('CODER_PREFLIGHT', '0');
 });
@@ -318,7 +323,7 @@ describe('POST /messages idempotency', () => {
       }),
     });
 
-    const response = await h.post('/api/coder/sessions/1/messages', {
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content,
       client_msg_id: 'preflight-cache-upgrade',
     });
@@ -337,7 +342,7 @@ describe('POST /messages idempotency', () => {
     expect(typeof upgradedCache.goalLifecyclePendingSince).toBe('string');
     expect(Number.isFinite(Date.parse(String(upgradedCache.goalLifecyclePendingSince)))).toBe(true);
     expect(poolMock.runFresh).toHaveBeenCalledWith(
-      1,
+      SESSION_ID,
       expect.objectContaining({ preflight: seed }),
     );
   });
@@ -354,12 +359,12 @@ describe('POST /messages idempotency', () => {
       ensureStructuralReady,
     });
 
-    const owner = h.post('/api/coder/sessions/1/messages', {
+    const owner = h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'payload-a',
       client_msg_id: 'same-key',
     });
     await vi.waitFor(() => expect(ensureStructuralReady).toHaveBeenCalledTimes(1));
-    const conflict = await h.post('/api/coder/sessions/1/messages', {
+    const conflict = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'payload-b',
       client_msg_id: 'same-key',
     });
@@ -392,7 +397,7 @@ describe('POST /messages idempotency', () => {
     });
 
     const owners = Array.from({ length: 32 }, (_, index) =>
-      h.post('/api/coder/sessions/1/messages', {
+      h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
         content: `owner-${index}`,
         client_msg_id: `owner-key-${index}`,
       }),
@@ -404,7 +409,7 @@ describe('POST /messages idempotency', () => {
     expect(h.controlPlaneCommands.size).toBe(32);
     expect(poolMock.runFresh).not.toHaveBeenCalled();
 
-    const overflow = await h.post('/api/coder/sessions/1/messages', {
+    const overflow = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'overflow',
       client_msg_id: 'owner-key-32',
     });
@@ -416,7 +421,7 @@ describe('POST /messages idempotency', () => {
     expect(overflow.headers.get('Retry-After')).toBe('1');
     expect(h.controlPlaneCommands.size).toBe(32);
 
-    const retry = await h.post('/api/coder/sessions/1/messages', {
+    const retry = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'owner-0',
       client_msg_id: 'owner-key-0',
     });
@@ -439,7 +444,7 @@ describe('POST /messages idempotency', () => {
   it('fails closed before effects when command authority is unavailable, even without a client key', async () => {
     const h = setup(new RecentMessageKeys(), { controlPlaneUnavailable: true });
 
-    const response = await h.post('/api/coder/sessions/1/messages', {
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'must not execute',
     });
 
@@ -454,7 +459,7 @@ describe('POST /messages idempotency', () => {
 
   it('keeps a fresh command non-terminal until its exact bus outcome', async () => {
     const h = setup();
-    const response = await h.post('/api/coder/sessions/1/messages', {
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'long run',
       client_msg_id: 'long-running-key',
     });
@@ -462,9 +467,9 @@ describe('POST /messages idempotency', () => {
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
     const command = [...h.controlPlaneCommands.values()][0]!;
     expect(command.status).toBe('running');
-    expect(command.result).toEqual({ busId: h.activeRuns.get(1)!.busId });
+    expect(command.result).toEqual({ busId: h.activeRuns.get(SESSION_ID)!.busId });
 
-    const bus = h.activeRuns.get(1)!;
+    const bus = h.activeRuns.get(SESSION_ID)!;
     markEnded(bus, 'done', { reason: 'completed' });
     expect(command.status).toBe('succeeded');
   });
@@ -478,15 +483,15 @@ describe('POST /messages idempotency', () => {
       rejectClaim: () => {},
     };
     const h = setup(transientOnly);
-    expect((await h.post('/api/coder/sessions/1/messages', {
+    expect((await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'original',
       client_msg_id: 'durable-key',
     })).status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
 
     const unrelated = createBus(new AbortController());
-    h.activeRuns.set(1, unrelated);
-    const retry = await h.post('/api/coder/sessions/1/messages', {
+    h.activeRuns.set(SESSION_ID, unrelated);
+    const retry = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'original',
       client_msg_id: 'durable-key',
     });
@@ -497,12 +502,12 @@ describe('POST /messages idempotency', () => {
 
   it('honors Last-Event-ID when replaying the exact durable bus after a route remount', async () => {
     const firstMount = setup();
-    expect((await firstMount.post('/api/coder/sessions/1/messages', {
+    expect((await firstMount.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'original',
       client_msg_id: 'durable-cursor-key',
     })).status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    const exactBus = firstMount.activeRuns.get(1)!;
+    const exactBus = firstMount.activeRuns.get(SESSION_ID)!;
     publish(exactBus, 'worker_log', { marker: 'already-acknowledged' });
     publish(exactBus, 'text_delta', { marker: 'must-replay' });
 
@@ -510,7 +515,7 @@ describe('POST /messages idempotency', () => {
       controlPlaneCommands: firstMount.controlPlaneCommands,
     });
     const replay = await remounted.post(
-      '/api/coder/sessions/1/messages',
+      `/api/coder/sessions/${SESSION_ID}/messages`,
       { content: 'original', client_msg_id: 'durable-cursor-key' },
       { 'Last-Event-ID': '0' },
     );
@@ -522,7 +527,7 @@ describe('POST /messages idempotency', () => {
 
   it('keeps the first-message command identity stable across append and route remount', async () => {
     const firstMount = setup(new RecentMessageKeys(), { initialMessageCount: 0 });
-    expect((await firstMount.post('/api/coder/sessions/1/messages', {
+    expect((await firstMount.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'first message',
       client_msg_id: 'first-message-remount',
     })).status).toBe(200);
@@ -538,7 +543,7 @@ describe('POST /messages idempotency', () => {
       initialMessageCount: 1,
     });
     const retry = await remounted.post(
-      '/api/coder/sessions/1/messages',
+      `/api/coder/sessions/${SESSION_ID}/messages`,
       { content: 'first message', client_msg_id: 'first-message-remount' },
       { 'Last-Event-ID': '-1' },
     );
@@ -547,18 +552,18 @@ describe('POST /messages idempotency', () => {
     expect(remounted.appendCalls).toHaveLength(0);
     expect(poolMock.runFresh).toHaveBeenCalledTimes(1);
 
-    markEnded(firstMount.activeRuns.get(1)!, 'done', { reason: 'completed' });
+    markEnded(firstMount.activeRuns.get(SESSION_ID)!, 'done', { reason: 'completed' });
     await retry.text();
   });
 
   it('persists a failure-class done signal as failed and replays an error terminal', async () => {
     const firstMount = setup();
-    expect((await firstMount.post('/api/coder/sessions/1/messages', {
+    expect((await firstMount.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'will fail',
       client_msg_id: 'failure-ledger-key',
     })).status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    const bus = firstMount.activeRuns.get(1)!;
+    const bus = firstMount.activeRuns.get(SESSION_ID)!;
     const command = [...firstMount.controlPlaneCommands.values()][0]!;
 
     // Compatibility guard: an older worker can still send done + a failure
@@ -575,7 +580,7 @@ describe('POST /messages idempotency', () => {
     const remounted = setup(new RecentMessageKeys(), {
       controlPlaneCommands: firstMount.controlPlaneCommands,
     });
-    const retry = await remounted.post('/api/coder/sessions/1/messages', {
+    const retry = await remounted.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'will fail',
       client_msg_id: 'failure-ledger-key',
     });
@@ -589,18 +594,18 @@ describe('POST /messages idempotency', () => {
 
   it('does not advance an in-memory duplicate beyond the client replay cursor', async () => {
     const h = setup();
-    const live = seedLiveRun(h.activeRuns, 1);
+    const live = seedLiveRun(h.activeRuns, SESSION_ID);
     publish(live.bus, 'worker_log', { marker: 'acknowledged' });
     publish(live.bus, 'worker_log', { marker: 'cursor-gap' });
 
-    expect((await h.post('/api/coder/sessions/1/messages', {
+    expect((await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'attach',
       client_msg_id: 'memory-cursor-key',
     })).status).toBe(200);
     publish(live.bus, 'text_delta', { marker: 'after-command' });
 
     const replay = await h.post(
-      '/api/coder/sessions/1/messages',
+      `/api/coder/sessions/${SESSION_ID}/messages`,
       { content: 'attach', client_msg_id: 'memory-cursor-key' },
       { 'Last-Event-ID': '0' },
     );
@@ -613,21 +618,21 @@ describe('POST /messages idempotency', () => {
   it('materializes the final pending agent transition only when the fresh run starts', async () => {
     const h = setup(new RecentMessageKeys(), {
       pendingTransition: {
-        sessionId: 1,
+        sessionId: SESSION_ID,
         fromAgent: 'explore',
         toAgent: 'plan',
         updatedAt: '2026-07-23T00:00:00.000Z',
       },
     });
 
-    const response = await h.post('/api/coder/sessions/1/messages', {
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'write the plan',
       client_msg_id: 'transition-turn-1',
     });
 
     expect(response.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    expect(h.consumeTransitionCalls).toEqual([1]);
+    expect(h.consumeTransitionCalls).toEqual([SESSION_ID]);
     expect(h.appendCalls).toEqual([{
       role: 'user',
       content: [{
@@ -637,7 +642,7 @@ describe('POST /messages idempotency', () => {
       isMeta: true,
     }]);
     expect(h.inputCalls).toEqual([expect.objectContaining({
-      session_id: 1,
+      session_id: SESSION_ID,
       kind: 'system_reminder',
       source_label: 'reminder:agent-transition',
       content: expect.stringContaining('The active agent is now plan.'),
@@ -651,7 +656,7 @@ describe('POST /messages idempotency', () => {
     }));
     const h = setup(new RecentMessageKeys(), { projectFresh: true, ensureStructuralReady: gate });
 
-    const pending = h.post('/api/coder/sessions/1/messages', { content: 'inspect project' });
+    const pending = h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'inspect project' });
     await vi.waitFor(() => expect(gate).toHaveBeenCalledTimes(1));
     expect(poolMock.runFresh).not.toHaveBeenCalled();
 
@@ -667,29 +672,37 @@ describe('POST /messages idempotency', () => {
       ensureStructuralReady: async () => ({ status: 'timeout', phase: 'scanning' }),
     });
 
-    const response = await h.post('/api/coder/sessions/1/messages', { content: 'inspect project' });
+    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'inspect project' });
     expect(response.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
   });
 
   it('a retry with the same client_msg_id does not re-append into a live run', async () => {
     const h = setup();
-    const live = seedLiveRun(h.activeRuns, 1);
+    const live = seedLiveRun(h.activeRuns, SESSION_ID);
 
-    const r1 = await h.post('/api/coder/sessions/1/messages', { content: 'hi', client_msg_id: 'K1' });
+    const r1 = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'hi', client_msg_id: 'K1' });
     expect(r1.status).toBe(200);
-    expect(h.appendCalls).toHaveLength(1);
+    expect(h.appendCalls).toHaveLength(0);
+    expect(poolMock.pushUserMessage).toHaveBeenCalledTimes(1);
+    expect(poolMock.pushUserMessage).toHaveBeenCalledWith(
+      SESSION_ID,
+      'hi',
+      undefined,
+      expect.stringMatching(/^message-command:/),
+    );
     expect(live.pushCalls).toEqual(['hi']);
-    expect(live.pushExtras).toEqual([{ selectedSkillIds: undefined, roundMessageId: 1 }]);
+    expect(live.pushExtras).toEqual([{ selectedSkillIds: undefined, roundMessageId: 42 }]);
 
     // Retry (connection dropped, ReconnectingSSEClient re-POSTs the same body).
     const r2 = await h.post(
-      '/api/coder/sessions/1/messages',
+      `/api/coder/sessions/${SESSION_ID}/messages`,
       { content: 'hi', client_msg_id: 'K1' },
       { 'Last-Event-ID': '0' },
     );
     expect(r2.status).toBe(200);
-    expect(h.appendCalls).toHaveLength(1); // NOT re-appended
+    expect(h.appendCalls).toHaveLength(0); // HTTP host never owns active-run persistence
+    expect(poolMock.pushUserMessage).toHaveBeenCalledTimes(1); // NOT re-persisted or re-pushed
     expect(live.pushCalls).toEqual(['hi']); // NOT re-pushed
 
     markEnded(live.bus, 'done', {});
@@ -698,16 +711,16 @@ describe('POST /messages idempotency', () => {
   it('a retry does not spawn a second run once the original bus has ended', async () => {
     const h = setup();
 
-    const r1 = await h.post('/api/coder/sessions/1/messages', { content: 'go', client_msg_id: 'K2' });
+    const r1 = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'go', client_msg_id: 'K2' });
     expect(r1.status).toBe(200);
     // The worker-pool start is asynchronous — wait for it to reach the call.
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
 
-    const bus = h.activeRuns.get(1)!;
+    const bus = h.activeRuns.get(SESSION_ID)!;
     markEnded(bus, 'done', {}); // run finished; bus lingers
 
     const r2 = await h.post(
-      '/api/coder/sessions/1/messages',
+      `/api/coder/sessions/${SESSION_ID}/messages`,
       { content: 'go', client_msg_id: 'K2' },
       { 'Last-Event-ID': '0' },
     );
@@ -729,7 +742,7 @@ describe('POST /messages idempotency', () => {
     };
     const h = setup(fakeStore);
 
-    const res = await h.post('/api/coder/sessions/1/messages', { content: 'hi', client_msg_id: 'K3' });
+    const res = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'hi', client_msg_id: 'K3' });
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toContain('event: done');
@@ -741,26 +754,28 @@ describe('POST /messages idempotency', () => {
 
   it('a retry with a recorded key replays instead of raising the spurious 409 (and preserves 409 otherwise)', async () => {
     const h = setup();
-    const live = seedLiveRun(h.activeRuns, 1);
+    const live = seedLiveRun(h.activeRuns, SESSION_ID);
 
     // Original send lands while the runner is idle → attaches + records the key.
-    await h.post('/api/coder/sessions/1/messages', { content: 'hi', client_msg_id: 'K4' });
-    expect(h.appendCalls).toHaveLength(1);
+    await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'hi', client_msg_id: 'K4' });
+    expect(h.appendCalls).toHaveLength(0);
+    expect(poolMock.pushUserMessage).toHaveBeenCalledTimes(1);
 
     // Runner is now blocked on an interactive tool.
     live.state.waiting = true;
 
     // Retry of the SAME send → deduped to a replay, never hits the 409 check.
     const retry = await h.post(
-      '/api/coder/sessions/1/messages',
+      `/api/coder/sessions/${SESSION_ID}/messages`,
       { content: 'hi', client_msg_id: 'K4' },
       { 'Last-Event-ID': '0' },
     );
     expect(retry.status).toBe(200);
-    expect(h.appendCalls).toHaveLength(1);
+    expect(h.appendCalls).toHaveLength(0);
+    expect(poolMock.pushUserMessage).toHaveBeenCalledTimes(1);
 
     // A genuinely new send while waiting still gets the 409 handshake.
-    const fresh = await h.post('/api/coder/sessions/1/messages', { content: 'other', client_msg_id: 'K5' });
+    const fresh = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'other', client_msg_id: 'K5' });
     expect(fresh.status).toBe(409);
     expect(await fresh.json()).toMatchObject({ code: 'INTERACTION_PENDING' });
 
@@ -770,7 +785,7 @@ describe('POST /messages idempotency', () => {
   it('keeps a persisted app coordinator even if the POST carries a stale agent', async () => {
     const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_orchestrator' });
 
-    const res = await h.post('/api/coder/sessions/1/messages', {
+    const res = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'seguir refinando',
       agent: 'explore',
       client_msg_id: 'K6',
@@ -784,7 +799,7 @@ describe('POST /messages idempotency', () => {
   it('still honors explicit agent changes for normal non-specialist sessions', async () => {
     const h = setup(new RecentMessageKeys(), { sessionAgent: 'build' });
 
-    const res = await h.post('/api/coder/sessions/1/messages', {
+    const res = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'investigar primeiro',
       agent: 'explore',
       client_msg_id: 'K7',
@@ -811,7 +826,7 @@ describe('POST /messages idempotency', () => {
     const selectionId = `custom:${custom.id}`;
     const h = setup(new RecentMessageKeys(), { sessionAgent: selectionId, customAgents: [custom] });
 
-    const res = await h.post('/api/coder/sessions/1/messages', {
+    const res = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'review this change',
       selected_skill_ids: ['repo-review'],
       client_msg_id: 'K8',
@@ -836,7 +851,7 @@ describe('POST /messages idempotency', () => {
       openTabs: ['src/main.ts', 'src/app.ts'],
     };
 
-    const res = await h.post('/api/coder/sessions/1/messages', {
+    const res = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'implement the change',
       max_turns: 17,
       plan_mode: false,
@@ -852,7 +867,7 @@ describe('POST /messages idempotency', () => {
 
     expect(res.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-    expect(poolMock.runFresh).toHaveBeenCalledWith(1, expect.objectContaining({
+    expect(poolMock.runFresh).toHaveBeenCalledWith(SESSION_ID, expect.objectContaining({
       userMessage: 'implement the change',
       maxTurns: 17,
       planMode: false,
@@ -870,9 +885,9 @@ describe('POST /messages idempotency', () => {
 describe('POST /continue idempotency + live-run hardening', () => {
   it('attaches to a live run instead of spawning a second runner (no key)', async () => {
     const h = setup();
-    const live = seedLiveRun(h.activeRuns, 1);
+    const live = seedLiveRun(h.activeRuns, SESSION_ID);
 
-    const res = await h.post('/api/coder/sessions/1/continue', {});
+    const res = await h.post(`/api/coder/sessions/${SESSION_ID}/continue`, {});
     expect(res.status).toBe(200);
     expect(poolMock.runFresh).not.toHaveBeenCalled(); // tailed the live run, no second worker run
 
@@ -882,15 +897,15 @@ describe('POST /continue idempotency + live-run hardening', () => {
   it('a retry with the same client_msg_id does not start a second run', async () => {
     const h = setup();
 
-    const r1 = await h.post('/api/coder/sessions/1/continue', { client_msg_id: 'C1' });
+    const r1 = await h.post(`/api/coder/sessions/${SESSION_ID}/continue`, { client_msg_id: 'C1' });
     expect(r1.status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
 
-    const bus = h.activeRuns.get(1)!;
+    const bus = h.activeRuns.get(SESSION_ID)!;
     markEnded(bus, 'done', {});
 
     const r2 = await h.post(
-      '/api/coder/sessions/1/continue',
+      `/api/coder/sessions/${SESSION_ID}/continue`,
       { client_msg_id: 'C1' },
       { 'Last-Event-ID': '0' },
     );
@@ -902,7 +917,7 @@ describe('POST /continue idempotency + live-run hardening', () => {
   it('keeps a persisted app coordinator during continue', async () => {
     const h = setup(new RecentMessageKeys(), { sessionAgent: 'app_orchestrator' });
 
-    const res = await h.post('/api/coder/sessions/1/continue', {
+    const res = await h.post(`/api/coder/sessions/${SESSION_ID}/continue`, {
       agent: 'explore',
       client_msg_id: 'C2',
     });

@@ -1,9 +1,11 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { FsSessionStore } from '../../sessions/fs-store/fs-session-store.js';
+import type { SessionId } from '@mcp/session-storage';
 import {
   clearSession,
   getGroup,
@@ -23,8 +25,11 @@ import {
   renderAgentTranscript,
 } from '../read-agent-transcript.js';
 
-let nextSession = 910_000;
-const SPILL_DIR = mkdtempSync(join(tmpdir(), 'mcp-spill-'));
+let temporaryRoot: string;
+let projectRoot: string;
+let dataDir: string;
+let sid: SessionId;
+let store: FsSessionStore;
 
 function transcript(): AgentMessage[] {
   return [
@@ -60,7 +65,7 @@ function agentState(index: number, reason: ResumableAgentState['reason']): Resum
   };
 }
 
-function group(sessionId: number, reasons: ResumableAgentState['reason'][]): ResumableGroup {
+function group(sessionId: SessionId, reasons: ResumableAgentState['reason'][]): ResumableGroup {
   return {
     spawnId: `grp-${sessionId}`,
     sessionId,
@@ -72,28 +77,51 @@ function group(sessionId: number, reasons: ResumableAgentState['reason'][]): Res
   };
 }
 
-beforeEach(() => {
-  // Route every spill to an isolated temp dir so tests never touch ~/.mcp-*.
-  vi.stubEnv('MCP_SUBAGENT_TRANSCRIPT_DIR', SPILL_DIR);
+beforeEach(async () => {
+  temporaryRoot = mkdtempSync(join(tmpdir(), 'mcp-bundle-spill-'));
+  projectRoot = join(temporaryRoot, 'project');
+  dataDir = join(temporaryRoot, 'data');
+  mkdirSync(projectRoot);
+  mkdirSync(dataDir);
+  store = FsSessionStore.fromRoots({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) =>
+        projectId === 910 ? projectRoot : null,
+      listProjectRoots: () => [
+        { project_id: 910, root_path: projectRoot },
+      ],
+    },
+  });
+  sid = (
+    await store.createSession({
+      project_id: 910,
+      title: 'subagent transcript',
+      provider: 'fake',
+      model: 'fake',
+    })
+  ).id;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await clearSession(sid);
+  await store.close();
   vi.unstubAllEnvs();
   stopResumeSweepForTests();
   vi.useRealTimers();
-});
-
-afterAll(() => {
-  rmSync(SPILL_DIR, { recursive: true, force: true });
+  rmSync(temporaryRoot, { recursive: true, force: true });
 });
 
 describe('completed-transcript retention (P1)', () => {
-  it('spills completed transcripts off-heap by DEFAULT but keeps them readable', () => {
+  it('spills completed transcripts into the bundle by default and keeps them readable', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     expect(retainCompletedTranscripts()).toBe(true);
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed', 'error']));
-    const stored = getGroup(sid, `grp-${sid}`);
+    await retainGroup(
+      sid,
+      group(sid, ['completed', 'error']),
+      store,
+    );
+    const stored = await getGroup(sid, `grp-${sid}`, store);
     // Completed → spilled to disk: no in-RAM transcript, pointer kept, 0 bytes.
     expect(stored?.agents[0].transcript).toBeUndefined();
     expect(stored?.agents[0].spillPath).toBeTruthy();
@@ -103,36 +131,38 @@ describe('completed-transcript retention (P1)', () => {
     expect(stored?.agents[1].transcript?.length).toBeGreaterThan(0);
     expect(stored?.agents[1].spillPath).toBeUndefined();
     // Spilled transcripts still count as readable via their pointer.
-    expect(listReadableGroups(sid)[0].agents[0].hasTranscript).toBe(true);
-    clearSession(sid);
+    expect((await listReadableGroups(sid, store))[0].agents[0].hasTranscript).toBe(true);
   });
 
-  it('drops completed transcripts when the kill switch is 0 (old economy)', () => {
+  it('drops completed transcripts when the kill switch is 0 (old economy)', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '0');
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed', 'error']));
-    const stored = getGroup(sid, `grp-${sid}`);
+    await retainGroup(
+      sid,
+      group(sid, ['completed', 'error']),
+      store,
+    );
+    const stored = await getGroup(sid, `grp-${sid}`, store);
     expect(stored?.agents[0].transcript).toBeUndefined();
     expect(stored?.agents[1].transcript?.length).toBeGreaterThan(0);
-    clearSession(sid);
   });
 
-  it('never lists completed agents as RESUMABLE even with a transcript', () => {
+  it('never lists completed agents as RESUMABLE even with a transcript', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed', 'tool_budget']));
+    await retainGroup(
+      sid,
+      group(sid, ['completed', 'tool_budget']),
+      store,
+    );
     const resumable = listResumable(sid);
     expect(resumable).toHaveLength(1);
     expect(resumable[0].reason).toBe('tool_budget');
-    const readable = listReadableGroups(sid);
+    const readable = await listReadableGroups(sid, store);
     expect(readable[0].agents.filter((a) => a.hasTranscript)).toHaveLength(2);
-    clearSession(sid);
   });
 
-  it('retainSpawnGroup keeps ALL-COMPLETED groups now (observability)', () => {
+  it('retainSpawnGroup keeps ALL-COMPLETED groups now (observability)', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    const sid = ++nextSession;
-    const resumableCount = retainSpawnGroup({
+    const resumableCount = await retainSpawnGroup({
       sessionId: sid,
       spawnId: 'spawn-ok',
       provider: 'zai',
@@ -150,24 +180,28 @@ describe('completed-transcript retention (P1)', () => {
         transcript: transcript(),
         finalText: 'all good',
       }],
+      store,
     });
     expect(resumableCount).toBe(0);
-    const stored = getGroup(sid, 'spawn-ok');
+    const stored = await getGroup(sid, 'spawn-ok', store);
     // The all-completed roster is retained, but its transcript lives on disk.
     expect(stored?.agents[0].transcript).toBeUndefined();
     expect(stored?.agents[0].spillPath).toBeTruthy();
-    expect(listReadableGroups(sid)[0].agents[0].hasTranscript).toBe(true);
-    clearSession(sid);
+    expect((await listReadableGroups(sid, store))[0].agents[0].hasTranscript).toBe(true);
   });
 });
 
 describe('read_agent_transcript rendering', () => {
-  it('renders header, tool calls with inputs, results and final text', () => {
+  it('renders header, tool calls with inputs, results and final text', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     vi.stubEnv('CODER_RESUME_SPILL', '0'); // pure in-RAM rendering (disk fallback covered below)
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed']));
-    const agent = findRetainedAgent(sid, `grp-${sid}`, 1);
+    await retainGroup(sid, group(sid, ['completed']), store);
+    const agent = await findRetainedAgent(
+      sid,
+      `grp-${sid}`,
+      1,
+      store,
+    );
     expect(agent).toBeDefined();
     const text = renderAgentTranscript(agent!);
     expect(text).toContain('"agent-1"');
@@ -176,13 +210,11 @@ describe('read_agent_transcript rendering', () => {
     expect(text).toContain('src/auth.ts');
     expect(text).toContain('← read_file');
     expect(text).toContain('[final] Done — login() lives in src/auth.ts.');
-    clearSession(sid);
   });
 
-  it('resolves agents by label and elides the middle under a tight budget', () => {
+  it('resolves agents by label and elides the middle under a tight budget', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     vi.stubEnv('CODER_RESUME_SPILL', '0');
-    const sid = ++nextSession;
     const g = group(sid, ['completed']);
     // Inflate the transcript so the digest budget must elide.
     for (let i = 0; i < 200; i++) {
@@ -191,46 +223,58 @@ describe('read_agent_transcript rendering', () => {
         content: [{ type: 'tool_use', id: `x${i}`, name: 'grep_code', input: { pattern: `p${i}` } }],
       } as AgentMessage);
     }
-    retainGroup(sid, g);
-    const agent = findRetainedAgent(sid, `grp-${sid}`, 'agent-1');
+    await retainGroup(sid, g, store);
+    const agent = await findRetainedAgent(
+      sid,
+      `grp-${sid}`,
+      'agent-1',
+      store,
+    );
     const text = renderAgentTranscript(agent!, { maxChars: 2_500 });
     expect(text.length).toBeLessThanOrEqual(3_200);
     expect(text).toContain('earlier event(s) elided');
-    clearSession(sid);
   });
 
   it('accepts zero as an unambiguous alias for the first agent', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     vi.stubEnv('CODER_RESUME_SPILL', '0');
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed', 'completed']));
+    await retainGroup(
+      sid,
+      group(sid, ['completed', 'completed']),
+      store,
+    );
 
-    const result = await buildReadAgentTranscriptTool().handler(
+    const result = await buildReadAgentTranscriptTool(store).handler(
       { spawn_id: `grp-${sid}`, agent: 0, max_chars: 24_000 },
       { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
     );
     expect(result.isError).not.toBe(true);
     expect(result.content).toContain('[transcript agent=#1 "agent-1"');
 
-    expect(findRetainedAgent(sid, `grp-${sid}`, 0)?.label).toBe('agent-1');
-    expect(findRetainedAgent(sid, `grp-${sid}`, '0')?.label).toBe('agent-1');
-    expect(findRetainedAgent(sid, `grp-${sid}`, 1)?.label).toBe('agent-1');
-    expect(findRetainedAgent(sid, `grp-${sid}`, 2)?.label).toBe('agent-2');
-
-    clearSession(sid);
+    expect(
+      (await findRetainedAgent(sid, `grp-${sid}`, 0, store))?.label,
+    ).toBe('agent-1');
+    expect(
+      (await findRetainedAgent(sid, `grp-${sid}`, '0', store))?.label,
+    ).toBe('agent-1');
+    expect(
+      (await findRetainedAgent(sid, `grp-${sid}`, 1, store))?.label,
+    ).toBe('agent-1');
+    expect(
+      (await findRetainedAgent(sid, `grp-${sid}`, 2, store))?.label,
+    ).toBe('agent-2');
   });
 });
 
 describe('terminal-transcript spill to disk (part b)', () => {
   it('read_agent_transcript renders the full body back from the spill file', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed']));
-    const stored = getGroup(sid, `grp-${sid}`);
+    await retainGroup(sid, group(sid, ['completed']), store);
+    const stored = await getGroup(sid, `grp-${sid}`, store);
     expect(stored?.agents[0].transcript).toBeUndefined(); // dropped from RAM
     expect(stored?.agents[0].spillPath).toBeTruthy();      // only the pointer stays
 
-    const result = await buildReadAgentTranscriptTool().handler(
+    const result = await buildReadAgentTranscriptTool(store).handler(
       { spawn_id: `grp-${sid}`, agent: 1 },
       { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
     );
@@ -239,83 +283,99 @@ describe('terminal-transcript spill to disk (part b)', () => {
     expect(result.content).toContain('→ read_file');
     expect(result.content).toContain('src/auth.ts');
     expect(result.content).toContain('← read_file');
-    clearSession(sid);
   });
 
-  it('keeps FAILED/ABORTED transcripts in RAM so resume_agent stays intact', () => {
+  it('keeps FAILED/ABORTED transcripts in RAM so resume_agent stays intact', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['error', 'aborted']));
-    const stored = getGroup(sid, `grp-${sid}`);
+    await retainGroup(
+      sid,
+      group(sid, ['error', 'aborted']),
+      store,
+    );
+    const stored = await getGroup(sid, `grp-${sid}`, store);
     for (const a of stored!.agents) {
       expect(a.transcript?.length).toBeGreaterThan(0); // resumable → resident
       expect(a.spillPath).toBeUndefined();             // nothing spilled
     }
     expect(listResumable(sid)).toHaveLength(2);
-    clearSession(sid);
   });
 
-  it('kill switch CODER_RESUME_SPILL=0 keeps completed transcripts in RAM', () => {
+  it('kill switch CODER_RESUME_SPILL=0 keeps completed transcripts in RAM', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     vi.stubEnv('CODER_RESUME_SPILL', '0');
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed']));
-    const stored = getGroup(sid, `grp-${sid}`);
+    await retainGroup(sid, group(sid, ['completed']), store);
+    const stored = await getGroup(sid, `grp-${sid}`, store);
     expect(stored?.agents[0].transcript?.length).toBeGreaterThan(0);
     expect(stored?.agents[0].spillPath).toBeUndefined();
-    clearSession(sid);
   });
 
   it('degrades to the final report when the spill file vanished', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed']));
-    const spillPath = getGroup(sid, `grp-${sid}`)!.agents[0].spillPath!;
+    await retainGroup(sid, group(sid, ['completed']), store);
+    const spillPath = (
+      await getGroup(sid, `grp-${sid}`, store)
+    )!.agents[0].spillPath!;
     rmSync(spillPath, { force: true }); // external cleanup between spill and read
-    const result = await buildReadAgentTranscriptTool().handler(
+    const result = await buildReadAgentTranscriptTool(store).handler(
       { spawn_id: `grp-${sid}`, agent: 1 },
       { cwd: '/tmp', runner: { sessionId: sid } } as unknown as ToolContext,
     );
     expect(result.isError).not.toBe(true);
     expect(result.content).toContain('[final] Done — login() lives in src/auth.ts.');
-    clearSession(sid);
   });
 
-  it('deletes the spill file when the group is cleared', () => {
+  it('retains the bundle transcript when the in-memory group is cleared', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed']));
-    const spillPath = getGroup(sid, `grp-${sid}`)!.agents[0].spillPath!;
+    await retainGroup(sid, group(sid, ['completed']), store);
+    const spillPath = (
+      await getGroup(sid, `grp-${sid}`, store)
+    )!.agents[0].spillPath!;
     expect(existsSync(spillPath)).toBe(true);
-    clearSession(sid);
-    expect(existsSync(spillPath)).toBe(false);
+    await clearSession(sid);
+    expect(existsSync(spillPath)).toBe(true);
+  });
+
+  it('re-hydrates a completed transcript entity after registry recreation', async () => {
+    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
+    await retainGroup(sid, group(sid, ['completed']), store);
+    await clearSession(sid);
+
+    const restored = await findRetainedAgent(
+      sid,
+      `grp-${sid}`,
+      1,
+      store,
+    );
+    expect(restored?.spillPath).toBeTruthy();
+    expect(existsSync(restored!.spillPath!)).toBe(true);
+    expect(renderAgentTranscript(restored!)).toContain('→ read_file');
   });
 });
 
 describe('periodic worker-realm sweep (part a)', () => {
-  it('reclaims an idle session on the timer without any registry access', () => {
+  it('reclaims an idle session on the timer without any registry access', async () => {
     vi.stubEnv('CODER_RESUME_TTL_MS', '1000');
     vi.stubEnv('CODER_RESUME_SWEEP_INTERVAL_MS', '10000');
     vi.useFakeTimers();
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['error'])); // arms the unref'd interval
+    await retainGroup(sid, group(sid, ['error']), store);
     expect(peekSessionGroupCountForTests(sid)).toBe(1); // retain-time sweep kept it
     // Advance past the TTL. Only the timer runs here — no getGroup/sweep call.
     vi.advanceTimersByTime(15_000);
     expect(peekSessionGroupCountForTests(sid)).toBe(0);
   });
 
-  it('the timer also deletes the spilled files of the groups it evicts', () => {
+  it('the timer retains bundle artifacts after evicting in-memory pointers', async () => {
     vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     vi.stubEnv('CODER_RESUME_TTL_MS', '1000');
     vi.stubEnv('CODER_RESUME_SWEEP_INTERVAL_MS', '10000');
     vi.useFakeTimers();
-    const sid = ++nextSession;
-    retainGroup(sid, group(sid, ['completed']));
-    const spillPath = getGroup(sid, `grp-${sid}`)!.agents[0].spillPath!;
+    await retainGroup(sid, group(sid, ['completed']), store);
+    const spillPath = (
+      await getGroup(sid, `grp-${sid}`, store)
+    )!.agents[0].spillPath!;
     expect(existsSync(spillPath)).toBe(true);
     vi.advanceTimersByTime(15_000);
     expect(peekSessionGroupCountForTests(sid)).toBe(0);
-    expect(existsSync(spillPath)).toBe(false);
+    expect(existsSync(spillPath)).toBe(true);
   });
 });

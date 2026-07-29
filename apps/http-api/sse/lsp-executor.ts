@@ -13,8 +13,13 @@ import {
   type LspExecutorOp,
   type LspOpCtx,
 } from '@mcp/api-handlers/lsp/executor-types.js';
+import { performance } from 'node:perf_hooks';
 import { resolveWorkerFile } from './workerFileResolution.js';
 import { LspWorkerClient } from './LspWorkerClient.js';
+import { recordSlowCall } from '../server/perf/slow-ipc.js';
+
+/** Fallback runs at or above this are worth surfacing (matches slow-ipc). */
+const SLOW_FALLBACK_MS = 50;
 
 function isTimeout(err: unknown): boolean {
   return err instanceof ErrRequestTimeout
@@ -28,13 +33,37 @@ export function wrapLspExecutorWithFallback(
 ): LspBackendExecutor {
   const ops = Object.keys(LSP_EMPTY_RESULTS) as LspExecutorOp[];
   const wrapped = {} as Record<LspExecutorOp, (ctx: LspOpCtx) => Promise<unknown>>;
+  const warnedOps = new Set<LspExecutorOp>();
   for (const op of ops) {
     wrapped[op] = async (ctx: LspOpCtx) => {
       try {
         return await (primary[op] as (c: LspOpCtx) => Promise<unknown>)(ctx);
       } catch (err) {
         if (isTimeout(err)) return LSP_EMPTY_RESULTS[op];
-        return (fallback[op] as (c: LspOpCtx) => Promise<unknown>)(ctx);
+        // The fallback keeps the feature working, but it runs the full TS
+        // LanguageService ON THE CALLING THREAD — in Electron that is the main
+        // thread, and these ops have been observed taking >10s. Silently
+        // degrading here made that invisible, so: warn once per op, and mark it
+        // as a sync section so the freeze journal can name it.
+        if (!warnedOps.has(op)) {
+          warnedOps.add(op);
+          console.warn(
+            `[lsp-worker] op '${op}' fell back to in-process execution (runs on the caller's thread): ` +
+              `${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        // Wall time, NOT sync time: the fallback is async-shaped, so timing it
+        // across the await would inflate the busy accountant with time the
+        // thread was not actually blocked — the very conflation that made
+        // `timeCall` useless for attribution. It goes to the slow-call table,
+        // where wall time is the right measure.
+        const startedAt = performance.now();
+        try {
+          return await (fallback[op] as (c: LspOpCtx) => Promise<unknown>)(ctx);
+        } finally {
+          const ms = performance.now() - startedAt;
+          if (ms >= SLOW_FALLBACK_MS) recordSlowCall(`lsp-fallback:${op}`, ms);
+        }
       }
     };
   }

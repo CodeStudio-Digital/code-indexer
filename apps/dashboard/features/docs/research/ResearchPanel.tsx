@@ -85,7 +85,7 @@ export function ResearchPanel() {
     }
   }
 
-  async function handleOpen(sessionId: number) {
+  async function handleOpen(sessionId: string) {
     try {
       const detail = await getResearchSession(sessionId);
       setActiveResult({
@@ -112,7 +112,7 @@ export function ResearchPanel() {
     }
   }
 
-  async function handleDelete(id: number) {
+  async function handleDelete(id: string) {
     setError(null);
     try {
       await deleteResearchSession(id);

@@ -37,6 +37,15 @@ import {
 import { installDbDriver, listDbDriverStatus } from '@mcp/services/db/driver-installer.js';
 import type { HandlerDeps } from '../types.js';
 import { sharedTunnelManager } from '../ssh/index.js';
+import { clampMaxRows, clampOffset, clampPageLimit, parseQueryTimeoutMs } from './limits.js';
+
+export {
+  MAX_QUERY_TIMEOUT_MS,
+  MAX_RESULT_ROWS,
+  MIN_QUERY_TIMEOUT_MS,
+  clampMaxRows,
+  parseQueryTimeoutMs,
+} from './limits.js';
 
 /** Pool key for a UI connection — distinct keyspace from the agent pools. */
 function keyFor(connectionId: string): string {
@@ -50,29 +59,21 @@ function keyFor(connectionId: string): string {
  */
 const inflight = new Map<string, AbortController>();
 const catalogCache = new Map<string, DbCatalogSnapshot>();
+/**
+ * In-flight catalog builds, so concurrent callers share ONE crawl. Building a
+ * catalog is `listSchemas` + three list calls per schema; the tree search fires
+ * one `searchCatalog` per connected connection on a cold cache, and the query
+ * console asks for the same catalog when a tab opens. Without this, opening a
+ * console while typing in the search box crawled the whole database twice.
+ */
+const catalogInflight = new Map<string, Promise<DbCatalogSnapshot>>();
 const dbTunnelByConnection = new Map<string, string>();
 const CATALOG_TTL_MS = 5 * 60_000;
 
-/** Keep an interactive query bounded while still allowing reports to finish. */
-export const MIN_QUERY_TIMEOUT_MS = 1_000;
-export const MAX_QUERY_TIMEOUT_MS = 60 * 60_000;
-
-/** Validate an untrusted per-query deadline before handing it to a driver. */
-export function parseQueryTimeoutMs(timeoutMs: unknown): number | undefined {
-  if (timeoutMs == null) return undefined;
-  if (
-    typeof timeoutMs !== 'number'
-    || !Number.isSafeInteger(timeoutMs)
-    || timeoutMs < MIN_QUERY_TIMEOUT_MS
-    || timeoutMs > MAX_QUERY_TIMEOUT_MS
-  ) {
-    throw new ApiError(
-      'db_invalid_query_timeout',
-      400,
-      `Query timeout must be an integer between ${MIN_QUERY_TIMEOUT_MS}ms and ${MAX_QUERY_TIMEOUT_MS}ms.`,
-    );
-  }
-  return timeoutMs;
+/** Forget everything cached for a connection (disconnect / reconnect / DDL). */
+function dropCaches(key: string): void {
+  catalogCache.delete(key);
+  catalogInflight.delete(key);
 }
 
 async function mapConcurrent<T, R>(values: T[], concurrency: number, map: (value: T, index: number) => Promise<R>): Promise<R[]> {
@@ -158,10 +159,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
     }
   }
 
-  async function loadCatalog(connectionId: string, force = false): Promise<DbCatalogSnapshot> {
-    const key = keyFor(connectionId);
-    const cached = catalogCache.get(key);
-    if (!force && cached && Date.now() - cached.refreshedAt < CATALOG_TTL_MS) return cached;
+  async function buildCatalog(connectionId: string): Promise<DbCatalogSnapshot> {
     const driver = requireDriver(connectionId);
     const schemas = await driver.listSchemas();
     const objects: DbCatalogSnapshot['objects'] = schemas.map((name) => ({ kind: 'schema', name }));
@@ -178,9 +176,25 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       objects.push(...functions.map((name) => ({ kind: 'function' as const, name, schema })));
       objects.push(...sequences.map((name) => ({ kind: 'sequence' as const, name, schema })));
     }
-    const snapshot = { objects, refreshedAt: Date.now() };
-    catalogCache.set(key, snapshot);
-    return snapshot;
+    return { objects, refreshedAt: Date.now() };
+  }
+
+  async function loadCatalog(connectionId: string, force = false): Promise<DbCatalogSnapshot> {
+    const key = keyFor(connectionId);
+    const cached = catalogCache.get(key);
+    if (!force && cached && Date.now() - cached.refreshedAt < CATALOG_TTL_MS) return cached;
+    // Join an in-flight crawl rather than starting a second one. A forced
+    // refresh still joins: a build that started microseconds ago is fresh.
+    const running = catalogInflight.get(key);
+    if (running) return running;
+    const pending = buildCatalog(connectionId)
+      .then((snapshot) => {
+        catalogCache.set(key, snapshot);
+        return snapshot;
+      })
+      .finally(() => catalogInflight.delete(key));
+    catalogInflight.set(key, pending);
+    return pending;
   }
 
   /** Guard a relational-only op (SQL/tables/DDL) against a document/key-value connection. */
@@ -266,7 +280,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       // A fresh Connect uses fresh credentials — drop any prior pool first.
       await mgr.closeKey(key);
       await stopDbTunnel(key);
-      catalogCache.delete(key);
+      dropCaches(key);
       const opened = await openDbTunnel(spec);
       if (opened.tunnelId) dbTunnelByConnection.set(key, opened.tunnelId);
       let driver: DatabaseDriver;
@@ -294,6 +308,10 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       const key = keyFor(connectionId);
       await mgr.closeKey(key);
       await stopDbTunnel(key);
+      // The caches are module-scoped and outlive the pool: without this, every
+      // connect/disconnect cycle leaves a full catalog snapshot behind for the
+      // life of the process.
+      dropCaches(key);
     },
 
     async listDatabases({ connectionId }) {
@@ -351,7 +369,12 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
 
     async tableRows({ connectionId, schema, table, limit, offset, orderBy, where }) {
       const started = Date.now();
-      const res = await requireDriver(connectionId).tablePreview(schema, table, { limit, offset, orderBy, where });
+      const res = await requireDriver(connectionId).tablePreview(schema, table, {
+        limit: clampPageLimit(limit),
+        offset: clampOffset(offset),
+        orderBy,
+        where,
+      });
       return { ...res, durationMs: Date.now() - started };
     },
 
@@ -396,8 +419,9 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return { sql: buildDdl(engine, 'create', { create: { schema: effSchema, table, columns } }).join(';\n') + ';' };
     },
 
-    async query({ connectionId, sql, params, maxRows, timeoutMs: requestedTimeoutMs, queryId, schema }) {
+    async query({ connectionId, sql, params, maxRows: requestedMaxRows, timeoutMs: requestedTimeoutMs, queryId, schema }) {
       const driver = requireDriver(connectionId);
+      const maxRows = clampMaxRows(requestedMaxRows);
       if (mgr.getMeta(keyFor(connectionId))?.readOnly && !isReadStatement(sql)) {
         throw new ApiError('db_read_only', 403, 'Connection is read-only — only SELECT statements are allowed.');
       }
@@ -427,9 +451,10 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       }
     },
 
-    async queryBatch({ connectionId, statements, maxRows, timeoutMs: requestedTimeoutMs, queryId, schema }) {
+    async queryBatch({ connectionId, statements, maxRows: requestedMaxRows, timeoutMs: requestedTimeoutMs, queryId, schema }) {
       assertRelational(connectionId, 'queryBatch');
       if (statements.length === 0) return { results: [], durationMs: 0 };
+      const maxRows = clampMaxRows(requestedMaxRows);
       const readOnly = mgr.getMeta(keyFor(connectionId))?.readOnly === true;
       if (readOnly && statements.some((statement) => !isReadStatement(statement.sql))) {
         throw new ApiError('db_read_only', 403, 'Connection is read-only — the atomic batch contains a write.');
@@ -578,7 +603,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       const sql = statements.join(';\n') + ';';
       if (dryRun) return { sql };
       const result = await executeDdlStatements(driver, statements, rebuild);
-      catalogCache.delete(keyFor(connectionId));
+      dropCaches(keyFor(connectionId));
       return { sql, result };
     },
 
@@ -613,7 +638,7 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
           ? await driver.runBatch(statements)
           : await executeDdlStatements(driver, statements, false);
       }
-      catalogCache.delete(keyFor(connectionId));
+      dropCaches(keyFor(connectionId));
       return { sql, result, applied: changes.length, atomic };
     },
 
@@ -699,8 +724,9 @@ export function createDbClientHandlers(_deps: HandlerDeps): DbClientApi {
       return result;
     },
 
-    async runCommand({ connectionId, command, maxRows }) {
+    async runCommand({ connectionId, command, maxRows: requestedMaxRows }) {
       const driver = requireDriver(connectionId);
+      const maxRows = clampMaxRows(requestedMaxRows);
       if (!driver.runCommand) {
         throw new ApiError('db_op_unsupported', 422, 'This connection does not support commands (relational — use query).');
       }

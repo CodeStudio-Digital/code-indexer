@@ -34,7 +34,7 @@ describe('docs_index_update', () => {
       projectName: 'test',
       companyContext: {
         orchestrator: {} as never,
-        companySessionId: 1,
+        companySessionId: '00000000-0000-4000-8000-000000000001',
         agentRole: 'master',
         agentRunId: null,
         allowedProjectIds: [],

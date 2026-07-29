@@ -1,7 +1,7 @@
 /**
  * Per-session registry for chat-pipeline executors.
  *
- * One executor per `coder_sessions` row; created lazily on the first
+ * One executor per filesystem session UUID; created lazily on the first
  * `POST /pipelines/:pid/start`. Each entry holds:
  *   - the `ChatPipelineExecutor` itself
  *   - a long-lived `CoderRunBus` so the dashboard can `attach` to a
@@ -15,6 +15,7 @@
  */
 import type { ChatPipelineExecutor } from '@mcp/code-agent/pipelines/ChatPipelineExecutor.js';
 import type { ChatPipelineBus, ChatPipelineEvent } from '@mcp/code-agent/pipelines/lib/eventBus.js';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
 import { createBus, publish, type CoderRunBus } from '../../../coder-bus.js';
 import { publishNotificationRuntimeEvent } from '../../../sse/notification-event-bus.js';
 
@@ -27,9 +28,9 @@ export interface CoderPipelineEntry {
 }
 
 export class CoderPipelineRegistry {
-  private readonly entries = new Map<number, CoderPipelineEntry>();
+  private readonly entries = new Map<SessionId, CoderPipelineEntry>();
 
-  get(sessionId: number): CoderPipelineEntry | undefined {
+  get(sessionId: SessionId): CoderPipelineEntry | undefined {
     return this.entries.get(sessionId);
   }
 
@@ -40,7 +41,7 @@ export class CoderPipelineRegistry {
    * the caller can immediately publish the bootstrap snapshot if needed.
    */
   register(
-    sessionId: number,
+    sessionId: SessionId,
     executor: ChatPipelineExecutor,
     pipelineBus: ChatPipelineBus,
   ): CoderPipelineEntry {
@@ -75,7 +76,7 @@ export class CoderPipelineRegistry {
   /** Drop the entry and stop forwarding events. The executor itself is left
    *  alone — callers in the abort/dispose path are responsible for terminal
    *  state on the executor before evicting. */
-  evict(sessionId: number): boolean {
+  evict(sessionId: SessionId): boolean {
     const entry = this.entries.get(sessionId);
     if (!entry) return false;
     try {

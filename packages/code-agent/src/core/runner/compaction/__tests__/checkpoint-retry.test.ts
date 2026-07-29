@@ -29,7 +29,11 @@ describe('DurableCheckpointCoordinator', () => {
       value: CompactionCheckpoint,
     ) => Promise<CompactionCheckpointResult>>()
       .mockResolvedValueOnce({ status: 'noop', reason: 'unaligned' })
-      .mockResolvedValueOnce({ status: 'committed', chapterId: 2, boundaryId: 20 });
+      .mockResolvedValueOnce({
+        status: 'committed',
+        chapterId: '00000000-0000-4000-8000-000000000002',
+        boundaryId: 20,
+      });
     const coordinator = new DurableCheckpointCoordinator(commit);
 
     expect(await coordinator.submit(checkpoint('first'), 10)).toMatchObject({ status: 'noop' });
@@ -64,7 +68,11 @@ describe('DurableCheckpointCoordinator', () => {
       value: CompactionCheckpoint,
     ) => Promise<CompactionCheckpointResult>>()
       .mockResolvedValueOnce({ status: 'failed', reason: 'database busy' })
-      .mockResolvedValueOnce({ status: 'committed', chapterId: 3, boundaryId: 30 });
+      .mockResolvedValueOnce({
+        status: 'committed',
+        chapterId: '00000000-0000-4000-8000-000000000003',
+        boundaryId: 30,
+      });
     const coordinator = new DurableCheckpointCoordinator(commit);
 
     await coordinator.submit(checkpoint('old'), 1);

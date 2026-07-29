@@ -36,15 +36,15 @@ export function AppStudioRightPanel({
   onCollapse,
 }: {
   active: AppStudioSidePanel;
-  appSessionId: number;
-  companySessionId: number | null;
+  appSessionId: string;
+  companySessionId: string | null;
   projectId: number;
   projectName: string;
-  masterSessionId: number | null;
+  masterSessionId: string | null;
   initialPrompt?: string | null;
   detail: AppStudioSessionDetail;
-  singleSessionId?: number | null;
-  onSingleSessionChange?: (sessionId: number | null) => void;
+  singleSessionId?: string | null;
+  onSingleSessionChange?: (sessionId: string | null) => void;
   companyStream: ReturnType<typeof useCompanyStream>;
   onChanged: () => void;
   onCollapse?: () => void;
@@ -73,8 +73,8 @@ function AppStudioSessionsPanel({
 }: {
   projectId: number;
   projectName: string;
-  initialSessionId?: number | null;
-  onSessionChange?: (sessionId: number | null) => void;
+  initialSessionId?: string | null;
+  onSessionChange?: (sessionId: string | null) => void;
   onCollapse?: () => void;
 }) {
   const { t } = useTranslation('appStudio');

@@ -8,7 +8,7 @@
  * `key={projectId}` in TransientSurface), so a connection never bleeds across
  * projects.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as api from './api.js';
 import { engineLabel, engineKindFor } from './engines.js';
 import { preferredTreeName, restrictTreeNames } from './tree/tree-preferences.js';
@@ -130,8 +130,6 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
   const querySeqRef = useRef(0);
   const connectionsRef = useRef<DbConnection[]>([]);
   connectionsRef.current = connections;
-  /** Cache TableInfo so columns + Indexes + FKs folders don't each refetch. */
-  const tableInfoRef = useRef<Map<string, DbTableInfo>>(new Map());
   const onOpenWorkTabRef = useRef(options.onOpenWorkTab);
   onOpenWorkTabRef.current = options.onOpenWorkTab;
 
@@ -155,7 +153,7 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
         ]);
         connectedRef.current.delete(changedConnectionId);
         for (const key of extraKeys) connectedDbPoolsRef.current.delete(key);
-        tableInfoRef.current.clear();
+        api.invalidateTableInfo();
         setStatusById((prev) => ({ ...prev, [changedConnectionId]: 'idle' }));
         setChildrenById((prev) => Object.fromEntries(
           Object.entries(prev).filter(([key]) => key !== root && !key.startsWith(`${root}/`)),
@@ -303,17 +301,16 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
     [connectConn],
   );
 
-  /** Describe a table, memoized so columns + index/FK folders don't each refetch. */
+  /**
+   * Describe a table for the tree. Deduping/caching lives in `api.describeTable`
+   * (shared with the grid, the SQL editor and the structure tab), so expanding a
+   * table and then opening its data tab costs ONE introspection round trip.
+   */
   const getTableInfo = useCallback(
-    async (connKey: string, schema: string | undefined, table: string): Promise<DbTableInfo> => {
-      const key = `${connKey}:${schema ?? ''}:${table}`;
-      const cached = tableInfoRef.current.get(key);
-      if (cached) return cached;
+    (connKey: string, schema: string | undefined, table: string): Promise<DbTableInfo> => {
       const engine = connectionsRef.current.find((c) => c.id === api.parseConnKey(connKey).id)?.engine;
       const fallbackSchema = engine === 'mssql' ? 'dbo' : engine === 'postgres' ? 'public' : '';
-      const info = await api.describeTable(connKey, schema ?? fallbackSchema, table);
-      tableInfoRef.current.set(key, info);
-      return info;
+      return api.describeTable(connKey, schema ?? fallbackSchema, table);
     },
     [],
   );
@@ -649,7 +646,7 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
   const clearImportRequest = useCallback(() => setImportRequest(null), []);
 
   const refreshNode = useCallback((nodeId: string) => {
-    tableInfoRef.current.clear();
+    api.invalidateTableInfo();
     setChildrenById((prev) => {
       const next = { ...prev };
       // Drop the node's cached children + everything under it so the next
@@ -676,7 +673,7 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
   );
 
   const invalidateTables = useCallback((connectionId: number, schema?: string) => {
-    tableInfoRef.current.clear();
+    api.invalidateTableInfo();
     const match = (k: string): boolean =>
       k.startsWith(`conn:${connectionId}`) && (!schema || k.endsWith(`schema:${schema}`));
     setChildrenById((prev) => {
@@ -716,23 +713,32 @@ export function useDbClient(projectId: number, options: UseDbClientOptions = {})
   }, []);
 
   // Flatten roots + expanded children into ordered rows.
-  const treeRows: DbTreeNode[] = [];
-  const pushSubtree = (node: DbTreeNode): void => {
-    treeRows.push(node);
-    if (expanded.has(node.id)) {
-      for (const child of childrenById[node.id] ?? []) pushSubtree(child);
+  //
+  // Memoized on purpose: this walks EVERY expanded node, and the consumer
+  // (ConnectionTree) memoizes its filtering + virtual-item building on the
+  // array identity. Rebuilding it on each render — a keystroke in the search
+  // box, a status dot flipping — re-walked a schema with thousands of tables
+  // and invalidated both downstream memos every time.
+  const treeRows = useMemo<DbTreeNode[]>(() => {
+    const rows: DbTreeNode[] = [];
+    const pushSubtree = (node: DbTreeNode): void => {
+      rows.push(node);
+      if (expanded.has(node.id)) {
+        for (const child of childrenById[node.id] ?? []) pushSubtree(child);
+      }
+    };
+    // Group connections so same-group roots are adjacent (header rendered in the tree).
+    const ordered = [...connections].sort(
+      (a, b) => (a.group_name ?? '').localeCompare(b.group_name ?? '') || a.sort_order - b.sort_order || a.label.localeCompare(b.label),
+    );
+    for (const conn of ordered) {
+      const root = connNode(conn);
+      // Label the root with its engine so different engines are distinguishable.
+      root.label = `${conn.label} · ${engineLabel(conn.engine)}`;
+      pushSubtree(root);
     }
-  };
-  // Group connections so same-group roots are adjacent (header rendered in the tree).
-  const ordered = [...connections].sort(
-    (a, b) => (a.group_name ?? '').localeCompare(b.group_name ?? '') || a.sort_order - b.sort_order || a.label.localeCompare(b.label),
-  );
-  for (const conn of ordered) {
-    const root = connNode(conn);
-    // Label the root with its engine so different engines are distinguishable.
-    root.label = `${conn.label} · ${engineLabel(conn.engine)}`;
-    pushSubtree(root);
-  }
+    return rows;
+  }, [childrenById, connections, expanded]);
 
   return {
     connections,

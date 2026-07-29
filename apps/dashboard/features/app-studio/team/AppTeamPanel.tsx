@@ -70,7 +70,7 @@ function persistedShape(current: AppTeamRoleConfig, draft: RoleConfig): AppTeamR
   };
 }
 
-export function AppTeamPanel({ appSessionId, onCollapse }: { appSessionId: number; onCollapse?: () => void }) {
+export function AppTeamPanel({ appSessionId, onCollapse }: { appSessionId: string; onCollapse?: () => void }) {
   const { t } = useTranslation('appStudio');
   const navigate = useNavigate();
   const { data, loading, error, refetch, update } = useApi<AppTeamConfigView>(`/app-studio/apps/${appSessionId}/team/config`);
@@ -193,13 +193,16 @@ export function AppTeamPanel({ appSessionId, onCollapse }: { appSessionId: numbe
           roleIdx={editing.index}
           availableSkills={skillsList?.skills ?? []}
           providerOptions={providerOptions}
-          getModelsForProvider={getModelsForProvider}
+          getModelsForProvider={(providerId) => getModelsForProvider(providerId).map((model) => ({
+            ...model,
+            mode: model.mode ?? undefined,
+          }))}
           onUpdate={(patch) => setEditing((current) => current ? { ...current, draft: { ...current.draft, ...patch } } : current)}
           onClose={() => void saveRole()}
           onCancel={() => setEditing(null)}
           roleNameReadOnly
           inheritedToolTiers={inheritedToolTiers(editing.draft)}
-          availableToolNames={team.roles[editing.index]?.availableToolNames}
+          availableToolNames={team?.roles[editing.index]?.availableToolNames}
         />
       )}
       {savingRole && <div className="pointer-events-none fixed inset-0 z-[70] grid place-items-center bg-black/20"><Loader2 className="h-5 w-5 animate-spin text-white" /></div>}

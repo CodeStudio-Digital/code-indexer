@@ -24,11 +24,32 @@ interface SlowCallRow {
   p99: number;
 }
 
+type FreezeSource =
+  | 'handler'
+  | 'background'
+  | 'event-loop'
+  | 'renderer'
+  | 'starved'
+  | 'offloop'
+  | 'gc'
+  | 'sync'
+  | 'unattributed';
+
 interface FreezeRow {
   at: number;
-  source: 'handler' | 'background' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
+  source: FreezeSource;
   durationMs: number;
   culprit: string;
+  /** Measured synchronous main-thread ms — the evidence behind the source. */
+  busyMs?: number;
+  gcMs?: number;
+}
+
+/** What the backend runtime can actually measure. See `stall-evidence.ts`. */
+interface StallEvidenceInfo {
+  eluAvailable: boolean;
+  gcObserver: boolean;
+  syncLabels: number;
 }
 
 type CpuTarget = 'main' | 'renderer';
@@ -44,6 +65,7 @@ export function ProfilingTools() {
   const [tracePath, setTracePath] = useState<string | null>(null);
   const [slowCalls, setSlowCalls] = useState<SlowCallRow[]>([]);
   const [freezes, setFreezes] = useState<FreezeRow[]>([]);
+  const [evidence, setEvidence] = useState<StallEvidenceInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadSlowCalls = async () => {
@@ -61,13 +83,28 @@ export function ProfilingTools() {
       const r = await fetch(`${apiBaseUrl()}/api/admin/perf/freezes`);
       if (r.ok) {
         const body = (await r.json()) as {
-          events: Array<{ source: 'handler' | 'background' | 'event-loop' | 'starved' | 'offloop'; channel?: string; durationMs: number; at: number; detail?: string; count?: number }>;
+          events: Array<{
+            source: Exclude<FreezeSource, 'renderer'>;
+            channel?: string;
+            durationMs: number;
+            at: number;
+            detail?: string;
+            count?: number;
+            busyMs?: number;
+            gcMs?: number;
+            topSyncLabel?: string;
+          }>;
+          evidence?: StallEvidenceInfo;
         };
+        setEvidence(body.evidence ?? null);
         mainRows = body.events.map((e) => ({
           at: e.at,
           source: e.source,
           durationMs: e.durationMs,
-          culprit: (e.channel ?? e.detail ?? '—') + (e.count && e.count > 1 ? ` ×${e.count}` : ''),
+          // `topSyncLabel` names the exact blocking section when one was measured.
+          culprit: (e.channel ?? e.topSyncLabel ?? e.detail ?? '—') + (e.count && e.count > 1 ? ` ×${e.count}` : ''),
+          busyMs: e.busyMs,
+          gcMs: e.gcMs,
         }));
       }
     } catch { /* transient */ }
@@ -218,6 +255,11 @@ export function ProfilingTools() {
             {t('perf.tools.reset')}
           </Button>
         </div>
+        {evidence && !evidence.eluAvailable && (
+          <p className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-muted-foreground">
+            {t('perf.tools.eluUnavailable')}
+          </p>
+        )}
         <div className="border rounded-md overflow-hidden">
           <table className="w-full text-xs">
             <thead className="bg-muted/50 text-muted-foreground">
@@ -225,6 +267,8 @@ export function ProfilingTools() {
                 <th className="py-1.5 px-2 text-left">{t('perf.tools.when')}</th>
                 <th className="px-2 text-left">{t('perf.tools.source')}</th>
                 <th className="px-2 text-right">{t('perf.tools.durationMs')}</th>
+                <th className="px-2 text-right">{t('perf.tools.busyMs')}</th>
+                <th className="px-2 text-right">{t('perf.tools.gcMs')}</th>
                 <th className="px-2 text-left">{t('perf.tools.culprit')}</th>
               </tr>
             </thead>
@@ -234,11 +278,13 @@ export function ProfilingTools() {
                   <td className="py-1 px-2 whitespace-nowrap">{new Date(r.at).toLocaleTimeString()}</td>
                   <td className="px-2">{r.source}</td>
                   <td className="px-2 text-right tabular-nums">{r.durationMs}</td>
+                  <td className="px-2 text-right tabular-nums">{r.busyMs ?? '—'}</td>
+                  <td className="px-2 text-right tabular-nums">{r.gcMs ?? '—'}</td>
                   <td className="px-2 font-mono break-all">{r.culprit}</td>
                 </tr>
               ))}
               {freezes.length === 0 && (
-                <tr><td colSpan={4} className="py-2 px-2 text-muted-foreground">{t('perf.tools.freezesEmpty')}</td></tr>
+                <tr><td colSpan={6} className="py-2 px-2 text-muted-foreground">{t('perf.tools.freezesEmpty')}</td></tr>
               )}
             </tbody>
           </table>

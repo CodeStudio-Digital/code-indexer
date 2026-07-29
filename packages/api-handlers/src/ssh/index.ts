@@ -20,6 +20,7 @@ import { KnownHostsStore } from './known-hosts.js';
 import { adaptChannelToIPty } from './ssh-pty-adapter.js';
 import { TunnelManager } from './ssh-tunnels.js';
 import { SftpManager } from './ssh-sftp.js';
+import { SftpIdNameResolver } from './ssh-id-names.js';
 import { generateSshKey } from './ssh-keys.js';
 import { readSshConfig } from './ssh-config-parser.js';
 import { sshExec } from './ssh-exec.js';
@@ -45,6 +46,12 @@ function sharedSftpManager(): SftpManager {
   return _sftp;
 }
 
+let _idNames: SftpIdNameResolver | null = null;
+function sharedIdNames(): SftpIdNameResolver {
+  if (!_idNames) _idNames = new SftpIdNameResolver(sharedSshManager());
+  return _idNames;
+}
+
 /** Drain every SSH-owned socket/channel/listener without creating lazy state. */
 export function disposeSharedSshResources(): void {
   _sftp?.closeAll();
@@ -53,6 +60,7 @@ export function disposeSharedSshResources(): void {
   _sftp = null;
   _tunnels = null;
   _manager = null;
+  _idNames = null;
 }
 
 export function createSshHandlers(_deps: HandlerDeps): SshApi {
@@ -155,6 +163,15 @@ export function createSshHandlers(_deps: HandlerDeps): SshApi {
     },
     async sftpRemove({ spec, path, isDir }) {
       await sharedSftpManager().remove(spec, path, isDir);
+    },
+    async sftpChmod({ spec, path, mode, recursive }) {
+      await sharedSftpManager().chmod(spec, path, mode, !!recursive);
+    },
+    async sftpChown({ spec, path, uid, gid, recursive }) {
+      await sharedSftpManager().chown(spec, path, uid, gid, !!recursive);
+    },
+    async sftpIdNames({ spec }) {
+      return sharedIdNames().get(spec);
     },
     async sftpClose({ hostId }) {
       sharedSftpManager().close(hostId);

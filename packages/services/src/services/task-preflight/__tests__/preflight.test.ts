@@ -4,8 +4,13 @@
  * suite runs ABI-free.
  */
 import { describe, expect, it } from 'vitest';
+import { asSessionId } from '@mcp/session-storage';
 import type { PipelineProviderResolver, ResolvedBinding } from '../../../pipelines/index.js';
-import { TaskPreflightService, type TaskPreflightDeps } from '../preflight-pipeline.js';
+import {
+  TaskPreflightService,
+  type TaskPreflightDeps,
+  type TaskPreflightInput,
+} from '../preflight-pipeline.js';
 import {
   buildPreflightMessages,
   cleanSessionTitle,
@@ -266,7 +271,11 @@ describe('buildPreflightMessages', () => {
 });
 
 describe('TaskPreflightService.run', () => {
-  const INPUT = { sessionId: 1, projectId: 7, userMessage: 'corrija o bug de login' };
+  const INPUT: TaskPreflightInput = {
+    sessionId: asSessionId('00000000-0000-4000-8000-000000000001'),
+    projectId: 7,
+    userMessage: 'corrija o bug de login',
+  };
 
   it('returns unconfigured when no binding resolves and no fallback is set', async () => {
     const result = await makeService(null).run(INPUT);

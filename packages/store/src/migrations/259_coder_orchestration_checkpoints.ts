@@ -14,6 +14,13 @@ export const coderOrchestrationCheckpoints259: Migration = {
   version: 259,
   name: 'coder_orchestration_checkpoints',
   up(db: DB): void {
+    // Session-scoped ⇒ CENTRAL-only (∈ CENTRAL_DROP_TABLES); a per-project DB
+    // trims `coder_sessions` away. Mirrors migration 258.
+    const sessions = db.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'coder_sessions'`,
+    ).get();
+    if (!sessions) return;
+
     db.exec(`
       CREATE TABLE IF NOT EXISTS coder_orchestration_checkpoints (
         session_id INTEGER NOT NULL REFERENCES coder_sessions(id) ON DELETE CASCADE,

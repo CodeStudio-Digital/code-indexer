@@ -7,21 +7,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2 } from 'lucide-react';
+import type { SftpIdNames } from '@mcp/api-bus';
 import type { SshHost, SshIdentity } from '../types.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../../components/ui/select.js';
 import { apiCall } from '../../../lib/api-client.js';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 import { useWorkspaceLayout } from '../../../state/workspace-layout.js';
-import { findHostByKey, sftpReadFile, sshHostKey, type NeedTrust } from '../api.js';
+import { findHostByKey, sftpChmod, sftpChown, sftpIdNames, sftpReadFile, sftpWriteFile, sshHostKey, type NeedTrust } from '../api.js';
 import { createLocalAdapter } from './local-adapter.js';
 import { createPaneSelection } from './pane-selection.js';
 import { useRemoteHost } from './use-remote-host.js';
 import { useTransfers } from './transfer-controller.js';
 import { FilePane } from './FilePane.js';
 import { useColumnConfig } from './column-config.js';
+import { loadSort, nextSortState, saveSort, type SortKey, type SortState } from './pane-sort.js';
 import { TransferBar } from './TransferBar.js';
 import { ConflictDialogHost } from './conflict-dialog.js';
+import { PermissionsDialog, type PermissionsSubmit } from './PermissionsDialog.js';
 import { extractLocal, extractRemote, zipLocal, zipRemote } from './zip-actions.js';
 import type { FsItem } from './fs-adapter.js';
 
@@ -33,6 +36,8 @@ interface DualPaneFilesProps {
 }
 
 type Kind = 'local' | 'remote';
+
+const EMPTY_ID_NAMES: SftpIdNames = { users: {}, groups: {} };
 
 export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: DualPaneFilesProps) {
   const { t } = useTranslation('ssh');
@@ -49,9 +54,17 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
   const remoteSel = useMemo(() => createPaneSelection(), []);
   const localAdapter = useMemo(() => (rootPath != null ? createLocalAdapter(projectId, rootPath) : null), [projectId, rootPath]);
   const { spec, adapter: remoteAdapter, error: remoteError, connecting } = useRemoteHost(hostId, hosts, identities, onNeedTrust);
-  // Shared column config across both panes so the layout stays symmetric.
+  // Shared column + sort config across both panes so the layout stays symmetric.
   const { visibility: columns, widths: columnWidths, toggle: onToggleColumn, setWidth: onColumnWidthChange } = useColumnConfig();
-  const { transfers, transferItems, cancel } = useTransfers(spec);
+  const [sort, setSort] = useState<SortState>(loadSort);
+  const onSort = useCallback((key: SortKey) => {
+    setSort((prev) => {
+      const next = nextSortState(prev, key);
+      saveSort(next);
+      return next;
+    });
+  }, []);
+  const { transfers, transferItems, runArchive, cancel } = useTransfers(spec);
 
   const [localCwd, setLocalCwd] = useState('');
   const [remoteCwd, setRemoteCwd] = useState('/');
@@ -104,10 +117,77 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
     [projectId],
   );
 
-  const localZip = useCallback((cwd: string, names: string[]) => (localAdapter ? zipLocal(projectId, cwd, names, localAdapter.join, t) : Promise.resolve(false)), [localAdapter, projectId, t]);
-  const localExtract = useCallback((cwd: string, name: string) => (localAdapter ? extractLocal(projectId, cwd, name, localAdapter.join, t) : Promise.resolve(false)), [localAdapter, projectId, t]);
+  // Local zip/unzip stream their worker progress into the same TransferBar row
+  // a file transfer uses, so they get a live percentage and a cancel button.
+  const localZip = useCallback((cwd: string, names: string[]) => (localAdapter ? zipLocal(projectId, cwd, names, localAdapter.join, t, runArchive) : Promise.resolve(false)), [localAdapter, projectId, t, runArchive]);
+  const localExtract = useCallback((cwd: string, name: string) => (localAdapter ? extractLocal(projectId, cwd, name, localAdapter.join, t, runArchive) : Promise.resolve(false)), [localAdapter, projectId, t, runArchive]);
   const remoteZip = useCallback((cwd: string, names: string[]) => (spec ? zipRemote(spec, cwd, names, t) : Promise.resolve(false)), [spec, t]);
   const remoteExtract = useCallback((cwd: string, name: string) => (spec ? extractRemote(spec, cwd, name, t) : Promise.resolve(false)), [spec, t]);
+
+  // "New file" per side — an empty write is the create. Both verbs already
+  // existed on the bus; nothing in the UI called them.
+  const createLocalFile = useCallback(
+    async (cwd: string, name: string) => {
+      if (!localAdapter) return;
+      await apiCall('files.write', { projectId, path: localAdapter.join(cwd, name), content: '' });
+    },
+    [localAdapter, projectId],
+  );
+  const createRemoteFile = useCallback(
+    async (cwd: string, name: string) => {
+      if (!spec || !remoteAdapter) return;
+      await sftpWriteFile(spec, remoteAdapter.join(cwd, name), '');
+    },
+    [spec, remoteAdapter],
+  );
+
+  // chmod/chown — remote only. `idNames` lets the dialog offer real account
+  // names instead of asking the user to remember uids.
+  const [permTarget, setPermTarget] = useState<FsItem | null>(null);
+  const [permBusy, setPermBusy] = useState(false);
+  const [permError, setPermError] = useState<string | null>(null);
+  const [idNames, setIdNames] = useState<SftpIdNames>(EMPTY_ID_NAMES);
+
+  const openPermissions = useCallback(
+    (item: FsItem) => {
+      setPermError(null);
+      setPermTarget(item);
+      if (spec) void sftpIdNames(spec).then(setIdNames).catch(() => setIdNames(EMPTY_ID_NAMES));
+    },
+    [spec],
+  );
+
+  const applyPermissions = useCallback(
+    async (v: PermissionsSubmit) => {
+      if (!spec || !permTarget) return;
+      setPermBusy(true);
+      setPermError(null);
+      try {
+        // Mode first: if chown fails (it needs root far more often than chmod
+        // does), the permission change the user asked for has still landed.
+        if (v.mode != null) await sftpChmod(spec, permTarget.path, v.mode, v.recursive);
+        if (v.uid != null || v.gid != null) {
+          // SFTP encodes uid/gid as uint32, so there is no negative "leave
+          // unchanged" sentinel to pass — send the entry's CURRENT id for the
+          // half the user didn't touch.
+          await sftpChown(
+            spec,
+            permTarget.path,
+            v.uid ?? permTarget.uid ?? 0,
+            v.gid ?? permTarget.gid ?? 0,
+            v.recursive,
+          );
+        }
+        setPermTarget(null);
+        setRemoteRefresh((n) => n + 1);
+      } catch (e) {
+        setPermError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setPermBusy(false);
+      }
+    },
+    [spec, permTarget],
+  );
 
   // Draggable divider.
   const containerRef = useRef<HTMLDivElement>(null);
@@ -165,6 +245,9 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
               columnWidths={columnWidths}
               onToggleColumn={onToggleColumn}
               onColumnWidthChange={onColumnWidthChange}
+              sort={sort}
+              onSort={onSort}
+              createFile={createLocalFile}
             />
           ) : (
             <div className="grid place-items-center h-full text-xs text-muted-foreground">
@@ -190,6 +273,10 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
               columnWidths={columnWidths}
               onToggleColumn={onToggleColumn}
               onColumnWidthChange={onColumnWidthChange}
+              sort={sort}
+              onSort={onSort}
+              createFile={createRemoteFile}
+              onEditPermissions={openPermissions}
             />
           ) : (
             <div className="grid place-items-center h-full text-xs text-muted-foreground">{t('sftp.selectHost')}</div>
@@ -199,6 +286,15 @@ export function DualPaneFiles({ projectId, hosts, identities, onNeedTrust }: Dua
 
       <TransferBar transfers={transfers} onCancel={cancel} />
       <ConflictDialogHost />
+      <PermissionsDialog
+        open={permTarget != null}
+        item={permTarget}
+        idNames={idNames}
+        busy={permBusy}
+        error={permError}
+        onOpenChange={(v) => !v && setPermTarget(null)}
+        onSubmit={(v) => void applyPermissions(v)}
+      />
     </div>
   );
 }

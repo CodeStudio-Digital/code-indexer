@@ -20,20 +20,20 @@ export function GenerateBar({
   onDirection, onAnchorChange, onGenerate, onFrameCount,
 }: {
   projectId: number;
-  assetId: number;
+  assetId: string;
   running: boolean;
   adopting: boolean;
   hasFrames: boolean;
   direction: string;
   /** Non-terminal job progress; null while idle / failed / done. */
   genStatus: { status: string; pct: number } | null;
-  anchorVersionId: number | null;
-  lastGenJobId: number | null;
-  versionById: Map<number, AssetVersion>;
+  anchorVersionId: string | null;
+  lastGenJobId: string | null;
+  versionById: Map<string, AssetVersion>;
   /** Target frame count for the next (re)generation (2..12). */
   frameCount: number;
   onDirection: (d: string) => void;
-  onAnchorChange: (versionId: number | null) => void;
+  onAnchorChange: (versionId: string | null) => void;
   onGenerate: () => void;
   onFrameCount: (n: number) => void;
 }) {

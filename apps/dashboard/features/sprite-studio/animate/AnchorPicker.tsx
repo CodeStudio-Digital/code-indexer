@@ -19,14 +19,14 @@ export function AnchorPicker({
   projectId, assetId, anchorVersionId, lastGenJobId, versionById, disabled, onChange,
 }: {
   projectId: number;
-  assetId: number;
+  assetId: string;
   /** Local draft (hydrated from the server AnimDto); null = asset's current. */
-  anchorVersionId: number | null;
+  anchorVersionId: string | null;
   /** Job that produced the current frames (settings.lastGenJobId); null = none. */
-  lastGenJobId: number | null;
-  versionById: Map<number, AssetVersion>;
+  lastGenJobId: string | null;
+  versionById: Map<string, AssetVersion>;
   disabled?: boolean;
-  onChange: (versionId: number | null) => void;
+  onChange: (versionId: string | null) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const anchor = anchorVersionId != null ? versionById.get(anchorVersionId) : undefined;

@@ -6,7 +6,7 @@ import {
 } from '@mcp/code-agent/ports/filesystem-port.js';
 import { MANAGE_PATH_DESC, maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import { emitRecentFileTouched } from '@mcp/code-agent/tools/global-recent-files.js';
-import { pathFor, resolveAuthorizedPath } from '@mcp/code-agent/tools/paths.js';
+import { pathFor, resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 
 type Operation = 'mkdir' | 'move' | 'delete';
 type DeleteMode = 'trash' | 'permanent';
@@ -31,12 +31,13 @@ function safeTarget(raw: unknown, ctx: ToolContext): {
   display: string;
   rootPath: string;
   external: boolean;
+  projectId?: number;
 } | { error: string } {
   const input = cleanInput(raw);
   if (!input) return { error: 'Path is required' };
   if (hasTraversal(input)) return { error: `Path '${input}' uses traversal segments` };
 
-  const resolved = resolveAuthorizedPath(input, ctx.cwd, ctx.externalRoots, 'write');
+  const resolved = resolveWorkspacePath(input, ctx, 'write');
   if (!resolved.ok) return { error: resolved.reason };
   const rel = resolved.relativePath;
   if (!rel || rel === '.') return { error: 'Refusing to operate on the project root' };
@@ -49,10 +50,27 @@ function safeTarget(raw: unknown, ctx: ToolContext): {
   return {
     abs: resolved.abs,
     rel,
-    display: resolved.external ? resolved.abs : rel,
+    display: resolved.external
+      ? resolved.abs
+      : resolved.workspacePrefix
+        ? `${resolved.workspacePrefix}/${rel}`
+        : rel,
     rootPath: resolved.rootPath,
     external: resolved.external,
+    projectId: resolved.projectId,
   };
+}
+
+function markOverlay(ctx: ToolContext, target: {
+  external: boolean;
+  projectId?: number;
+  rel: string;
+}): void {
+  if (target.external) return;
+  const overlay = target.projectId != null
+    ? ctx.overlayByRoot?.get(target.projectId) ?? ctx.overlay
+    : ctx.overlay;
+  overlay?.mark(target.rel);
 }
 
 async function exists(fs: IFilesystemPort, abs: string): Promise<boolean> {
@@ -91,7 +109,7 @@ async function mkdir(args: Record<string, unknown>, ctx: ToolContext): Promise<T
     if (!st.isDirectory()) return err(`Path '${target.display}' already exists and is not a directory`);
   }
   await fs.mkdir(target.abs, { recursive: true });
-  if (!target.external) ctx.overlay?.mark(target.rel);
+  markOverlay(ctx, target);
   emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
   return ok(`${alreadyExists ? 'Directory already exists' : 'Created directory'}: ${target.display}`);
 }
@@ -117,10 +135,8 @@ async function move(args: Record<string, unknown>, ctx: ToolContext): Promise<To
   const p = pathFor(to.rootPath);
   await fs.mkdir(p.dirname(to.abs), { recursive: true });
   await fs.rename(from.abs, to.abs);
-  if (!from.external) {
-    ctx.overlay?.mark(from.rel);
-    ctx.overlay?.mark(to.rel);
-  }
+  markOverlay(ctx, from);
+  markOverlay(ctx, to);
   emitRecentFileTouched({ absolutePath: from.abs, kind: 'edit' });
   emitRecentFileTouched({ absolutePath: to.abs, kind: 'edit' });
   return ok(`Moved ${from.display} -> ${to.display}`);
@@ -146,7 +162,7 @@ async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Prom
     const expected = `PERMANENT DELETE ${target.display}`;
     if (confirm !== expected) return err(`Permanent delete requires confirm='${expected}'`);
     await fs.rm(target.abs, { recursive, force: false });
-    if (!target.external) ctx.overlay?.mark(target.rel);
+    markOverlay(ctx, target);
     emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
     return ok(`Deleted permanently: ${target.display}`);
   }
@@ -160,7 +176,7 @@ async function deletePath(args: Record<string, unknown>, ctx: ToolContext): Prom
   const p = pathFor(target.rootPath);
   await fs.mkdir(p.dirname(trash.abs), { recursive: true });
   await fs.rename(target.abs, trash.abs);
-  if (!target.external) ctx.overlay?.mark(target.rel);
+  markOverlay(ctx, target);
   emitRecentFileTouched({ absolutePath: target.abs, kind: 'edit' });
   return ok(`Moved ${target.display} to trash: ${trash.abs}`);
 }
@@ -184,9 +200,9 @@ export const managePathTool: CoderTool = {
           "Which args each operation requires — 'mkdir': path; 'move': from_path + to_path; " +
           "'delete': path (+ recursive and confirm for non-empty dirs, delete_mode defaults to trash).",
       },
-      path: { type: 'string', description: 'Project-relative path, or absolute path under an authorized writable external root, for mkdir/delete' },
-      from_path: { type: 'string', description: 'Project-relative or authorized writable external source path for move' },
-      to_path: { type: 'string', description: 'Project-relative or authorized writable external destination path for move (same root as source)' },
+      path: { type: 'string', description: 'Project-relative path for mkdir/delete; use "<project-slug>/..." in a global session. Absolute paths require a writable external grant.' },
+      from_path: { type: 'string', description: 'Project-relative move source; use "<project-slug>/..." in a global session, or an authorized writable external path.' },
+      to_path: { type: 'string', description: 'Move destination in the same real project/external root as the source.' },
       recursive: { type: 'boolean', description: 'Required for non-empty directory deletes' },
       delete_mode: { type: 'string', enum: ['trash', 'permanent'], description: 'Defaults to trash' },
       confirm: { type: 'string', description: "Exact confirmation string for recursive/permanent deletes" },

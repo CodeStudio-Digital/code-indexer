@@ -39,6 +39,7 @@ import {
   type BackgroundAgentSlot,
   type SubagentJob,
 } from '@mcp/code-agent/tools/subagent-jobs.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export async function runBackgroundEphemeral(
   deps: SubagentDeps,
@@ -145,7 +146,7 @@ async function runBackgroundJob(
   specs: ParallelAgentSpec[],
   job: SubagentJob,
   info: { provider: string; model: string },
-  sessionId: number,
+  sessionId: SessionId,
 ): Promise<void> {
   const manager = getSubagentJobManager();
   try {
@@ -208,19 +209,26 @@ async function runBackgroundJob(
     const hint = unfinished > 0 ? renderResumeHint(job.groupId, unfinished) : '';
 
     // Persistence side-effects are BEST-EFFORT: a background job outlives its
-    // spawning run, so the worker/DB may be tearing down when it settles. A
-    // throw here (SQLITE_BUSY, closed connection) must NOT rewrite a
+    // spawning run, so its bundle writer may be tearing down when it settles.
+    // A throw here (read-only root, writer fencing) must NOT rewrite a
     // successful job into a "failed" one and discard the real findings.
-    try { deps.sessionStore?.bumpSessionUsage(sessionId, totalUsage); job.usageAccounted = true; }
+    try {
+      await deps.sessionStore?.bumpSessionUsage(
+        sessionId,
+        totalUsage,
+        `background-job:${job.jobId}`,
+      );
+      job.usageAccounted = true;
+    }
     catch (e) { console.warn(`[coder] background bumpSessionUsage failed: ${e instanceof Error ? e.message : String(e)}`); }
     try {
       for (let i = 0; i < results.length; i++) {
-        captureInvestigation(deps, ctx, agents[i], results[i].finalText ?? '', '', results[i].usage.input_tokens + results[i].usage.output_tokens);
+        await captureInvestigation(deps, ctx, agents[i], results[i].finalText ?? '', '', results[i].usage.input_tokens + results[i].usage.output_tokens);
       }
     } catch { /* captureInvestigation is itself guarded; belt-and-suspenders */ }
     let resumableCount = 0;
     try {
-      resumableCount = retainSpawnGroup({
+      resumableCount = await retainSpawnGroup({
         sessionId, spawnId: job.groupId, provider: info.provider, model: info.model,
         agents: results.map((r, i) => ({ ...toRetentionAgent(i, agents[i], r, specs[i]?.limits), toolCallCount: r.toolCallCount })),
         store: deps.sessionStore,

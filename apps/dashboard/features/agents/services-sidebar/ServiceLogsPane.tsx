@@ -3,7 +3,7 @@
  *
  * Two data sources merged into one ascending list:
  *   - REST backfill: `GET /services/:sid/logs/history` (paged via
- *     before_id — the "load earlier" button walks back).
+ *     before_seq — the "load earlier" button walks back).
  *   - Live tail: the bounded per-service buffer in `sandboxSlice`
  *     (`sandbox.service.log_batch` SSE → max 500 lines/service).
  *
@@ -19,14 +19,15 @@ import { selectSandbox, useCompanyStore } from '../../../state/company/index.js'
 import type { ServiceLogEntry } from '../../../state/company/sandboxSlice.js';
 
 interface HistoryLine {
-  id: number;
+  id: string;
+  seq: number;
   stream: string;
   line: string;
   at_ms: number;
 }
 
 export interface ServiceLogsPaneProps {
-  sessionId?: number;
+  sessionId?: string;
   serviceId?: string;
 }
 
@@ -54,12 +55,12 @@ export function ServiceLogsPane({ sessionId, serviceId }: ServiceLogsPaneProps) 
   );
 
   const fetchPage = useCallback(
-    async (beforeId?: number) => {
+    async (beforeSeq?: number) => {
       if (sessionId == null || !serviceId) return;
       setLoading(true);
       try {
         const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
-        if (beforeId) params.set('before_id', String(beforeId));
+        if (beforeSeq != null) params.set('before_seq', String(beforeSeq));
         const r = await fetch(
           `/api/company/sessions/${sessionId}/services/${encodeURIComponent(serviceId)}/logs/history?${params}`,
         );
@@ -67,7 +68,7 @@ export function ServiceLogsPane({ sessionId, serviceId }: ServiceLogsPaneProps) 
         const body = (await r.json()) as { lines?: HistoryLine[] };
         const page = (body.lines ?? []).slice().reverse(); // newest-first → ascending
         if (page.length < PAGE_SIZE) setExhausted(true);
-        setHistory((prev) => (beforeId ? [...page, ...prev] : page));
+        setHistory((prev) => (beforeSeq != null ? [...page, ...prev] : page));
       } catch {
         /* history is best-effort — live tail still works */
       } finally {
@@ -111,7 +112,7 @@ export function ServiceLogsPane({ sessionId, serviceId }: ServiceLogsPaneProps) 
     if (el) el.scrollTop = el.scrollHeight;
   }, [merged.length]);
 
-  const earliestId = history.length > 0 ? history[0].id : undefined;
+  const earliestSeq = history.length > 0 ? history[0].seq : undefined;
 
   return (
     <div className="mt-1 rounded border bg-background/50">
@@ -139,12 +140,12 @@ export function ServiceLogsPane({ sessionId, serviceId }: ServiceLogsPaneProps) 
         </span>
       </div>
       <div ref={scrollRef} className="max-h-44 overflow-y-auto px-1.5 py-1 font-mono text-[9px] leading-4">
-        {!exhausted && earliestId !== undefined && (
+        {!exhausted && earliestSeq !== undefined && (
           <button
             type="button"
             className="mb-1 w-full rounded border px-1 py-0.5 text-[9px] text-muted-foreground hover:bg-accent"
             disabled={loading}
-            onClick={() => void fetchPage(earliestId)}
+            onClick={() => void fetchPage(earliestSeq)}
           >
             {loading ? '…' : t('services.logs.loadEarlier')}
           </button>

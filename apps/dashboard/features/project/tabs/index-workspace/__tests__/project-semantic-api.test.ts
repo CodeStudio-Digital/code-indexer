@@ -4,6 +4,7 @@ import {
   codeNamespaceStatus,
   fetchProjectSemanticStatus,
   requestProjectSemanticReindex,
+  recordProjectSemanticOutcome,
   semanticCoveragePercent,
   semanticWorkIsActive,
   testProjectSemanticSearch,
@@ -126,8 +127,24 @@ describe('project semantic API', () => {
       limit: '10',
       supersessionKey: 'semantic-test:p91',
       bypassCache: '1',
+      consumer: 'semantic_test',
     });
     expect(init).toEqual({ signal: controller.signal });
+  });
+
+  it('records a useful semantic result without sending query or path content', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(recordProjectSemanticOutcome(91, 'request-91', true)).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/91/search/outcome', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId: 'request-91', semanticWin: true }),
+    });
   });
 
   it('treats only a running job as active work', () => {

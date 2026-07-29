@@ -1,14 +1,22 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../deps.js';
-import { parseIdParam } from './_helpers.js';
+import { parseSessionIdParam } from './_helpers.js';
 import { getRecentMissingPrices } from '@mcp/code-agent/providers/pricing-cache.js';
+import {
+  getFilesystemFirstTurnPayload,
+  getFilesystemSessionTelemetrySummary,
+  listFilesystemTurnTelemetry,
+} from '@mcp/code-agent/sessions/fs-store/telemetry-dashboard.js';
+import {
+  getFilesystemGlobalTelemetrySummary,
+  inspectFilesystemCostCoverage,
+} from '@mcp/code-agent/sessions/fs-store/telemetry-global-dashboard.js';
 import { refreshAllModelPrices } from '@mcp/indexer/indexer/providers/scheduled-pricing-refresh.js';
 import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js';
 
 /**
- * Telemetry routes — surface the per-turn data captured by migration 069
- * (coder_turn_telemetry) so the dashboard can show "where are tokens being
- * spent" without forcing the user to run SQL by hand.
+ * Telemetry routes over immutable per-session metric files. No handler in
+ * this module has a SQLite session query or a compatibility fallback.
  *
  *   GET  /api/admin/telemetry/global         → admin dashboard payload
  *   POST /api/admin/telemetry/backfill-costs  → re-price historical turns
@@ -21,17 +29,14 @@ import { getEnabledPriceSources } from '@mcp/services/services/pricing/index.js'
 export function mountTelemetryRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore, providerStore } = deps;
 
-  app.get('/api/admin/telemetry/global', (c) => {
+  app.get('/api/admin/telemetry/global', async (c) => {
     const limitRaw = c.req.query('limit');
     const limit = limitRaw ? Math.max(1, Math.min(500, Number(limitRaw))) : 50;
     const projectIdRaw = c.req.query('project_id');
     const project_id = projectIdRaw ? Number(projectIdRaw) : null;
-    // ISO 8601 string accepted directly — SQL compares lexicographically
-    // against `created_at`'s 'YYYY-MM-DD HH:MM:SS' format. Pass-through
-    // makes "since=2026-05-01" or "since=2026-05-01 12:00:00" both work.
     const since = c.req.query('since') ?? null;
     return c.json(
-      sessionStore.getGlobalTelemetrySummary({
+      await getFilesystemGlobalTelemetrySummary(sessionStore, {
         limit,
         project_id: Number.isFinite(project_id) ? project_id : null,
         since,
@@ -39,21 +44,10 @@ export function mountTelemetryRoutes(app: Hono, deps: ServerDeps): void {
     );
   });
 
-  // Recompute estimated_cost_usd for historical rows using the current price
-  // cache. POST {dryRun?, onlyNullCost?, batchSize?}. Idempotent.
+  // The path stays stable, but filesystem turn metrics are immutable. Report
+  // current coverage instead of rewriting historical records in place.
   app.post('/api/admin/telemetry/backfill-costs', async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as {
-      dryRun?: boolean;
-      onlyNullCost?: boolean;
-      batchSize?: number;
-    };
-    return c.json(
-      sessionStore.backfillTurnCosts({
-        dryRun: body.dryRun === true,
-        onlyNullCost: body.onlyNullCost === true,
-        batchSize: typeof body.batchSize === 'number' ? body.batchSize : undefined,
-      }),
-    );
+    return c.json(await inspectFilesystemCostCoverage(sessionStore));
   });
 
   // Current contents of model_prices (all sources) + the in-memory list of
@@ -78,23 +72,32 @@ export function mountTelemetryRoutes(app: Hono, deps: ServerDeps): void {
     return c.json(await refreshAllModelPrices(providerStore, sources));
   });
 
-  app.get('/api/sessions/:id/telemetry', (c) => {
-    const id = parseIdParam(c);
+  app.get('/api/sessions/:id/telemetry', async (c) => {
+    const id = parseSessionIdParam(c);
+    const [summary, firstTurn, turns, attempts] = await Promise.all([
+      getFilesystemSessionTelemetrySummary(sessionStore, id),
+      getFilesystemFirstTurnPayload(sessionStore, id),
+      listFilesystemTurnTelemetry(sessionStore, id),
+      sessionStore.listProviderAttempts(id),
+    ]);
+    if (!summary) return c.json({ error: 'Session not found' }, 404);
     return c.json({
-      ...sessionStore.getSessionTelemetrySummary(id),
-      first_turn_payload: sessionStore.getFirstTurnPayloadBreakdown(id),
-      turns: sessionStore.getTurnTelemetry(id),
-      attempts: sessionStore.listProviderAttempts(id),
+      ...summary,
+      first_turn_payload: firstTurn,
+      turns,
+      attempts,
     });
   });
 
-  app.get('/api/sessions/:id/telemetry/turns', (c) => {
-    const id = parseIdParam(c);
-    return c.json({ turns: sessionStore.getTurnTelemetry(id) });
+  app.get('/api/sessions/:id/telemetry/turns', async (c) => {
+    const id = parseSessionIdParam(c);
+    return c.json({
+      turns: await listFilesystemTurnTelemetry(sessionStore, id),
+    });
   });
 
-  app.get('/api/sessions/:id/telemetry/attempts', (c) => {
-    const id = parseIdParam(c);
-    return c.json({ attempts: sessionStore.listProviderAttempts(id) });
+  app.get('/api/sessions/:id/telemetry/attempts', async (c) => {
+    const id = parseSessionIdParam(c);
+    return c.json({ attempts: await sessionStore.listProviderAttempts(id) });
   });
 }

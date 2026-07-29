@@ -155,11 +155,10 @@ export async function buildAttachedServiceSandbox(
     attachedHostname: hostname,
   };
 
-  const numericId = Number(req.sessionId);
-  if (deps.servicesStore && Number.isFinite(numericId)) {
+  if (deps.servicesStore) {
     try {
       deps.servicesStore.upsert({
-        session_id: numericId,
+        session_id: req.sessionId,
         service_id: req.serviceId,
         name: req.name ?? req.serviceId,
         container_id: ref,
@@ -209,11 +208,10 @@ export async function refreshAttachedService(
   deps: RefreshAttachedServiceDeps,
 ): Promise<Sandbox> {
   const sb = deps.registry.getService(sessionId, serviceId);
-  const numericId = Number(sessionId);
   let ref = sb?.externalContainerRef ?? sb?.containerId ?? '';
   let hostname = sb?.attachedHostname ?? serviceId;
-  if (!ref && deps.servicesStore && Number.isFinite(numericId)) {
-    const row = deps.servicesStore.get(numericId, serviceId);
+  if (!ref && deps.servicesStore) {
+    const row = deps.servicesStore.get(sessionId, serviceId);
     if (row?.is_attached === 1 && row.external_container_ref) {
       ref = row.external_container_ref;
       hostname = row.attached_hostname || row.service_id;
@@ -266,9 +264,9 @@ export async function refreshAttachedService(
     while (target.recentLogs.length > 200) target.recentLogs.shift();
   }
 
-  if (deps.servicesStore && Number.isFinite(numericId)) {
+  if (deps.servicesStore) {
     try {
-      deps.servicesStore.patch(numericId, serviceId, {
+      deps.servicesStore.patch(sessionId, serviceId, {
         status: deps.toPersistedStatus(target.status),
         error: target.error ?? null,
         last_access_at_ms: target.lastAccessAt,

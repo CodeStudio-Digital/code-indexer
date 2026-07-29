@@ -25,7 +25,7 @@ const REFRESH_INTERVAL_MS = 5_000;
 type TabKey = 'versions' | 'components' | 'docs' | 'storybook';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   onBack: () => void;
 }
 
@@ -282,7 +282,7 @@ function StatusBadge({ status }: { status: DesignSystemVersion['status'] }) {
 
 function ComponentsView({
   sessionId, latestPublished,
-}: { sessionId: number; latestPublished: DesignSystemVersion | null }) {
+}: { sessionId: string; latestPublished: DesignSystemVersion | null }) {
   const { t } = useTranslation('designSystems');
   const [components, setComponents] = useState<DesignSystemComponent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -338,7 +338,7 @@ function Section({ title, components }: { title: string; components: DesignSyste
 
 function DocsView({
   sessionId, latestPublished,
-}: { sessionId: number; latestPublished: DesignSystemVersion | null }) {
+}: { sessionId: string; latestPublished: DesignSystemVersion | null }) {
   const { t } = useTranslation('designSystems');
   const [md, setMd] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -370,7 +370,7 @@ function DocsView({
 
 function StorybookView({
   sessionId, latestPublished,
-}: { sessionId: number; latestPublished: DesignSystemVersion | null }) {
+}: { sessionId: string; latestPublished: DesignSystemVersion | null }) {
   const { t } = useTranslation('designSystems');
   if (!latestPublished) return <Empty>{t('storybook.empty')}</Empty>;
   if (!latestPublished.storybook_path) {

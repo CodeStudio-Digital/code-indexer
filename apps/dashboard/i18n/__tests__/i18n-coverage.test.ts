@@ -36,6 +36,19 @@ type LiteralItem = {
   text: string;
 };
 
+type TranslationBinding = {
+  name: string;
+  namespaces: string[];
+  scope: ts.Node;
+};
+
+type TranslationReference = {
+  file: string;
+  line: number;
+  key: string;
+  namespace: string;
+};
+
 const literalBaseline = readJson(join(here, 'literal-baseline.json')) as LiteralBaseline;
 
 describe('dashboard i18n catalogs', () => {
@@ -57,7 +70,142 @@ describe('dashboard i18n catalogs', () => {
     }
     expect(failures).toEqual([]);
   });
+
+  it('defines every statically referenced translation key', () => {
+    const catalogs = new Map<string, Set<string>>();
+    for (const file of readdirSync(join(localesRoot, 'pt-BR')).filter((name) => name.endsWith('.json'))) {
+      catalogs.set(file.replace(/\.json$/, ''), new Set(Object.keys(flatten(readJson(join(localesRoot, 'pt-BR', file))))));
+    }
+
+    const failures = walkDashboardSource()
+      .flatMap(scanStaticTranslationReferences)
+      .filter(({ namespace, key }) => {
+        const catalog = catalogs.get(namespace);
+        return !catalog || (!catalog.has(key) && ![...catalog].some((candidate) => (
+          candidate.startsWith(`${key}.`) || candidate.startsWith(`${key}_`)
+        )));
+      })
+      .map(({ file, line, namespace, key }) => `${file}:${line} missing ${namespace}:${key}`)
+      .sort();
+
+    expect(failures).toEqual([]);
+  });
 });
+
+function staticString(node: ts.Node | undefined): string | null {
+  return node && ts.isStringLiteralLike(node) ? node.text : null;
+}
+
+function translationNamespaces(call: ts.CallExpression): string[] | null {
+  if (!ts.isIdentifier(call.expression) || call.expression.text !== 'useTranslation') return null;
+  const namespaceArg = call.arguments[0];
+  if (!namespaceArg) return ['common'];
+  const namespace = staticString(namespaceArg);
+  if (namespace) return [namespace];
+  if (!ts.isArrayLiteralExpression(namespaceArg)) return null;
+  const namespaces = namespaceArg.elements.map(staticString);
+  return namespaces.every((candidate): candidate is string => candidate != null) ? namespaces : null;
+}
+
+function bindingScope(node: ts.Node): ts.Node {
+  let current: ts.Node | undefined = node.parent;
+  while (current && !ts.isBlock(current) && !ts.isSourceFile(current)) current = current.parent;
+  return current ?? node.getSourceFile();
+}
+
+function translationBindings(sf: ts.SourceFile): TranslationBinding[] {
+  const bindings: TranslationBinding[] = [];
+
+  function visit(node: ts.Node): void {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer &&
+      ts.isCallExpression(node.initializer)
+    ) {
+      const namespaces = translationNamespaces(node.initializer);
+      if (namespaces) {
+        for (const element of node.name.elements) {
+          const property = element.propertyName?.getText(sf) ?? element.name.getText(sf);
+          if (property === 't' && ts.isIdentifier(element.name)) {
+            bindings.push({ name: element.name.text, namespaces, scope: bindingScope(node) });
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sf);
+  return bindings;
+}
+
+function namespaceOption(call: ts.CallExpression): string | null {
+  const options = call.arguments[1];
+  if (!options || !ts.isObjectLiteralExpression(options)) return null;
+  for (const property of options.properties) {
+    if (!ts.isPropertyAssignment(property) || property.name.getText() !== 'ns') continue;
+    return staticString(property.initializer);
+  }
+  return null;
+}
+
+function scanStaticTranslationReferences(file: string): TranslationReference[] {
+  const source = readFileSync(file, 'utf8');
+  const relativePath = relative(repoRoot, file).replace(/\\/g, '/');
+  const sf = ts.createSourceFile(
+    file,
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  const bindings = translationBindings(sf);
+  const references: TranslationReference[] = [];
+
+  function add(call: ts.CallExpression, namespaces: string[]): void {
+    const rawKey = staticString(call.arguments[0]);
+    if (!rawKey) return;
+    const separator = rawKey.indexOf(':');
+    const namespace = separator > 0
+      ? rawKey.slice(0, separator)
+      : namespaceOption(call) ?? namespaces[0];
+    const key = separator > 0 ? rawKey.slice(separator + 1) : rawKey;
+    if (!namespace || !key) return;
+    references.push({
+      file: relativePath,
+      line: sf.getLineAndCharacterOfPosition(call.getStart(sf)).line + 1,
+      key,
+      namespace,
+    });
+  }
+
+  function visit(node: ts.Node): void {
+    if (ts.isCallExpression(node)) {
+      if (ts.isIdentifier(node.expression)) {
+        const binding = bindings
+          .filter(({ name, scope }) => (
+            name === node.expression.text &&
+            scope.getStart(sf) <= node.getStart(sf) &&
+            scope.end >= node.end
+          ))
+          .sort((a, b) => (a.scope.end - a.scope.getStart(sf)) - (b.scope.end - b.scope.getStart(sf)))[0];
+        if (binding) add(node, binding.namespaces);
+      } else if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === 't' &&
+        ts.isIdentifier(node.expression.expression) &&
+        node.expression.expression.text === 'i18n'
+      ) {
+        add(node, ['common']);
+      }
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sf);
+  return references;
+}
 
 const protectedDashboardFiles = [
   'apps/dashboard/AppShell.tsx',
@@ -255,6 +403,7 @@ describe('dashboard visible literals', () => {
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
+    if (['node_modules', 'dist', '.pytest_cache', '__pycache__'].includes(entry)) continue;
     const path = join(dir, entry);
     const stat = statSync(path);
     if (stat.isDirectory()) walk(path, out);

@@ -19,6 +19,7 @@ export type {
   PlanPrompt,
   QuestionPrompt,
   RunDelta,
+  SessionId,
   SessionState,
   StreamBlock,
   StreamTask,

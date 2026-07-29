@@ -18,8 +18,8 @@
  */
 
 export interface DeciderContext {
-  sessionId?: number;
-  companySessionId?: number;
+  sessionId?: string;
+  companySessionId?: string;
   templateId?: number;
   userId?: string;
   /** Caller-supplied snapshot of the resolved `config_json` for the session. */

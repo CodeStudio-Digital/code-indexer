@@ -26,17 +26,19 @@ import {
 } from '@mcp/code-agent/core/mutation-fence.js';
 import type { ToolMutationFence } from '@mcp/code-agent/core/tool.js';
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import {
   type CreateBaselineInput,
   type SessionKind,
-  SessionFileSnapshotStore,
-} from '@mcp/store/session-file-snapshot-store.js';
+  type SessionSnapshotStorePort,
+} from '@mcp/services/services/session-snapshot-port.js';
+import { newSessionId, type SessionId } from '@mcp/session-storage';
 
 const MAX_BASELINE_BYTES = 4 * 1024 * 1024;
 
 export interface SnapshotRecorderDeps {
   sessionKind: SessionKind;
-  sessionId: number;
+  sessionId: SessionId;
   /** Absolute root of the PRIMARY project (the native cwd). */
   projectRoot: string;
   /** Primary project id (migration 154). Stamped on baselines so revert/diff
@@ -45,23 +47,24 @@ export interface SnapshotRecorderDeps {
   /** Linked SECONDARY roots for a global session — writes under any of these are
    *  recorded against that root's project. Empty/undefined for normal sessions. */
   secondaryRoots?: ReadonlyArray<{ projectId: number; rootPath: string }>;
-  store: SessionFileSnapshotStore;
+  store: SessionSnapshotStorePort<SessionId, string>;
   /** Returns the current turn number from the runner, or null when unknown. */
   getTurn?: () => number | null;
   /** Persisted user-message id delimiting the current conversational round. */
   getRoundMessageId?: () => number | null;
   /** Fired after a successful record so the SSE layer can notify clients. */
   onRecorded?: (info: {
-    baselineId: number;
-    globalBaselineId: number;
+    baselineId: string;
+    globalBaselineId: string;
     roundMessageId: number | null;
-    roundSnapshotId: number | null;
+    roundSnapshotId: string | null;
     filePath: string;
   }) => void;
 }
 
 export interface PreparedSnapshotMutation {
-  globalBaselineId: number;
+  globalBaselineId: string;
+  operationId: string;
   roundMessageId: number | null;
   projectId: number | null;
   filePath: string;
@@ -73,12 +76,17 @@ export interface PreparedSnapshotMutation {
 }
 
 function toProjectRelative(absPath: string, projectRoot: string): string | null {
-  const root = projectRoot.replace(/\\/g, '/');
-  const p = absPath.replace(/\\/g, '/');
-  if (!p.toLowerCase().startsWith(root.toLowerCase())) return null;
-  let rel = p.slice(root.length);
-  if (rel.startsWith('/')) rel = rel.slice(1);
-  return rel || '.';
+  const root = path.resolve(projectRoot);
+  const candidate = path.resolve(absPath);
+  const rel = path.relative(root, candidate);
+  if (
+    rel === '..' ||
+    rel.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(rel)
+  ) {
+    return null;
+  }
+  return rel ? rel.replace(/\\/g, '/') : '.';
 }
 
 function hashContent(content: string | null): string {
@@ -156,7 +164,8 @@ export class SnapshotRecorder {
     const afterOversized = info.expectedAfter != null
       && (info.expectedAfter.length > MAX_BASELINE_BYTES || isBinaryLike(info.expectedAfter));
     const baselineHash = hashContent(content);
-    const create: CreateBaselineInput = {
+    const operationId = `snapshot-mutation:${newSessionId()}`;
+    const create: CreateBaselineInput<SessionId> = {
       session_kind: this.deps.sessionKind,
       session_id: this.deps.sessionId,
       project_id: match.projectId,
@@ -166,16 +175,19 @@ export class SnapshotRecorder {
       existed_before: existed,
       baseline_hash: baselineHash,
       oversized: oversized || afterOversized,
+      operation_id: operationId,
     };
     const afterHash = hashContent(info.expectedAfter);
-    const { baseline } = this.deps.store.recordBaselineAndEdit(create, {
+    const { baseline } = await this.deps.store.recordBaselineAndEdit(create, {
       turn_number: this.deps.getTurn?.() ?? null,
       tool_name: info.tool,
       content_after_hash: afterHash,
       was_delete: info.isDelete,
+      operation_id: operationId,
     });
     return {
       globalBaselineId: baseline.id,
+      operationId,
       roundMessageId: this.deps.getRoundMessageId?.() ?? null,
       projectId: match.projectId,
       filePath: create.file_path,
@@ -188,11 +200,11 @@ export class SnapshotRecorder {
   }
 
   /** Commit the round envelope only after the filesystem mutation succeeded. */
-  complete(prepared: PreparedSnapshotMutation | null): void {
+  async complete(prepared: PreparedSnapshotMutation | null): Promise<void> {
     if (!prepared) return;
-    let roundSnapshotId: number | null = null;
+    let roundSnapshotId: string | null = null;
     if (prepared.roundMessageId != null) {
-      const round = this.deps.store.recordRoundSnapshotMutation({
+      const round = await this.deps.store.recordRoundSnapshotMutation({
         session_kind: this.deps.sessionKind,
         session_id: this.deps.sessionId,
         round_message_id: prepared.roundMessageId,
@@ -204,6 +216,7 @@ export class SnapshotRecorder {
         content_after: prepared.contentAfter,
         existed_after: prepared.existedAfter,
         oversized: prepared.oversized,
+        operation_id: `${prepared.operationId}:round`,
       });
       roundSnapshotId = round.id;
     }
@@ -260,7 +273,7 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
       resource: absPath,
     });
     await this.inner.writeFile(absPath, data);
-    this.recorder.complete(prepared);
+    await this.recorder.complete(prepared);
   }
 
   async unlink(absPath: string): Promise<void> {
@@ -275,7 +288,7 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
       resource: absPath,
     });
     await this.inner.unlink(absPath);
-    this.recorder.complete(prepared);
+    await this.recorder.complete(prepared);
   }
 
   readFile(absPath: string): Promise<string> {
@@ -327,8 +340,8 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
       resource: newAbsPath,
     });
     await this.inner.rename(oldAbsPath, newAbsPath);
-    this.recorder.complete(oldPrepared);
-    this.recorder.complete(newPrepared);
+    await this.recorder.complete(oldPrepared);
+    await this.recorder.complete(newPrepared);
   }
   async rm(absPath: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
     const prepared = await this.recorder.record(absPath, this.inner, {
@@ -342,7 +355,7 @@ export class SnapshotRecordingFilesystemPort implements IFilesystemPort {
       resource: absPath,
     });
     await this.inner.rm(absPath, options);
-    this.recorder.complete(prepared);
+    await this.recorder.complete(prepared);
   }
 
   /**

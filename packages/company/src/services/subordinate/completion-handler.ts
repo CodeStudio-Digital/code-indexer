@@ -22,8 +22,6 @@
  * file (~250 LOC).
  */
 import type { RunCoderHandle, CoderAttachment } from '@mcp/code-agent/index.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type {
@@ -35,14 +33,13 @@ import type {
 import type { RetryPolicy } from '@mcp/company/RetryPolicy.js';
 import {
   readFinalAssistantText,
-} from '@mcp/company/services/subordinate/runner-wiring.js';
+} from '@mcp/company/services/finalText.js';
 import { logSkillOutcome } from '@mcp/company/services/subordinate/skill-telemetry.js';
 import { subordinateCompletionBus } from '@mcp/company/services/subordinate/completion-events.js';
 import {
   readRoleRuntimePolicy,
   resolveRoleFallback,
 } from '@mcp/company/services/subordinate/role-runtime.js';
-import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.js';
 
 /**
  * Resume signature the completion handler invokes for auto-retry. Same
@@ -50,7 +47,7 @@ import { getAppStudioStore } from '@mcp/company/tools/app-studio/store-binding.j
  * path doesn't supply (role override, attachments, thinking).
  */
 export type ResumeSubordinateFn = (
-  agentRunId: number,
+  agentRunId: string,
   message?: string,
   roleOverride?: string,
   attachments?: CoderAttachment[],
@@ -67,10 +64,10 @@ export interface SubordinateCompletionDeps {
   retryPolicy: RetryPolicy;
   /** Orchestrator facade retained for the lifecycle's shared deps shape. */
   orchestratorRef: unknown;
-  runningIds: Set<number>;
+  runningIds: Set<string>;
   notifyIdleChanged: () => void;
   resume: ResumeSubordinateFn;
-  onSubordinateIdle?: (agentRunId: number, role: string) => void;
+  onSubordinateIdle?: (agentRunId: string, role: string) => void;
 }
 
 interface ModelFallbackResult {
@@ -88,18 +85,16 @@ interface ModelFallbackResult {
  * Returns `null` when no fallback is possible (no pool, only one
  * candidate, store write failed). All branches are logged.
  */
-export function applySubordinateModelFallback(
-  agentRunId: number,
+export async function applySubordinateModelFallback(
+  agentRunId: string,
   role: string,
   deps: SubordinateCompletionDeps,
-): ModelFallbackResult | null {
-  const agentRun = deps.ctx.companyStore.getAgentRun(agentRunId);
+): Promise<ModelFallbackResult | null> {
+  const agentRun = deps.ctx.companyFiles.getAgentRunSync(agentRunId);
   if (!agentRun) return null;
 
-  const companySession = deps.ctx.companyStore.getCompanySession(agentRun.company_session_id);
-  const runtimeKind = companySession?.runtime_kind === 'app_studio'
-    ? 'app_studio'
-    : 'company';
+  const companySession = deps.ctx.companyFiles.getSession();
+  const runtimeKind = companySession.runtime_kind;
   let policy: ReturnType<typeof readRoleRuntimePolicy>;
   try {
     policy = readRoleRuntimePolicy(
@@ -126,42 +121,48 @@ export function applySubordinateModelFallback(
   const to = { provider: fallback.provider, model: fallback.model };
 
   try {
-    const config = loadConfig();
-    const store = new SessionStore(config.dbPath);
-    try {
-      store.updateSessionProvider(agentRun.coder_session_id, to.provider, to.model);
+    const sessionStore = deps.ctx.companyFiles.sessionStore;
+    await Promise.all([
+      sessionStore.updateSessionProvider(
+        agentRun.coder_session_id,
+        to.provider,
+        to.model,
+      ),
       // A stored response id belongs to the previous provider/model turn
       // graph. Clear it so the resumed run starts with plain message history.
-      store.setLastResponseState(agentRun.coder_session_id, null, null);
-    } finally {
-      store.close();
-    }
-    deps.ctx.companyStore.updateAgentRunProvider(
-      agentRunId,
-      to.provider,
-      to.model,
-      fallback.reason,
-    );
+      sessionStore.setLastResponseState(
+        agentRun.coder_session_id,
+        null,
+        null,
+      ),
+      deps.ctx.companyFiles.updateAgentRunProvider(
+        agentRunId,
+        to.provider,
+        to.model,
+        fallback.reason,
+      ),
+    ]);
     deps.board.post(
       'system',
       agentRunId,
       'message',
       `[AUTO-FALLBACK] (${fallback.reason}) @${role} ${from.provider}/${from.model} -> ${to.provider}/${to.model}`,
     );
-    if (runtimeKind === 'app_studio' && deps.ctx.appStudioSessionId != null) {
-      try {
-        getAppStudioStore()?.appendEvent(
-          deps.ctx.appStudioSessionId,
-          'agents.model_fallback',
-          'company_agent_run',
-          String(agentRunId),
-          JSON.stringify({ role, from, to, reason: fallback.reason }),
-          `app-agent-fallback:${agentRunId}:${to.provider}:${to.model}`,
-        );
-      } catch {
-        // Telemetry is best-effort and must never prevent the configured retry.
-      }
-    }
+    await deps.ctx.companyFiles.entities.create('log', {
+      relations: { agent_run_id: agentRunId },
+      data: {
+        level: 'info',
+        message: 'agents.model_fallback',
+        event: 'agents.model_fallback',
+        entity_kind: 'company_agent_run',
+        entity_id: agentRunId,
+        role,
+        from,
+        to,
+        reason: fallback.reason,
+        runtime_kind: runtimeKind,
+      },
+    }).catch(() => undefined);
     return { from, to, reason: fallback.reason };
   } catch (e) {
     console.warn(
@@ -193,14 +194,16 @@ function parseRetryAfterMs(detail: string | null | undefined): number | undefine
   return unit.startsWith('ms') ? n : n * 1000;
 }
 
-export function handleSubordinateFailure(
-  agentRunId: number,
+export async function handleSubordinateFailure(
+  agentRunId: string,
   role: string,
   summary: string,
   errorDetail: string | null,
   deps: SubordinateCompletionDeps,
-): void {
-  deps.status.setStatus(agentRunId, 'error', `Ended: ${summary}`);
+): Promise<void> {
+  await deps.ctx.companyFiles
+    .updateAgentRunStatus(agentRunId, 'error', `Ended: ${summary}`)
+    .catch(() => undefined);
   deps.runningIds.delete(agentRunId);
   deps.attention.signal({ kind: 'finished', agentRunId, role });
   deps.board.post('system', agentRunId, 'message', `@${role} ${summary}`);
@@ -208,7 +211,11 @@ export function handleSubordinateFailure(
   if (deps.retryPolicy.shouldRetry(agentRunId, errorDetail)) {
     const attempt = deps.retryPolicy.usedCount(agentRunId);
     const max = deps.retryPolicy.maxAttempts;
-    const fallback = applySubordinateModelFallback(agentRunId, role, deps);
+    const fallback = await applySubordinateModelFallback(
+      agentRunId,
+      role,
+      deps,
+    );
     deps.board.post('system', agentRunId, 'message',
       `[AUTO-RETRY] @${role} — transient error, retrying (${attempt}/${max})`);
     try {
@@ -271,8 +278,8 @@ export function handleSubordinateFailure(
  * `abortSubordinate` write it synchronously before `.done` resolves.
  * Also hardens the pre-existing abort path against the same clobber.
  */
-export function isUserStoppedRun(deps: SubordinateCompletionDeps, agentRunId: number): boolean {
-  const status = deps.ctx.companyStore.getAgentRun(agentRunId)?.status;
+export function isUserStoppedRun(deps: SubordinateCompletionDeps, agentRunId: string): boolean {
+  const status = deps.ctx.companyFiles.getAgentRunSync(agentRunId)?.status;
   // Missing row = the user deleted the agent mid-run → nothing to report
   // as a failure. `paused`/`aborted` = intentional stop.
   return status == null || status === 'paused' || status === 'aborted';
@@ -285,7 +292,7 @@ export function isUserStoppedRun(deps: SubordinateCompletionDeps, agentRunId: nu
  */
 export function attachSubordinateCompletionHandler(
   handle: RunCoderHandle,
-  agentRunId: number,
+  agentRunId: string,
   role: string,
   isResumed: boolean,
   deps: SubordinateCompletionDeps,
@@ -293,16 +300,25 @@ export function attachSubordinateCompletionHandler(
   const resumedTag = isResumed ? ' (resumed)' : '';
 
   handle.done
-    .then(({ reason, error }) => {
+    .then(async ({ reason, error }) => {
       if (reason === 'completed') {
         deps.retryPolicy.clear(agentRunId);
-        deps.status.setStatus(agentRunId, 'waiting', 'Task done. Ready for next task.');
+        await deps.ctx.companyFiles
+          .updateAgentRunStatus(
+            agentRunId,
+            'waiting',
+            'Task done. Ready for next task.',
+          )
+          .catch(() => undefined);
         deps.runningIds.delete(agentRunId);
         deps.attention.signal({ kind: 'finished', agentRunId, role });
         deps.board.post('system', agentRunId, 'deliverable',
           `@${role}${resumedTag} finished task. Status: **waiting** for next instructions.`);
 
-        const finalText = readFinalAssistantText(handle.session.id);
+        const finalText = await readFinalAssistantText(
+          deps.ctx.companyFiles.sessionStore,
+          handle.session.id,
+        );
         const finalBlock = finalText
           ? `\n\n--- Final message from @${role} ---\n${finalText}`
           : `\n\n--- Final message from @${role} ---\n(no final assistant text message)`;
@@ -331,21 +347,25 @@ export function attachSubordinateCompletionHandler(
               `**Result summary:**\n\n${summary}`);
           }
         } catch { /* best-effort */ }
-        logSkillOutcome(handle.session.id, agentRunId, 'success');
+        await logSkillOutcome(
+          deps.ctx.companyFiles.sessionStore,
+          handle.session.id,
+          agentRunId,
+          'success',
+        );
         // C5 — fire-and-forget broadcast to any listeners that want to
         // react to completions OFF the response path (telemetry, role
         // history, kanban-sync extensions). Existing kanban/master
         // notifiers above ran SYNC; this bus is purely additive.
         try {
-          const finalTextForBus = readFinalAssistantText(handle.session.id) ?? undefined;
           subordinateCompletionBus.emit({
             agentRunId,
             role,
             outcome: 'completed',
-            finalText: finalTextForBus
-              ? finalTextForBus.length > 2000
-                ? finalTextForBus.slice(0, 2000) + '\n\n[…truncated]'
-                : finalTextForBus
+            finalText: finalText
+              ? finalText.length > 2000
+                ? finalText.slice(0, 2000) + '\n\n[…truncated]'
+                : finalText
               : undefined,
             kanbanCardId: deps.kanban.findCardForAgent(agentRunId) ?? null,
             emittedAtMs: Date.now(),
@@ -371,8 +391,20 @@ export function attachSubordinateCompletionHandler(
         deps.attention.signal({ kind: 'finished', agentRunId, role });
       } else {
         const detail = error ? ` — ${error}` : '';
-        handleSubordinateFailure(agentRunId, role, `${reason}${detail}`, error ?? null, deps);
-        logSkillOutcome(handle.session.id, agentRunId, 'failed', error ?? undefined);
+        await handleSubordinateFailure(
+          agentRunId,
+          role,
+          `${reason}${detail}`,
+          error ?? null,
+          deps,
+        );
+        await logSkillOutcome(
+          deps.ctx.companyFiles.sessionStore,
+          handle.session.id,
+          agentRunId,
+          'failed',
+          error ?? undefined,
+        );
         // C5 — broadcast the failure event too. Listeners differentiate
         // via `outcome: 'failed'` + `failureReason`.
         try {
@@ -389,7 +421,7 @@ export function attachSubordinateCompletionHandler(
         }
       }
     })
-    .catch((err: unknown) => {
+    .catch(async (err: unknown) => {
       if (isUserStoppedRun(deps, agentRunId)) {
         // See the `.then` branch — a user-initiated stop must not be
         // reported as a failure.
@@ -398,7 +430,13 @@ export function attachSubordinateCompletionHandler(
         return;
       }
       const detail = err instanceof Error ? err.message : String(err);
-      handleSubordinateFailure(agentRunId, role, `FAILED: ${detail}`, detail, deps);
+      await handleSubordinateFailure(
+        agentRunId,
+        role,
+        `FAILED: ${detail}`,
+        detail,
+        deps,
+      );
       // C5 — broadcast the synchronous-throw failure path too.
       try {
         subordinateCompletionBus.emit({

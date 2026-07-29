@@ -11,7 +11,6 @@ export type DistillTrigger = 'compaction' | 'manual_clear' | 'idle' | 'agent' | 
 export type DistillStatus = 'ok' | 'empty' | 'error' | 'skipped';
 
 export interface MemoryDistillLogEntry {
-  sessionId?: number | null;
   trigger: DistillTrigger | string;
   status: DistillStatus | string;
   created?: number;
@@ -35,7 +34,6 @@ export interface MemoryDistillLogEntry {
 export interface MemoryDistillLogRow {
   id: number;
   project_id: number;
-  session_id: number | null;
   trigger: string;
   status: string;
   created: number;
@@ -54,12 +52,11 @@ export interface MemoryDistillLogRow {
 export function insert(db: DB, projectId: number, entry: MemoryDistillLogEntry): void {
   db.prepare(`
     INSERT INTO memory_distill_log
-      (project_id, session_id, trigger, status, created, merged, skipped, error,
+      (project_id, trigger, status, created, merged, skipped, error,
        detail, provider, model, raw_chars, duration_ms, created_user)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     projectId,
-    entry.sessionId ?? null,
     entry.trigger,
     entry.status,
     entry.created ?? 0,

@@ -28,6 +28,10 @@ import { PortAllocator } from '@mcp/services/sandbox/port-allocator.js';
 import { FakeSandboxDriver } from './helpers/fake-sandbox-driver.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const OTHER_SESSION_ID = '00000000-0000-4000-8000-000000000043';
+const EMPTY_SESSION_ID = '00000000-0000-4000-8000-000000000099';
+
 function makeManager(opts?: { driver?: FakeSandboxDriver }) {
   const driver = opts?.driver ?? new FakeSandboxDriver();
   const manager = new SandboxManager({
@@ -62,12 +66,12 @@ describe('SandboxManager → attachExternalService', () => {
     driver.seedContainer('user-container-abc', { running: true, paused: false });
 
     const sb = await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'user-container-abc',
     });
 
-    expect(sb.id).toBe('42:api');
+    expect(sb.id).toBe(`${SESSION_ID}:api`);
     expect(sb.containerId).toBe('user-container-abc');
     expect(sb.attached).toBe(true);
     expect(sb.status).toBe('ready');
@@ -78,7 +82,7 @@ describe('SandboxManager → attachExternalService', () => {
     const { manager } = makeManager();
     await expect(
       manager.attachExternalService({
-        sessionId: '42',
+        sessionId: SESSION_ID,
         serviceId: 'api',
         containerRef: 'ghost-container',
       }),
@@ -90,7 +94,7 @@ describe('SandboxManager → attachExternalService', () => {
     driver.seedContainer('anything');
     await expect(
       manager.attachExternalService({
-        sessionId: '42',
+        sessionId: SESSION_ID,
         serviceId: 'main',
         containerRef: 'anything',
       }),
@@ -103,7 +107,7 @@ describe('SandboxManager → attachExternalService', () => {
     for (const bad of ['Has-Caps', '1starts-with-digit', '-dash-first', 'a'.repeat(33)]) {
       await expect(
         manager.attachExternalService({
-          sessionId: '42',
+          sessionId: SESSION_ID,
           serviceId: bad,
           containerRef: 'anything',
         }),
@@ -116,7 +120,7 @@ describe('SandboxManager → attachExternalService', () => {
     driver.seedContainer('paused-c', { running: false, paused: true });
 
     const sb = await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'paused-c',
     });
@@ -129,7 +133,7 @@ describe('SandboxManager → attachExternalService', () => {
     driver.seedContainer('stopped-c', { running: false, paused: false });
 
     const sb = await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'stopped-c',
     });
@@ -143,14 +147,14 @@ describe('SandboxManager → destroyService for attached services', () => {
     const { manager, driver } = makeManager();
     driver.seedContainer('user-c');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'user-c',
     });
 
-    expect(manager.getService('42', 'api')).toBeDefined();
-    await manager.destroyService('42', 'api', 'user-removed');
-    expect(manager.getService('42', 'api')).toBeUndefined();
+    expect(manager.getService(SESSION_ID, 'api')).toBeDefined();
+    await manager.destroyService(SESSION_ID, 'api', 'user-removed');
+    expect(manager.getService(SESSION_ID, 'api')).toBeUndefined();
     // Critical contract: the user's container outlives the binding.
     expect(driver.calls.destroy).toEqual([]);
     expect(driver.containers.has('user-c')).toBe(true);
@@ -158,7 +162,7 @@ describe('SandboxManager → destroyService for attached services', () => {
 
   it('is a no-op for an unknown service id (idempotent)', async () => {
     const { manager } = makeManager();
-    await expect(manager.destroyService('42', 'never-existed')).resolves.toBeUndefined();
+    await expect(manager.destroyService(SESSION_ID, 'never-existed')).resolves.toBeUndefined();
   });
 });
 
@@ -169,12 +173,12 @@ describe('SandboxManager → pauseRuntimeContainer + unpauseRuntimeContainer', (
     const { manager, driver } = makeManager();
     driver.seedContainer('c1', { running: true, paused: false });
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
 
-    const sb = await manager.pauseRuntimeContainer('42', 'api');
+    const sb = await manager.pauseRuntimeContainer(SESSION_ID, 'api');
     expect(sb.runtimePaused).toBe(true);
     expect(driver.calls.pauseContainer).toContain('c1');
   });
@@ -183,13 +187,13 @@ describe('SandboxManager → pauseRuntimeContainer + unpauseRuntimeContainer', (
     const { manager, driver } = makeManager();
     driver.seedContainer('c1', { running: true, paused: false });
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
 
-    await manager.pauseRuntimeContainer('42', 'api');
-    const second = await manager.pauseRuntimeContainer('42', 'api');
+    await manager.pauseRuntimeContainer(SESSION_ID, 'api');
+    const second = await manager.pauseRuntimeContainer(SESSION_ID, 'api');
     expect(second.runtimePaused).toBe(true);
     // Second call must NOT issue another driver pause — manager short-circuits.
     expect(driver.calls.pauseContainer.length).toBe(1);
@@ -199,13 +203,13 @@ describe('SandboxManager → pauseRuntimeContainer + unpauseRuntimeContainer', (
     const { manager, driver } = makeManager();
     driver.seedContainer('c1', { running: true, paused: false });
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
-    await manager.pauseRuntimeContainer('42', 'api');
+    await manager.pauseRuntimeContainer(SESSION_ID, 'api');
 
-    const sb = await manager.unpauseRuntimeContainer('42', 'api');
+    const sb = await manager.unpauseRuntimeContainer(SESSION_ID, 'api');
     expect(sb.runtimePaused).toBe(false);
     expect(driver.calls.unpauseContainer).toContain('c1');
   });
@@ -214,12 +218,12 @@ describe('SandboxManager → pauseRuntimeContainer + unpauseRuntimeContainer', (
     const { manager, driver } = makeManager();
     driver.seedContainer('stopped', { running: false, paused: false });
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'stopped',
     });
     // attach reports status='paused' (stopped external container) — pause refuses.
-    await expect(manager.pauseRuntimeContainer('42', 'api')).rejects.toThrow(
+    await expect(manager.pauseRuntimeContainer(SESSION_ID, 'api')).rejects.toThrow(
       /Cannot runtime-pause/,
     );
   });
@@ -228,13 +232,13 @@ describe('SandboxManager → pauseRuntimeContainer + unpauseRuntimeContainer', (
     const { manager, driver } = makeManager();
     driver.seedContainer('c1');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
     // External agent removed the container behind the manager's back.
     driver.containers.delete('c1');
-    await expect(manager.pauseRuntimeContainer('42', 'api')).rejects.toThrow(
+    await expect(manager.pauseRuntimeContainer(SESSION_ID, 'api')).rejects.toThrow(
       /no longer exists/i,
     );
   });
@@ -261,12 +265,12 @@ describe('SandboxManager → syncEnvsToAllContainers', () => {
     driver.seedContainer('c-api', { workdir: '/app' });
     driver.seedContainer('c-worker', { workdir: '/work' });
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c-api',
     });
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'worker',
       containerRef: 'c-worker',
     });
@@ -274,14 +278,14 @@ describe('SandboxManager → syncEnvsToAllContainers', () => {
     // Attached external services have mountKind='external', so the
     // sync should SKIP them — verify the contract by inverting: we'd
     // expect zero writeFile calls.
-    await manager.syncEnvsToAllContainers('42');
+    await manager.syncEnvsToAllContainers(SESSION_ID);
     expect(driver.calls.writeFile).toEqual([]);
   });
 
   it('is a no-op when there are no containers attached to the session', async () => {
     setCompanySessionEnvStore(makeFakeEnvStore({ FOO: 'bar' }));
     const { manager, driver } = makeManager();
-    await manager.syncEnvsToAllContainers('99');
+    await manager.syncEnvsToAllContainers(EMPTY_SESSION_ID);
     expect(driver.calls.writeFile).toEqual([]);
   });
 
@@ -290,11 +294,11 @@ describe('SandboxManager → syncEnvsToAllContainers', () => {
     const { manager, driver } = makeManager();
     driver.seedContainer('c-api');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c-api',
     });
-    await manager.syncEnvsToAllContainers('42');
+    await manager.syncEnvsToAllContainers(SESSION_ID);
     // Empty envs render a header-only .env; attached services skip
     // anyway. writeFile must not fire.
     expect(driver.calls.writeFile).toEqual([]);
@@ -310,27 +314,27 @@ describe('SandboxManager → subscribe / emit', () => {
     const off = manager.subscribe((ev) => events.push(ev));
     driver.seedContainer('c1');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
     off();
     const readyEvents = events.filter((e) => e.kind === 'ready');
     expect(readyEvents.length).toBe(1);
-    expect(readyEvents[0].sandboxId).toBe('42:api');
+    expect(readyEvents[0].sandboxId).toBe(`${SESSION_ID}:api`);
   });
 
   it('forwards `destroying` + `destroyed` events through the full destroy cycle', async () => {
     const { manager, driver } = makeManager();
     driver.seedContainer('c1');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
     const events: SandboxEvent[] = [];
     const off = manager.subscribe((ev) => events.push(ev));
-    await manager.destroyService('42', 'api', 'user-removed');
+    await manager.destroyService(SESSION_ID, 'api', 'user-removed');
     off();
     const kinds = events.map((e) => e.kind);
     expect(kinds).toContain('destroying');
@@ -346,7 +350,7 @@ describe('SandboxManager → subscribe / emit', () => {
     offA();
     driver.seedContainer('c1');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
@@ -366,11 +370,11 @@ describe('SandboxManager → workspace IO (on attached service)', () => {
     const c = driver.seedContainer('c1');
     c.files.set('/notes.md', 'hello from inside');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
-    const got = await manager.readWorkspaceFileOnService('42', 'api', 'notes.md');
+    const got = await manager.readWorkspaceFileOnService(SESSION_ID, 'api', 'notes.md');
     expect(got).toBe('hello from inside');
   });
 
@@ -378,12 +382,12 @@ describe('SandboxManager → workspace IO (on attached service)', () => {
     const { manager, driver } = makeManager();
     driver.seedContainer('c1');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
     await expect(
-      manager.readWorkspaceFileOnService('42', 'api', '../etc/passwd'),
+      manager.readWorkspaceFileOnService(SESSION_ID, 'api', '../etc/passwd'),
     ).rejects.toThrow(/\.\./);
   });
 });
@@ -392,7 +396,7 @@ describe('SandboxManager → queries', () => {
   it('list() / listServices() empty by default', () => {
     const { manager } = makeManager();
     expect(manager.list()).toEqual([]);
-    expect(manager.listServices('42')).toEqual([]);
+    expect(manager.listServices(SESSION_ID)).toEqual([]);
   });
 
   it('listServices returns only services belonging to the requested session', async () => {
@@ -400,29 +404,31 @@ describe('SandboxManager → queries', () => {
     driver.seedContainer('c1');
     driver.seedContainer('c2');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
     await manager.attachExternalService({
-      sessionId: '43',
+      sessionId: OTHER_SESSION_ID,
       serviceId: 'api',
       containerRef: 'c2',
     });
-    expect(manager.listServices('42').map((s) => s.id)).toEqual(['42:api']);
-    expect(manager.listServices('43').map((s) => s.id)).toEqual(['43:api']);
-    expect(manager.listServices('99').map((s) => s.id)).toEqual([]);
+    expect(manager.listServices(SESSION_ID).map((s) => s.id)).toEqual([`${SESSION_ID}:api`]);
+    expect(manager.listServices(OTHER_SESSION_ID).map((s) => s.id)).toEqual([
+      `${OTHER_SESSION_ID}:api`,
+    ]);
+    expect(manager.listServices(EMPTY_SESSION_ID).map((s) => s.id)).toEqual([]);
   });
 
   it('getService returns the attached sandbox when present, undefined otherwise', async () => {
     const { manager, driver } = makeManager();
     driver.seedContainer('c1');
     await manager.attachExternalService({
-      sessionId: '42',
+      sessionId: SESSION_ID,
       serviceId: 'api',
       containerRef: 'c1',
     });
-    expect(manager.getService('42', 'api')?.id).toBe('42:api');
-    expect(manager.getService('42', 'ghost')).toBeUndefined();
+    expect(manager.getService(SESSION_ID, 'api')?.id).toBe(`${SESSION_ID}:api`);
+    expect(manager.getService(SESSION_ID, 'ghost')).toBeUndefined();
   });
 });

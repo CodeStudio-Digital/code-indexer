@@ -34,11 +34,6 @@ import { getSandboxManager, resolveDriver } from '@mcp/services/sandbox/index.js
 import { detectDockerfile } from '@mcp/services/sandbox/dockerfile-detector.js';
 import { detectManifest } from '@mcp/services/sandbox/manifest-detector/detect.js';
 import type { NodeManifest } from '@mcp/services/sandbox/manifest-detector/types.js';
-// Archive persistence is now owned by SandboxManager itself (auto-save
-// on destroy, auto-load on provision). We re-export the path helper so
-// the DELETE /sessions handler — which doesn't go through the manager
-// for cleanup — can still resolve the file to delete.
-import { archivePath } from '@mcp/services/sandbox/archive.js';
 import { tryGetChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import type { SandboxManager } from '@mcp/services/sandbox/sandbox-manager.js';
 import { getServiceSupervisorStores } from '@mcp/company/services/service-supervisor/stores.js';
@@ -59,12 +54,6 @@ const STATUS_TRANSITION_KINDS: Record<string, string> = {
   destroying: 'destroying',
   destroyed: 'destroyed',
 };
-
-/** @deprecated prefer `archivePath` from `core/sandbox/archive`. Re-exported
- *  for back-compat with the DELETE /sessions handler. */
-export function sandboxArchivePath(sessionId: string | number): string {
-  return archivePath(sessionId);
-}
 
 /**
  * Pure: return `true` when at least one entry in the session config's
@@ -128,7 +117,7 @@ function inferExternalNodePort(stack: SandboxStack, manifest: NodeManifest): num
  * Best-effort throughout: never throws to the provision path.
  */
 async function wireSessionToChromeService(
-  companySessionId: number,
+  companySessionId: string,
   manager: SandboxManager,
 ): Promise<void> {
   const svc = tryGetChromeService();
@@ -150,7 +139,7 @@ async function wireSessionToChromeService(
       const envStore = getCompanySessionEnvStore();
       if (envStore) {
         try {
-          envStore.upsert(companySessionId, 'PLAYWRIGHT_WS_ENDPOINT', state.wsEndpoint, false, {
+          await envStore.upsert(companySessionId, 'PLAYWRIGHT_WS_ENDPOINT', state.wsEndpoint, false, {
             source: 'auto',
           });
         } catch (e) {
@@ -295,8 +284,7 @@ export class SandboxService {
    * `null` when builder mode is disabled for this session.
    */
   private readBuilderConfig(): BuilderSessionConfig['builder'] | null {
-    const row = this.ctx.companyStore.getCompanySession(this.ctx.companySessionId);
-    if (!row) return null;
+    const row = this.ctx.companyFiles.getSession();
     try {
       const cfg = JSON.parse(row.config_json || '{}') as BuilderSessionConfig;
       return cfg.builder ?? null;
@@ -315,8 +303,7 @@ export class SandboxService {
    * on the lean image.
    */
   private detectIncludeE2e(): boolean {
-    const row = this.ctx.companyStore.getCompanySession(this.ctx.companySessionId);
-    if (!row) return false;
+    const row = this.ctx.companyFiles.getSession();
     return hasQaPlaywrightSkill(row.config_json ?? '');
   }
 
@@ -530,9 +517,13 @@ export class SandboxService {
         `⚠ QA e2e: playwright.config.ts breaks the QA contract — Playwright runs will be refused until fixed:\n` +
         verdict.problems.map((p) => `  • ${p}`).join('\n') +
         (verdict.suggestion ? `\n${verdict.suggestion}` : '');
-      this.ctx.companyStore.postToBoard(
-        this.ctx.companySessionId, 'system', null, 'message', body, [],
-      );
+      this.ctx.companyFiles.createBoardEntry({
+        authorRole: 'system',
+        agentRunId: null,
+        kind: 'message',
+        content: body,
+        mentions: [],
+      });
     } catch (e) {
       console.warn(
         `[sandbox-service] qa config validation skipped for session ${this.sessionKey}: ${e instanceof Error ? e.message : String(e)}`,

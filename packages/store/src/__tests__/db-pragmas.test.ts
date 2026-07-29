@@ -70,4 +70,54 @@ describe('applyTuningPragmas', () => {
     expect(fake.applied).toContain('busy_timeout = 5000');
     expect(fake.applied).toContain(`mmap_size = ${256 * 1024 * 1024}`);
   });
+
+  // The Electron-main handle caps its busy wait: better-sqlite3 blocks inside a
+  // synchronous native call, so on that thread the ceiling bounds how long every
+  // window can freeze. Worker/CLI connections keep the 5s default.
+  it('busyTimeoutMs option caps the ceiling for one connection', () => {
+    const db = new CodeIndexDB(join(dir, 'index3.db'), { busyTimeoutMs: 250 });
+    try {
+      expect(db.raw().pragma('busy_timeout', { simple: true })).toBe(250);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('busyTimeoutMs option wins over the env override', () => {
+    process.env.MCP_SQLITE_BUSY_TIMEOUT_MS = '9000';
+    const db = new CodeIndexDB(join(dir, 'index4.db'), { busyTimeoutMs: 250 });
+    try {
+      expect(db.raw().pragma('busy_timeout', { simple: true })).toBe(250);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('omitting busyTimeoutMs leaves every existing caller on 5000', () => {
+    const fake = { applied: [] as string[], pragma(sql: string) { this.applied.push(sql); } };
+    applyTuningPragmas(fake, { busyTimeoutMs: undefined });
+    expect(fake.applied).toContain('busy_timeout = 5000');
+  });
+
+  it('withBusyTimeout restores the connection ceiling afterwards', () => {
+    const db = new CodeIndexDB(join(dir, 'index5.db'), { busyTimeoutMs: 250 });
+    try {
+      const inner = db.withBusyTimeout(5000, () =>
+        Number(db.raw().pragma('busy_timeout', { simple: true })));
+      expect(inner).toBe(5000);
+      expect(db.raw().pragma('busy_timeout', { simple: true })).toBe(250);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('withBusyTimeout restores the ceiling even when the operation throws', () => {
+    const db = new CodeIndexDB(join(dir, 'index6.db'), { busyTimeoutMs: 250 });
+    try {
+      expect(() => db.withBusyTimeout(5000, () => { throw new Error('boom'); })).toThrow('boom');
+      expect(db.raw().pragma('busy_timeout', { simple: true })).toBe(250);
+    } finally {
+      db.close();
+    }
+  });
 });

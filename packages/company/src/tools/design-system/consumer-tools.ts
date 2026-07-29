@@ -27,15 +27,19 @@ const DOCS_WHOLE_CAP = 8_000;
 const SECTION_CAP = 16_000;
 
 /** Null-guard the store + resolve the pinned version, then run `fn`. */
-function withVersion(
+async function withVersion(
   binding: DsConsumerBinding,
-  fn: (store: DesignSystemStore, version: DesignSystemVersion, newerSemver: string | null) => ToolResult,
-): ToolResult {
+  fn: (
+    store: DesignSystemStore,
+    version: DesignSystemVersion,
+    newerSemver: string | null,
+  ) => ToolResult | Promise<ToolResult>,
+): Promise<ToolResult> {
   const store = getDesignSystemStore();
   if (!store) return err('Design system tools: DesignSystemStore not wired.');
-  const resolved = resolveConsumerVersion(store, binding);
+  const resolved = await resolveConsumerVersion(store, binding);
   if (!resolved.ok) return err(resolved.error);
-  return fn(store, resolved.version, resolved.newerSemver);
+  return await fn(store, resolved.version, resolved.newerSemver);
 }
 
 function dsComponents(binding: DsConsumerBinding): CoderTool {
@@ -46,8 +50,8 @@ function dsComponents(binding: DsConsumerBinding): CoderTool {
     parameters: NO_PARAMS,
     source: 'native',
     handler: async () =>
-      withVersion(binding, (store, version, newerSemver) => {
-        const components = sortComponents(store.listComponents(version.id));
+      withVersion(binding, async (store, version, newerSemver) => {
+        const components = sortComponents(await store.listComponents(version.id));
         const lines = components.map((c) => {
           const props = summarizeProps(c.props_schema_json);
           return `- ${c.name} (${c.kind})${props ? ` — props: ${props}` : ''}`;
@@ -86,8 +90,8 @@ function dsComponent(binding: DsConsumerBinding): CoderTool {
     handler: async (args) => {
       const name = String((args as { name?: unknown }).name ?? '').trim();
       if (!name) return err('ds_component: `name` is required.');
-      return withVersion(binding, (store, version) => {
-        const components = store.listComponents(version.id);
+      return withVersion(binding, async (store, version) => {
+        const components = await store.listComponents(version.id);
         const found =
           components.find((c) => c.name === name) ??
           components.find((c) => c.name.toLowerCase() === name.toLowerCase());

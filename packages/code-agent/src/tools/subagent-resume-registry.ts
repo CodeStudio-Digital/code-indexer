@@ -32,6 +32,7 @@ import {
   removeSpillFile,
   spillTranscriptToDisk,
 } from '@mcp/code-agent/tools/subagent-transcript-spill.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface ResumableAgentState {
   /** 0-based; matches agent_progress.agentIndex and the original roster. */
@@ -52,7 +53,7 @@ export interface ResumableAgentState {
    */
   transcript?: AgentMessage[];
   /**
-   * Set when this agent's transcript was spilled to a JSONL file instead of
+   * Set when this agent's transcript was spilled to a bundle entity instead of
    * kept in `transcript`. read_agent_transcript falls back to it. Only
    * completed (never-resumed) agents are spilled, so resume state is unaffected.
    */
@@ -73,7 +74,7 @@ export interface ResumableAgentState {
 export interface ResumableGroup {
   /** == groupId for parallel spawns; fresh 8-hex for single spawns. */
   spawnId: string;
-  sessionId: number;
+  sessionId: SessionId;
   provider: string;
   model: string;
   createdAt: number;
@@ -124,60 +125,88 @@ function sweepIntervalMs(): number {
     : 5 * 60_000;
 }
 
-const bySession = new Map<number, Map<string, ResumableGroup>>();
+const bySession = new Map<SessionId, Map<string, ResumableGroup>>();
+const storesBySession = new Map<SessionId, ResumeCheckpointStore>();
 const inFlightResumes = new Set<string>();
 const resumeLeaseTokens = new Map<string, string>();
 const resumeLeaseGuards = new Map<string, OrchestrationLeaseGuard>();
 let touchSeq = 0;
 /** Unref'd worker-realm timer that reclaims idle sessions on the TTL cadence. */
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
-const checkpointEnforced = (): boolean => process.env.CODER_AGENT_RUN_STORE_ENFORCE === '1';
 
 export interface ResumeCheckpointStore {
   saveOrchestrationCheckpoint(input: {
-    sessionId: number;
+    sessionId: SessionId;
     kind: 'subagent_resume';
     scopeId: string;
     privacyClass: 'session_private_redacted';
     payloadJson: string;
     expiresAt: string;
     leaseToken?: string;
-  }): boolean;
+  }): Promise<boolean>;
   loadOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'subagent_resume',
     scopeId: string,
-  ): { payloadJson: string } | null;
+  ): Promise<{ payload_json: string } | null>;
   listOrchestrationCheckpoints(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'subagent_resume',
     limit?: number,
-  ): Array<{ scopeId: string; payloadJson: string }>;
+  ): Promise<Array<{ scope_id: string; payload_json: string }>>;
   removeOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'subagent_resume',
     scopeId: string,
     leaseToken?: string,
-  ): void;
+  ): Promise<void>;
   tryAcquireOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'subagent_resume',
     scopeId: string,
     leaseMs?: number,
-  ): string | null;
+  ): Promise<string | null>;
   releaseOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'subagent_resume',
     scopeId: string,
     leaseToken: string,
-  ): void;
+  ): Promise<void>;
   renewOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'subagent_resume',
     scopeId: string,
     leaseToken: string,
     leaseMs?: number,
-  ): boolean;
+  ): Promise<boolean>;
+  writeSubagentTranscript(
+    sessionId: SessionId,
+    spawnId: string,
+    agentIndex: number,
+    transcript: AgentMessage[],
+  ): Promise<string | null>;
+  findSubagentTranscript?(
+    sessionId: SessionId,
+    spawnId: string,
+    agentIndex: number,
+  ): Promise<string | null>;
+}
+
+async function hydrateSpillPaths(
+  group: ResumableGroup,
+  store?: ResumeCheckpointStore,
+): Promise<void> {
+  if (typeof store?.findSubagentTranscript !== 'function') return;
+  await Promise.all(group.agents.map(async (agent) => {
+    if (agent.transcript || agent.spillPath) return;
+    agent.spillPath = (
+      await store.findSubagentTranscript!(
+        group.sessionId,
+        group.spawnId,
+        agent.agentIndex,
+      )
+    ) ?? undefined;
+  }));
 }
 
 /** Stamp freshness — wall-clock for TTL, monotonic seq for deterministic LRU. */
@@ -210,7 +239,7 @@ function durableProjection(group: ResumableGroup): ResumableGroup {
 
 function parsePersistedGroup(
   payloadJson: string,
-  sessionId: number,
+  sessionId: SessionId,
   spawnId: string,
 ): ResumableGroup | undefined {
   try {
@@ -237,17 +266,19 @@ function parsePersistedGroup(
   }
 }
 
-function persistGroup(store: ResumeCheckpointStore | undefined, group: ResumableGroup): boolean {
+async function persistGroup(
+  store: ResumeCheckpointStore | undefined,
+  group: ResumableGroup,
+): Promise<boolean> {
   if (!store || typeof store.saveOrchestrationCheckpoint !== 'function') return true;
   const key = `${group.sessionId}:${group.spawnId}`;
   const leaseToken = resumeLeaseTokens.get(key);
-  if (leaseToken?.startsWith('compat:')) return !checkpointEnforced();
   const projection = durableProjection(group);
   // Keep a transcript-free completed roster as a short-lived tombstone. It
   // prevents a stale executor that loaded before the winning commit from
   // relaunching an already-completed child after it later wins the lease.
   try {
-    const saved = store.saveOrchestrationCheckpoint({
+    const saved = await store.saveOrchestrationCheckpoint({
       sessionId: group.sessionId,
       kind: 'subagent_resume',
       scopeId: group.spawnId,
@@ -256,13 +287,17 @@ function persistGroup(store: ResumeCheckpointStore | undefined, group: Resumable
       expiresAt: new Date(Date.now() + ttlMs()).toISOString(),
       leaseToken,
     });
-    const rows = store.listOrchestrationCheckpoints(
+    const rows = await store.listOrchestrationCheckpoints(
       group.sessionId,
       'subagent_resume',
       MAX_GROUPS_PER_SESSION + 20,
     );
     for (const row of rows.slice(MAX_GROUPS_PER_SESSION)) {
-      store.removeOrchestrationCheckpoint(group.sessionId, 'subagent_resume', row.scopeId);
+      await store.removeOrchestrationCheckpoint(
+        group.sessionId,
+        'subagent_resume',
+        row.scope_id,
+      );
     }
     return saved;
   } catch {
@@ -330,7 +365,7 @@ function lruGroup(groups: Map<string, ResumableGroup>): ResumableGroup | null {
   return oldest;
 }
 
-/** Evict a group from RAM AND delete any transcript it spilled to disk. */
+/** Evict a group from RAM; bundle transcripts live until session deletion. */
 function dropGroup(groups: Map<string, ResumableGroup>, group: ResumableGroup): void {
   for (const a of group.agents) if (a.spillPath) removeSpillFile(a.spillPath);
   groups.delete(group.spawnId);
@@ -342,19 +377,30 @@ function dropGroup(groups: Map<string, ResumableGroup>, group: ResumableGroup): 
  * failed/aborted keep their in-RAM transcript so resume_agent can relaunch
  * them. A spill failure is non-fatal: the transcript simply stays in RAM.
  */
-function maybeSpillAgent(sessionId: number, spawnId: string, agent: ResumableAgentState): void {
+async function maybeSpillAgent(
+  store: ResumeCheckpointStore | undefined,
+  sessionId: SessionId,
+  spawnId: string,
+  agent: ResumableAgentState,
+): Promise<void> {
   if (agent.spillPath) { removeSpillFile(agent.spillPath); agent.spillPath = undefined; }
   if (!spillTerminalTranscripts()) return;
   if (agent.reason !== 'completed') return;
   if (!agent.transcript || agent.transcript.length === 0) return;
-  const path = spillTranscriptToDisk(sessionId, spawnId, agent.agentIndex, agent.transcript);
+  const path = await spillTranscriptToDisk(
+    store,
+    sessionId,
+    spawnId,
+    agent.agentIndex,
+    agent.transcript,
+  );
   if (path) {
     agent.spillPath = path;
     agent.transcript = undefined;
   }
 }
 
-function sweep(sessionId: number): void {
+function sweep(sessionId: SessionId): void {
   const groups = bySession.get(sessionId);
   if (!groups) return;
   const now = Date.now();
@@ -405,7 +451,7 @@ export function stopResumeSweepForTests(): void {
 }
 
 /** Test hook: RAM group count for a session WITHOUT triggering a lazy sweep. */
-export function peekSessionGroupCountForTests(sessionId: number): number {
+export function peekSessionGroupCountForTests(sessionId: SessionId): number {
   return bySession.get(sessionId)?.size ?? 0;
 }
 
@@ -427,11 +473,12 @@ export function retainCompletedTranscripts(): boolean {
  * RAM); failed/aborted transcripts stay resident so resume can relaunch them.
  * Arms the periodic worker-realm sweep so idle sessions are reclaimed on time.
  */
-export function retainGroup(
-  sessionId: number,
+export async function retainGroup(
+  sessionId: SessionId,
   group: ResumableGroup,
   store?: ResumeCheckpointStore,
-): void {
+): Promise<void> {
+  if (store) storesBySession.set(sessionId, store);
   const retainCompleted = retainCompletedTranscripts();
   for (const agent of group.agents) {
     if (agent.transcript && (agent.reason !== 'completed' || retainCompleted)) {
@@ -441,7 +488,7 @@ export function retainGroup(
     }
     // Spill completed transcripts to disk (drops them from RAM) so approxBytes
     // below reflects only what actually stays resident.
-    maybeSpillAgent(sessionId, group.spawnId, agent);
+    await maybeSpillAgent(store, sessionId, group.spawnId, agent);
     agent.approxBytes = agent.transcript ? approxBytesOf(agent.transcript) : 0;
   }
   let groups = bySession.get(sessionId);
@@ -451,21 +498,33 @@ export function retainGroup(
   }
   touch(group);
   groups.set(group.spawnId, group);
-  persistGroup(store, group);
+  await persistGroup(store, group);
   ensureSweepTimer();
   sweep(sessionId);
 }
 
-export function getGroup(
-  sessionId: number,
+export async function getGroup(
+  sessionId: SessionId,
   spawnId: string,
   store?: ResumeCheckpointStore,
-): ResumableGroup | undefined {
+): Promise<ResumableGroup | undefined> {
+  const durableStore = store ?? storesBySession.get(sessionId);
+  if (store) storesBySession.set(sessionId, store);
   sweep(sessionId);
   let group = bySession.get(sessionId)?.get(spawnId);
-  if (!group && store) {
-    const row = store.loadOrchestrationCheckpoint(sessionId, 'subagent_resume', spawnId);
-    group = row ? parsePersistedGroup(row.payloadJson, sessionId, spawnId) : undefined;
+  if (!group && durableStore) {
+    const checkpoint = await durableStore.loadOrchestrationCheckpoint(
+      sessionId,
+      'subagent_resume',
+      spawnId,
+    );
+    group = checkpoint
+      ? parsePersistedGroup(
+          checkpoint.payload_json,
+          sessionId,
+          spawnId,
+        )
+      : undefined;
     if (group) {
       let groups = bySession.get(sessionId);
       if (!groups) {
@@ -476,6 +535,7 @@ export function getGroup(
     }
   }
   if (group) touch(group);
+  if (group) await hydrateSpillPaths(group, durableStore);
   return group;
 }
 
@@ -484,49 +544,62 @@ export function getGroup(
  * intentionally cache-first for read/observability callers, but execution
  * must discard any pre-CAS snapshot before selecting resume targets.
  */
-export function reloadGroupUnderLease(
-  sessionId: number,
+export async function reloadGroupUnderLease(
+  sessionId: SessionId,
   spawnId: string,
   store?: ResumeCheckpointStore,
-): ResumableGroup | undefined {
-  assertResumeLease(sessionId, spawnId, store);
+): Promise<ResumableGroup | undefined> {
+  await assertResumeLease(sessionId, spawnId, store);
   const cached = bySession.get(sessionId)?.get(spawnId);
   const leaseToken = resumeLeaseTokens.get(`${sessionId}:${spawnId}`);
-  const restored = store && !leaseToken?.startsWith('compat:')
-    ? (() => {
-        const row = store.loadOrchestrationCheckpoint(sessionId, 'subagent_resume', spawnId);
-        return row ? parsePersistedGroup(row.payloadJson, sessionId, spawnId) : undefined;
-      })()
+  const restored = store
+    ? (() => store
+        .loadOrchestrationCheckpoint(
+          sessionId,
+          'subagent_resume',
+          spawnId,
+        )
+        .then((checkpoint) =>
+          checkpoint
+            ? parsePersistedGroup(
+                checkpoint.payload_json,
+                sessionId,
+                spawnId,
+              )
+            : undefined,
+        ))()
     : cached
       ? parsePersistedGroup(JSON.stringify(cached), sessionId, spawnId)
       : undefined;
-  if (!restored) return undefined;
+  const resolved = await restored;
+  if (!resolved) return undefined;
   // The durable checkpoint strips the host-local spill pointer, so carry it
   // forward from this worker's cache — otherwise a store-backed reload would
   // orphan the spilled files and lose completed-agent readability post-resume.
   if (cached) {
     const spillByIndex = new Map(cached.agents.map((a) => [a.agentIndex, a.spillPath]));
-    for (const a of restored.agents) {
+    for (const a of resolved.agents) {
       if (!a.spillPath && !a.transcript) a.spillPath = spillByIndex.get(a.agentIndex);
     }
   }
+  await hydrateSpillPaths(resolved, store);
   let groups = bySession.get(sessionId);
   if (!groups) {
     groups = new Map();
     bySession.set(sessionId, groups);
   }
-  touch(restored);
-  groups.set(spawnId, restored);
-  return restored;
+  touch(resolved);
+  groups.set(spawnId, resolved);
+  return resolved;
 }
 
 /** Swap an agent's state after a resume attempt (failed again → new transcript/attempt). */
-export function replaceAgentState(
-  sessionId: number,
+export async function replaceAgentState(
+  sessionId: SessionId,
   spawnId: string,
   next: ResumableAgentState,
   store?: ResumeCheckpointStore,
-): boolean {
+): Promise<boolean> {
   const group = bySession.get(sessionId)?.get(spawnId);
   if (!group) return false;
   const idx = group.agents.findIndex((a) => a.agentIndex === next.agentIndex);
@@ -538,17 +611,17 @@ export function replaceAgentState(
   } else {
     next.transcript = undefined;
   }
-  maybeSpillAgent(sessionId, spawnId, next);
+  await maybeSpillAgent(store, sessionId, spawnId, next);
   next.approxBytes = next.transcript ? approxBytesOf(next.transcript) : 0;
   group.agents[idx] = next;
   touch(group);
-  const persisted = persistGroup(store, group);
+  const persisted = await persistGroup(store, group);
   sweep(sessionId);
   return persisted;
 }
 
 export function listResumable(
-  sessionId: number,
+  sessionId: SessionId,
 ): Array<{ spawnId: string; agentIndex: number; label: string; reason: StopReason; attempt: number }> {
   sweep(sessionId);
   const out: Array<{ spawnId: string; agentIndex: number; label: string; reason: StopReason; attempt: number }> = [];
@@ -565,9 +638,20 @@ export function listResumable(
 }
 
 /** Groups with at least one retained transcript — feed for read_agent_transcript. */
-export function listReadableGroups(
-  sessionId: number,
-): Array<{ spawnId: string; createdAt: number; agents: Array<{ agentIndex: number; label: string; reason: StopReason; hasTranscript: boolean }> }> {
+export async function listReadableGroups(
+  sessionId: SessionId,
+  store?: ResumeCheckpointStore,
+): Promise<Array<{ spawnId: string; createdAt: number; agents: Array<{ agentIndex: number; label: string; reason: StopReason; hasTranscript: boolean }> }>> {
+  const durableStore = store ?? storesBySession.get(sessionId);
+  if (durableStore) {
+    for (const checkpoint of await durableStore.listOrchestrationCheckpoints(
+      sessionId,
+      'subagent_resume',
+      MAX_GROUPS_PER_SESSION,
+    )) {
+      await getGroup(sessionId, checkpoint.scope_id, durableStore);
+    }
+  }
   sweep(sessionId);
   const out: Array<{ spawnId: string; createdAt: number; agents: Array<{ agentIndex: number; label: string; reason: StopReason; hasTranscript: boolean }> }> = [];
   for (const g of bySession.get(sessionId)?.values() ?? []) {
@@ -586,35 +670,33 @@ export function listReadableGroups(
   return out.sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function clearSession(sessionId: number, store?: ResumeCheckpointStore): void {
+export async function clearSession(
+  sessionId: SessionId,
+  _store?: ResumeCheckpointStore,
+): Promise<void> {
   bySession.delete(sessionId);
   removeSessionSpill(sessionId);
-  if (store) {
-    for (const row of store.listOrchestrationCheckpoints(sessionId, 'subagent_resume', 200)) {
-      store.removeOrchestrationCheckpoint(sessionId, 'subagent_resume', row.scopeId);
-    }
-  }
+  storesBySession.delete(sessionId);
 }
 
 /** Per-spawnId in-flight lock so concurrent resume_agent calls can't double-run. */
-export function tryAcquireResume(
-  sessionId: number,
+export async function tryAcquireResume(
+  sessionId: SessionId,
   spawnId: string,
   store?: ResumeCheckpointStore,
-): boolean {
+): Promise<boolean> {
   const key = `${sessionId}:${spawnId}`;
   if (inFlightResumes.has(key)) return false;
   const duration = leaseMs();
-  const leaseToken = store?.tryAcquireOrchestrationCheckpoint(
-    sessionId,
-    'subagent_resume',
-    spawnId,
-    duration,
-  );
+  const leaseToken = store
+    ? await store.tryAcquireOrchestrationCheckpoint(
+        sessionId,
+        'subagent_resume',
+        spawnId,
+        duration,
+      )
+    : undefined;
   if (store && !leaseToken) return false;
-  if (leaseToken?.startsWith('compat:') && checkpointEnforced()) {
-    throw new Error(`resume_agent '${spawnId}' requires migration 259 while AgentRun enforcement is enabled`);
-  }
   inFlightResumes.add(key);
   if (leaseToken) {
     resumeLeaseTokens.set(key, leaseToken);
@@ -635,22 +717,22 @@ export function tryAcquireResume(
 }
 
 /** Renew/verify the resume operation immediately before dispatch or ACK. */
-export function assertResumeLease(
-  sessionId: number,
+export async function assertResumeLease(
+  sessionId: SessionId,
   spawnId: string,
   store?: ResumeCheckpointStore,
-): void {
+): Promise<void> {
   if (!store || typeof store.renewOrchestrationCheckpoint !== 'function') return;
   const guard = resumeLeaseGuards.get(`${sessionId}:${spawnId}`);
   if (!guard) {
     throw new Error(`resume_agent '${spawnId}' executor lease was fenced or expired`);
   }
-  guard.assertOwned();
+  await guard.assertOwned();
 }
 
 /** Renew the short lease while resumed children are inside provider/tools. */
 export function startResumeLeaseKeepalive(
-  sessionId: number,
+  sessionId: SessionId,
   spawnId: string,
   store?: ResumeCheckpointStore,
   onLost?: (error: Error) => void,
@@ -661,15 +743,18 @@ export function startResumeLeaseKeepalive(
   return guard.start(onLost);
 }
 
-export function resumeLeaseKeepaliveActiveForTests(sessionId: number, spawnId: string): boolean {
+export function resumeLeaseKeepaliveActiveForTests(
+  sessionId: SessionId,
+  spawnId: string,
+): boolean {
   return resumeLeaseGuards.get(`${sessionId}:${spawnId}`)?.isRunning() ?? false;
 }
 
-export function releaseResume(
-  sessionId: number,
+export async function releaseResume(
+  sessionId: SessionId,
   spawnId: string,
   store?: ResumeCheckpointStore,
-): void {
+): Promise<void> {
   const key = `${sessionId}:${spawnId}`;
   inFlightResumes.delete(key);
   resumeLeaseGuards.get(key)?.stop();
@@ -677,6 +762,11 @@ export function releaseResume(
   const leaseToken = resumeLeaseTokens.get(key);
   resumeLeaseTokens.delete(key);
   if (store && leaseToken) {
-    store.releaseOrchestrationCheckpoint(sessionId, 'subagent_resume', spawnId, leaseToken);
+    await store.releaseOrchestrationCheckpoint(
+      sessionId,
+      'subagent_resume',
+      spawnId,
+      leaseToken,
+    );
   }
 }

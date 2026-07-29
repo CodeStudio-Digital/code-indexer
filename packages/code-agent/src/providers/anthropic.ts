@@ -12,7 +12,7 @@ import { renderTextDocument } from './document-utils.js';
 
 export const ANTHROPIC_EXTENDED_CACHE_TTL_BETA = 'extended-cache-ttl-2025-04-11';
 
-type AnthropicResolvedRequestModel = {
+export type AnthropicResolvedRequestModel = {
   apiModel: string;
   requestedModel?: string;
   displayModel?: string;
@@ -55,6 +55,95 @@ type AnthropicRawStreamResult = {
   response: AnthropicResponseLike | null;
   requestId: string | null | undefined;
 };
+
+export interface AnthropicRuntimeModelMetadata {
+  supported_reasoning_levels?: readonly string[] | null;
+}
+
+const ANTHROPIC_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+function anthropicModelFamily(model: string): string {
+  return model.replace(/\[(1|2)m\]$/i, '').toLowerCase();
+}
+
+function supportsAnthropicAdaptiveThinking(model: string): boolean {
+  const family = anthropicModelFamily(model);
+  return (
+    family.includes('claude-fable-5') ||
+    family.includes('claude-mythos-5') ||
+    family.includes('claude-opus-5') ||
+    family.includes('claude-opus-4-8') ||
+    family.includes('claude-opus-4-7') ||
+    family.includes('claude-opus-4-6') ||
+    family.includes('claude-sonnet-5') ||
+    family.includes('claude-sonnet-4-6')
+  );
+}
+
+function anthropicDefaultMaxTokens(model: string): number {
+  const family = anthropicModelFamily(model);
+  if (
+    family.includes('claude-fable-5') ||
+    family.includes('claude-mythos-5') ||
+    family.includes('claude-opus-5') ||
+    family.includes('claude-opus-4-8') ||
+    family.includes('claude-opus-4-7') ||
+    family.includes('claude-opus-4-6') ||
+    family.includes('claude-sonnet-5')
+  ) {
+    return 64_000;
+  }
+  if (
+    family.includes('claude-sonnet-4-6') ||
+    family.includes('claude-haiku-4-5')
+  ) {
+    return 32_000;
+  }
+  return 8_192;
+}
+
+/**
+ * Resolve current first-party Anthropic model controls without leaking the
+ * legacy `{type:"enabled", budget_tokens}` shape into adaptive-only models.
+ * Fable 5 rejects disabled thinking, so it always receives adaptive thinking.
+ */
+export function resolveAnthropicRequestModel(
+  model: string,
+  req: Pick<ChatRequest, 'thinking' | 'reasoningEffort'>,
+  metadata?: AnthropicRuntimeModelMetadata,
+): AnthropicResolvedRequestModel {
+  const adaptive = supportsAnthropicAdaptiveThinking(model);
+  const family = anthropicModelFamily(model);
+  const alwaysAdaptive =
+    family.includes('claude-fable-5') || family.includes('claude-mythos-5');
+  const requestedEffort = req.reasoningEffort?.trim().toLowerCase();
+  const advertisedLevels = metadata?.supported_reasoning_levels?.map((level) =>
+    level.toLowerCase(),
+  );
+  const effort =
+    adaptive &&
+    requestedEffort &&
+    ANTHROPIC_EFFORT_LEVELS.includes(
+      requestedEffort as (typeof ANTHROPIC_EFFORT_LEVELS)[number],
+    ) &&
+    (advertisedLevels == null || advertisedLevels.includes(requestedEffort))
+      ? requestedEffort
+      : null;
+  const thinking =
+    adaptive && (alwaysAdaptive || req.thinking === true || effort !== null)
+      ? { type: 'adaptive' as const }
+      : undefined;
+
+  return {
+    apiModel: model.replace(/\[(1|2)m\]$/i, ''),
+    requestedModel: model,
+    displayModel: model,
+    maxTokens: anthropicDefaultMaxTokens(model),
+    thinking,
+    outputConfig: adaptive && effort ? { effort } : undefined,
+    effort,
+  };
+}
 
 export type AnthropicPromptCacheTtl = '5m' | '1h';
 
@@ -237,7 +326,7 @@ export class AnthropicChatProvider implements ChatProvider {
     name?: string;
   }) {
     this.name = opts.name ?? 'anthropic';
-    this.model = opts.model ?? 'claude-sonnet-4-6';
+    this.model = opts.model ?? 'claude-sonnet-5';
     this.defaultMetadata = opts.defaultMetadata;
     this.defaultBetas = opts.defaultBetas;
     this.defaultTemperature = opts.defaultTemperature;

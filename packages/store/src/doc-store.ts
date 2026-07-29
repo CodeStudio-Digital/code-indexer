@@ -135,6 +135,10 @@ export class DocStore {
   getChunksByIds(ids: readonly number[]): DocChunk[] { return chunks.getByIds(this.db, ids); }
   getChunkNeighbors(chunkId: number, window: number = 1): DocChunk[] { return chunks.getNeighbors(this.db, chunkId, window); }
   listChunksBySource(sourceId: number): DocChunk[] { return chunks.listBySource(this.db, sourceId); }
+  /** Outline columns only — avoids loading every chunk body. See listOutlineBySource. */
+  listChunkOutlineBySource(sourceId: number): chunks.DocChunkOutlineRow[] {
+    return chunks.listOutlineBySource(this.db, sourceId);
+  }
   listChunksByCollection(collectionId: number): DocChunk[] { return chunks.listByCollection(this.db, collectionId); }
   listChunksBySourceHeading(sourceId: number, headingPath: string | null, sourceUri: string | null): DocChunk[] { return chunks.listBySourceHeading(this.db, sourceId, headingPath, sourceUri); }
   clearEmbeddingsForSource(sourceId: number): { cleared: number } { return chunks.clearEmbeddingsForSource(this.db, sourceId); }
@@ -211,6 +215,8 @@ export class DocStore {
   linkProjectCollection(projectId: number, collectionId: number, origin: DocProjectLinkOrigin = 'manual'): boolean { return projectLinks.link(this.db, projectId, collectionId, origin); }
   unlinkProjectCollection(projectId: number, collectionId: number): boolean { return projectLinks.unlink(this.db, projectId, collectionId); }
   listCollectionsForProject(projectId: number): DocCollection[] { return projectLinks.listCollectionsForProject(this.db, projectId); }
+  /** One query for many projects — see project-links.ts for why the loop form hurts. */
+  listCollectionsForProjects(projectIds: readonly number[]): Map<number, DocCollection[]> { return projectLinks.listCollectionsForProjects(this.db, projectIds); }
   listProjectsForCollection(collectionId: number): DocProjectLink[] { return projectLinks.listProjectsForCollection(this.db, collectionId); }
 
   // ─── Auto-discovery suggestions (migration 096) ───────────────

@@ -313,17 +313,22 @@ export function toKimiToolParam(tool: {
 }
 
 export function normalizeKimiToolParameters(schema: JsonSchema | unknown): Record<string, unknown> {
-  const normalized = normalizeSchema(schema);
+  const normalized = normalizeSchema(schema, true);
   if (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) {
     const obj = normalized as Record<string, unknown>;
-    if (!obj.type) obj.type = 'object';
+    // The Kimi tool wrapper has a stricter root contract than an arbitrary
+    // MFJS node: function.parameters itself must always be an object. A root
+    // $ref cannot coexist with that required type, so prefer an explicit,
+    // permissive object; nested refs remain intact.
+    if (typeof obj.$ref === 'string') delete obj.$ref;
+    obj.type = 'object';
     return obj;
   }
   return { type: 'object', properties: {} };
 }
 
-function normalizeSchema(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizeSchema);
+function normalizeSchema(value: unknown, isToolParametersRoot = false): unknown {
+  if (Array.isArray(value)) return value.map((item) => normalizeSchema(item));
   if (!value || typeof value !== 'object') return value;
 
   const input = value as Record<string, unknown>;
@@ -341,7 +346,40 @@ function normalizeSchema(value: unknown): unknown {
     out[key] = normalizeSchema(child);
   }
 
-  if (!out.type) {
+  if (hasAnyOf(out)) {
+    if (isToolParametersRoot) {
+      // `function.parameters` must have root type=object, while MFJS also
+      // rejects type beside anyOf. There is no legal root representation for
+      // that standard JSON Schema combination. Collapse only the root union,
+      // merge any branch-only properties so the model still sees them, and
+      // leave the original conditional validation to the MCP server.
+      mergeRootAnyOfProperties(out);
+      delete out.anyOf;
+      out.type = 'object';
+    } else {
+      // For nested schemas MFJS's normal rule applies: move the parent type
+      // into untyped branches and remove it from the union node.
+      const parentType = out.type;
+      if (parentType !== undefined) {
+        out.anyOf = (out.anyOf as unknown[]).map((branch) => {
+          if (!branch || typeof branch !== 'object' || Array.isArray(branch)) return branch;
+          const branchSchema = branch as Record<string, unknown>;
+          if (
+            branchSchema.type !== undefined ||
+            hasAnyOf(branchSchema) ||
+            typeof branchSchema.$ref === 'string'
+          ) {
+            return branchSchema;
+          }
+          return { ...branchSchema, type: parentType };
+        });
+      }
+      delete out.type;
+    }
+  } else if (!isToolParametersRoot && typeof out.$ref === 'string') {
+    // The same MFJS parent-type rule applies to referenced schemas.
+    delete out.type;
+  } else if (!out.type) {
     if (out.properties && typeof out.properties === 'object') {
       out.type = 'object';
     } else if (out.items) {
@@ -354,6 +392,31 @@ function normalizeSchema(value: unknown): unknown {
   }
 
   return out;
+}
+
+function hasAnyOf(schema: Record<string, unknown>): boolean {
+  return Array.isArray(schema.anyOf) && schema.anyOf.length > 0;
+}
+
+function mergeRootAnyOfProperties(schema: Record<string, unknown>): void {
+  const currentProperties =
+    schema.properties && typeof schema.properties === 'object' && !Array.isArray(schema.properties)
+      ? schema.properties as Record<string, unknown>
+      : {};
+  const mergedProperties = { ...currentProperties };
+
+  for (const branch of schema.anyOf as unknown[]) {
+    if (!branch || typeof branch !== 'object' || Array.isArray(branch)) continue;
+    const branchProperties = (branch as Record<string, unknown>).properties;
+    if (!branchProperties || typeof branchProperties !== 'object' || Array.isArray(branchProperties)) {
+      continue;
+    }
+    for (const [name, propertySchema] of Object.entries(branchProperties)) {
+      if (!(name in mergedProperties)) mergedProperties[name] = propertySchema;
+    }
+  }
+
+  if (Object.keys(mergedProperties).length > 0) schema.properties = mergedProperties;
 }
 
 function normalizeKimiPropertySchema(value: unknown): Record<string, unknown> {

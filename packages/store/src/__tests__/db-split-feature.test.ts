@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openRawProjectDb, initProjectSchema } from '../project-db/index.js';
 import { splitProject } from '../db-split/index.js';
+import { FEATURE_TABLES } from '../db-split/manifest.js';
 import { ApiClientStore } from '../api-client-store.js';
 import type { DB } from '../db/types.js';
 
@@ -34,6 +35,13 @@ function openFresh(path: string): DB {
 }
 
 describe('db-split FEATURE class (R1)', () => {
+  it('never classifies operational Design System state as a SQLite feature', () => {
+    const tables = new Set(FEATURE_TABLES.map((entry) => entry.table));
+    expect(tables.has('design_system_sessions')).toBe(false);
+    expect(tables.has('design_system_versions')).toBe(false);
+    expect(tables.has('design_system_components')).toBe(false);
+  });
+
   it('copies the project API client + file history; excludes the other project', () => {
     const dir = freshDir();
     const centralPath = join(dir, 'index.db');

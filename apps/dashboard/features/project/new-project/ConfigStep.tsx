@@ -25,7 +25,7 @@ export interface ConfigState {
   /** Builder mode (react-vite only): Tailwind + shadcn + element selection. */
   builder: boolean;
   /** Published DS (DS Studio session id) to link at create time. */
-  dsSessionId: number | null;
+  dsSessionId: string | null;
 }
 
 interface ConfigStepProps {
@@ -138,7 +138,7 @@ export function ConfigStep({ template, value, onChange }: ConfigStepProps) {
           ) : (
             <Select
               value={value.dsSessionId == null ? 'none' : String(value.dsSessionId)}
-              onValueChange={(v) => onChange({ dsSessionId: v === 'none' ? null : Number(v) })}
+              onValueChange={(v) => onChange({ dsSessionId: v === 'none' ? null : v })}
             >
               <SelectTrigger>
                 <SelectValue />

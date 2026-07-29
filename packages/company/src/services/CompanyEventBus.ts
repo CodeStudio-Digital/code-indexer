@@ -40,7 +40,7 @@ export type CompanyInternalEvent =
    */
   | {
       type: 'master.inbox_received';
-      messageIds: number[];
+      messageIds: string[];
       fromRoles: string[];
     }
   /**

@@ -1,14 +1,18 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { bootstrapTestI18n } from '../../../../i18n/test-bootstrap.js';
 import type { RoundSnapshotFileSummary, SnapshotFileSummary } from '../../../snapshots/types.js';
 import { FileChangeRow } from '../FileChangeRow.js';
 import { SnapshotFilesProvider } from '../snapshot-files-context.js';
 
-function summary(addedLines: number, removedLines: number): SnapshotFileSummary {
+const BASELINE_ID = '00000000-0000-4000-8000-000000000007';
+const ROUND_SNAPSHOT_ID = '00000000-0000-4000-8000-000000000008';
+
+function summary(addedLines: number, removedLines: number, filePath = 'src/example.ts'): SnapshotFileSummary {
   return {
-    baselineId: 7,
-    filePath: 'src/example.ts',
+    baselineId: BASELINE_ID,
+    filePath,
     status: 'active',
     existedBefore: true,
     oversized: false,
@@ -24,6 +28,8 @@ function summary(addedLines: number, removedLines: number): SnapshotFileSummary 
 }
 
 describe('FileChangeRow', () => {
+  beforeAll(bootstrapTestI18n);
+
   it('shows the live session snapshot when the tool card has no round snapshot', () => {
     const file = summary(12, 3);
     const html = renderToStaticMarkup(createElement(
@@ -37,12 +43,42 @@ describe('FileChangeRow', () => {
     expect(html).not.toContain('>–<');
   });
 
+  it('resolves an absolute Windows tool path to the project-relative baseline', () => {
+    const file = summary(12, 3, 'scripts/cluster-cli.mjs');
+    const html = renderToStaticMarkup(createElement(
+      SnapshotFilesProvider,
+      { actions: null, files: new Map([[file.filePath, file]]) },
+      createElement(FileChangeRow, {
+        file: { path: 'D:\\proj\\scripts\\cluster-cli.mjs', op: 'edit' },
+      }),
+    ));
+
+    expect(html).toContain('+12');
+    expect(html).toContain('−3');
+    expect(html).not.toContain('>–<');
+  });
+
+  it('keeps the placeholder and explains itself for a file outside the project', () => {
+    const file = summary(12, 3, 'src/example.ts');
+    const html = renderToStaticMarkup(createElement(
+      SnapshotFilesProvider,
+      { actions: null, files: new Map([[file.filePath, file]]) },
+      createElement(FileChangeRow, {
+        file: { path: 'D:\\Claude\\scripts\\cluster-cli.mjs', op: 'edit' },
+      }),
+    ));
+
+    expect(html).toContain('>–<');
+    // Locale-agnostic: the row must carry *some* explanation, not a bare `–`.
+    expect(html).toMatch(/title="[^"]+"/);
+  });
+
   it('prefers the frozen round snapshot over the cumulative session baseline', () => {
     const global = summary(99, 40);
     const round: RoundSnapshotFileSummary = {
       ...summary(5, 2),
       roundMessageId: 100,
-      roundSnapshotId: 8,
+      roundSnapshotId: ROUND_SNAPSHOT_ID,
       globalBaselineId: global.baselineId,
       projectId: 1,
     };

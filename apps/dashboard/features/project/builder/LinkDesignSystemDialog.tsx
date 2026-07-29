@@ -27,7 +27,7 @@ import {
 } from '../new-project/useLinkableDesignSystems.js';
 
 interface DsLinkInfo {
-  sessionId: number;
+  sessionId: string;
   packageName: string;
   semver: string;
 }
@@ -40,7 +40,7 @@ function parseBuilder(json: string | null | undefined): { stack: string; designS
     if (cfg.kind === 'ds' || typeof cfg.stack !== 'string') return null;
     const ds = cfg.designSystem;
     const linked =
-      ds && typeof ds.sessionId === 'number' && typeof ds.packageName === 'string' && typeof ds.semver === 'string'
+      ds && typeof ds.sessionId === 'string' && typeof ds.packageName === 'string' && typeof ds.semver === 'string'
         ? { sessionId: ds.sessionId, packageName: ds.packageName, semver: ds.semver }
         : null;
     return { stack: cfg.stack, designSystem: linked };
@@ -52,7 +52,7 @@ function parseBuilder(json: string | null | undefined): { stack: string; designS
 export function LinkDesignSystemDialog({ projectId }: { projectId: number }) {
   const { t } = useTranslation(['projects', 'common']);
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<number | 'unlink' | null>(null);
+  const [busy, setBusy] = useState<string | 'unlink' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { data: project, refetch } = useApi<Project>(`/projects/${projectId}`);
   const cfg = useMemo(() => parseBuilder(project?.builder_json), [project?.builder_json]);
@@ -62,7 +62,7 @@ export function LinkDesignSystemDialog({ projectId }: { projectId: number }) {
   const linked = cfg.designSystem;
   const linkedEntry = linked ? ds.items.find((d) => d.sessionId === linked.sessionId) ?? null : null;
 
-  async function run(key: number | 'unlink', action: () => Promise<unknown>) {
+  async function run(key: string | 'unlink', action: () => Promise<unknown>) {
     setBusy(key);
     setError(null);
     try {

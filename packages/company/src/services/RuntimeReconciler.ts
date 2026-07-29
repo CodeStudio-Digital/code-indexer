@@ -1,16 +1,17 @@
 /**
- * RuntimeReconciler — periodic sweep that keeps `agent_runs.status` in
- * the DB consistent with the runtime state of the orchestrator.
+ * RuntimeReconciler — periodic sweep that keeps each agent-run file status
+ * consistent with the runtime state of the orchestrator.
  *
  * Boot recovery already covers the cold-start path (`server.ts` calls
- * `companyStore.recoverStaleAgentRuns` and `MasterInboxRouter.reviveIfPending`),
+ * bundle startup recovery and `MasterInboxRouter.reviveIfPending`),
  * but doesn't help DURING a live session. If something kills the master
- * runner without flipping the DB (worker thread crash, uncaught throw
- * inside a tool, OS-level OOM), the row stays at `status='running'`
+ * runner without updating its persisted bundle (worker thread crash,
+ * uncaught throw inside a tool, OS-level OOM), the agent-run record stays
+ * at `status='running'`
  * forever and the dashboard renders a status that doesn't match reality.
  *
  * Two responsibilities, one timer:
- *   1. Force `status='idle'` on agent_runs whose runtime says they're
+ *   1. Force `status='idle'` on agent-run records whose runtime says they're
  *      dead (master `_handle == null || _ended === true`, or subordinate
  *      missing from `subordinates` map).
  *   2. (Item 3 — Heartbeat Master) If the master is dead AND there are
@@ -31,6 +32,7 @@ import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 import type { KanbanService } from '@mcp/company/services/KanbanService.js';
+import { asAgentRunId } from '@mcp/session-storage';
 import {
   isAutonomyActionAllowed,
   resolveAutonomy,
@@ -104,12 +106,11 @@ function readNudgeMs(): number {
 }
 
 /**
- * Parse a SQLite timestamp to epoch ms. `datetime('now')` yields
- * "YYYY-MM-DD HH:MM:SS" in UTC with NO zone marker — `Date.parse` would read
- * that as LOCAL time and skew the age by the host's UTC offset (hours).
- * Normalize to explicit UTC; ISO strings that already carry a zone pass through.
+ * Parse a persisted timestamp to epoch ms. Migration can preserve legacy
+ * "YYYY-MM-DD HH:MM:SS" UTC values without a zone marker, so normalize that
+ * shape to explicit UTC. Native filesystem records already use ISO timestamps.
  */
-function parseSqliteUtc(s: string | null | undefined): number {
+function parsePersistedTimestamp(s: string | null | undefined): number {
   if (!s) return NaN;
   if (/[zZ]|[+-]\d\d:?\d\d$/.test(s)) return Date.parse(s);
   return Date.parse(s.replace(' ', 'T') + 'Z');
@@ -159,7 +160,7 @@ export class RuntimeReconciler {
   private lastNextCardNudgeAt = 0;
   /** Per-subordinate auto-reestablish attempt counter (crash-loop cap). Reset
    *  when the subordinate is observed healthy (tracked) again. */
-  private readonly reestablishAttempts = new Map<number, number>();
+  private readonly reestablishAttempts = new Map<string, number>();
 
   constructor(private readonly deps: RuntimeReconcilerDeps) {}
 
@@ -233,18 +234,22 @@ export class RuntimeReconciler {
     // Find any agent_run row for the master with a "live" status that
     // doesn't match the runtime. We use listAgentRuns + filter rather
     // than a custom query because the row count per session is small.
-    const runs = this.deps.ctx.companyStore.listAgentRuns(sessionId);
+    const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
     const masterRow = runs.find((r) => r.role === 'master');
     if (!masterRow) return;
-    const dbSaysRunning =
+    const persistedSaysRunning =
       masterRow.status === 'running' ||
       masterRow.status === 'waiting_plan' ||
       masterRow.status === 'waiting_question' ||
       masterRow.status === 'waiting_tasks';
-    if (!dbSaysRunning) return;
+    if (!persistedSaysRunning) return;
     if (this.deps.master.isAlive) return;
     // Runtime says dead, DB says running — reconcile.
-    this.deps.ctx.companyStore.updateAgentRunStatus(masterRow.id, 'idle', 'reconciled');
+    await this.deps.ctx.companyFiles.updateAgentRunStatus(
+      masterRow.id,
+      'idle',
+      'reconciled',
+    );
     this.deps.publisher.publish('agent_status', {
       agentRunId: masterRow.id,
       role: 'master',
@@ -260,7 +265,7 @@ export class RuntimeReconciler {
 
   private async reconcileSubordinates(): Promise<void> {
     const sessionId = this.deps.ctx.companySessionId;
-    const runs = this.deps.ctx.companyStore.listAgentRuns(sessionId);
+    const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
     for (const r of runs) {
       if (r.role === 'master') continue;
       const isRunning = r.status === 'running';
@@ -288,7 +293,11 @@ export class RuntimeReconciler {
           this.reestablishAttempts.set(r.id, attempts);
           // Flip off 'running' FIRST: the UI stops showing it running AND resume
           // is permitted (it rejects a 'running' row).
-          this.deps.ctx.companyStore.updateAgentRunStatus(r.id, 'error', 'reconciler: runtime gone — re-establishing');
+          await this.deps.ctx.companyFiles.updateAgentRunStatus(
+            r.id,
+            'error',
+            'reconciler: runtime gone — re-establishing',
+          );
           this.deps.publisher.publish('agent_status', {
             agentRunId: r.id, role: r.role, status: 'error', message: 're-establishing',
           });
@@ -318,7 +327,11 @@ export class RuntimeReconciler {
       }
 
       // waiting_* ghost, or auto-reestablish disabled → reconcile to idle.
-      this.deps.ctx.companyStore.updateAgentRunStatus(r.id, 'idle', 'reconciled');
+      await this.deps.ctx.companyFiles.updateAgentRunStatus(
+        r.id,
+        'idle',
+        'reconciled',
+      );
       this.deps.publisher.publish('agent_status', {
         agentRunId: r.id,
         role: r.role,
@@ -362,7 +375,7 @@ export class RuntimeReconciler {
     } catch {
       return;
     }
-    const runs = this.deps.ctx.companyStore.listAgentRuns(sessionId);
+    const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
     const liveRunIds = new Set(
       runs.filter((r) => ACTIVE_RUN_STATUSES.has(r.status)).map((r) => r.id),
     );
@@ -373,7 +386,7 @@ export class RuntimeReconciler {
       blockedBy: c.blocked_by,
       assignedAgentRunIds: c.agents
         .filter((a) => !a.unassigned_at)
-        .map((a) => a.agent_run_id),
+        .map((a) => asAgentRunId(a.agent_run_id)),
     }));
     const schedRuns = [...new Set(schedCards.flatMap((c) => c.assignedAgentRunIds))].map(
       (id) => ({ agentRunId: id, live: liveRunIds.has(id) }),
@@ -386,7 +399,10 @@ export class RuntimeReconciler {
       try {
         const card = cardsFull.find((c) => c.id === cardId);
         for (const a of card?.agents ?? []) {
-          if (!a.unassigned_at && !liveRunIds.has(a.agent_run_id)) {
+          if (
+            !a.unassigned_at &&
+            !liveRunIds.has(asAgentRunId(a.agent_run_id))
+          ) {
             kanban.unassignAgent(cardId, a.agent_run_id);
           }
         }
@@ -423,8 +439,7 @@ export class RuntimeReconciler {
    */
   private async heartbeatMasterInbox(): Promise<void> {
     if (this.deps.master.isAlive) return;
-    const pending = this.deps.ctx.companyStore.listInboxMessages({
-      companySessionId: this.deps.ctx.companySessionId,
+    const pending = this.deps.ctx.companyFiles.listInboxMessagesSync({
       toRole: MASTER_INBOX_SENTINEL,
       status: 'pending',
       limit: 1,
@@ -461,13 +476,13 @@ export class RuntimeReconciler {
     const sessionId = this.deps.ctx.companySessionId;
     const now = this.nowMs();
 
-    const stalled = this.deps.ctx.companyStore
-      .listAgentRuns(sessionId)
+    const stalled = this.deps.ctx.companyFiles
+      .listAgentRunsSync()
       .filter((r) => {
         if (r.role === 'master') return false;
         const kind = decisionKindOf(r.status);
         if (!kind || !this.decisionStillPending(r.id, kind)) return false;
-        const ageMs = now - parseSqliteUtc(r.updated_at);
+        const ageMs = now - parsePersistedTimestamp(r.updated_at);
         return Number.isFinite(ageMs) && ageMs >= nudgeMs;
       });
 
@@ -482,7 +497,7 @@ export class RuntimeReconciler {
         // waitForUserInput, mirroring HumanInTheLoop's original post).
         this.deps.master.handle?.runner.interruptWait({ kind, agentRunId: r.id, role: r.role });
         this.deps.attention.signal({ kind, agentRunId: r.id, role: r.role });
-        this.publishNudge({ case: 'decision', agentRunId: r.id, role: r.role, kind, ageMs: now - parseSqliteUtc(r.updated_at) });
+        this.publishNudge({ case: 'decision', agentRunId: r.id, role: r.role, kind, ageMs: now - parsePersistedTimestamp(r.updated_at) });
         console.log(`[company s=${sessionId}] master nudge (decision): re-woke for run=${r.id} kind=${kind}`);
       }
       await this.nudgeStalledInbox(sessionId, now, nudgeMs);
@@ -516,11 +531,11 @@ export class RuntimeReconciler {
     const kanban = this.deps.kanban;
     if (!kanban) return;
     try {
-      const runs = this.deps.ctx.companyStore.listAgentRuns(this.deps.ctx.companySessionId);
+      const runs = this.deps.ctx.companyFiles.listAgentRunsSync();
       const masterRow = runs.find((r) => r.role === 'master');
       const decision = evaluateNextCardNudge({
         masterAlive: this.deps.master.isAlive,
-        masterIdleMs: now - parseSqliteUtc(masterRow?.updated_at),
+        masterIdleMs: now - parsePersistedTimestamp(masterRow?.updated_at),
         activeSubordinateCount: runs.filter(
           (r) => r.role !== 'master' && ACTIVE_RUN_STATUSES.has(r.status),
         ).length,
@@ -539,26 +554,25 @@ export class RuntimeReconciler {
     } catch { /* nudge must never break the sweep */ }
   }
 
-  private decisionStillPending(id: number, kind: 'plan' | 'question' | 'tasks'): boolean {
+  private decisionStillPending(id: string, kind: 'plan' | 'question' | 'tasks'): boolean {
     if (kind === 'plan') return this.deps.humanInLoop.hasPendingPlan(id);
     if (kind === 'question') return this.deps.humanInLoop.hasPendingQuestion(id);
     return this.deps.humanInLoop.hasPendingTasks(id);
   }
 
-  private async nudgeStalledInbox(sessionId: number, now: number, nudgeMs: number): Promise<void> {
-    const pending = this.deps.ctx.companyStore.listInboxMessages({
-      companySessionId: sessionId,
+  private async nudgeStalledInbox(sessionId: string, now: number, nudgeMs: number): Promise<void> {
+    const pending = this.deps.ctx.companyFiles.listInboxMessagesSync({
       toRole: MASTER_INBOX_SENTINEL,
       status: 'pending',
     });
     const oldest = pending.find((m) => {
-      const created = parseSqliteUtc(m.created_at);
+      const created = parsePersistedTimestamp(m.created_at);
       return Number.isFinite(created) && now - created >= nudgeMs;
     });
     if (!oldest || this.recentlyNudged(`b:${oldest.id}`, now)) return;
     this.recordNudge(`b:${oldest.id}`, now);
     await this.deps.masterInbox.tryDeliverNow();
-    this.publishNudge({ case: 'inbox', messageId: oldest.id, ageMs: now - parseSqliteUtc(oldest.created_at) });
+    this.publishNudge({ case: 'inbox', messageId: oldest.id, ageMs: now - parsePersistedTimestamp(oldest.created_at) });
     console.log(`[company s=${sessionId}] master nudge (inbox): re-delivered, oldest msg=${oldest.id}`);
   }
 
@@ -579,10 +593,10 @@ export class RuntimeReconciler {
 
   private publishNudge(payload: {
     case: 'decision' | 'inbox' | 'resurrect' | 'next_card';
-    agentRunId?: number;
+    agentRunId?: string;
     role?: string;
     kind?: 'plan' | 'question' | 'tasks';
-    messageId?: number;
+    messageId?: string;
     reason?: string;
     ageMs?: number;
     /** next_card only — how many ready todo cards triggered the nudge. */

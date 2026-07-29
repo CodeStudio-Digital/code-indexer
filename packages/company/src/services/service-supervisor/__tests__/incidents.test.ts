@@ -13,8 +13,12 @@ import {
   type ServiceIncident,
 } from '../incidents.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000012';
+const CARD_ID = '00000000-0000-4000-8000-000000000007';
+const CREATED_CARD_ID = '00000000-0000-4000-8000-000000000099';
+
 const incident: ServiceIncident = {
-  sessionId: 12,
+  sessionId: SESSION_ID,
   serviceId: 'api',
   detail: 'container not running (exit=137)',
   restartAttempts: 3,
@@ -26,7 +30,7 @@ function makeDeps(over: Partial<IncidentDeps> = {}) {
     notify: vi.fn(),
     post: vi.fn(),
     publish: vi.fn(),
-    createCard: vi.fn(() => ({ id: 99 })),
+    createCard: vi.fn(() => ({ id: CREATED_CARD_ID })),
     addComment: vi.fn(),
     send: vi.fn(async () => ({})),
   };
@@ -56,13 +60,13 @@ describe('buildIncidentMessage', () => {
 
   it('B8 — local ids get host-process wording, not container remediation', () => {
     const msg = buildIncidentMessage({
-      sessionId: 12,
-      serviceId: 'local:12',
+      sessionId: SESSION_ID,
+      serviceId: `local:${SESSION_ID}`,
       detail: 'process 4242 not running',
       restartAttempts: 0,
       atMs: 1_000,
     });
-    expect(msg).toContain('**local:12**');
+    expect(msg).toContain(`**local:${SESSION_ID}**`);
     expect(msg).toContain('host process');
     expect(msg).toContain('process 4242 not running');
     expect(msg).not.toContain('rebuild the container');
@@ -127,17 +131,30 @@ describe('emitIncident', () => {
   it('dedupes: an open marked card gets a comment instead of a duplicate', async () => {
     const { deps, calls } = makeDeps();
     deps.kanban!.listCardsFull = () => [
-      { id: 7, column: 'todo', title: `${incidentCardTitle('api')} service down — auto-restart exhausted` },
+      {
+        id: CARD_ID,
+        column: 'todo',
+        title: `${incidentCardTitle('api')} service down — auto-restart exhausted`,
+      },
     ];
     await emitIncident(deps, incident);
     expect(calls.createCard).not.toHaveBeenCalled();
-    expect(calls.addComment).toHaveBeenCalledWith(7, 'supervisor', null, expect.stringContaining('Incident re-fired'));
+    expect(calls.addComment).toHaveBeenCalledWith(
+      CARD_ID,
+      'supervisor',
+      null,
+      expect.stringContaining('Incident re-fired'),
+    );
   });
 
   it('a done card does not block a fresh incident card', async () => {
     const { deps, calls } = makeDeps();
     deps.kanban!.listCardsFull = () => [
-      { id: 7, column: 'done', title: `${incidentCardTitle('api')} service down` },
+      {
+        id: CARD_ID,
+        column: 'done',
+        title: `${incidentCardTitle('api')} service down`,
+      },
     ];
     await emitIncident(deps, incident);
     expect(calls.createCard).toHaveBeenCalled();
@@ -146,7 +163,11 @@ describe('emitIncident', () => {
   it('dedupe is per-service: another service\'s card does not match', async () => {
     const { deps, calls } = makeDeps();
     deps.kanban!.listCardsFull = () => [
-      { id: 7, column: 'todo', title: `${incidentCardTitle('web')} service down` },
+      {
+        id: CARD_ID,
+        column: 'todo',
+        title: `${incidentCardTitle('web')} service down`,
+      },
     ];
     await emitIncident(deps, incident);
     expect(calls.createCard).toHaveBeenCalled();

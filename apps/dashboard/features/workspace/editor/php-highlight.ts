@@ -45,6 +45,11 @@ const PHP_CONSTRUCTS = [
 // `white` styles the whitespace capture group (no colour). Token names omit the
 // `.php` postfix the base grammar uses; theme matching is by prefix either way.
 const EXTRA_PHP_RULES: MonacoNs.languages.IMonarchLanguageRule[] = [
+  // ── PHP 8 attributes: `#[Route(...)]` ─────────────────────────────
+  // An attribute is a DECLARATION, not a comment — but the base grammar reads
+  // the leading `#` as a line comment and greys the whole thing out. Match the
+  // opener first (prepended rules win) and hand the body to `@phpAttribute`.
+  [/#\[/, { token: 'annotation', next: '@phpAttribute' }],
   // ── member access on objects ──────────────────────────────────────
   [/(->)(\s*)([a-zA-Z_]\w*)(?=\s*\()/, ['delimiter.php', 'white', 'entity.name.function.member']],
   [/(->)(\s*)([a-zA-Z_]\w*)/, ['delimiter.php', 'white', 'variable.other.property']],
@@ -75,8 +80,35 @@ const EXTRA_PHP_RULES: MonacoNs.languages.IMonarchLanguageRule[] = [
   }],
 ];
 
+/**
+ * The two states an attribute group is tokenized in. Split so the attribute
+ * NAMES paint as `annotation` while the ARGUMENTS keep ordinary PHP colours —
+ * `#[Route(code: StatusCode::OK)]` still shows the class, the constant and the
+ * strings, exactly like the same expression outside the brackets.
+ */
+const PHP_ATTRIBUTE_STATES: Record<string, MonacoNs.languages.IMonarchLanguageRule[]> = {
+  // Group level (`#[Foo, Bar\Baz]`): only names and commas live here, so a `]`
+  // always closes the group. `@phpRoot` covers whitespace/comments/delimiters.
+  phpAttribute: [
+    [/\]/, { token: 'annotation', next: '@pop' }],
+    [/\(/, { token: 'delimiter.parenthesis.php', next: '@phpAttributeArgs' }],
+    [/\\?[a-zA-Z_]\w*(?:\\[a-zA-Z_]\w*)*/, 'annotation'],
+    { include: '@phpRoot' },
+  ],
+  // Argument level: ordinary PHP expressions. Balanced `(`/`)` are tracked here
+  // so an array literal or a nested call can't pop the group early.
+  phpAttributeArgs: [
+    [/\)/, { token: 'delimiter.parenthesis.php', next: '@pop' }],
+    [/\(/, { token: 'delimiter.parenthesis.php', next: '@push' }],
+    { include: '@phpRoot' },
+  ],
+};
+
 /** The rules we prepend — exported for the regression test. */
 export const PHP_EXTRA_RULES = EXTRA_PHP_RULES;
+
+/** The attribute states we add — exported for the regression test. */
+export const PHP_ATTRIBUTE_RULES = PHP_ATTRIBUTE_STATES;
 
 /** Build the enriched language def without mutating Monaco's shared object. */
 export function enrichedPhp(): MonacoNs.languages.IMonarchLanguage {
@@ -90,6 +122,7 @@ export function enrichedPhp(): MonacoNs.languages.IMonarchLanguage {
     phpConstructs: PHP_CONSTRUCTS,
     tokenizer: {
       ...base.tokenizer,
+      ...PHP_ATTRIBUTE_STATES,
       phpRoot: [...EXTRA_PHP_RULES, ...base.tokenizer.phpRoot],
     },
   };

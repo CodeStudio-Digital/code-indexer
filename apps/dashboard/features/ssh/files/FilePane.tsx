@@ -1,20 +1,28 @@
 /**
  * Generic file pane — the same component drives both sides; only its `adapter`
- * differs (local project files vs remote SFTP). Owns its cwd/listing and
- * Ctrl/Shift multi-select; delegates the toolbar/menu actions to
- * `usePaneActions` and the right-click menu to `usePaneMenu`, and supports
- * cross-pane drag & drop.
+ * differs (local project files vs remote SFTP). Owns its cwd/listing, the
+ * sorted view of it, and Ctrl/Shift multi-select; delegates chrome to
+ * `FilePaneHeader`, actions to `usePaneActions`/`usePaneExtraActions`, the
+ * right-click menu to `usePaneMenu` and key handling to `usePaneKeyboard`.
+ *
+ * The list is VIRTUALIZED (unconditionally — one render path, no threshold),
+ * which is why rows have a fixed `ROW_HEIGHT` and why dragging near an edge has
+ * to auto-scroll: an off-screen row has no DOM node to drop onto.
  */
 import { useCallback, useEffect, useMemo, useState, type DragEvent, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ArrowUp, Check, Columns2, Download, FolderPlus, Loader2, RefreshCw, Upload } from 'lucide-react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { cn } from '../../../lib/utils.js';
-import { Popover, PopoverContent, PopoverTrigger } from '../../../components/ui/popover.js';
 import { FilePaneRow } from './FilePaneRow.js';
 import { hasPanePayload, readPanePayload, setPanePayload } from './pane-dnd.js';
 import { usePaneActions } from './use-pane-actions.js';
 import { usePaneMenu } from './use-pane-menu.js';
-import { COLUMNS, type ColumnId, type ColumnVisibility, type ColumnWidths } from './column-config.js';
+import { FilePaneHeader } from './FilePaneHeader.js';
+import { usePaneExtraActions } from './use-pane-extra-actions.js';
+import { usePaneKeyboard } from './use-pane-keyboard.js';
+import { usePaneDragScroll } from './use-pane-dragscroll.js';
+import { sortEntries, type SortKey, type SortState } from './pane-sort.js';
+import { ROW_HEIGHT, type ColumnId, type ColumnVisibility, type ColumnWidths } from './column-config.js';
 import type { FsAdapter, FsItem } from './fs-adapter.js';
 import type { PaneSelectionStore } from './pane-selection.js';
 
@@ -30,6 +38,8 @@ interface FilePaneProps {
   onCwdChange: (cwd: string) => void;
   onTransfer: (from: Kind, to: Kind, destDir: string, items: FsItem[]) => void;
   onOpenFile?: (item: FsItem) => void;
+  /** Remote-only chmod/chown entry point. */
+  onEditPermissions?: (item: FsItem) => void;
   onZip: (cwd: string, names: string[]) => Promise<boolean> | void;
   onExtract: (cwd: string, name: string) => Promise<boolean> | void;
   /** Which metadata columns are visible (shared by both panes). */
@@ -37,6 +47,11 @@ interface FilePaneProps {
   columnWidths: ColumnWidths;
   onToggleColumn: (id: ColumnId) => void;
   onColumnWidthChange: (id: ColumnId, width: number) => void;
+  /** Sort order, shared by both panes so the layout stays symmetric. */
+  sort: SortState;
+  onSort: (key: SortKey) => void;
+  /** Create an empty file — the owner supplies the transport per side. */
+  createFile: (dir: string, name: string) => Promise<void>;
 }
 
 export function FilePane(props: FilePaneProps) {
@@ -49,12 +64,16 @@ export function FilePane(props: FilePaneProps) {
     onCwdChange,
     onTransfer,
     onOpenFile,
+    onEditPermissions,
     onZip,
     onExtract,
     columns,
     columnWidths,
     onToggleColumn,
     onColumnWidthChange,
+    sort,
+    onSort,
+    createFile,
   } = props;
   const { t } = useTranslation('ssh');
   const [cwd, setCwd] = useState<string | null>(null);
@@ -106,43 +125,39 @@ export function FilePane(props: FilePaneProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
-  const order = useMemo(() => entries.map((e) => e.path), [entries]);
+  // Sorting is client-side over the in-memory listing; `sorted` is the single
+  // source of order for rendering, shift-ranges, keyboard indices and the
+  // virtualizer, so they can never disagree.
+  const sorted = useMemo(() => sortEntries(entries, sort), [entries, sort]);
+  const order = useMemo(() => sorted.map((e) => e.path), [sorted]);
   const selectedItems = useCallback(
     (fallback?: FsItem): FsItem[] => {
       const set = useSel.getState().selected;
-      const chosen = entries.filter((e) => set.has(e.path));
+      const chosen = sorted.filter((e) => set.has(e.path));
       return chosen.length ? chosen : fallback ? [fallback] : [];
     },
-    [entries, useSel],
+    [sorted, useSel],
   );
 
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: sorted.length,
+    getScrollElement: () => scrollEl,
+    estimateSize: () => ROW_HEIGHT,
+    overscan: 12,
+  });
+  const { onDragOver: onDragScroll, stopDragScroll } = usePaneDragScroll(scrollEl);
+
+  // Entering a directory must land at the top; without this the virtualizer
+  // keeps the previous scroll offset and the new listing opens mid-list.
+  useEffect(() => {
+    virtualizer.scrollToOffset(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cwd]);
+
   const actions = usePaneActions({ adapter, useSel, cwd, refresh: list, otherKind, otherCwd, onTransfer, onZip, onExtract, t });
-  const menu = usePaneMenu({ adapter, useSel, selectedItems, actions, onOpenFile, refresh: () => cwd != null && void list(cwd), t });
-  const crumbs = useMemo(() => (cwd == null ? [] : pathCrumbs(adapter.kind, cwd)), [adapter.kind, cwd]);
-  const startColumnResize = useCallback(
-    (e: MouseEvent, id: ColumnId) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startWidth = columnWidths[id];
-      const oldCursor = document.body.style.cursor;
-      const oldUserSelect = document.body.style.userSelect;
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      const onMove = (ev: globalThis.MouseEvent): void => {
-        onColumnWidthChange(id, startWidth - (ev.clientX - startX));
-      };
-      const onUp = (): void => {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        document.body.style.cursor = oldCursor;
-        document.body.style.userSelect = oldUserSelect;
-      };
-      window.addEventListener('mousemove', onMove);
-      window.addEventListener('mouseup', onUp);
-    },
-    [columnWidths, onColumnWidthChange],
-  );
+  const extra = usePaneExtraActions({ adapter, cwd, refresh: list, createFile, t });
+  const menu = usePaneMenu({ adapter, useSel, selectedItems, actions, extra, onOpenFile, onEditPermissions, refresh: () => cwd != null && void list(cwd), t });
 
   const onRowClick = useCallback(
     (e: MouseEvent, item: FsItem) => {
@@ -159,11 +174,27 @@ export function FilePane(props: FilePaneProps) {
   const onDragStart = useCallback(
     (e: DragEvent, item: FsItem) => {
       const set = useSel.getState().selected;
-      const items = set.has(item.path) ? entries.filter((x) => set.has(x.path)) : [item];
+      // Payload is serialized into dataTransfer (see pane-dnd.ts), so a source
+      // row unmounting mid-drag — which virtualization makes routine — is fine.
+      const items = set.has(item.path) ? sorted.filter((x) => set.has(x.path)) : [item];
       setPanePayload(e, { fromKind: adapter.kind, items });
     },
-    [entries, useSel, adapter.kind],
+    [sorted, useSel, adapter.kind],
   );
+
+  const onKeyDown = usePaneKeyboard({
+    useSel,
+    entries: sorted,
+    order,
+    pageSize: () => Math.max(1, Math.floor((scrollEl?.clientHeight ?? 0) / ROW_HEIGHT)),
+    scrollToIndex: (i) => virtualizer.scrollToIndex(i, { align: 'auto' }),
+    onOpen,
+    onParent: () => cwd != null && !atRootOf(adapter, cwd) && void list(adapter.parentDir(cwd)),
+    onRemove: (items) => void actions.doRemove(items),
+    onRename: (item) => void actions.doRename(item),
+    onRefresh: () => cwd != null && void list(cwd),
+    selectedItems,
+  });
 
   const dropInto = useCallback(
     (e: DragEvent, dir: string) => {
@@ -177,164 +208,98 @@ export function FilePane(props: FilePaneProps) {
     [adapter.kind, onTransfer],
   );
 
-  const atRoot = cwd != null && adapter.parentDir(cwd) === cwd;
-  const iconBtn = 'rounded p-1 text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-40';
-  const transferLabel = adapter.kind === 'local' ? t('files.toRemote') : t('files.toLocal');
-  const TransferIcon = adapter.kind === 'local' ? Upload : Download;
+  const atRoot = cwd != null && atRootOf(adapter, cwd);
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <div className="h-8 shrink-0 border-b flex items-center gap-1 px-2">
-        <span className="text-[11px] font-medium truncate max-w-[40%]" title={adapter.label}>{adapter.label}</span>
-        <button type="button" aria-label={t('sftp.up')} className={iconBtn} disabled={cwd == null || atRoot} onClick={() => cwd != null && void list(adapter.parentDir(cwd))}>
-          <ArrowUp className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" aria-label={t('sftp.refresh')} className={iconBtn} disabled={cwd == null} onClick={() => cwd != null && void list(cwd)}>
-          <RefreshCw className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" aria-label={t('sftp.newFolder')} className={iconBtn} disabled={cwd == null} onClick={() => void actions.doMkdir()}>
-          <FolderPlus className="h-3.5 w-3.5" />
-        </button>
-        <button type="button" aria-label={transferLabel} title={transferLabel} className={iconBtn} onClick={() => actions.doTransfer(selectedItems())}>
-          <TransferIcon className="h-3.5 w-3.5" />
-        </button>
-        <nav className="ml-1 flex min-w-0 flex-1 items-center overflow-hidden font-mono text-[10px] text-muted-foreground" title={cwd ?? ''}>
-          {crumbs.map((crumb, i) => {
-            const current = cwd === crumb.path;
-            return (
-              <span key={`${crumb.path}:${i}`} className="flex min-w-0 items-center">
-                {i > 1 && <span className="px-0.5 text-muted-foreground/60">/</span>}
-                <button
-                  type="button"
-                  disabled={current || loading}
-                  onClick={() => void list(crumb.path)}
-                  className={cn(
-                    'min-w-0 max-w-[120px] truncate rounded px-1 py-0.5 text-left hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:text-foreground',
-                    current && 'font-medium',
-                  )}
-                  title={crumb.path || '/'}
-                >
-                  {crumb.label}
-                </button>
-              </span>
-            );
-          })}
-        </nav>
-        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />}
-        <Popover>
-          <PopoverTrigger asChild>
-            <button type="button" aria-label={t('sftp.columnsToggle')} title={t('sftp.columnsToggle')} className={iconBtn}>
-              <Columns2 className="h-3.5 w-3.5" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent align="end" className="w-44 p-1">
-            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{t('sftp.columnsTitle')}</p>
-            {COLUMNS.map((col) => (
-              <button
-                key={col.id}
-                type="button"
-                role="menuitemcheckbox"
-                aria-checked={columns[col.id]}
-                onClick={() => onToggleColumn(col.id)}
-                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-xs hover:bg-accent"
-              >
-                <span className="w-4 flex items-center justify-center">
-                  {columns[col.id] && <Check className="h-3 w-3" />}
-                </span>
-                {t(`sftp.columns.${col.labelKey}`)}
-              </button>
-            ))}
-          </PopoverContent>
-        </Popover>
-      </div>
+      <FilePaneHeader
+        adapter={adapter}
+        cwd={cwd}
+        atRoot={atRoot}
+        loading={loading}
+        error={error}
+        columns={columns}
+        columnWidths={columnWidths}
+        sort={sort}
+        onNavigate={(dir) => void list(dir)}
+        onRefresh={() => cwd != null && void list(cwd)}
+        onNewFolder={() => void actions.doMkdir()}
+        onTransferSelected={() => actions.doTransfer(selectedItems())}
+        onToggleColumn={onToggleColumn}
+        onColumnWidthChange={onColumnWidthChange}
+        onSort={onSort}
+      />
 
-      {error && <div className="px-2 py-1 text-[10px] text-red-400 border-b bg-red-500/10 shrink-0">{error}</div>}
-
-      {/* Column header — mirrors the row layout so widths align. The Name
-          column flexes (flex-1); the others use the same fixed widths as
-          FilePaneRow so header and cells stay in lockstep. */}
-      <div className="flex items-center gap-2 px-3 h-6 shrink-0 border-b bg-muted/40 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-        <span className="w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate whitespace-nowrap" title={t('sftp.columns.name')}>{t('sftp.columns.name')}</span>
-        {COLUMNS.map((col) => {
-          if (!columns[col.id]) return null;
-          const label = t(`sftp.columns.${col.labelKey}`);
-          return (
-            <span
-              key={col.id}
-              className="group/col relative shrink-0 text-right"
-              style={{ width: columnWidths[col.id] }}
-              title={label}
-            >
-              <span className="block truncate whitespace-nowrap px-1">{label}</span>
-              <span
-                role="separator"
-                aria-orientation="vertical"
-                aria-label={label}
-                title={label}
-                onMouseDown={(e) => startColumnResize(e, col.id)}
-                className="absolute -left-1 top-0 h-full w-2 cursor-col-resize rounded-sm hover:bg-primary/30 group-hover/col:bg-border"
-              />
-            </span>
-          );
-        })}
-      </div>
-
+      {/* Virtualized unconditionally: one render path avoids the
+          "works at 39 rows, breaks at 41" class of bug, and a real listing
+          (node_modules, /usr/bin) used to mount thousands of DOM rows. */}
       <div
-        className={cn('flex-1 min-h-0 overflow-y-auto', dropActive && 'ring-2 ring-inset ring-primary/60')}
+        ref={setScrollEl}
+        tabIndex={0}
+        role="listbox"
+        aria-multiselectable
+        aria-label={adapter.label}
+        onKeyDown={onKeyDown}
+        className={cn(
+          'flex-1 min-h-0 overflow-y-auto outline-none [scrollbar-gutter:stable]',
+          dropActive && 'ring-2 ring-inset ring-primary/60',
+        )}
         onContextMenu={menu.onEmptyContext}
         onDragOver={(e) => {
-          if (hasPanePayload(e)) {
-            e.preventDefault();
-            setDropActive(true);
-          }
+          if (!hasPanePayload(e)) return;
+          e.preventDefault();
+          setDropActive(true);
+          // An off-screen row has no DOM node to drop onto, so the pane has to
+          // scroll itself while the cursor sits near an edge.
+          onDragScroll(e);
         }}
-        onDragLeave={() => setDropActive(false)}
-        onDrop={(e) => cwd != null && dropInto(e, cwd)}
+        onDragLeave={() => {
+          setDropActive(false);
+          stopDragScroll();
+        }}
+        onDrop={(e) => {
+          stopDragScroll();
+          if (cwd != null) dropInto(e, cwd);
+        }}
       >
-        {entries.length === 0 && !loading && (
+        {sorted.length === 0 && !loading && (
           <div className="grid place-items-center h-full text-xs text-muted-foreground">{t('sftp.empty')}</div>
         )}
-        {entries.map((e) => (
-          <FilePaneRow
-            key={e.path}
-            item={e}
-            useSel={useSel}
-            busy={actions.busyPath === e.path}
-            columns={columns}
-            columnWidths={columnWidths}
-            onClick={onRowClick}
-            onOpen={onOpen}
-            onContext={menu.onRowContext}
-            onDragStart={onDragStart}
-            onDropInto={(ev, item) => dropInto(ev, item.path)}
-          />
-        ))}
+        {sorted.length > 0 && (
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+            {virtualizer.getVirtualItems().map((vi) => {
+              const e = sorted[vi.index];
+              return (
+                <div
+                  key={e.path}
+                  style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${vi.start}px)` }}
+                >
+                  <FilePaneRow
+                    item={e}
+                    useSel={useSel}
+                    busy={actions.busyPath === e.path}
+                    columns={columns}
+                    columnWidths={columnWidths}
+                    onClick={onRowClick}
+                    onOpen={onOpen}
+                    onContext={menu.onRowContext}
+                    onDragStart={onDragStart}
+                    onDropInto={(ev, item) => dropInto(ev, item.path)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
       {menu.Menu}
     </div>
   );
 }
 
-function pathCrumbs(kind: FsAdapter['kind'], cwd: string): Array<{ label: string; path: string }> {
-  if (kind === 'local') {
-    const parts = cwd.split('/').filter(Boolean);
-    const crumbs = [{ label: '/', path: '' }];
-    let path = '';
-    for (const part of parts) {
-      path = path ? `${path}/${part}` : part;
-      crumbs.push({ label: part, path });
-    }
-    return crumbs;
-  }
-
-  const normalized = cwd.startsWith('/') ? cwd : `/${cwd}`;
-  const parts = normalized.split('/').filter(Boolean);
-  const crumbs = [{ label: '/', path: '/' }];
-  let path = '';
-  for (const part of parts) {
-    path = `${path}/${part}`;
-    crumbs.push({ label: part, path });
-  }
-  return crumbs;
+/** True when `cwd` is the adapter's root (parentDir clamps there). */
+function atRootOf(adapter: FsAdapter, cwd: string): boolean {
+  return adapter.parentDir(cwd) === cwd;
 }
+
+

@@ -17,9 +17,11 @@
  * they also show up in the dashboard Snapshots panel (source 'auto'), exactly
  * like the human-triggered "Revisão automática" button.
  */
-import type { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
-import type { SessionFileReviewStore } from '@mcp/store/session-file-review-store.js';
-import type { ReviewIntelStore } from '@mcp/store/review-intel-store.js';
+import type { ReviewIntelPort } from './review-intel-port.js';
+import type {
+  SessionReviewStorePort,
+  SessionSnapshotStorePort,
+} from './session-snapshot-port.js';
 import type { FileDiff, SessionSnapshotService } from './session-snapshots.js';
 import type {
   SnapshotReviewFinding,
@@ -32,12 +34,15 @@ import { buildReviewBundle } from './review-bundle.js';
 import type { IntentContractCompiler, IntentObligation } from './intent-contract.js';
 import { buildReviewPriors, recordSessionFates } from './review-fates.js';
 
-export interface ReviewSessionDeps {
-  snapshotStore: SessionFileSnapshotStore;
-  snapshotService: SessionSnapshotService;
+export interface ReviewSessionDeps<
+  SessionKey extends string = string,
+  RecordId extends string = string,
+> {
+  snapshotStore: SessionSnapshotStorePort<SessionKey, RecordId>;
+  snapshotService: SessionSnapshotService<SessionKey, RecordId>;
   pipeline: SnapshotReviewPipeline;
   /** When present, persists the run + comments so the Snapshots panel shows them. */
-  reviewStore?: SessionFileReviewStore;
+  reviewStore?: SessionReviewStorePort<SessionKey, RecordId>;
   /** When present, absence detection runs (review-absences.ts): untouched
    *  call sites of contract-changed symbols become a "references to verify"
    *  prompt section + kind=missing_change findings. Failures are swallowed —
@@ -45,7 +50,7 @@ export interface ReviewSessionDeps {
   referenceLookup?: ReviewReferenceLookup;
   /** When present (with reviewStore), finding fates are observed before the
    *  run and calibration priors are injected into the prompt (review-fates). */
-  intelStore?: ReviewIntelStore;
+  intelStore?: ReviewIntelPort<SessionKey, RecordId>;
   /** Scopes the calibration priors to this project — without it the
    *  aggregates would cross every project on the machine. */
   projectId?: number;
@@ -79,11 +84,14 @@ export interface ReviewSessionOptions {
 
 const DIFF_CONTEXT = 3;
 
-async function loadDiffs(
-  service: SessionSnapshotService,
-  baselineIds: number[],
-): Promise<FileDiff[]> {
-  const diffs: FileDiff[] = [];
+async function loadDiffs<
+  SessionKey extends string,
+  RecordId extends string,
+>(
+  service: SessionSnapshotService<SessionKey, RecordId>,
+  baselineIds: RecordId[],
+): Promise<FileDiff<RecordId>[]> {
+  const diffs: FileDiff<RecordId>[] = [];
   for (const baselineId of baselineIds) {
     const diff = await service.getDiff(baselineId, { context: DIFF_CONTEXT });
     if (diff) diffs.push(diff);
@@ -91,7 +99,9 @@ async function loadDiffs(
   return diffs;
 }
 
-function countPendingHunks(diffs: FileDiff[]): number {
+function countPendingHunks<RecordId extends string>(
+  diffs: FileDiff<RecordId>[],
+): number {
   return diffs.reduce(
     (sum, diff) =>
       sum + (diff.diffDisabled ? 0 : diff.hunks.filter((h) => h.decision === 'pending').length),
@@ -100,7 +110,10 @@ function countPendingHunks(diffs: FileDiff[]): number {
 }
 
 /** Mirror of `excerptFor` in snapshot-review-routes.ts — a fallback diff snippet. */
-function excerptFor(diff: FileDiff, fingerprint?: string | null): string | null {
+function excerptFor<RecordId extends string>(
+  diff: FileDiff<RecordId>,
+  fingerprint?: string | null,
+): string | null {
   if (diff.diffDisabled) return null;
   const hunk = fingerprint
     ? diff.hunks.find((h) => h.fingerprint === fingerprint)
@@ -118,7 +131,10 @@ function excerptFor(diff: FileDiff, fingerprint?: string | null): string | null 
 
 /** Enclosing-symbol name for a finding's line — an anchor that survives the
  *  fingerprint invalidation a re-edit causes. Best-effort. */
-function symbolAnchorFor(diff: FileDiff, line: number | null | undefined): string | null {
+function symbolAnchorFor<RecordId extends string>(
+  diff: FileDiff<RecordId>,
+  line: number | null | undefined,
+): string | null {
   if (line == null || diff.currentContent == null) return null;
   try {
     const declLine = findEnclosingDeclLine(diff.currentContent, line);
@@ -129,12 +145,15 @@ function symbolAnchorFor(diff: FileDiff, line: number | null | undefined): strin
   }
 }
 
-function persistComments(
-  reviewStore: SessionFileReviewStore,
-  runId: number,
-  diffs: FileDiff[],
+async function persistComments<
+  SessionKey extends string,
+  RecordId extends string,
+>(
+  reviewStore: SessionReviewStorePort<SessionKey, RecordId>,
+  runId: RecordId,
+  diffs: FileDiff<RecordId>[],
   findings: SnapshotReviewFinding[],
-): void {
+): Promise<void> {
   for (const finding of findings) {
     const kind = finding.kind ?? 'defect';
     let diff = diffs.find(
@@ -157,7 +176,7 @@ function persistComments(
           : kind === 'scope_creep'
             ? '[scope creep] '
             : '';
-    reviewStore.createComment({
+    await reviewStore.createComment({
       run_id: runId,
       baseline_id: diff.baseline.id,
       source: 'auto',
@@ -178,26 +197,36 @@ function persistComments(
   }
 }
 
-export async function reviewSessionSnapshots(
-  deps: ReviewSessionDeps,
-  coderSessionId: number,
+export async function reviewSessionSnapshots<
+  SessionKey extends string,
+  RecordId extends string,
+>(
+  deps: ReviewSessionDeps<SessionKey, RecordId>,
+  coderSessionId: SessionKey,
   opts: ReviewSessionOptions = {},
 ): Promise<ReviewSessionOutcome> {
   const { snapshotStore, snapshotService, pipeline, reviewStore } = deps;
-  const baselineIds = snapshotStore.listActiveBaselineIds('coder', coderSessionId);
+  const baselineIds = await snapshotStore.listActiveBaselineIds('coder', coderSessionId);
   // Drop internal/never-reviewed paths (.mcp-indexer/**, .git, node_modules,
   // dist) up front so they don't count toward pendingHunks or reach the model.
   const diffs = filterReviewableDiffs(await loadDiffs(snapshotService, baselineIds));
   const pendingHunks = countPendingHunks(diffs);
 
-  const run = reviewStore?.createRun({
+  const run = reviewStore
+    ? await reviewStore.createRun({
     session_kind: 'coder',
     session_id: coderSessionId,
     source: 'auto',
-  });
+      })
+    : undefined;
 
   if (pendingHunks === 0) {
-    if (run) reviewStore!.completeRun(run.id, { status: 'completed', raw_response: '{"findings":[]}' });
+    if (run) {
+      await reviewStore!.completeRun(run.id, {
+        status: 'completed',
+        raw_response: '{"findings":[]}',
+      });
+    }
     return { ok: true, pendingHunks: 0, findings: [] };
   }
 
@@ -206,8 +235,14 @@ export async function reviewSessionSnapshots(
   // aggregate into calibration priors for this review. Best-effort.
   let priors: string | null = null;
   if (deps.intelStore && reviewStore) {
-    recordSessionFates(reviewStore, deps.intelStore, 'coder', coderSessionId, diffs);
-    priors = buildReviewPriors(deps.intelStore, deps.projectId);
+    await recordSessionFates(
+      reviewStore,
+      deps.intelStore,
+      'coder',
+      coderSessionId,
+      diffs,
+    );
+    priors = await buildReviewPriors(deps.intelStore, deps.projectId);
   }
 
   // Compile the intent contract (cached per intent hash) — null degrades to
@@ -217,7 +252,7 @@ export async function reviewSessionSnapshots(
     obligations = await deps.intentCompiler.compile({
       sessionKind: 'coder',
       sessionId: coderSessionId,
-      resolveContext: { sessionId: coderSessionId },
+      resolveContext: { sessionId: String(coderSessionId) },
       intentSource: opts.intent,
     });
   }
@@ -237,7 +272,7 @@ export async function reviewSessionSnapshots(
   const result = await pipeline.review({
     sessionKind: 'coder',
     sessionId: coderSessionId,
-    resolveContext: { sessionId: coderSessionId },
+    resolveContext: { sessionId: String(coderSessionId) },
     diffs,
     contextText: bundle.contextText,
     absencesText: bundle.absencesText,
@@ -246,7 +281,7 @@ export async function reviewSessionSnapshots(
 
   if (!result.ok) {
     if (run) {
-      reviewStore!.completeRun(run.id, {
+      await reviewStore!.completeRun(run.id, {
         status: 'error',
         provider_id: result.providerId ?? null,
         model_id: result.modelId ?? null,
@@ -266,13 +301,13 @@ export async function reviewSessionSnapshots(
   }
 
   if (run) {
-    reviewStore!.completeRun(run.id, {
+    await reviewStore!.completeRun(run.id, {
       status: 'completed',
       provider_id: result.providerId ?? null,
       model_id: result.modelId ?? null,
       raw_response: result.raw,
     });
-    persistComments(reviewStore!, run.id, diffs, result.findings);
+    await persistComments(reviewStore!, run.id, diffs, result.findings);
   }
 
   return {

@@ -12,14 +12,14 @@ import { bulkDeleteVersions } from '../api-anim-bulk.js';
 
 export function useSelectionActions(projectId: number, refresh: () => void): {
   busy: boolean;
-  deleteVersions: (ids: number[]) => Promise<void>;
-  addToTimeline: (orderedIds: number[]) => void;
-  restoreTimeline: (versionIds: number[]) => void;
+  deleteVersions: (ids: string[]) => Promise<void>;
+  addToTimeline: (orderedIds: string[]) => void;
+  restoreTimeline: (versionIds: string[]) => void;
 } {
   const { t } = useTranslation('spriteStudio');
   const [busy, setBusy] = useState(false);
 
-  const deleteVersions = useCallback(async (ids: number[]) => {
+  const deleteVersions = useCallback(async (ids: string[]) => {
     if (ids.length === 0 || busy) return;
     const s = useAnimateSession.getState();
     const inUse = ids.filter((id) => s.frameVersionIds.includes(id));
@@ -51,7 +51,7 @@ export function useSelectionActions(projectId: number, refresh: () => void): {
     }
   }, [busy, projectId, refresh, t]);
 
-  const addToTimeline = useCallback((orderedIds: number[]) => {
+  const addToTimeline = useCallback((orderedIds: string[]) => {
     const s = useAnimateSession.getState();
     if (!s.appendToTimeline) { toast.error(t('frames.needAnimation')); return; }
     const ordered = orderedIds.filter((id) => s.selected.has(id));
@@ -62,7 +62,7 @@ export function useSelectionActions(projectId: number, refresh: () => void): {
   }, [t]);
 
   // Restore a whole batch: replace the open animation's timeline with it.
-  const restoreTimeline = useCallback((versionIds: number[]) => {
+  const restoreTimeline = useCallback((versionIds: string[]) => {
     const s = useAnimateSession.getState();
     if (!s.setTimeline) { toast.error(t('frames.needAnimation')); return; }
     if (versionIds.length === 0) return;

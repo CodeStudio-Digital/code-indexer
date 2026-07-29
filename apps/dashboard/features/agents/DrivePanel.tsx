@@ -73,7 +73,7 @@ interface DriveReadResponse {
 }
 
 interface DrivePanelProps {
-  companySessionId: number;
+  companySessionId: string;
 }
 
 export function DrivePanel({ companySessionId }: DrivePanelProps) {

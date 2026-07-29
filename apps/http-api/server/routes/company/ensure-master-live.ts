@@ -28,8 +28,9 @@ import {
 } from '../../../sse/companyOrchestrator.js';
 import { withSessionLock } from '../coder/sessionLock.js';
 import { resolveAndRunMaster } from './master-resolve.js';
-import { routeAllowsCompanySurface } from './runtime-capabilities.js';
 import { resolveEffectiveMasterRuntime } from '@mcp/company/services/subordinate/role-runtime.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 export interface EnsureMasterOpts {
   /** Delivered to the master as a continuation (the answer / message / plan verdict). */
@@ -52,8 +53,8 @@ export type EnsureMasterResult =
     };
 
 export async function ensureCompanyMasterLive(
-  id: number,
-  deps: Pick<ServerDeps, 'companyStore'>,
+  id: CompanySessionId,
+  deps: Pick<ServerDeps, 'sessionStore'>,
   opts: EnsureMasterOpts,
 ): Promise<EnsureMasterResult> {
   return withSessionLock(id, () => ensureCompanyMasterLiveLocked(id, deps, opts));
@@ -68,12 +69,10 @@ export async function ensureCompanyMasterLive(
  * re-entrant.
  */
 export async function ensureCompanyMasterLiveLocked(
-  id: number,
-  deps: Pick<ServerDeps, 'companyStore'>,
+  id: CompanySessionId,
+  deps: Pick<ServerDeps, 'sessionStore'>,
   opts: EnsureMasterOpts,
 ): Promise<EnsureMasterResult> {
-  const { companyStore } = deps;
-
   const existing = getCompanyOrchestrator(id);
   if (existing) {
     try {
@@ -118,8 +117,17 @@ export async function ensureCompanyMasterLiveLocked(
     }
   }
 
-  const session = companyStore.getCompanySession(id);
-  if (!session) return { error: 'Not found', status: 404 };
+  await deps.sessionStore.ensureCatalog();
+  let companyFiles: CompanySessionFiles;
+  try {
+    companyFiles = new CompanySessionFiles({
+      companySessionId: id,
+      sessionStore: deps.sessionStore,
+    });
+  } catch {
+    return { error: 'Not found', status: 404 };
+  }
+  const session = companyFiles.getSession();
 
   let config: {
     role_assignments?: Parameters<CompanyOrchestrator['startMaster']>[0]['roleConfigs'];
@@ -141,11 +149,13 @@ export async function ensureCompanyMasterLiveLocked(
 
   // A session that has a master run RESUMES it (reuses coder_session_id);
   // a brand-new sub-session with no master run cold-starts.
-  const masterRun = companyStore.listAgentRuns(id).filter((r) => r.role === 'master').pop();
+  const masterRun = companyFiles.listAgentRunsSync()
+    .filter((r) => r.role === 'master')
+    .pop();
 
   const attemptSpawnAndResume = async (): Promise<WorkerBackedOrchestrator> => {
     const { orchestrator } = await getOrSpawnCompanyOrchestrator(id);
-    if (routeAllowsCompanySurface(companyStore, id, 'pipelines')) {
+    if (session.runtime_kind !== 'app_studio') {
       void orchestrator.pipelineRecoverRunning().catch((err) => {
         console.warn(`[company s=${id}] pipeline recovery failed:`, err);
       });

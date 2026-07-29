@@ -2,11 +2,6 @@
  * Per-turn telemetry persistence — pure function extracted from the
  * legacy `CoderRunner.persistTurnTelemetry`.
  *
- * Migration history (read alongside `sessions/store/telemetry-record.ts`):
- *   - Mig 069: base schema (`coder_turn_telemetry` table).
- *   - Mig 072: `system_prompt_chars`, `tools_def_chars`, `estimated_cost_usd`.
- *   - Mig 093: `response_meta` (request betas + response rate-limits).
- *
  * Scope of THIS function (kept narrow on purpose):
  *   - Compute `largest_tool_result_chars` and `paginate_count` (signals
  *     that don't depend on `this`).
@@ -28,23 +23,17 @@ import type {
   ToolUseBlock,
 } from '@mcp/code-agent/core/messages.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type {
+  FsTurnTelemetryInput,
+  FsTurnTelemetrySink,
+} from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface PersistTurnTelemetryArgs {
-  /** Session store handle; persistence is skipped when omitted. */
-  store: Pick<SessionStore, 'recordTurnTelemetry'> | undefined;
-  /**
-   * Perf W1 — optional async writer (dbWriter worker). When present it wins
-   * over `store`: the INSERT happens off the coder thread and the id comes
-   * back as a promise. Callers that need the id for same-turn stamping await
-   * it (see `flushPendingTurn` in `index.ts`); the row is queued on the same
-   * per-session FIFO as `persistAssistantTurn`, so ordering holds.
-   */
-  asyncStore?: (
-    input: Parameters<SessionStore['recordTurnTelemetry']>[0],
-  ) => Promise<number | null>;
-  /** Persistent coder_sessions row id; null for subagents/tests. */
-  sessionId: number | null;
+  /** Filesystem telemetry sink; persistence is skipped when omitted. */
+  store: FsTurnTelemetrySink | undefined;
+  /** Filesystem session UUID; null for detached subagents/tests. */
+  sessionId: SessionId | null;
   /** Fresh per-run uuid for cross-table correlation. */
   runId: string;
   /** True when this run is inside a subagent (no kanban/board lifecycle). */
@@ -93,9 +82,8 @@ export interface PersistTurnTelemetryArgs {
 }
 
 /**
- * Insert one row into `coder_turn_telemetry` and return its id (or null
- * when persistence is unavailable / failed). With `asyncStore` wired the
- * insert runs off-thread and the id resolves later (promise return).
+ * Persist one immutable metric file and return its UUID (or null when
+ * persistence is unavailable / failed).
  *
  * Best-effort: the function NEVER throws / never rejects. Telemetry must
  * not break a real turn. Failures inside `store.recordTurnTelemetry` are
@@ -103,8 +91,8 @@ export interface PersistTurnTelemetryArgs {
  */
 export function persistTurnTelemetry(
   args: PersistTurnTelemetryArgs,
-): number | null | Promise<number | null> {
-  if (!args.store && !args.asyncStore) return null;
+): string | null | Promise<string | null> {
+  if (!args.store || args.sessionId == null) return null;
 
   // ── largest_tool_result_chars ──
   // Surfaces tools that routinely produce huge outputs (good candidates
@@ -157,7 +145,7 @@ export function persistTurnTelemetry(
     : (args.responseMeta ?? null);
 
   try {
-    const record: Parameters<NonNullable<PersistTurnTelemetryArgs['store']>['recordTurnTelemetry']>[0] = {
+    const record: FsTurnTelemetryInput = {
       session_id: args.sessionId,
       run_id: args.runId,
       turn: args.turn,
@@ -191,20 +179,7 @@ export function persistTurnTelemetry(
       estimated_cost_usd: cost > 0 ? cost : null,
       response_meta: responseMeta,
     };
-    if (args.asyncStore) {
-      const syncStore = args.store;
-      const syncFallback = (): number | null => {
-        // Degradation contract (incident 2026-07-20): a broken dbWriter
-        // worker must fall back to the synchronous insert, never drop rows.
-        if (!syncStore) return null;
-        try { return syncStore.recordTurnTelemetry(record); } catch { return null; }
-      };
-      return args.asyncStore(record).then(
-        (id) => (id != null ? id : syncFallback()),
-        () => syncFallback(),
-      );
-    }
-    return args.store!.recordTurnTelemetry(record);
+    return args.store.recordTurnTelemetry(record).catch(() => null);
   } catch {
     return null;
   }

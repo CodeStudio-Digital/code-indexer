@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { FileAudio2, FileImage, FileText, Film, Loader2, RotateCcw } from 'lucide-react';
 import type { OpenFile } from '../../../state/workspace.js';
 import type { BinaryMediaKind } from './media-types.js';
@@ -17,14 +18,15 @@ const checkerboardStyle = {
   backgroundSize: '20px 20px',
 };
 
-const labels: Record<BinaryMediaKind, string> = {
-  image: 'Image preview',
-  video: 'Video preview',
-  audio: 'Audio preview',
-  pdf: 'PDF preview',
+const labelKeys: Record<BinaryMediaKind, string> = {
+  image: 'mediaPreview.image',
+  video: 'mediaPreview.video',
+  audio: 'mediaPreview.audio',
+  pdf: 'mediaPreview.pdf',
 };
 
 export function MediaView({ file, kind }: MediaViewProps) {
+  const { t } = useTranslation('workspace');
   const source = useMemo(
     () => rawProjectFileUrl(file.projectId, file.path),
     [file.projectId, file.path],
@@ -38,7 +40,7 @@ export function MediaView({ file, kind }: MediaViewProps) {
     <div className="h-full min-h-0 flex flex-col bg-background">
       <div className="h-7 shrink-0 border-b bg-card/40 flex items-center px-2 gap-1 text-[10.5px] text-muted-foreground">
         <MediaIcon kind={kind} />
-        <span>{labels[kind]}</span>
+        <span>{t(labelKeys[kind])}</span>
         <span className="ml-auto font-mono text-[10px] text-muted-foreground/70">
           {file.path.split('/').pop()}
         </span>
@@ -47,9 +49,9 @@ export function MediaView({ file, kind }: MediaViewProps) {
         {error ? (
           <div className="absolute inset-0 grid place-items-center p-6">
             <div className="max-w-sm text-center text-sm text-muted-foreground">
-              <p className="text-foreground font-medium">Preview unavailable</p>
+              <p className="text-foreground font-medium">{t('mediaPreview.unavailable')}</p>
               <p className="mt-1 text-xs">
-                The file could not be decoded by this browser. Its container or codec may be unsupported.
+                {t('mediaPreview.decodeFailed')}
               </p>
               <button
                 type="button"
@@ -60,7 +62,7 @@ export function MediaView({ file, kind }: MediaViewProps) {
                 className="mt-3 h-7 inline-flex items-center gap-1.5 rounded border px-2.5 text-xs hover:bg-muted text-foreground"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
-                Retry
+                {t('mediaPreview.retry')}
               </button>
             </div>
           </div>
@@ -88,6 +90,7 @@ function MediaSurface({
   fileName: string;
   onError: () => void;
 }) {
+  const { t } = useTranslation('workspace');
   if (kind === 'image') {
     return (
       <div className="h-full w-full overflow-auto p-5 grid place-items-center" style={checkerboardStyle}>
@@ -112,7 +115,7 @@ function MediaSurface({
           onError={onError}
           className="max-h-full max-w-full bg-black shadow-xl"
         >
-          Your browser does not support this video format.
+          {t('mediaPreview.videoUnsupported')}
         </video>
       </div>
     );
@@ -125,7 +128,7 @@ function MediaSurface({
           <FileAudio2 className="h-12 w-12 mx-auto text-primary/70" />
           <p className="mt-3 mb-4 text-sm font-medium truncate" title={fileName}>{fileName}</p>
           <audio src={source} controls preload="metadata" onError={onError} className="w-full">
-            Your browser does not support this audio format.
+            {t('mediaPreview.audioUnsupported')}
           </audio>
         </div>
       </div>
@@ -139,7 +142,7 @@ function MediaSurface({
       </div>
       <iframe
         src={source}
-        title={`PDF preview: ${fileName}`}
+        title={t('mediaPreview.pdfFrameTitle', { file: fileName })}
         onError={onError}
         className="absolute inset-0 h-full w-full border-0 bg-white"
       />

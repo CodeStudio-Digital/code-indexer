@@ -15,7 +15,7 @@ import { Textarea } from '../../../components/ui/textarea.js';
 import { apiPatch } from '../../../hooks/useApi.js';
 
 interface OperationalRulesEditorProps {
-  sessionId: number;
+  sessionId: string;
   /** Current value parsed from the session's config_json (operational_rules). */
   value: string;
   /** Re-fetch the session so the saved value round-trips back into `value`. */

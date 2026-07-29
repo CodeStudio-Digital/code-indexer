@@ -9,10 +9,14 @@ import {
   type InvestigationSemanticRow,
 } from '../investigation-semantic-index.js';
 
+const INVESTIGATION_ID = '018f0f5e-7b2d-7a45-8c11-0123456789ab';
+const SESSION_ID = '018f0f5e-7b2d-7a45-8c11-0123456789ac';
+const OTHER_INVESTIGATION_ID = '018f0f5e-7b2d-7a45-8c11-0123456789ad';
+
 const row: InvestigationSemanticRow = {
-  id: 17,
+  id: INVESTIGATION_ID,
   project_id: 7,
-  session_id: 3,
+  session_id: SESSION_ID,
   topic: 'distributed vectors',
   summary: 'route investigation vectors with the Knowledge profile',
   body: 'long details remain relational',
@@ -69,12 +73,12 @@ describe('InvestigationSemanticIndex', () => {
     );
     expect(vectors.upsert).toHaveBeenCalledWith([
       {
-        id: investigationVectorId(17),
+        id: investigationVectorId(INVESTIGATION_ID),
         values: [0.6, 0.8],
         metadata: {
           type: 'investigation',
-          ref_id: '17',
-          session_id: '3',
+          ref_id: INVESTIGATION_ID,
+          session_id: SESSION_ID,
           chunk_index: '0',
           embedding_hash: investigationEmbeddingTextHash(row, 'knowledge-space'),
         },
@@ -90,16 +94,19 @@ describe('InvestigationSemanticIndex', () => {
     } satisfies EmbeddingService;
     const vectors = makeVectorStore();
     vectors.search.mockResolvedValue([
-      { id: 'a', score: 0.9, metadata: { type: 'investigation', ref_id: '8' } },
-      { id: 'b', score: 0.8, metadata: { type: 'investigation', ref_id: '8' } },
+      { id: 'a', score: 0.9, metadata: { type: 'investigation', ref_id: INVESTIGATION_ID } },
+      { id: 'b', score: 0.8, metadata: { type: 'investigation', ref_id: INVESTIGATION_ID } },
       { id: 'c', score: 0.7, metadata: { type: 'investigation', ref_id: 'bad' } },
-      { id: 'd', score: 0.6, metadata: { type: 'investigation', ref_id: '5' } },
+      { id: 'd', score: 0.6, metadata: { type: 'investigation', ref_id: OTHER_INVESTIGATION_ID } },
     ]);
     const index = new InvestigationSemanticIndex(
       { listProject: () => [] }, null, vectors, queryEmbedding,
     );
 
-    await expect(index.search(7, 'routing', 3)).resolves.toEqual([8, 5]);
+    await expect(index.search(7, 'routing', 3)).resolves.toEqual([
+      INVESTIGATION_ID,
+      OTHER_INVESTIGATION_ID,
+    ]);
     expect(queryEmbedding.embedQueryForNamespace).toHaveBeenCalledWith(
       'memory:project:p7', 'routing',
     );

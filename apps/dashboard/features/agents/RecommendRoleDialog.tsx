@@ -31,7 +31,7 @@ import {
 } from './recommendations-api.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   open: boolean;
   onClose: () => void;
   /** Optional initial task text (e.g. picked from a kanban card). */

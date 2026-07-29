@@ -178,7 +178,7 @@ interface ProviderOption {
 }
 
 const PROVIDERS: ProviderOption[] = [
-  { id: 'anthropic', label: 'Anthropic',     keyExample: 'sk-ant-…',  defaultModel: 'claude-sonnet-4-5' },
+  { id: 'anthropic', label: 'Anthropic',     keyExample: 'sk-ant-…',  defaultModel: 'claude-sonnet-5' },
   { id: 'openai',    label: 'OpenAI',        keyExample: 'sk-…',      defaultModel: 'gpt-5' },
   { id: 'google',    label: 'Google AI',     keyExample: 'AIza…',     defaultModel: 'gemini-2.5-pro' },
   { id: 'bedrock',   label: 'AWS Bedrock',   keyExample: 'IAM access keys configured separately' },

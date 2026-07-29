@@ -16,10 +16,10 @@ interface Entry {
   lastActivity: number;
 }
 
-const buses = new Map<number, Entry>();
+const buses = new Map<string, Entry>();
 
 /** Get (or lazily create) the bus for a sprite project's DB id. */
-export function getSpriteBus(spriteProjectId: number): CoderRunBus {
+export function getSpriteBus(spriteProjectId: string): CoderRunBus {
   let entry = buses.get(spriteProjectId);
   if (!entry) {
     // The AbortController is unused (we never markEnded), but createBus needs it.
@@ -31,7 +31,7 @@ export function getSpriteBus(spriteProjectId: number): CoderRunBus {
 }
 
 /** Publish a typed sprite-job event onto a project's bus (SSE event name = type). */
-export function emitSpriteEvent(spriteProjectId: number, ev: SpriteJobEvent): void {
+export function emitSpriteEvent(spriteProjectId: string, ev: SpriteJobEvent): void {
   const bus = getSpriteBus(spriteProjectId);
   publish(bus, ev.type, ev);
   const entry = buses.get(spriteProjectId);

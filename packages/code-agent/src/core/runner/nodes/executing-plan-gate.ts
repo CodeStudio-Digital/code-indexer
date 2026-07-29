@@ -44,81 +44,75 @@ export function maybePlanNudge(ctx: RunContext): string | null {
 }
 
 /**
- * A1 — independent goal-completion gate for `update_goal`.
+ * Schedule the independent completion reviewer after goal persistence.
  *
- * The verifier runs BEFORE the tool handler persists status=complete. A
- * negative verdict therefore leaves the durable goal in_progress, matching a
- * Stop-hook contract: only verified completion commits the terminal state.
- *
- * Fail-open by construction: unset callback, a thrown verifier, or a null
- * verdict (no usable persisted goal) lets the normal update proceed.
- * Negative verdicts are fail-closed and bounded: once the attempt cap is
- * reached, later calls are refused without spending another verifier request.
+ * The reviewer is deliberately detached from dispatch: its positive,
+ * negative, inconclusive, or failed result is audit data only. It can improve
+ * later diagnosis without delaying the tool result or revoking completion.
  */
-const GOAL_VERIFY_MAX_ATTEMPTS = Math.max(0, Number(process.env.CODER_GOAL_VERIFY_MAX_ATTEMPTS ?? 2));
-
-export async function maybeGoalCompletionRefusal(
+export function scheduleGoalCompletionAdvisory(
   ctx: RunContext,
   evidence?: import('./executing-verification-gate.js').VerificationReadiness,
-): Promise<string | null> {
+): boolean {
   const verify = ctx.bridge?.verifyGoalCompletion;
-  if (!verify) return null;
-  let goal: ReturnType<NonNullable<typeof ctx.opts.toolContext.getGoalState>>;
-  try {
-    goal = ctx.opts.toolContext.getGoalState?.() ?? null;
-  } catch {
-    return null; // the lifecycle/persistence gate surfaces the authoritative error
-  }
-  if (goal?.status !== 'in_progress') return null;
-  const evidenceFingerprint = evidence
-    ? JSON.stringify({
-        status: evidence.status,
-        changedFiles: [...evidence.changedFiles].sort(),
-        lastWriteSeq: evidence.lastWriteSeq,
-        lastValidationSeq: evidence.lastValidationSeq,
-        lastSuccessfulValidationSeq: evidence.lastSuccessfulValidationSeq,
-        validationSignals: [...evidence.validationSignals].sort(),
-      })
-    : null;
-  if (
-    evidenceFingerprint != null
-    && ctx.goalVerifyEvidenceFingerprint != null
-    && evidenceFingerprint !== ctx.goalVerifyEvidenceFingerprint
-  ) {
-    // A new write/validation revision is real progress. Give the independent
-    // verifier a fresh bounded budget instead of permanently pinning an old
-    // negative verdict to the run.
-    ctx.goalVerifyAttempts = 0;
-  }
-  if (evidenceFingerprint != null) {
-    ctx.goalVerifyEvidenceFingerprint = evidenceFingerprint;
-  }
-  if (ctx.goalVerifyAttempts >= GOAL_VERIFY_MAX_ATTEMPTS) {
-    return (
-      '[goal-verifier] Refused `update_goal`: the independent completion check ' +
-      `already found unmet requirements ${ctx.goalVerifyAttempts} time(s). ` +
-      'The goal remains in_progress; address the reported gaps or stop with an explicit blocker.'
-    );
-  }
+  if (!verify) return false;
 
-  let verdict: { goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null;
-  try {
-    verdict = await verify(evidence);
-  } catch {
-    return null; // fail-open — a broken verifier must never block the run
-  }
-  if (!verdict) return null;
-  if (verdict.goalMet) return null;
+  const record = (
+    health: 'verified' | 'unverified' | 'completed_with_warnings',
+    content: string,
+    gaps: ReadonlyArray<{ description: string; severity: string }> = [],
+  ): void => {
+    if (ctx.opts.sessionId == null) return;
+    try {
+      ctx.opts.sessionStore?.recordSessionInput({
+        session_id: ctx.opts.sessionId,
+        kind: 'system_reminder',
+        source_label: 'advisory:goal-verification',
+        content,
+        meta: {
+          health,
+          gaps,
+          evidence_status: evidence?.status ?? null,
+          validation_signals: evidence?.validationSignals ?? [],
+          turn: ctx.turn,
+        },
+      });
+    } catch {
+      // Audit persistence is best-effort and must not affect the completed run.
+    }
+  };
 
-  ctx.goalVerifyAttempts += 1;
-  const gapLines = verdict.gaps.length
-    ? verdict.gaps.map((g) => `- [${g.severity}] ${g.description}`).join('\n')
-    : '- (no specific gaps returned — re-check the goal against your changes)';
-  return (
-    '[goal-verifier] Refused `update_goal`: an independent completion check found the goal is NOT fully met. ' +
-    'The persisted goal remains in_progress. Address these gaps, then retry:\n' +
-    gapLines +
-    `\nIf a gap is wrong or genuinely out of scope, state that explicitly rather than silently ignoring it. ` +
-    `The verifier runs at most ${GOAL_VERIFY_MAX_ATTEMPTS} time(s) per run.`
-  );
+  queueMicrotask(() => {
+    void verify(evidence).then((verdict) => {
+      if (!verdict) {
+        record(
+          'unverified',
+          '[goal-advisory] Independent completion review was inconclusive. The goal remains complete.',
+        );
+        return;
+      }
+      if (verdict.goalMet) {
+        record(
+          'verified',
+          '[goal-advisory] Independent completion review confirmed the completed goal.',
+        );
+        return;
+      }
+      const gapLines = verdict.gaps.length > 0
+        ? verdict.gaps.map((gap) => `- [${gap.severity}] ${gap.description}`).join('\n')
+        : '- No specific gaps were returned.';
+      record(
+        'completed_with_warnings',
+        '[goal-advisory] Independent completion review reported gaps after completion:\n' + gapLines,
+        verdict.gaps,
+      );
+    }).catch((error: unknown) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      record(
+        'unverified',
+        `[goal-advisory] Independent completion review failed (${reason}). The goal remains complete.`,
+      );
+    });
+  });
+  return true;
 }

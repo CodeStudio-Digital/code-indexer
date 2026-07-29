@@ -15,10 +15,10 @@ import { apiPost, apiPatch } from '../../../../hooks/useApi.js';
 import type { Pipeline, PipelineGraph } from '@mcp/company/types.js';
 
 export type PipelineBuilderScope =
-  | { kind: 'company'; companySessionId: number }
+  | { kind: 'company'; companySessionId: string }
   // `projectId` is optional — the coder routes derive the owning project
   // from the session server-side; it's kept for callers that already have it.
-  | { kind: 'project'; coderSessionId: number; projectId?: number };
+  | { kind: 'project'; coderSessionId: string; projectId?: number };
 
 export interface PipelineValidationResult {
   ok: boolean;
@@ -40,7 +40,10 @@ export interface GenerateResult {
 }
 
 export interface PipelinePersistence {
-  validate: (graph: PipelineGraph, pipelineId: number | null) => Promise<PipelineValidationResult>;
+  validate: (
+    graph: PipelineGraph,
+    pipelineId: number | string | null,
+  ) => Promise<PipelineValidationResult>;
   save: (args: SaveArgs) => Promise<Pipeline>;
   /** Ask the AI to draft a graph from a natural-language description. */
   generate: (intent: string, availableRoles: string[]) => Promise<GenerateResult>;

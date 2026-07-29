@@ -18,11 +18,11 @@ export function AppStudioChatRail({
   onChanged,
   onCollapse,
 }: {
-  appSessionId: number;
-  companySessionId: number | null;
+  appSessionId: string;
+  companySessionId: string | null;
   projectId: number;
   projectName: string;
-  masterSessionId: number | null;
+  masterSessionId: string | null;
   initialPrompt?: string | null;
   detail: AppStudioSessionDetail;
   companyStream?: ReturnType<typeof useCompanyStream>;

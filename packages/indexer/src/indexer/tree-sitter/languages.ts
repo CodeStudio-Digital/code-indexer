@@ -4,10 +4,32 @@
  * from tree-sitter-wasms package.
  */
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import Parser from 'web-tree-sitter';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+
+/**
+ * Absolute path to a file shipped inside an installed package, located via
+ * Node's own module resolution rather than a hardcoded `../../..` depth.
+ *
+ * Why: these paths used to walk five levels up from the module's directory to
+ * `<repo>/node_modules`. That depth only holds when running from source
+ * (`packages/indexer/src/indexer/tree-sitter`). The compiled build adds a
+ * `dist/` level (`dist/packages/indexer/src/...`), so the same walk landed on
+ * `dist/node_modules` — which does not exist. Tree-sitter then failed to
+ * initialise and indexing stalled in the packaged desktop app while working
+ * fine in dev. Module resolution walks up until it finds a real `node_modules`,
+ * so it is correct in BOTH layouts, and inside the Electron asar (module
+ * resolution and the subsequent read both go through Electron's patched fs).
+ *
+ * Resolution targets `package.json` because neither package exposes a usable
+ * bare entry: `tree-sitter-wasms`'s `main` points at a non-existent path, and
+ * we want the package ROOT, not its main file.
+ */
+function packageFile(packageName: string, ...segments: string[]): string {
+  return resolve(dirname(require.resolve(`${packageName}/package.json`)), ...segments);
+}
 
 let initialized = false;
 const languageCache = new Map<string, Parser.Language>();
@@ -15,7 +37,7 @@ const languageCache = new Map<string, Parser.Language>();
 /** Ensure web-tree-sitter WASM runtime is initialized (once). */
 export async function initTreeSitter(): Promise<void> {
   if (initialized) return;
-  const wasmPath = resolve(__dirname, '../../../../../node_modules/web-tree-sitter/tree-sitter.wasm');
+  const wasmPath = packageFile('web-tree-sitter', 'tree-sitter.wasm');
   await Parser.init({ locateFile: () => wasmPath });
   initialized = true;
 }
@@ -137,7 +159,7 @@ export async function loadLanguage(wasmFile: string): Promise<Parser.Language> {
   const cached = languageCache.get(wasmFile);
   if (cached) return cached;
 
-  const wasmPath = resolve(__dirname, '../../../../../node_modules/tree-sitter-wasms/out', wasmFile);
+  const wasmPath = packageFile('tree-sitter-wasms', 'out', wasmFile);
   const lang = await Parser.Language.load(wasmPath);
   languageCache.set(wasmFile, lang);
   return lang;

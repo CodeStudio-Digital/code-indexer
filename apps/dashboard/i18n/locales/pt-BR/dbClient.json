@@ -186,7 +186,10 @@
     "noRelations": "Nenhuma chave estrangeira relacionada a esta linha.",
     "copyCsv": "Copiar como CSV",
     "copy": "Copiar",
-    "copied": "Copiado para a área de transferência"
+    "copied": "Copiado para a área de transferência",
+    "rowsShown": "{{n}} linha(s)",
+    "truncated": "truncado",
+    "truncatedHint": "O servidor limitou este resultado — refine a consulta ou aumente o limite de linhas."
   },
   "node": {
     "viewData": "Ver dados",
@@ -405,8 +408,8 @@
     "done": "Inseridas {{n}} linhas",
     "doneErrors": "Inseridas {{ok}}, {{errors}} com falha",
     "errorsN": "{{n}} erros"
-  }
-  ,"edit.primaryKey": "PK",
+  },
+  "edit.primaryKey": "PK",
   "edit.null": "NULO",
   "edit.true": "verdadeiro",
   "edit.false": "falso"

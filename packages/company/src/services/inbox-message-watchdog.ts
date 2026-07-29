@@ -1,7 +1,7 @@
 /**
  * C8 — InboxMessageWatchdog (Sprint 3.5).
  *
- * Periodic watcher that detects `agent_inbox` messages stuck in
+ * Periodic watcher that detects file-backed inbox messages stuck in
  * `pending`/`delivered` status past a threshold (default 5 min) and
  * publishes `inbox_message_stuck` events on the MetaBus. Master
  * listeners can then reassign, escalate, or cancel — instead of
@@ -10,7 +10,7 @@
  * **Design**:
  *   - Process-wide singleton, started by the host during boot.
  *   - Interval-based (`setInterval`); default 30s scan.
- *   - Read-only against `agent_inbox` (no DB mutation here — listeners
+ *   - Read-only against session bundles (no mutation here — listeners
  *     decide whether to flip statuses).
  *   - Idempotent — repeated stuck events for the same message ID are
  *     deduped via a `notifiedMessageIds` set bounded by LRU eviction.
@@ -28,22 +28,30 @@
  *   - `MCP_COMPANY_INBOX_WATCHDOG_STUCK_MS` — stuck threshold, default 5*60_000
  *   - `MCP_COMPANY_INBOX_WATCHDOG_ENABLED` — `'1'` to start at boot (default `'0'`)
  */
-import type { CompanyStore } from '@mcp/store/company-store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import type { AgentInboxMessage } from '@mcp/company/types.js';
+import { CompanySessionFiles } from './CompanySessionFiles.js';
 import type { IMetaBusPublisher } from './ports.js';
 
+export interface InboxWatchdogSource {
+  listOpenMessages():
+    | readonly AgentInboxMessage[]
+    | Promise<readonly AgentInboxMessage[]>;
+}
+
 export interface InboxWatchdogDeps {
-  companyStore: CompanyStore;
+  source: InboxWatchdogSource;
   publisher: IMetaBusPublisher;
   /** Override for tests. Defaults to `Date.now()`. */
   now?: () => number;
 }
 
 export interface InboxStuckEvent {
-  messageId: number;
-  companySessionId: number;
-  fromAgentRunId: number;
+  messageId: string;
+  companySessionId: string;
+  fromAgentRunId: string;
   fromRole: string;
-  toAgentRunId: number | null;
+  toAgentRunId: string | null;
   toRole: string | null;
   status: 'pending' | 'delivered';
   /** ms since the message was created. */
@@ -77,7 +85,7 @@ export class InboxMessageWatchdog {
    * repeated notifications when the same message remains stuck across
    * many scan windows. Bounded LRU; oldest entries drop when full.
    */
-  private notifiedMessageIds = new Set<number>();
+  private notifiedMessageIds = new Set<string>();
   /** Number of scans completed since start — diagnostic-only. */
   private scanCount = 0;
 
@@ -113,7 +121,7 @@ export class InboxMessageWatchdog {
    * Diagnostic accessor — has the watchdog flagged this message yet?
    * Useful for tests and the admin panel.
    */
-  hasNotified(messageId: number): boolean {
+  hasNotified(messageId: string): boolean {
     return this.notifiedMessageIds.has(messageId);
   }
 
@@ -143,57 +151,41 @@ export class InboxMessageWatchdog {
     const now = this.deps.now ? this.deps.now() : Date.now();
     const stuckMs = resolveStuckMs();
     const cutoff = now - stuckMs;
-    const sessions = this.deps.companyStore.listSessionsWithPendingMasterInbox();
-    // listSessionsWithPendingMasterInbox covers master-bound pending;
-    // we also need peer-to-peer pending. Walk every active company
-    // session we know about via the same store.
-    const allSessions = new Set<number>(sessions);
-    // listInboxMessages requires a company_session_id; we don't have
-    // a "list all companies" method, so the master-bound query is our
-    // narrowest filter. Tests pass companySessionId via mock.
-    // (If you need wider coverage, extend CompanyStore with a
-    // `listSessionsWithAnyPendingInbox()` helper.)
-
     const emitted: InboxStuckEvent[] = [];
-    for (const sid of allSessions) {
-      const messages = this.deps.companyStore.listInboxMessages({
-        companySessionId: sid,
-        status: ['pending', 'delivered'],
-      });
-      for (const m of messages) {
-        if (this.notifiedMessageIds.has(m.id)) continue;
-        const createdMs = Date.parse(m.created_at);
-        if (!Number.isFinite(createdMs)) continue;
-        if (createdMs > cutoff) continue; // not yet stuck
-        const ageMs = now - createdMs;
-        const event: InboxStuckEvent = {
-          messageId: m.id,
-          companySessionId: sid,
-          fromAgentRunId: m.from_agent_run_id,
-          fromRole: m.from_role,
-          toAgentRunId: m.to_agent_run_id ?? null,
-          toRole: m.to_role ?? null,
-          status: m.status as 'pending' | 'delivered',
-          ageMs,
-          detectedAtMs: now,
-        };
-        emitted.push(event);
-        this.recordNotified(m.id);
-        try {
-          this.deps.publisher.publish('inbox_message_stuck', event);
-        } catch (e) {
-          console.warn(
-            `[inbox-watchdog] publish failed for message ${m.id}: ${
-              e instanceof Error ? e.message : String(e)
-            }`,
-          );
-        }
+    const messages = await this.deps.source.listOpenMessages();
+    for (const m of messages) {
+      if (this.notifiedMessageIds.has(m.id)) continue;
+      const createdMs = Date.parse(m.created_at);
+      if (!Number.isFinite(createdMs)) continue;
+      if (createdMs > cutoff) continue; // not yet stuck
+      const ageMs = now - createdMs;
+      const event: InboxStuckEvent = {
+        messageId: m.id,
+        companySessionId: m.company_session_id,
+        fromAgentRunId: m.from_agent_run_id,
+        fromRole: m.from_role,
+        toAgentRunId: m.to_agent_run_id ?? null,
+        toRole: m.to_role ?? null,
+        status: m.status as 'pending' | 'delivered',
+        ageMs,
+        detectedAtMs: now,
+      };
+      emitted.push(event);
+      this.recordNotified(m.id);
+      try {
+        this.deps.publisher.publish('inbox_message_stuck', event);
+      } catch (e) {
+        console.warn(
+          `[inbox-watchdog] publish failed for message ${m.id}: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
+        );
       }
     }
     return emitted;
   }
 
-  private recordNotified(id: number): void {
+  private recordNotified(id: string): void {
     if (this.notifiedMessageIds.size >= NOTIFIED_LRU_MAX) {
       // Drop the oldest by deletion order. Set preserves insertion
       // order; we evict the first key. Not strict LRU but bounded.
@@ -202,6 +194,35 @@ export class InboxMessageWatchdog {
     }
     this.notifiedMessageIds.add(id);
   }
+}
+
+export function createFileInboxWatchdogSource(
+  sessionStore: FsSessionStore,
+): InboxWatchdogSource {
+  return {
+    async listOpenMessages(): Promise<AgentInboxMessage[]> {
+      await sessionStore.ensureCatalog();
+      const messages: AgentInboxMessage[] = [];
+      for (const entry of sessionStore.catalog.list()) {
+        if (
+          entry.session.kind !== 'company' &&
+          entry.session.kind !== 'app_studio'
+        ) {
+          continue;
+        }
+        const files = new CompanySessionFiles({
+          companySessionId: entry.session.id,
+          sessionStore,
+        });
+        messages.push(
+          ...files.listInboxMessagesSync({
+            status: ['pending', 'delivered'],
+          }),
+        );
+      }
+      return messages;
+    },
+  };
 }
 
 /**

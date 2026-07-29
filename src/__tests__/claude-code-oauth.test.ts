@@ -9,17 +9,33 @@ import {
   CLAUDE_CODE_PACKAGE_VERSION,
   claudeCodeAuthHeaders,
   createClaudeCodeFetchWithRetry,
+  disposeClaudeCodeOAuthResources,
   getClaudeCodeBetasForModel,
   parseClaudeCodeRateLimitHeaders,
   refreshIfExpired,
   resolveClaudeCodeModel,
+  startOAuthFlow,
 } from '@mcp/services/services/oauth/claude-code.js';
 
 afterEach(() => {
   __setClaudeCodeFetchForTests(null);
+  disposeClaudeCodeOAuthResources();
 });
 
 describe('Claude Code OAuth parity helpers', () => {
+  it('binds the loopback callback before using its ephemeral port in PKCE URLs', async () => {
+    const flow = await startOAuthFlow();
+    const authorizeUrl = new URL(flow.authorize_url);
+
+    expect(flow.port).toBeGreaterThan(0);
+    expect(authorizeUrl.searchParams.get('redirect_uri')).toBe(
+      `http://localhost:${flow.port}/callback`,
+    );
+    expect(flow.manual_authorize_url).toContain(
+      encodeURIComponent('https://platform.claude.com/oauth/code/callback'),
+    );
+  });
+
   it('builds the Claude.ai authorize URL with official params and scopes', () => {
     const url = new URL(buildClaudeCodeAuthUrl({
       codeChallenge: 'challenge',
@@ -120,7 +136,7 @@ describe('Claude Code OAuth parity helpers', () => {
     const priorDisableExperimental = process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
     delete process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
     try {
-      expect(CLAUDE_CODE_PACKAGE_VERSION).toBe('2.1.215');
+      expect(CLAUDE_CODE_PACKAGE_VERSION).toBe('2.1.219');
       expect(getClaudeCodeBetasForModel('claude-opus-4-8[1m]', true, {
         hasEffort: true,
         hasTools: true,
@@ -132,6 +148,7 @@ describe('Claude Code OAuth parity helpers', () => {
         'interleaved-thinking-2025-05-14',
         'context-management-2025-06-27',
         'prompt-caching-scope-2026-01-05',
+        'mid-conversation-system-2026-04-07',
         'extended-cache-ttl-2025-04-11',
       ]);
       expect(getClaudeCodeBetasForModel('claude-sonnet-4-6[1m]', true)).toEqual([
@@ -153,7 +170,7 @@ describe('Claude Code OAuth parity helpers', () => {
     expect(resolveClaudeCodeModel('default', {
       subscriptionType: 'max',
     })).toMatchObject({
-      apiModel: 'claude-opus-4-8',
+      apiModel: 'claude-opus-5',
       maxTokens: 64_000,
       effort: 'high',
       thinking: { type: 'adaptive' },
@@ -170,7 +187,21 @@ describe('Claude Code OAuth parity helpers', () => {
     expect(resolveClaudeCodeModel('default', {
       subscriptionType: 'enterprise',
       billingType: 'enterprise_usage_based',
-    }).apiModel).toBe('claude-opus-4-8');
+    }).apiModel).toBe('claude-opus-5');
+    expect(resolveClaudeCodeModel('opus')).toMatchObject({
+      apiModel: 'claude-opus-5',
+      displayName: 'Opus 5',
+      maxTokens: 64_000,
+      effort: 'high',
+      thinking: { type: 'adaptive' },
+      isOneMillionContext: true,
+    });
+    expect(resolveClaudeCodeModel('opus-4-8', null, { effort: 'max' })).toMatchObject({
+      apiModel: 'claude-opus-4-8',
+      displayName: 'Opus 4.8',
+      effort: 'max',
+      outputConfig: { effort: 'max' },
+    });
     expect(resolveClaudeCodeModel('fable')).toMatchObject({
       apiModel: 'claude-fable-5',
       displayName: 'Fable 5',

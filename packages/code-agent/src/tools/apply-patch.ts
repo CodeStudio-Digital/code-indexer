@@ -26,7 +26,7 @@
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
-import { resolveAuthorizedPath, pathFor } from '@mcp/code-agent/tools/paths.js';
+import { resolveWorkspacePath, pathFor } from '@mcp/code-agent/tools/paths.js';
 import {
   defaultLocalFilesystemPort,
   type IFilesystemPort,
@@ -297,9 +297,9 @@ export interface ApplyResult {
 }
 
 type PlannedOp =
-  | { kind: 'add'; abs: string; data: string; relPath: string; rootPath: string; external: boolean }
-  | { kind: 'delete'; abs: string; relPath: string; rootPath: string; external: boolean }
-  | { kind: 'write'; abs: string; data: string; relPath: string; rootPath: string; external: boolean }
+  | { kind: 'add'; abs: string; data: string; relPath: string; displayPath: string; rootPath: string; external: boolean; projectId?: number }
+  | { kind: 'delete'; abs: string; relPath: string; displayPath: string; rootPath: string; external: boolean; projectId?: number }
+  | { kind: 'write'; abs: string; data: string; relPath: string; displayPath: string; rootPath: string; external: boolean; projectId?: number }
   | {
       kind: 'move';
       oldAbs: string;
@@ -307,9 +307,25 @@ type PlannedOp =
       data: string;
       oldRel: string;
       newRel: string;
+      oldDisplay: string;
+      newDisplay: string;
       rootPath: string;
       external: boolean;
+      projectId?: number;
     };
+
+function markOverlay(
+  ctx: ToolContext,
+  projectId: number | undefined,
+  relativePath: string,
+  external: boolean,
+): void {
+  if (external) return;
+  const overlay = projectId != null
+    ? ctx.overlayByRoot?.get(projectId) ?? ctx.overlay
+    : ctx.overlay;
+  overlay?.mark(relativePath);
+}
 
 export async function applyParsedPatch(
   patch: ParsedPatch,
@@ -328,40 +344,44 @@ export async function applyParsedPatch(
   // writes. Any `throw` here leaves the working tree untouched.
   for (const action of patch.actions) {
     if (action.kind === 'add') {
-      const resolved = resolveAuthorizedPath(action.path, ctx.cwd, ctx.externalRoots, 'write');
+      const resolved = resolveWorkspacePath(action.path, ctx, 'write');
       if (!resolved.ok) throw new Error(`apply_patch: ${resolved.reason}`);
       planned.push({
         kind: 'add',
         abs: resolved.abs,
         data: action.lines.join('\n'),
-        relPath: action.path,
+        relPath: resolved.relativePath,
+        displayPath: action.path,
         rootPath: resolved.rootPath,
         external: resolved.external,
+        projectId: resolved.projectId,
       });
       continue;
     }
 
     if (action.kind === 'delete') {
-      const resolved = resolveAuthorizedPath(action.path, ctx.cwd, ctx.externalRoots, 'write');
+      const resolved = resolveWorkspacePath(action.path, ctx, 'write');
       if (!resolved.ok) throw new Error(`apply_patch: ${resolved.reason}`);
       planned.push({
         kind: 'delete',
         abs: resolved.abs,
-        relPath: action.path,
+        relPath: resolved.relativePath,
+        displayPath: action.path,
         rootPath: resolved.rootPath,
         external: resolved.external,
+        projectId: resolved.projectId,
       });
       continue;
     }
 
     // update
-    const resolved = resolveAuthorizedPath(action.path, ctx.cwd, ctx.externalRoots, 'write');
+    const resolved = resolveWorkspacePath(action.path, ctx, 'write');
     if (!resolved.ok) throw new Error(`apply_patch: ${resolved.reason}`);
     const abs = resolved.abs;
     let newAbs: string | null = null;
-    let moveResolved: Extract<ReturnType<typeof resolveAuthorizedPath>, { ok: true }> | null = null;
+    let moveResolved: Extract<ReturnType<typeof resolveWorkspacePath>, { ok: true }> | null = null;
     if (action.movePath) {
-      const target = resolveAuthorizedPath(action.movePath, ctx.cwd, ctx.externalRoots, 'write');
+      const target = resolveWorkspacePath(action.movePath, ctx, 'write');
       if (!target.ok) throw new Error(`apply_patch: ${target.reason}`);
       if (target.rootPath.toLowerCase() !== resolved.rootPath.toLowerCase()) {
         throw new Error('apply_patch: moves across project/external root boundaries are not allowed');
@@ -403,19 +423,24 @@ export async function applyParsedPatch(
         oldAbs: abs,
         newAbs,
         data: finalContent,
-        oldRel: action.path,
-        newRel: action.movePath!,
+        oldRel: resolved.relativePath,
+        newRel: moveResolved!.relativePath,
+        oldDisplay: action.path,
+        newDisplay: action.movePath!,
         rootPath: moveResolved!.rootPath,
         external: moveResolved!.external,
+        projectId: moveResolved!.projectId,
       });
     } else {
       planned.push({
         kind: 'write',
         abs,
         data: finalContent,
-        relPath: action.path,
+        relPath: resolved.relativePath,
+        displayPath: action.path,
         rootPath: resolved.rootPath,
         external: resolved.external,
+        projectId: resolved.projectId,
       });
     }
   }
@@ -434,28 +459,26 @@ export async function applyParsedPatch(
       if (op.kind === 'add') {
         await fs.mkdir(path.dirname(op.abs), { recursive: true });
         await fs.writeFile(op.abs, op.data);
-        if (!op.external) ctx.overlay?.mark(op.relPath);
-        result.added.push(op.relPath);
+        markOverlay(ctx, op.projectId, op.relPath, op.external);
+        result.added.push(op.displayPath);
       } else if (op.kind === 'delete') {
         await fs.unlink(op.abs);
-        if (!op.external) ctx.overlay?.mark(op.relPath);
-        result.deleted.push(op.relPath);
+        markOverlay(ctx, op.projectId, op.relPath, op.external);
+        result.deleted.push(op.displayPath);
       } else if (op.kind === 'write') {
         await fs.writeFile(op.abs, op.data);
-        if (!op.external) ctx.overlay?.mark(op.relPath);
-        result.updated.push(op.relPath);
+        markOverlay(ctx, op.projectId, op.relPath, op.external);
+        result.updated.push(op.displayPath);
       } else {
         // move: write new first, then unlink old. If write fails the
         // original file still exists — never both gone.
         await fs.mkdir(path.dirname(op.newAbs), { recursive: true });
         await fs.writeFile(op.newAbs, op.data);
         await fs.unlink(op.oldAbs);
-        if (!op.external) {
-          ctx.overlay?.mark(op.oldRel);
-          ctx.overlay?.mark(op.newRel);
-        }
-        result.moved.push({ from: op.oldRel, to: op.newRel });
-        result.updated.push(op.newRel);
+        markOverlay(ctx, op.projectId, op.oldRel, op.external);
+        markOverlay(ctx, op.projectId, op.newRel, op.external);
+        result.moved.push({ from: op.oldDisplay, to: op.newDisplay });
+        result.updated.push(op.newDisplay);
       }
     } catch (e) {
       const failedLabel = describeOp(op);
@@ -474,8 +497,8 @@ export async function applyParsedPatch(
 }
 
 function describeOp(op: PlannedOp): string {
-  if (op.kind === 'move') return `move:${op.oldRel}->${op.newRel}`;
-  return `${op.kind}:${op.relPath}`;
+  if (op.kind === 'move') return `move:${op.oldDisplay}->${op.newDisplay}`;
+  return `${op.kind}:${op.displayPath}`;
 }
 
 // ─── Tool definition ──────────────────────────────────────────────

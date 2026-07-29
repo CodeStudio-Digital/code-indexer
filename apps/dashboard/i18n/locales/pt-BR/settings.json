@@ -389,5 +389,7 @@
   "toast.saveFailed": "Falha ao salvar",
   "toast.saved": "{{count}} configuração(ões) salva(s)",
   "toast.savedApplied": "Mudanças aplicadas imediatamente.",
-  "toast.savedRestart": "Algumas mudanças exigem reinício do backend para fazer efeito."
+  "toast.savedRestart": "Algumas mudanças exigem reinício do backend para fazer efeito.",
+  "item.CODER_MAX_AUTO_CONTINUES.effective": "Limite efetivo: {{turns}} turnos por execução.",
+  "item.CODER_MAX_AUTO_CONTINUES.warning": "Este valor é agressivo e pode aumentar o custo e a duração."
 }

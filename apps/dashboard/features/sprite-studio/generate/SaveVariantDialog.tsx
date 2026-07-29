@@ -37,12 +37,12 @@ export function SaveVariantDialog({
   open: boolean;
   onOpenChange: (v: boolean) => void;
   projectId: number;
-  jobId: number;
+  jobId: string;
   candidate: JobCandidate | null;
   prompt: string;
   settings: StudioSettings | null;
   activeAsset: SpriteAsset | null;
-  onSaved: (assetId: number, versionId: number) => void;
+  onSaved: (assetId: string, versionId: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const [target, setTarget] = useState<Target>(activeAsset ? 'existing' : 'new');
@@ -66,7 +66,7 @@ export function SaveVariantDialog({
     setBusy(true);
     setError(null);
     try {
-      let assetId: number;
+      let assetId: string;
       if (target === 'existing' && activeAsset) {
         assetId = activeAsset.id;
       } else {

@@ -13,7 +13,7 @@ export function loadedChapterMarkers(
   const markers = new Map<number, ConversationChapter[]>();
   for (const chapter of chapters) {
     const groupIndex = groups.findIndex((group) => groupMessageIds(group).some(
-      (id) => id >= chapter.start_message_id && id <= chapter.end_message_id,
+      (id) => id >= chapter.start_message_seq && id <= chapter.end_message_seq,
     ));
     if (groupIndex < 0) continue;
     const current = markers.get(groupIndex) ?? [];

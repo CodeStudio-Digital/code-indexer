@@ -169,6 +169,7 @@ describe('capability-aligned composition', () => {
       availableTools: new Set(['create_goal', 'update_goal']),
     });
     expect(withGoalTools).toContain('# Goal lifecycle');
-    expect(withGoalTools).toContain('Before non-trivial work');
+    expect(withGoalTools).toContain('optional durable context and telemetry');
+    expect(withGoalTools).toContain('never authorize tools or block a final response');
   });
 });

@@ -17,7 +17,7 @@ import type { ServerDeps } from '../../deps.js';
 import { emitSpriteEvent } from './bus-registry.js';
 
 /** Scratch root (OUTSIDE any repo): `<dataDir>/sprite-studio/tmp/<jobId>`. */
-export function spriteScratchDir(jobId: number): string {
+export function spriteScratchDir(jobId: string): string {
   return path.join(mcpDataDir(), 'sprite-studio', 'tmp', String(jobId));
 }
 
@@ -30,7 +30,7 @@ export function spriteScratchDir(jobId: number): string {
  */
 export function sweepOrphanSpriteScratch(deps: ServerDeps): void {
   const base = path.join(mcpDataDir(), 'sprite-studio', 'tmp');
-  setImmediate(() => {
+  setImmediate(async () => {
     let names: string[];
     try {
       names = fs.readdirSync(base);
@@ -38,10 +38,10 @@ export function sweepOrphanSpriteScratch(deps: ServerDeps): void {
       return; // no scratch root yet
     }
     for (const name of names) {
-      const jobId = Number(name);
-      if (!Number.isInteger(jobId) || jobId <= 0) continue;
+      const jobId = name;
+      if (!/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(jobId)) continue;
       try {
-        if (deps.spriteJobsStore.get(jobId)) continue;
+        if (await deps.spriteFileStore.hasJob(jobId)) continue;
         fs.rmSync(path.join(base, name), { recursive: true, force: true });
       } catch {
         /* best effort — retried on the next server start */
@@ -52,12 +52,13 @@ export function sweepOrphanSpriteScratch(deps: ServerDeps): void {
 
 /** Resolve the IDE project root path for a sprite project id (for autoSave/promote). */
 export function makeProjectRootResolver(deps: ServerDeps) {
-  return (spriteProjectId: number): string => {
-    const row = deps.spriteProjectsStore.getById(spriteProjectId);
+  return async (spriteProjectId: string): Promise<string> => {
+    const row = await deps.spriteFileStore.projectById(spriteProjectId);
     if (!row) throw new Error(`Unknown sprite project ${spriteProjectId}`);
-    const project = deps.db.getProject(row.project_id);
-    if (!project?.root_path) throw new Error(`No workspace for project ${row.project_id}`);
-    return project.root_path;
+    if (!row.root_path) {
+      throw new Error(`No workspace for project ${row.project_id}`);
+    }
+    return row.root_path;
   };
 }
 
@@ -66,15 +67,27 @@ export function makeProjectRootResolver(deps: ServerDeps) {
  * SSE bus. The prompt expander is wired only when its binding resolves; absent,
  * the runner uses its deterministic template.
  */
-export function buildSpriteJobDeps(deps: ServerDeps, spriteProjectId: number): SpriteJobDeps {
+export function buildSpriteJobDeps(deps: ServerDeps, spriteProjectId: string): SpriteJobDeps {
   const resolver = deps.pipelineProviderResolver;
   const projectRoot = makeProjectRootResolver(deps);
 
   return {
     stores: {
-      projects: deps.spriteProjectsStore,
-      assets: deps.spriteAssetsStore,
-      jobs: deps.spriteJobsStore,
+      assets: {
+        get: (id) => deps.spriteFileStore.getAsset(id),
+        insertVersion: (input) => deps.spriteFileStore.insertVersion(input),
+        setCurrentVersion: (assetId, versionId) =>
+          deps.spriteFileStore.setCurrentVersion(assetId, versionId),
+      },
+      jobs: {
+        get: (id) => deps.spriteFileStore.getJob(id),
+        updateStatus: (id, status) =>
+          deps.spriteFileStore.updateJobStatus(id, status),
+        setResult: (id, patch) =>
+          deps.spriteFileStore.setJobResult(id, patch),
+        setError: (id, error) =>
+          deps.spriteFileStore.setJobError(id, error),
+      },
     },
     async resolveImageChain() {
       const chain = await resolver.resolveChain('sprite-studio', 'image_gen', {});

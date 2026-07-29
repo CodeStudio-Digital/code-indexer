@@ -9,52 +9,64 @@ import { describe, it, expect } from 'vitest';
 import { applyAgentStatus, type AgentStatusPayload } from '../agentStatusEvent.js';
 import { INITIAL_STREAM_STATE, type AgentStreamState, type StreamState } from '../../types.js';
 
+const AGENT_RUN_ID = '11111111-1111-4111-8111-111111111111';
+const CODER_SESSION_ID = '22222222-2222-4222-8222-222222222222';
+const MASTER_RUN_ID = '33333333-3333-4333-8333-333333333333';
+const MASTER_SESSION_ID = '44444444-4444-4444-8444-444444444444';
+
 function base(): StreamState {
   return { ...INITIAL_STREAM_STATE, subordinateStates: new Map() };
 }
 
 const evt = (over: Partial<AgentStatusPayload> = {}): AgentStatusPayload => ({
-  agentRunId: 7,
+  agentRunId: AGENT_RUN_ID,
   role: 'backend',
   status: 'running',
   message: '',
-  coderSessionId: 42,
+  coderSessionId: CODER_SESSION_ID,
   ...over,
 });
 
 describe('applyAgentStatus — subordinate materialisation', () => {
   it('creates an absent subordinate carrying coderSessionId', () => {
-    const agent = applyAgentStatus(base(), evt()).subordinateStates.get(7);
+    const agent = applyAgentStatus(base(), evt()).subordinateStates.get(AGENT_RUN_ID);
     expect(agent?.role).toBe('backend');
     expect(agent?.status).toBe('running');
-    expect(agent?.coderSessionId).toBe(42);
+    expect(agent?.coderSessionId).toBe(CODER_SESSION_ID);
   });
 
   it('merges status into an existing subordinate without clobbering coderSessionId or text', () => {
     const existing: AgentStreamState = {
       role: 'backend',
-      agentRunId: 7,
-      coderSessionId: 42,
+      agentRunId: AGENT_RUN_ID,
+      coderSessionId: CODER_SESSION_ID,
       textChunks: ['hi'],
       toolCalls: [],
       status: 'running',
     };
-    const start: StreamState = { ...base(), subordinateStates: new Map([[7, existing]]) };
+    const start: StreamState = {
+      ...base(),
+      subordinateStates: new Map([[AGENT_RUN_ID, existing]]),
+    };
     // A later event with NO coderSessionId (e.g. from the reconciler) must
     // keep the known id and not wipe accumulated text.
     const agent = applyAgentStatus(
       start,
       evt({ status: 'waiting', message: 'done', coderSessionId: undefined }),
-    ).subordinateStates.get(7);
+    ).subordinateStates.get(AGENT_RUN_ID);
     expect(agent?.status).toBe('waiting');
     expect(agent?.statusMessage).toBe('done');
-    expect(agent?.coderSessionId).toBe(42);
+    expect(agent?.coderSessionId).toBe(CODER_SESSION_ID);
     expect(agent?.textChunks).toEqual(['hi']);
   });
 
   it('creates the master with coderSessionId when absent', () => {
-    const s = applyAgentStatus(base(), evt({ role: 'master', agentRunId: 1, coderSessionId: 9 }));
-    expect(s.masterState?.coderSessionId).toBe(9);
+    const s = applyAgentStatus(base(), evt({
+      role: 'master',
+      agentRunId: MASTER_RUN_ID,
+      coderSessionId: MASTER_SESSION_ID,
+    }));
+    expect(s.masterState?.coderSessionId).toBe(MASTER_SESSION_ID);
     expect(s.masterState?.status).toBe('running');
     expect(s.subordinateStates.size).toBe(0);
   });
@@ -67,7 +79,7 @@ describe('applyAgentStatus — subordinate materialisation', () => {
       effectiveModel: 'gpt-5.6-sol',
       dispatchSource: 'app_studio',
       fallbackReason: null,
-    })).subordinateStates.get(7);
+    })).subordinateStates.get(AGENT_RUN_ID);
 
     expect(agent).toMatchObject({
       configuredProvider: 'openai-chatgpt',

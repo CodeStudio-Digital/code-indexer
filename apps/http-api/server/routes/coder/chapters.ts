@@ -1,11 +1,20 @@
 import type { Context, Hono } from 'hono';
-import type { ServerDeps } from '../../deps.js';
-import { notFound, parseIdParam, parseIntQuery, parseJsonBody } from '../_helpers.js';
+import { HTTPException } from 'hono/http-exception';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
+import {
+  notFound,
+  parseIntQuery,
+  parseJsonBody,
+  parseSessionRecordIdParam,
+  parseSessionIdParam,
+} from '../_helpers.js';
 
 interface ChapterPage<T = unknown> {
   items: T[];
   next_cursor: string | null;
 }
+
+type MaybePromise<T> = T | Promise<T>;
 
 /**
  * Kept structural on purpose: chapter persistence lives in code-agent and can
@@ -13,22 +22,28 @@ interface ChapterPage<T = unknown> {
  * crashing an older process whose store has not been migrated yet.
  */
 interface ConversationChapterStore {
-  getConversationChapterStatus?: (sessionId: number) => unknown;
+  getSession: (sessionId: SessionId) => MaybePromise<unknown | null>;
+  getConversationChapterStatus?: (
+    sessionId: SessionId,
+  ) => MaybePromise<unknown>;
   listConversationChapters?: (
-    sessionId: number,
+    sessionId: SessionId,
     options: { limit: number; cursor?: string },
-  ) => ChapterPage;
+  ) => MaybePromise<ChapterPage>;
   searchConversationChapters?: (
-    sessionId: number,
+    sessionId: SessionId,
     query: string,
     options: { limit: number; cursor?: string },
-  ) => ChapterPage;
-  getConversationChapter?: (sessionId: number, chapterId: number) => unknown | null;
+  ) => MaybePromise<ChapterPage>;
+  getConversationChapter?: (
+    sessionId: SessionId,
+    chapterId: string,
+  ) => MaybePromise<unknown | null>;
   listConversationChapterSource?: (
-    sessionId: number,
-    chapterId: number,
+    sessionId: SessionId,
+    chapterId: string,
     options: { limit: number; cursor?: string },
-  ) => ChapterPage;
+  ) => MaybePromise<ChapterPage>;
 }
 
 export interface RebuildConversationChaptersInput {
@@ -42,17 +57,27 @@ export interface CoderChapterRoutesOptions {
    * Rebuild needs an LLM/provider and therefore does not belong to the store.
    * The compaction service can inject the orchestrator here when available.
    */
-  rebuild?: (sessionId: number, input: RebuildConversationChaptersInput) => Promise<unknown>;
+  rebuild?: (sessionId: SessionId, input: RebuildConversationChaptersInput) => Promise<unknown>;
 }
 
-function validCursor(raw: string | undefined): string | undefined {
-  const cursor = raw?.trim();
-  if (!cursor) return undefined;
-  return cursor.slice(0, 200);
+function chapterCursor(
+  c: Context,
+  prefix: 'chapter' | 'search' | 'message',
+): string | undefined {
+  const raw = c.req.query('cursor');
+  if (raw == null || raw === '') return undefined;
+  const match = new RegExp(`^${prefix}:(0|[1-9][0-9]*)$`).exec(raw);
+  const seq = match ? Number(match[1]) : Number.NaN;
+  if (!Number.isSafeInteger(seq)) {
+    throw new HTTPException(400, {
+      message: `cursor must be a ${prefix} sequence cursor`,
+    });
+  }
+  return `${prefix}:${seq}`;
 }
 
-function chapterStore(deps: ServerDeps): ConversationChapterStore {
-  return deps.sessionStore as unknown as ConversationChapterStore;
+export interface CoderChapterRouteDeps {
+  readonly sessionStore: ConversationChapterStore;
 }
 
 function unavailable(c: Context) {
@@ -62,34 +87,42 @@ function unavailable(c: Context) {
 /** Mount the append-only conversation chapter read/rebuild API. */
 export function mountCoderChapterRoutes(
   app: Hono,
-  deps: ServerDeps,
+  deps: CoderChapterRouteDeps,
   options: CoderChapterRoutesOptions = {},
 ): void {
-  app.get('/api/coder/sessions/:id/chapters', (c) => {
-    const sessionId = parseIdParam(c);
-    if (!deps.sessionStore.getSession(sessionId)) return notFound(c);
+  app.get('/api/coder/sessions/:id/chapters', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    if (!await deps.sessionStore.getSession(sessionId)) return notFound(c);
 
     const limit = Math.max(1, Math.min(50, parseIntQuery(c, 'limit', 10)));
-    const cursor = validCursor(c.req.query('cursor'));
     const query = (c.req.query('q') ?? '').trim().slice(0, 500);
-    const store = chapterStore(deps);
+    const store = deps.sessionStore;
 
     if (query) {
       if (!store.searchConversationChapters) return unavailable(c);
-      const page = store.searchConversationChapters(sessionId, query, { limit, cursor });
+      const cursor = chapterCursor(c, 'search');
+      const page = await store.searchConversationChapters(
+        sessionId,
+        query,
+        { limit, cursor },
+      );
       return c.json({
         ...page,
         ...(store.getConversationChapterStatus
-          ? { status: store.getConversationChapterStatus(sessionId) }
+          ? { status: await store.getConversationChapterStatus(sessionId) }
           : {}),
       });
     }
     if (!store.listConversationChapters) return unavailable(c);
-    const page = store.listConversationChapters(sessionId, { limit, cursor });
+    const cursor = chapterCursor(c, 'chapter');
+    const page = await store.listConversationChapters(
+      sessionId,
+      { limit, cursor },
+    );
     return c.json({
       ...page,
       ...(store.getConversationChapterStatus
-        ? { status: store.getConversationChapterStatus(sessionId) }
+        ? { status: await store.getConversationChapterStatus(sessionId) }
         : {}),
     });
   });
@@ -97,8 +130,8 @@ export function mountCoderChapterRoutes(
   // Register the static path before `:chapterId` so rebuild can never be
   // mistaken for an id by routers that prefer declaration order.
   app.post('/api/coder/sessions/:id/chapters/rebuild', async (c) => {
-    const sessionId = parseIdParam(c);
-    if (!deps.sessionStore.getSession(sessionId)) return notFound(c);
+    const sessionId = parseSessionIdParam(c);
+    if (!await deps.sessionStore.getSession(sessionId)) return notFound(c);
     if (!options.rebuild) {
       return c.json({ error: 'conversation chapter rebuild is not configured' }, 501);
     }
@@ -121,33 +154,34 @@ export function mountCoderChapterRoutes(
     }
   });
 
-  app.get('/api/coder/sessions/:id/chapters/:chapterId', (c) => {
-    const sessionId = parseIdParam(c);
-    if (!deps.sessionStore.getSession(sessionId)) return notFound(c);
-    const chapterId = parseIdParam(c, 'chapterId');
-    if (!Number.isInteger(chapterId) || chapterId <= 0) {
-      return c.json({ error: 'invalid chapter id' }, 400);
-    }
-    const store = chapterStore(deps);
+  app.get('/api/coder/sessions/:id/chapters/:chapterId', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    if (!await deps.sessionStore.getSession(sessionId)) return notFound(c);
+    const chapterId = parseSessionRecordIdParam(c, 'chapterId');
+    const store = deps.sessionStore;
     if (!store.getConversationChapter) return unavailable(c);
-    const chapter = store.getConversationChapter(sessionId, chapterId);
+    const chapter = await store.getConversationChapter(sessionId, chapterId);
     return chapter ? c.json(chapter) : notFound(c, 'chapter not found');
   });
 
-  app.get('/api/coder/sessions/:id/chapters/:chapterId/messages', (c) => {
-    const sessionId = parseIdParam(c);
-    if (!deps.sessionStore.getSession(sessionId)) return notFound(c);
-    const chapterId = parseIdParam(c, 'chapterId');
-    if (!Number.isInteger(chapterId) || chapterId <= 0) {
-      return c.json({ error: 'invalid chapter id' }, 400);
-    }
+  app.get('/api/coder/sessions/:id/chapters/:chapterId/messages', async (c) => {
+    const sessionId = parseSessionIdParam(c);
+    if (!await deps.sessionStore.getSession(sessionId)) return notFound(c);
+    const chapterId = parseSessionRecordIdParam(c, 'chapterId');
     const limit = Math.max(1, Math.min(100, parseIntQuery(c, 'limit', 40)));
-    const cursor = validCursor(c.req.query('cursor'));
-    const store = chapterStore(deps);
+    const cursor = chapterCursor(c, 'message');
+    const store = deps.sessionStore;
     if (!store.listConversationChapterSource) return unavailable(c);
-    if (store.getConversationChapter && !store.getConversationChapter(sessionId, chapterId)) {
+    if (
+      store.getConversationChapter &&
+      !await store.getConversationChapter(sessionId, chapterId)
+    ) {
       return notFound(c, 'chapter not found');
     }
-    return c.json(store.listConversationChapterSource(sessionId, chapterId, { limit, cursor }));
+    return c.json(await store.listConversationChapterSource(
+      sessionId,
+      chapterId,
+      { limit, cursor },
+    ));
   });
 }

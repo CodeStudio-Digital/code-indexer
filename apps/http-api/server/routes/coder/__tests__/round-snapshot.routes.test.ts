@@ -1,85 +1,120 @@
-import Database from 'better-sqlite3';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Hono } from 'hono';
 import { afterEach, describe, expect, it } from 'vitest';
-import { coderRoundFileSnapshots222 } from '@mcp/store/migrations/222_coder_round_file_snapshots.js';
-import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
+import { asSessionId } from '@mcp/session-storage';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 import { mountCoderSnapshotRoutes } from '../snapshot.js';
 import type { ServerDeps } from '../../../deps.js';
 
-const databases: Database.Database[] = [];
+const SESSION_ID = asSessionId('88888888-8888-4888-8888-888888888888');
+const FOREIGN_SESSION_ID = asSessionId(
+  '88888888-8888-4888-8888-888888888889',
+);
 
-afterEach(() => {
-  while (databases.length > 0) databases.pop()?.close();
+const cleanups: Array<() => Promise<void>> = [];
+
+afterEach(async () => {
+  while (cleanups.length > 0) await cleanups.pop()?.();
 });
 
-function setup() {
-  const db = new Database(':memory:');
-  databases.push(db);
-  db.exec(`
-    CREATE TABLE coder_messages (
-      id INTEGER PRIMARY KEY,
-      session_id INTEGER NOT NULL,
-      role TEXT NOT NULL,
-      is_meta INTEGER NOT NULL DEFAULT 0
-    );
-    CREATE TABLE session_file_baselines (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_kind TEXT NOT NULL,
-      session_id INTEGER NOT NULL,
-      project_id INTEGER,
-      file_path TEXT NOT NULL,
-      content_before TEXT,
-      rollback_content TEXT,
-      existed_before INTEGER NOT NULL,
-      baseline_hash TEXT NOT NULL,
-      oversized INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'active',
-      first_seen_at TEXT NOT NULL,
-      last_edited_at TEXT NOT NULL,
-      closed_at TEXT
-    );
-  `);
-  coderRoundFileSnapshots222.up(db);
-  db.prepare(
-    "INSERT INTO coder_messages (id, session_id, role, is_meta) VALUES (11, 1, 'user', 0)",
-  ).run();
-  const store = new SessionFileSnapshotStore(db);
+async function setup() {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'round-routes-fs-'));
+  const dataDir = join(temporaryRoot, 'data');
+  const projectRoot = join(temporaryRoot, 'project');
+  await Promise.all([mkdir(dataDir), mkdir(projectRoot)]);
+  const store = FsSessionStore.fromRoots({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (projectId) =>
+        projectId === 10 ? projectRoot : null,
+      listProjectRoots: () => [
+        { project_id: 10, root_path: projectRoot },
+      ],
+    },
+  });
+  await store.createSession({
+    id: SESSION_ID,
+    project_id: 10,
+    title: 'Round route',
+    provider: 'test',
+    model: 'test',
+  });
+  await store.createSession({
+    id: FOREIGN_SESSION_ID,
+    project_id: 10,
+    title: 'Foreign round route',
+    provider: 'test',
+    model: 'test',
+  });
+  await store.appendMessage({
+    session_id: SESSION_ID,
+    operation_id: 'round-user-message',
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text: 'Change a.ts' }],
+    },
+  });
   const app = new Hono();
   mountCoderSnapshotRoutes(app, {
-    sessionStore: {
-      getDb: () => db,
-      getSession: (id: number) => ({ id, project_id: 10 }),
-    },
+    sessionStore: store,
     db: {
-      getProject: () => ({ root_path: 'C:\\repo' }),
+      getProject: () => ({ root_path: projectRoot }),
     },
+    pipelineProviderResolver: {},
   } as unknown as ServerDeps);
-  return { app, db, store };
+  cleanups.push(async () => {
+    await store.close();
+    await rm(temporaryRoot, { recursive: true, force: true });
+  });
+  return { app, store };
 }
 
-function insertBaseline(
-  db: Database.Database,
-  input: { sessionId: number; projectId: number; filePath: string },
-): number {
-  const result = db.prepare(`
-    INSERT INTO session_file_baselines
-      (session_kind, session_id, project_id, file_path, content_before, rollback_content,
-       existed_before, baseline_hash, oversized, status, first_seen_at, last_edited_at)
-    VALUES ('coder', ?, ?, ?, 'before\n', 'before\n', 1, 'hash', 0, 'active',
-            datetime('now'), datetime('now'))
-  `).run(input.sessionId, input.projectId, input.filePath);
-  return Number(result.lastInsertRowid);
+async function insertBaseline(
+  store: FsSessionStore,
+  input: {
+    sessionId: typeof SESSION_ID;
+    projectId: number;
+    filePath: string;
+  },
+) {
+  return (
+    await store.recordBaselineAndEdit(
+      {
+        session_kind: 'coder',
+        session_id: input.sessionId,
+        project_id: input.projectId,
+        file_path: input.filePath,
+        content_before: 'before\n',
+        rollback_content: 'before\n',
+        existed_before: true,
+        baseline_hash: 'hash',
+        oversized: false,
+      },
+      {
+        turn_number: 1,
+        tool_name: 'edit_file',
+        content_after_hash: 'after',
+        was_delete: false,
+      },
+    )
+  ).baseline;
 }
 
 describe('coder per-round snapshot routes', () => {
   it('lists a frozen round only when the user message and global baseline share its context', async () => {
-    const { app, db, store } = setup();
-    const baselineId = insertBaseline(db, { sessionId: 1, projectId: 10, filePath: 'a.ts' });
-    store.recordRoundSnapshotMutation({
+    const { app, store } = await setup();
+    const baseline = await insertBaseline(store, {
+      sessionId: SESSION_ID,
+      projectId: 10,
+      filePath: 'a.ts',
+    });
+    await store.recordRoundSnapshotMutation({
       session_kind: 'coder',
-      session_id: 1,
-      round_message_id: 11,
-      global_baseline_id: baselineId,
+      session_id: SESSION_ID,
+      round_message_id: 1,
+      global_baseline_id: baseline.id,
       project_id: 10,
       file_path: 'a.ts',
       content_before: 'before\n',
@@ -89,32 +124,36 @@ describe('coder per-round snapshot routes', () => {
       oversized: false,
     });
 
-    const response = await app.request('/api/coder/sessions/1/snapshot/round/11');
+    const response = await app.request(
+      `/api/coder/sessions/${SESSION_ID}/snapshot/round/1`,
+    );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      roundMessageId: 11,
-      files: [expect.objectContaining({
-        filePath: 'a.ts',
-        globalBaselineId: baselineId,
-        addedLines: 1,
-        removedLines: 1,
-      })],
+      roundSeq: 1,
+      files: [
+        expect.objectContaining({
+          filePath: 'a.ts',
+          globalBaselineId: baseline.id,
+          addedLines: 1,
+          removedLines: 1,
+        }),
+      ],
     });
   });
 
   it('rejects a round snapshot linked to a baseline from another session', async () => {
-    const { app, db, store } = setup();
-    const foreignBaselineId = insertBaseline(db, {
-      sessionId: 2,
+    const { app, store } = await setup();
+    const foreignBaseline = await insertBaseline(store, {
+      sessionId: FOREIGN_SESSION_ID,
       projectId: 10,
       filePath: 'a.ts',
     });
-    store.recordRoundSnapshotMutation({
+    await store.recordRoundSnapshotMutation({
       session_kind: 'coder',
-      session_id: 1,
-      round_message_id: 11,
-      global_baseline_id: foreignBaselineId,
+      session_id: SESSION_ID,
+      round_message_id: 1,
+      global_baseline_id: foreignBaseline.id,
       project_id: 10,
       file_path: 'a.ts',
       content_before: 'before\n',
@@ -124,7 +163,9 @@ describe('coder per-round snapshot routes', () => {
       oversized: false,
     });
 
-    const response = await app.request('/api/coder/sessions/1/snapshot/round/11');
+    const response = await app.request(
+      `/api/coder/sessions/${SESSION_ID}/snapshot/round/1`,
+    );
 
     expect(response.status).toBe(404);
   });

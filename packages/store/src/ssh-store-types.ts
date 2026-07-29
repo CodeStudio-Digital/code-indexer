@@ -43,6 +43,14 @@ export interface SshHost {
   /** 1 = shared across all projects (stored in the central DB, visible everywhere). */
   is_shared: number;
   keepalive_secs: number | null;
+  /**
+   * DEAD COLUMN — despite the name, this is NOT the TOFU pin. Nothing writes it
+   * at runtime; the real host-key trust store is `<dataDir>/ssh/known_hosts.json`
+   * keyed by `host:port`, which is what the connection manager's `hostVerifier`
+   * consults. Do NOT start writing it: two sources of truth that can disagree
+   * about a host key is strictly worse than one plus a dead column. Drop it in a
+   * later forward migration.
+   */
   known_host_sha256: string | null;
   startup_snippet_id: number | null;
   last_used_at: string | null;

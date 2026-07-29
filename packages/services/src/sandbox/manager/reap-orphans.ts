@@ -15,11 +15,11 @@
  * CLI-specific; E2B manages its own lifecycle.
  *
  * Two-phase per orphan:
- *   1. SALVAGE (best-effort): `exportWorkdir` → `saveArchive`. Skipped
+ *   1. SALVAGE (fail-closed): `exportWorkdir` → `saveArchive`. Skipped
  *      when the session already has a bind-mounted host workdir or the
  *      container is missing the `mcp.workdir` label.
- *   2. DESTROY (always): `cli rm -f <id>`. An un-salvageable container
- *      is still an orphan that must be removed before its name is reused.
+ *   2. DESTROY after salvage: `cli rm -f <id>`. A primary container whose
+ *      archive cannot be committed is left intact for a later recovery pass.
  *
  * Belt-and-suspenders: also clears any stale in-memory entry or DB row
  * that points at the destroyed container so the next provision falls
@@ -104,13 +104,15 @@ export async function reapOrphans(deps: ReapOrphansDeps): Promise<void> {
 
   const orphans = allLabeled.filter((o) => {
     if (keepAlive.has(o.id) || dbContainerIds.has(o.id)) return false;
-    // Skip containers whose mcp.sessionId is not a numeric session ID.
-    // All company session IDs are SQLite integer primary keys ("42") or
-    // service composites ("42:api"). Chrome Service uses "chrome-service"
-    // and Verdaccio uses "verdaccio-registry" — both non-numeric — so
+    // Skip containers whose mcp.sessionId is not a Company UUID (optionally
+    // followed by a service id). Chrome Service and Verdaccio use named ids, so
     // they must be left alone even though they carry mcp.sandbox=1.
     const sessionPart = o.sessionId.split(':')[0] ?? '';
-    if (!sessionPart || !/^\d+$/.test(sessionPart)) return false;
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        sessionPart,
+      )
+    ) return false;
     return true;
   });
   const skipped = allLabeled.length - orphans.length;
@@ -129,30 +131,39 @@ export async function reapOrphans(deps: ReapOrphansDeps): Promise<void> {
   let salvaged = 0;
   let destroyed = 0;
   for (const orphan of orphans) {
+    const sessionId = orphan.sessionId.split(':')[0] ?? '';
+    const isPrimary = orphan.sessionId === sessionId;
     // Skip salvage entirely when this session has a bind-mounted host
     // workdir — the files are already safe on disk, and `docker cp`
-    // from a dying container just burns I/O.
-    const orphanHostMount = orphan.sessionId
-      ? resolveHostWorkdirMount(orphan.sessionId)
+    // from a dying container just burns I/O. Secondary-service containers
+    // also skip salvage: the single canonical workdir archive belongs to
+    // the primary sandbox and must never be overwritten by a service tar.
+    const orphanHostMount = sessionId
+      ? resolveHostWorkdirMount(sessionId)
       : null;
     const alreadyPersisted =
       !!orphanHostMount && hasInitializedWorkdir(orphanHostMount);
 
-    if (orphan.sessionId && orphan.workdir && !alreadyPersisted) {
+    if (sessionId && isPrimary && orphan.workdir && !alreadyPersisted) {
       try {
         const tar = await deps.driver.exportWorkdir(orphan.id, orphan.workdir);
-        if (tar && tar.byteLength > 0) {
-          await saveArchive(orphan.sessionId, tar);
-          salvaged++;
-          console.log(
-            `[sandbox-manager] salvaged archive for session=${orphan.sessionId} ` +
-              `from orphan container ${orphan.id.slice(0, 12)} (${tar.byteLength} bytes)`,
-          );
+        if (!tar || tar.byteLength === 0) {
+          throw new Error('sandbox driver returned an empty workdir archive');
         }
+        await saveArchive(sessionId, tar);
+        salvaged++;
+        console.log(
+          `[sandbox-manager] salvaged archive for session=${sessionId} ` +
+            `from orphan container ${orphan.id.slice(0, 12)} (${tar.byteLength} bytes)`,
+        );
       } catch (e) {
         console.warn(
-          `[sandbox-manager] salvage failed for session=${orphan.sessionId}: ${e instanceof Error ? e.message : String(e)}`,
+          `[sandbox-manager] salvage failed closed for session=${sessionId}; ` +
+            `container ${orphan.id.slice(0, 12)} was left intact: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
         );
+        continue;
       }
     }
 
@@ -172,13 +183,12 @@ export async function reapOrphans(deps: ReapOrphansDeps): Promise<void> {
       // class, but exposed as `primary` on `SandboxRegistry` directly.
       const reg = deps.registry as { primary: Map<string, Sandbox> };
       reg.primary.delete(orphan.sessionId);
-      const numericId = Number(orphan.sessionId);
-      if (deps.store && Number.isFinite(numericId)) {
+      if (deps.store && sessionId) {
         try {
-          deps.store.delete(numericId);
+          deps.store.delete(sessionId);
         } catch (e) {
           console.warn(
-            `[sandbox-manager] clearing stale DB row ${orphan.sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
+            `[sandbox-manager] clearing stale sandbox record ${orphan.sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
           );
         }
       }

@@ -114,7 +114,6 @@ export function createBaseTables(db: DB): void {
       scope TEXT,
       project_id INTEGER,
       memory_id INTEGER,
-      session_id INTEGER,
       kept INTEGER,
       dropped INTEGER,
       query_hash TEXT,

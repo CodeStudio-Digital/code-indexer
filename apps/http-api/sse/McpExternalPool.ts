@@ -246,6 +246,11 @@ export class McpExternalPool implements IMcpServerManager {
     return this.manager.getCustomTierSummary();
   }
 
+  /** Delegates to the inner manager — stdio server pids for the task manager. */
+  listStdioProcesses(): Array<{ serverId: string; name: string; pid: number }> {
+    return this.manager.listStdioProcesses();
+  }
+
   /**
    * In-process callers use `shutdown()` to tear down the pool at
    * process exit. Implementing `closeAll()` as a no-op here is

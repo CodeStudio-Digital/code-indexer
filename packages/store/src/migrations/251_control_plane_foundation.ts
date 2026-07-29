@@ -3,10 +3,22 @@ import type { Migration } from './index.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
+function tableExists(db: DB, table: string): boolean {
+  return !!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table);
+}
+
 export const controlPlaneFoundation251: Migration = {
   version: 251,
   name: 'control_plane_foundation',
   up(db: DB): void {
+    // The control plane is CENTRAL-only (∈ CENTRAL_DROP_TABLES): every session,
+    // command and run hangs off `coder_sessions`, which a per-project DB trims
+    // away. Creating it there would only be undone by the next trim — and worse,
+    // migration 257 would then take its table-rebuild path on a project DB, where
+    // `ALTER TABLE … RENAME` reparses the whole schema and chokes on triggers
+    // left pointing at other trimmed central tables. Mirrors migration 258.
+    if (!tableExists(db, 'coder_sessions')) return;
+
     db.exec(`
       CREATE TABLE IF NOT EXISTS control_plane_sessions (
         session_id TEXT PRIMARY KEY,

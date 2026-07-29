@@ -25,6 +25,19 @@ export interface ManifestInfo {
 }
 
 /**
+ * One progress frame from a zip/unzip job. Totals are known up front (the
+ * member list is walked and budgeted before any compression happens), so a
+ * determinate progress bar is possible. The final frame has `done: true`.
+ */
+export interface ArchiveProgress {
+  files: number;
+  totalFiles: number;
+  bytes: number;
+  totalBytes: number;
+  done: boolean;
+}
+
+/**
  * File-tree node — for the IDE FileTreeRail. NOT in the current routes;
  * added in Dia 6 with `electronAPI.api.files.tree({projectId})`.
  */
@@ -113,7 +126,12 @@ export interface FilesApi {
    */
   tree(input: { projectId: number; maxDepth?: number; root?: string; withStats?: boolean }, ctx: ApiContext): Promise<FileTreeNode>;
 
-  /** Zip project files/folders into `out` (a project-relative `.zip` path). */
+  /**
+   * Zip project files/folders into `out` (a project-relative `.zip` path).
+   * Runs in a worker thread — compression is fully synchronous and used to
+   * freeze every window. Prefer `archiveStream` in the UI so the user gets
+   * progress and a cancel button; this form just drains the same job.
+   */
   archive(
     input: { projectId: number; paths: string[]; out: string },
     ctx: ApiContext,
@@ -124,6 +142,28 @@ export interface FilesApi {
     input: { projectId: number; zip: string; dest: string },
     ctx: ApiContext,
   ): Promise<{ ok: true; files: number; bytes: number }>;
+
+  /**
+   * Streaming zip. `archiveId` is the caller's handle for `archiveCancel`.
+   * The `Stream` suffix is load-bearing: handlers-mount auto-detects it and
+   * pumps the iterator over a MessageChannel, so no Electron-side wiring.
+   */
+  archiveStream(
+    input: { projectId: number; paths: string[]; out: string; archiveId?: string },
+    ctx: ApiContext,
+  ): AsyncIterable<ArchiveProgress>;
+
+  /** Streaming extract; same contract as `archiveStream`. */
+  extractStream(
+    input: { projectId: number; zip: string; dest: string; archiveId?: string },
+    ctx: ApiContext,
+  ): AsyncIterable<ArchiveProgress>;
+
+  /**
+   * Ask a running archive/extract to stop. `cancelled: false` means the id was
+   * unknown or the job had already finished — not an error.
+   */
+  archiveCancel(input: { archiveId: string }, ctx: ApiContext): Promise<{ ok: true; cancelled: boolean }>;
 
   // `projectId` (optional) routes the surrogate-id lookup to that project's DB
   // when per-project DBs are split; absent → central (pre-split behavior).

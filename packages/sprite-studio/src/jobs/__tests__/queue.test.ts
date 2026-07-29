@@ -2,17 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { SpriteJobQueue } from '../queue.js';
 
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
+const id = (n: number): string =>
+  `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 interface Controlled {
-  started: number[];
-  finish: (jobId: number) => void;
-  make: (jobId: number) => (signal: AbortSignal) => Promise<void>;
+  started: string[];
+  finish: (jobId: string) => void;
+  make: (jobId: string) => (signal: AbortSignal) => Promise<void>;
 }
 
 /** Jobs that record their start order and finish only when told to. */
 function controlled(): Controlled {
-  const started: number[] = [];
-  const resolvers = new Map<number, () => void>();
+  const started: string[] = [];
+  const resolvers = new Map<string, () => void>();
   return {
     started,
     finish: (jobId) => resolvers.get(jobId)?.(),
@@ -28,18 +30,18 @@ describe('SpriteJobQueue', () => {
   it('runs jobs of one project strictly FIFO, one at a time', async () => {
     const q = new SpriteJobQueue(2);
     const c = controlled();
-    q.enqueue(1, 11, c.make(11));
-    q.enqueue(1, 12, c.make(12));
-    q.enqueue(1, 13, c.make(13));
+    q.enqueue(id(1), id(11), c.make(id(11)));
+    q.enqueue(id(1), id(12), c.make(id(12)));
+    q.enqueue(id(1), id(13), c.make(id(13)));
     await tick();
-    expect(c.started).toEqual([11]); // same project: no parallelism
-    c.finish(11);
+    expect(c.started).toEqual([id(11)]); // same project: no parallelism
+    c.finish(id(11));
     await tick();
-    expect(c.started).toEqual([11, 12]);
-    c.finish(12);
+    expect(c.started).toEqual([id(11), id(12)]);
+    c.finish(id(12));
     await tick();
-    expect(c.started).toEqual([11, 12, 13]);
-    c.finish(13);
+    expect(c.started).toEqual([id(11), id(12), id(13)]);
+    c.finish(id(13));
     await tick();
     expect(q.running).toBe(0);
   });
@@ -47,38 +49,38 @@ describe('SpriteJobQueue', () => {
   it('caps global concurrency at 2 across projects', async () => {
     const q = new SpriteJobQueue(2);
     const c = controlled();
-    q.enqueue(1, 21, c.make(21));
-    q.enqueue(2, 22, c.make(22));
-    q.enqueue(3, 23, c.make(23));
+    q.enqueue(id(1), id(21), c.make(id(21)));
+    q.enqueue(id(2), id(22), c.make(id(22)));
+    q.enqueue(id(3), id(23), c.make(id(23)));
     await tick();
-    expect(c.started).toEqual([21, 22]); // third project waits for a slot
+    expect(c.started).toEqual([id(21), id(22)]); // third project waits for a slot
     expect(q.running).toBe(2);
-    c.finish(21);
+    c.finish(id(21));
     await tick();
-    expect(c.started).toEqual([21, 22, 23]);
-    c.finish(22);
-    c.finish(23);
+    expect(c.started).toEqual([id(21), id(22), id(23)]);
+    c.finish(id(22));
+    c.finish(id(23));
     await tick();
   });
 
   it('cancel removes a queued job before it ever starts', async () => {
     const q = new SpriteJobQueue(2);
     const c = controlled();
-    q.enqueue(1, 31, c.make(31));
-    q.enqueue(1, 32, c.make(32));
-    expect(q.isActive(32)).toBe(true);
-    expect(q.cancel(32)).toBe(true);
-    expect(q.isActive(32)).toBe(false);
-    c.finish(31);
+    q.enqueue(id(1), id(31), c.make(id(31)));
+    q.enqueue(id(1), id(32), c.make(id(32)));
+    expect(q.isActive(id(32))).toBe(true);
+    expect(q.cancel(id(32))).toBe(true);
+    expect(q.isActive(id(32))).toBe(false);
+    c.finish(id(31));
     await tick();
-    expect(c.started).toEqual([31]); // 32 never ran
-    expect(q.cancel(999)).toBe(false); // unknown job
+    expect(c.started).toEqual([id(31)]); // 32 never ran
+    expect(q.cancel(id(999))).toBe(false); // unknown job
   });
 
   it('cancel aborts the signal of a running job', async () => {
     const q = new SpriteJobQueue(2);
     let observed: AbortSignal | undefined;
-    q.enqueue(1, 41, (signal) => {
+    q.enqueue(id(1), id(41), (signal) => {
       observed = signal;
       return new Promise<void>((resolve) => {
         signal.addEventListener('abort', () => resolve(), { once: true });
@@ -86,17 +88,17 @@ describe('SpriteJobQueue', () => {
     });
     await tick();
     expect(observed?.aborted).toBe(false);
-    expect(q.cancel(41)).toBe(true);
+    expect(q.cancel(id(41))).toBe(true);
     expect(observed?.aborted).toBe(true);
     await tick();
-    expect(q.isActive(41)).toBe(false); // slot released after abort resolves
+    expect(q.isActive(id(41))).toBe(false); // slot released after abort resolves
   });
 
   it('rejects double-enqueue of the same job id', () => {
     const q = new SpriteJobQueue(2);
     const c = controlled();
-    q.enqueue(1, 51, c.make(51));
-    expect(() => q.enqueue(1, 51, c.make(51))).toThrow(/already/);
-    c.finish(51);
+    q.enqueue(id(1), id(51), c.make(id(51)));
+    expect(() => q.enqueue(id(1), id(51), c.make(id(51)))).toThrow(/already/);
+    c.finish(id(51));
   });
 });

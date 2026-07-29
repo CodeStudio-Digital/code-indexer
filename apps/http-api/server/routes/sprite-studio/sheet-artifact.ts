@@ -10,15 +10,15 @@ import path from 'node:path';
 import { resolveInsideSpriteDir } from '@mcp/sprite-studio/repo/paths.js';
 import { spriteScratchDir } from './job-deps.js';
 
-const sheetRel = (slug: string, jobId: number): string => `assets/${slug}/sheets/job-${jobId}.png`;
+const sheetRel = (slug: string, jobId: string): string => `assets/${slug}/sheets/job-${jobId}.png`;
 
 /** Absolute repo path of a job's persisted sheet (may not exist yet). */
-export function sheetAbsPath(root: string, slug: string, jobId: number): string {
+export function sheetAbsPath(root: string, slug: string, jobId: string): string {
   return resolveInsideSpriteDir(root, sheetRel(slug, jobId));
 }
 
 /** True when a durable sheet exists for this job. */
-export function hasJobSheet(root: string, slug: string, jobId: number): boolean {
+export function hasJobSheet(root: string, slug: string, jobId: string): boolean {
   try {
     return fs.existsSync(sheetAbsPath(root, slug, jobId));
   } catch {
@@ -30,7 +30,7 @@ export function hasJobSheet(root: string, slug: string, jobId: number): boolean 
  * Copy the job's scratch sheet into the repo (best-effort). No-op when the job
  * was a single-image (non-packed) generation, so there is no sheet to keep.
  */
-export function persistJobSheet(root: string, slug: string, jobId: number): void {
+export function persistJobSheet(root: string, slug: string, jobId: string): void {
   try {
     const src = path.join(spriteScratchDir(jobId), 'sheet.png');
     if (!fs.existsSync(src)) return;

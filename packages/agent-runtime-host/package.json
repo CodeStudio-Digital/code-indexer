@@ -1,0 +1,17 @@
+{
+  "name": "@mcp/agent-runtime-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run src/__tests__",
+    "typecheck": "tsc -b ../agent-runtime-contracts tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.13.0",
+    "@mcp/agent-runtime-contracts": "workspace:*"
+  }
+}

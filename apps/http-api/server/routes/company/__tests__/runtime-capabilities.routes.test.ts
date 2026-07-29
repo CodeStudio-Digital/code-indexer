@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CodeIndexDB } from '@mcp/store/db.js';
 import { CompanyStore } from '@mcp/store/company-store.js';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { OperationalSessionFiles } from '../../../operational-session-files.js';
 import type { PipelineGraph } from '@mcp/company/types.js';
 import type { ServerDeps } from '../../../deps.js';
 
@@ -19,7 +20,7 @@ vi.mock('../../../../sse/companyOrchestrator.js', () => ({
   getCompanyOrchestrator: H.getActive,
   hasCompanyOrchestrator: vi.fn(() => false),
   deleteCompanyOrchestrator: H.deleteActive,
-  evictCompanyOrchestrator: vi.fn(async (id: number) => {
+  evictCompanyOrchestrator: vi.fn(async (id: string) => {
     H.deleteActive(id);
   }),
 }));
@@ -50,21 +51,60 @@ const graph: PipelineGraph = {
 
 interface Handle {
   app: Hono;
-  db: CodeIndexDB;
   companyStore: CompanyStore;
-  genericId: number;
-  appId: number;
+  operationalSessionFiles: OperationalSessionFiles;
+  sessionStore: FsSessionStore;
+  genericId: string;
+  appId: string;
   dir: string;
 }
 
-function setup(): Handle {
+async function setup(): Promise<Handle> {
   const dir = mkdtempSync(join(tmpdir(), 'mcp-company-cap-routes-'));
-  const dbPath = join(dir, 'test.db');
-  const db = new CodeIndexDB(dbPath);
-  const companyStore = new CompanyStore(dbPath);
-  const generic = companyStore.createCompanySession({ name: 'Company', config_json: '{}' });
-  const appTeam = companyStore.createCompanySession({
+  const dataDir = join(dir, 'data');
+  const projectRoot = join(dir, 'project');
+  mkdirSync(dataDir, { recursive: true });
+  mkdirSync(projectRoot, { recursive: true });
+  const project = { id: 7, name: 'Workspace', root_path: projectRoot };
+  const sessionStore = FsSessionStore.fromRoots({
+    dataDir,
+    projectRootResolver: {
+      resolveProjectRoot: (id) => id === project.id ? project.root_path : null,
+      listProjectRoots: () => [{
+        project_id: project.id,
+        root_path: project.root_path,
+      }],
+    },
+    projectInfoResolver: (id) => id === project.id
+      ? {
+          project_id: project.id,
+          name: project.name,
+          root_path: project.root_path,
+        }
+      : null,
+  });
+  const operationalSessionFiles = new OperationalSessionFiles({
+    repository: sessionStore.repository,
+    catalog: sessionStore.catalog,
+    locator: sessionStore.locator,
+    projects: {
+      getProject: (id) => id === project.id ? project : null,
+    },
+  });
+  const emptyCatalogDb = {
+    prepare: vi.fn(() => ({
+      all: vi.fn(() => []),
+    })),
+  };
+  const companyStore = new CompanyStore(emptyCatalogDb as never, sessionStore);
+  const generic = await operationalSessionFiles.createCompanySession({
+    name: 'Company',
+    project_ids: [project.id],
+    config_json: '{}',
+  });
+  const appTeam = await operationalSessionFiles.createCompanySession({
     name: 'App team',
+    project_ids: [project.id],
     config_json: '{}',
     runtime_kind: 'app_studio',
   });
@@ -72,7 +112,9 @@ function setup(): Handle {
   const app = new Hono();
   const deps = {
     companyStore,
-    db,
+    operationalSessionFiles,
+    sessionStore,
+    db: emptyCatalogDb,
     appStudioStore: { getSessionByCompanySessionId: vi.fn(() => null) },
     companySessionEnvStore: {
       list: vi.fn(() => []),
@@ -90,23 +132,30 @@ function setup(): Handle {
   mountCompanyStreamRoutes(app, deps);
   mountCompanyInboxRoutes(app, deps);
   mountCompanyEnvsRoutes(app, deps);
-  return { app, db, companyStore, genericId: generic.id, appId: appTeam.id, dir };
+  return {
+    app,
+    companyStore,
+    operationalSessionFiles,
+    sessionStore,
+    genericId: generic.id,
+    appId: appTeam.id,
+    dir,
+  };
 }
 
 function teardown(h: Handle): void {
   try { h.companyStore.close(); } catch { /* already closed */ }
-  try { h.db.close(); } catch { /* already closed */ }
   try { rmSync(h.dir, { recursive: true, force: true }); } catch { /* Windows handle lag */ }
 }
 
 describe('Company route capability boundary for App Studio teams', () => {
   let h: Handle;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     H.getOrSpawn.mockReset();
     H.getActive.mockReset();
     H.deleteActive.mockReset();
-    h = setup();
+    h = await setup();
   });
   afterEach(() => teardown(h));
 
@@ -138,7 +187,8 @@ describe('Company route capability boundary for App Studio teams', () => {
       code: 'COMPANY_SURFACE_UNAVAILABLE_FOR_APP',
       surface: 'kanban',
     });
-    expect(h.companyStore.listKanbanCardsFull(h.appId)).toEqual([]);
+    const repository = await h.operationalSessionFiles.company(h.appId);
+    expect((await repository.list('kanbanCard')).items).toEqual([]);
   });
 
   it('rejects App manual dispatch without spawning a Company orchestrator', async () => {
@@ -175,7 +225,7 @@ describe('Company route capability boundary for App Studio teams', () => {
       code: 'COMPANY_SURFACE_UNAVAILABLE_FOR_APP',
       surface: 'pipelines',
     });
-    expect(h.companyStore.listPipelines({ companySessionId: h.appId })).toEqual([]);
+    expect(await h.companyStore.listPipelines()).toEqual([]);
   });
 
   it('preserves the full generic Company role runtime contract', async () => {
@@ -197,7 +247,10 @@ describe('Company route capability boundary for App Studio teams', () => {
       }),
     });
     expect(response.status).toBe(200);
-    const persisted = JSON.parse(h.companyStore.getCompanySession(h.genericId)!.config_json) as {
+    const session = await h.operationalSessionFiles.getCompanySession(
+      h.genericId,
+    );
+    const persisted = JSON.parse(session!.config_json) as {
       role_assignments: unknown[];
     };
     expect(persisted.role_assignments).toEqual([expect.objectContaining({
@@ -214,11 +267,7 @@ describe('Company route capability boundary for App Studio teams', () => {
   });
 
   it('returns empty App pipeline reads and rejects start before the orchestrator', async () => {
-    const pipeline = h.companyStore.createPipeline({
-      name: 'Legacy App pipeline',
-      graph,
-      companySessionId: h.appId,
-    });
+    const pipelineId = '77777777-7777-4777-8777-777777777777';
 
     const listed = await h.app.request(`/api/company/pipelines?company_session_id=${h.appId}`);
     expect(listed.status).toBe(200);
@@ -231,7 +280,7 @@ describe('Company route capability boundary for App Studio teams', () => {
     expect(await executions.json()).toEqual([]);
 
     const started = await h.app.request(
-      `/api/company/sessions/${h.appId}/pipelines/${pipeline.id}/start`,
+      `/api/company/sessions/${h.appId}/pipelines/${pipelineId}/start`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -278,7 +327,10 @@ describe('Company route capability boundary for App Studio teams', () => {
         body: request.body === undefined ? undefined : JSON.stringify(request.body),
       });
       expect(response.status, `${request.method} ${request.path}`).toBe(409);
-      expect(await response.json()).toMatchObject({
+      expect(
+        await response.json(),
+        `${request.method} ${request.path}`,
+      ).toMatchObject({
         code: 'APP_STUDIO_CONTROL_PLANE_OWNED',
         runtime_kind: 'app_studio',
       });

@@ -1,6 +1,7 @@
 import type {
   AgentAttachment,
   DecisionAnswers,
+  SessionId,
   StreamTask,
   StreamTaskExecutionMode,
 } from '../../hooks/useAgentStream.js';
@@ -11,7 +12,17 @@ export interface AgentChatWorkbenchSlots {
   rightPanelHost: HTMLElement | null;
   rightRailHost: HTMLElement | null;
   onSessionStateChange?: (state: { hasSession: boolean; rightPanelOpen: boolean }) => void;
-  onSessionSelected?: (sessionId: number) => void;
+  onSessionSelected?: (sessionId: SessionId) => void;
+}
+
+/** Optional project preview contributed to the session's right activity rail. */
+export interface AgentChatPreviewConfig {
+  /** Builder projects pin the dev port in their generated Vite config. */
+  pinnedPort?: number;
+  /** Enables source-aware element and region selection for stamped builders. */
+  selectionEnabled?: boolean;
+  /** Inferred project framework, used to choose the best selector strategy. */
+  framework?: 'next' | 'react' | 'vue' | 'angular' | null;
 }
 
 /** A project linked to a global (multi-project) session. */
@@ -36,7 +47,7 @@ export interface AgentChatProps {
   mode?: 'project' | 'global';
   /** Optional session to pre-select on mount, set when the user clicks a
    *  recent-session entry in the global sidebar. */
-  initialSessionId?: number;
+  initialSessionId?: SessionId;
   /**
    * Builder studio: when set, each outgoing message is prefixed with the
    * element the user selected in the preview (consumed + cleared from the
@@ -54,10 +65,12 @@ export interface AgentChatProps {
   /** Project workbench integration: moves the session list and contextual
    * tools into the IDE's existing docks instead of nesting a second shell. */
   workbenchSlots?: AgentChatWorkbenchSlots;
+  /** Live project preview exposed as one mutually-exclusive right-rail panel. */
+  preview?: AgentChatPreviewConfig;
 }
 
 export interface CoderSession {
-  id: number;
+  id: SessionId;
   project_id: number;
   /** Global (multi-project) session flag (migration 152). */
   is_global?: boolean;
@@ -87,8 +100,8 @@ export interface CoderSession {
   total_cache_creation_tokens: number;
   /** Most recent turn's input tokens — actual context window usage. */
   last_turn_input_tokens: number;
-  /** Optional group (folder) this session belongs to (migration 009). */
-  group_id: number | null;
+  /** Optional filesystem-backed group (folder) this session belongs to. */
+  group_id: string | null;
   is_archived: boolean;
   archived_at: string | null;
   /** Pin-to-top flag (migration 010). */
@@ -148,7 +161,8 @@ export interface CoderSession {
 }
 
 export interface CoderSessionGroup {
-  id: number;
+  id: string;
+  seq: number;
   project_id: number;
   name: string;
   color: string | null;
@@ -210,7 +224,10 @@ export interface PersistedMessage {
 }
 
 export interface MessageRow {
-  id: number;
+  /** Stable UUID record identity. Never use it for ordering or pagination. */
+  id: string;
+  /** Monotonic conversation order within this session. */
+  seq: number;
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens?: number;
@@ -251,18 +268,18 @@ export interface SessionData {
   archived_count?: number;
   /** User message immediately before the loaded window. It owns an assistant
    *  tail that starts mid-turn after compaction or pagination. */
-  preceding_user_message_id?: number | null;
+  preceding_user_seq?: number | null;
   /** Status fallback for tool calls whose tool_result block is missing. Absent/empty for healthy sessions. */
   tool_results?: ToolResultFallback[];
   /** Linked projects for a global session (migration 152). Empty for normal sessions. */
   linked_projects?: LinkedProject[];
 }
 
-/** Response shape from GET /api/coder/sessions/:id/messages?before_id=N */
+/** Response shape from GET /api/coder/sessions/:id/messages?before_seq=N */
 export interface MessagePage {
   messages: PersistedMessage[];
   message_rows: MessageRow[];
-  preceding_user_message_id?: number | null;
+  preceding_user_seq?: number | null;
   tool_results?: ToolResultFallback[];
 }
 
@@ -297,11 +314,13 @@ export interface ConversationResumeContent {
 
 /** Append-only chapter row returned by the conversation chapter API. */
 export interface ConversationChapter {
-  id: number;
-  session_id: number;
+  id: string;
+  seq: number;
+  revision: number;
+  session_id: SessionId;
   ordinal: number;
-  start_message_id: number;
-  end_message_id: number;
+  start_message_seq: number;
+  end_message_seq: number;
   source: ConversationChapterSource;
   chapter_kind?: 'context' | 'milestone' | 'rebuild';
   advances_context_boundary?: 0 | 1;
@@ -324,7 +343,9 @@ export interface ConversationChapterPage {
 }
 
 export interface ConversationChapterAttempt {
-  id: number;
+  id: string;
+  seq: number;
+  revision: number;
   status: 'started' | 'summarized' | 'deterministic_fallback' | 'noop' | 'checkpoint_failed';
   trigger: string;
   summary_provider?: string | null;
@@ -336,7 +357,7 @@ export interface ConversationChapterAttempt {
 
 export interface ConversationChapterStatus {
   state: 'healthy' | 'degraded' | 'empty';
-  boundary_id: number | null;
+  boundary_seq: number | null;
   unsummarized_messages: number;
   chapter_count: number;
   context_chapters: number;
@@ -357,7 +378,8 @@ export interface ConversationChapterStatus {
 
 /** Original transcript row returned for a chapter range. */
 export interface ConversationChapterSourceMessage {
-  id: number;
+  id: string;
+  seq: number;
   role: 'user' | 'assistant' | 'tool';
   content?: ContentBlock[] | string;
   content_json?: string;
@@ -439,14 +461,17 @@ export interface PromptHandlers {
     spec_path: string,
     requested_changes?: string,
   ) => Promise<void>;
-  /** Fork the session at the given persisted user-message id: create a new
+  /** Fork the session at the given persisted user-message sequence: create a new
    *  session containing history up to (exclusive) the message, pre-fill the
    *  composer with the message text for editing. */
-  onFork?: (messageId: number) => Promise<void> | void;
-  /** Roll the session back to the given persisted user-message id: DELETE that
+  onFork?: (messageSeq: number) => Promise<void> | void;
+  /** Roll the session back to the given persisted user-message sequence: hide that
    *  message and everything after it (in place, destructive), then re-seed the
    *  composer with its text + attachments for editing and re-sending. */
-  onRollback?: (messageId: number) => Promise<void> | void;
+  onRollback?: (messageSeq: number) => Promise<void> | void;
+  /** Persisted message currently being rolled back. While set, all rollback
+   *  actions are disabled and the matching message shows progress. */
+  rollbackPendingSeq?: number | null;
   /**
    * PermissionGate verdict — resolves a tool call paused awaiting approval
    * (POST /tool-approval). Wired by AgentChat; the ToolCallBlock renders the
@@ -464,7 +489,7 @@ export interface PromptHandlers {
    * abort (POST /agents/abort) and retained-transcript fetches; persisted
    * paths already carry it via resultSource.
    */
-  sessionId?: number;
+  sessionId?: SessionId;
 }
 
 // ─── Visual grouping for chat display ───────────────────────────
@@ -478,4 +503,4 @@ export type VisualGroup =
       hasText: boolean;
     };
 
-export type { AgentAttachment };
+export type { AgentAttachment, SessionId };

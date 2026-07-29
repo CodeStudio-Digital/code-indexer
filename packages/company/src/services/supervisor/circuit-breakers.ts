@@ -111,7 +111,7 @@ export interface RoleQuarantineInfo {
 
 /** Snapshot for dashboards / introspection. */
 export interface BreakerStatusSnapshot {
-  agents: Array<{ agentRunId: number; recentAttempts: number; tripped: boolean }>;
+  agents: Array<{ agentRunId: string; recentAttempts: number; tripped: boolean }>;
   roles: Array<{ role: string; recentFailures: number; quarantinedUntilMs: number | null }>;
   globalIncidentsInWindow: number;
   readOnlyUntilMs: number | null;
@@ -125,7 +125,7 @@ export interface BreakerStatusSnapshot {
  */
 export class CircuitBreakers {
   private readonly cfg: CircuitBreakerConfig;
-  private readonly agentAttempts = new Map<number, number[]>();
+  private readonly agentAttempts = new Map<string, number[]>();
   private readonly roleFailures = new Map<string, number[]>();
   private readonly roleQuarantineUntil = new Map<string, number>();
   private globalIncidents: number[] = [];
@@ -152,7 +152,7 @@ export class CircuitBreakers {
    * the supervisor can transition to QUARANTINED immediately rather
    * than waiting for the next tick).
    */
-  recordAgentFailure(agentRunId: number, nowMs: number): boolean {
+  recordAgentFailure(agentRunId: string, nowMs: number): boolean {
     const list = this.agentAttempts.get(agentRunId) ?? [];
     list.push(nowMs);
     this.pruneOlderThan(list, nowMs - this.cfg.agentWindowMs);
@@ -161,7 +161,7 @@ export class CircuitBreakers {
   }
 
   /** True when agent has ≥ N failed recovery attempts in the window. */
-  isAgentTripped(agentRunId: number, nowMs: number): boolean {
+  isAgentTripped(agentRunId: string, nowMs: number): boolean {
     const list = this.agentAttempts.get(agentRunId);
     if (!list || list.length === 0) return false;
     this.pruneOlderThan(list, nowMs - this.cfg.agentWindowMs);
@@ -169,7 +169,7 @@ export class CircuitBreakers {
   }
 
   /** Clear the agent's history. Called when the agent reaches TERMINAL. */
-  clearAgent(agentRunId: number): void {
+  clearAgent(agentRunId: string): void {
     this.agentAttempts.delete(agentRunId);
   }
 

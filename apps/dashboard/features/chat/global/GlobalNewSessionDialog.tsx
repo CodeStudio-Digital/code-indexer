@@ -23,7 +23,7 @@ interface ProjectRow {
 }
 
 interface WorkspaceRow {
-  id: number;
+  id: string;
   label: string;
   sessionCount: number;
 }
@@ -35,15 +35,14 @@ export interface GlobalNewSessionDialogProps {
     title?: string;
     projectIds?: number[];
     primaryProjectId?: number;
-    reuseProjectId?: number;
+    reuseSessionId?: string;
   }) => Promise<unknown> | void;
 }
 
 /**
- * Create a global (multi-project) session — either by building a NEW virtual
- * workspace (pick 1+ projects) or by REUSING an existing one (already indexed,
- * no wait). All projects are first-class; the "primary" star just labels the
- * default repo (e.g. for git).
+ * Create a global (multi-project) session from selected real roots, or copy the
+ * linked-root set from an existing global UUID bundle. All projects are
+ * first-class; the primary star selects the default cwd.
  */
 export function GlobalNewSessionDialog({ open, onOpenChange, onCreate }: GlobalNewSessionDialogProps) {
   const { t } = useTranslation(['chat', 'common']);
@@ -54,7 +53,7 @@ export function GlobalNewSessionDialog({ open, onOpenChange, onCreate }: GlobalN
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [primaryId, setPrimaryId] = useState<number | null>(null);
-  const [reuseId, setReuseId] = useState<number | null>(null);
+  const [reuseId, setReuseId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
   // Loose folders the user just picked this session — merged into the list so a
@@ -140,7 +139,7 @@ export function GlobalNewSessionDialog({ open, onOpenChange, onCreate }: GlobalN
     setBusy(true);
     try {
       if (mode === 'reuse' && reuseId != null) {
-        await onCreate({ reuseProjectId: reuseId, title: title.trim() || undefined });
+        await onCreate({ reuseSessionId: reuseId, title: title.trim() || undefined });
       } else if (effectivePrimary != null) {
         await onCreate({ projectIds: [...selected], primaryProjectId: effectivePrimary, title: title.trim() || undefined });
       }

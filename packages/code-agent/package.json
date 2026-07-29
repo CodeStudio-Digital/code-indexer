@@ -5,9 +5,12 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./sessions/store.js": null,
+    "./sessions/store/*": null,
     "./*": "./src/*"
   },
   "dependencies": {
+    "@mcp/session-storage": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
     "@mcp/db-drivers": "workspace:*",

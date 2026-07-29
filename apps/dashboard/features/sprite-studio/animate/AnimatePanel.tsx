@@ -41,29 +41,29 @@ export function AnimatePanel({
   asset: SpriteAsset;
   settings: StudioSettings | null;
   /** Shared version lookup (lifted useAssetVersions) — provenance titles. */
-  versionById: Map<number, AssetVersion>;
+  versionById: Map<string, AssetVersion>;
   /** Generation batches — resolves whether the last gen kept its sheet. */
   generations: GenerationGroup[];
   /** Re-pull the shared version list after adopt/align create new rows. */
   refreshVersions: () => void;
-  onSaved: (assetId: number, versionId: number) => void;
+  onSaved: (assetId: string, versionId: string) => void;
   /** Open a frame's version in the editor (wired by CenterSurface/StudioView). */
-  onEditVersion?: (versionId: number, frameIndex: number, track: number) => void;
+  onEditVersion?: (versionId: string, frameIndex: number, track: number) => void;
   onExportAnimation?: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const { jobs } = useSpriteJobs(projectId);
 
   const [animations, setAnimations] = useState<anim.SpriteAnimation[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [frameCount, setFrameCount] = useState(4);
-  const [anchorId, setAnchorId] = useState<number | null>(null);
+  const [anchorId, setAnchorId] = useState<string | null>(null);
   const [activeTrack, setActiveTrack] = useState(0);
   const [aligning, setAligning] = useState(false);
   const [repositioning, setRepositioning] = useState(false);
   const [direction, setDirection] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const selectedIdRef = useRef<number | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
   const assetIdRef = useRef(asset.id);
 
   const current = animations.find((a) => a.id === selectedId) ?? null;
@@ -149,7 +149,7 @@ export function AnimatePanel({
       const savedFrame = targetIndex != null
         ? updated.frames.find((f) => f.track === 0 && f.frameIndex === targetIndex)
         : updated.frames.find((f) => f.track === 0);
-      onSaved(asset.id, savedFrame?.versionId ?? 0);
+      if (savedFrame) onSaved(asset.id, savedFrame.versionId);
       toast.success(t(targetIndex != null ? 'animate.align.doneCurrent' : 'animate.align.doneAll'));
     } catch (e) {
       if (selectedIdRef.current === animationId && assetIdRef.current === asset.id) setError((e as Error).message);
@@ -175,7 +175,7 @@ export function AnimatePanel({
       applyServer(updated);
       refreshVersions();
       const savedFrame = updated.frames.find((f) => f.track === 0 && f.frameIndex === targetIndex);
-      onSaved(asset.id, savedFrame?.versionId ?? 0);
+      if (savedFrame) onSaved(asset.id, savedFrame.versionId);
       toast.success(t('animate.reposition.done'));
     } catch (e) {
       if (selectedIdRef.current === animationId && assetIdRef.current === asset.id) setError((e as Error).message);

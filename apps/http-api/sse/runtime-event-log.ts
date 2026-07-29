@@ -7,14 +7,17 @@ import {
   registerRuntimeEventLog,
   resetRuntimeEventLogStorage,
   type PersistableRuntimeEvent,
+  type RuntimeEventLogLocation,
 } from './runtime-event-log-storage.js';
+import type { CompanySessionId, SessionId } from '@mcp/session-storage';
 
 export type RuntimeLogKind = 'coder' | 'company';
+export type RuntimeSessionId = SessionId | CompanySessionId;
 
 export interface RuntimeEventEnvelope extends BufferedEvent {
   ts: number;
   kind: RuntimeLogKind;
-  sessionId: number;
+  sessionId: RuntimeSessionId;
   opId?: string;
   groupId?: string;
   agentIndex?: number;
@@ -56,11 +59,12 @@ interface RuntimeEventView {
 export function installRuntimeEventLog(
   bus: CoderRunBus,
   kind: RuntimeLogKind,
-  sessionId: number,
+  sessionId: RuntimeSessionId,
+  location: RuntimeEventLogLocation,
 ): () => void {
   const key = logKey(kind, sessionId);
   activeLogRefs.set(key, (activeLogRefs.get(key) ?? 0) + 1);
-  const detachStorage = registerRuntimeEventLog(kind, sessionId);
+  const detachStorage = registerRuntimeEventLog(location);
 
   const detachSink = addBusEventSink(bus, (ev) => {
     if (!shouldCaptureRuntimeEvent(ev, key)) return;
@@ -69,7 +73,7 @@ export function installRuntimeEventLog(
 
     const prepared = prepareRuntimeEvent(env);
     appendInMemory(key, prepared.event);
-    persistRuntimeEvent(prepared);
+    persistRuntimeEvent(prepared, location);
   });
 
   return () => {
@@ -81,8 +85,16 @@ export function installRuntimeEventLog(
   };
 }
 
-export function getRuntimeEventLog(kind: RuntimeLogKind, sessionId: number): RuntimeEventEnvelope[] {
-  const persisted = readPersistedRuntimeEvents(kind, sessionId);
+export async function getRuntimeEventLog(
+  kind: RuntimeLogKind,
+  sessionId: RuntimeSessionId,
+  location: RuntimeEventLogLocation,
+): Promise<RuntimeEventEnvelope[]> {
+  const persisted = await readPersistedRuntimeEvents(
+    kind,
+    sessionId,
+    location,
+  );
   const live = logs.get(logKey(kind, sessionId)) ?? [];
   if (persisted.length === 0) return live;
   if (live.length === 0) return persisted;
@@ -170,7 +182,11 @@ function sampleProgress(key: string, signature: string, now = Date.now()): boole
   return true;
 }
 
-function enrichEvent(ev: BufferedEvent, kind: RuntimeLogKind, sessionId: number): RuntimeEventEnvelope {
+function enrichEvent(
+  ev: BufferedEvent,
+  kind: RuntimeLogKind,
+  sessionId: RuntimeSessionId,
+): RuntimeEventEnvelope {
   const view = runtimeEventView(ev);
   return {
     ...ev,
@@ -256,7 +272,7 @@ function eventKey(event: RuntimeEventEnvelope): string {
   return `${event.ts}:${event.seq}:${event.event}`;
 }
 
-function logKey(kind: RuntimeLogKind, sessionId: number): string {
+function logKey(kind: RuntimeLogKind, sessionId: RuntimeSessionId): string {
   return `${kind}:${sessionId}`;
 }
 

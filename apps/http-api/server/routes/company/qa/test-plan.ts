@@ -15,7 +15,7 @@
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../../deps.js';
-import { parseIdParam, parseJsonBody } from '../../_helpers.js';
+import { parseJsonBody, parseSessionIdParam } from '../../_helpers.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 
 const TEST_PLAN_PATH = 'tests/e2e/TEST_PLAN.md';
@@ -29,7 +29,7 @@ export function mountQaTestPlanRoutes(app: Hono, deps: ServerDeps): void {
   void deps; // No store deps — manager is module-level.
 
   app.get('/api/company/sessions/:id/qa/test-plan', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     try {
       const content = await getSandboxManager().readWorkspaceFile(
         String(sessionId),
@@ -47,7 +47,7 @@ export function mountQaTestPlanRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.put('/api/company/sessions/:id/qa/test-plan', async (c) => {
-    const sessionId = parseIdParam(c);
+    const sessionId = parseSessionIdParam(c);
     const body = await parseJsonBody<PutBody>(c);
     if (typeof body.content !== 'string') {
       return c.json({ error: 'body.content must be a string' }, 400);

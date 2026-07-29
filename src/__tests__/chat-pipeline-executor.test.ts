@@ -10,25 +10,63 @@
  * parent chat session, and node persistence under `coder_session_id`.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { CodeIndexDB } from '@mcp/store/db.js';
-import { CompanyStore } from '@mcp/store/company-store.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/session-storage';
 import { ChatPipelineExecutor } from '@mcp/code-agent/pipelines/ChatPipelineExecutor.js';
 import { createChatPipelineBus, type ChatPipelineEvent } from '@mcp/code-agent/pipelines/lib/eventBus.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
-import type { PipelineGraph } from '@mcp/company/types.js';
+import type {
+  Pipeline,
+  PipelineExecutionContext,
+  PipelineGraph,
+} from '@mcp/company/types.js';
 
 // ─── Stub provider ──────────────────────────────────────────────
 
 interface StubCounters {
   agentCalls: number;
   validatorCalls: number;
+}
+
+interface PipelineTemplateStore {
+  getPipeline(id: number): Pipeline | null;
+  createPipeline(input: {
+    name: string;
+    description: string;
+    graph: PipelineGraph;
+    companySessionId: null;
+  }): Pipeline & { id: number };
+}
+
+function makePipelineTemplateStore(): PipelineTemplateStore {
+  const pipelines = new Map<number, Pipeline & { id: number }>();
+  let nextId = 1;
+  return {
+    getPipeline: (id) => pipelines.get(id) ?? null,
+    createPipeline(input) {
+      const now = new Date().toISOString();
+      const pipeline: Pipeline & { id: number } = {
+        id: nextId++,
+        name: input.name,
+        description: input.description,
+        project_id: null,
+        company_session_id: input.companySessionId,
+        template_id: null,
+        graph: input.graph,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+      };
+      pipelines.set(pipeline.id, pipeline);
+      return pipeline;
+    },
+  };
 }
 
 function makeStubProvider(counters: StubCounters): ChatProvider {
@@ -75,24 +113,29 @@ function makeStubProvider(counters: StubCounters): ChatProvider {
 
 describe('ChatPipelineExecutor — 3-node end-to-end', () => {
   let workDir: string;
-  let dbPath: string;
-  let db: CodeIndexDB;
-  let companyStore: CompanyStore;
-  let sessionStore: SessionStore;
+  let companyStore: PipelineTemplateStore;
+  let sessionStore: FsSessionStore;
   let projectId: number;
-  let coderSessionId: number;
+  let coderSessionId: SessionId;
   let pipelineId: number;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     workDir = mkdtempSync(join(tmpdir(), 'chat-pipe-'));
-    dbPath = join(workDir, 'index.sqlite');
-    db = new CodeIndexDB(dbPath);
-    companyStore = new CompanyStore(dbPath);
-    sessionStore = new SessionStore(dbPath);
+    companyStore = makePipelineTemplateStore();
+    projectId = 1;
+    const dataDir = join(workDir, 'data');
+    mkdirSync(dataDir);
+    sessionStore = FsSessionStore.fromRoots({
+      dataDir,
+      projectRootResolver: {
+        resolveProjectRoot: (id) => id === projectId ? workDir : null,
+        listProjectRoots: () => [
+          { project_id: projectId, root_path: workDir },
+        ],
+      },
+    });
 
-    projectId = db.createProject('chat-pipe-proj', workDir).id;
-
-    const session = sessionStore.createSession({
+    const session = await sessionStore.createSession({
       project_id: projectId,
       title: 'pipeline test',
       provider: 'stub',
@@ -141,10 +184,8 @@ describe('ChatPipelineExecutor — 3-node end-to-end', () => {
     pipelineId = pipeline.id;
   });
 
-  afterEach(() => {
-    sessionStore.close();
-    companyStore.close();
-    db.close();
+  afterEach(async () => {
+    await sessionStore.close();
     rmSync(workDir, { recursive: true, force: true });
   });
 
@@ -180,13 +221,16 @@ describe('ChatPipelineExecutor — 3-node end-to-end', () => {
     const exec = await executor.start(pipelineId, 'investigate the codebase', 'user-test');
     expect(exec.status).toBe('running');
     expect(exec.coder_session_id).toBe(coderSessionId);
-    expect(exec.company_session_id).toBeNull();
 
     const final = await terminal;
     expect(final.name).toBe('pipeline_completed');
 
     // Three nodes: investigate (agent) + validate (validator) + summarize (agent)
-    const rows = companyStore.listPipelineNodeExecutions(exec.id);
+    const rows =
+      await sessionStore.chatPipelines.listNodeExecutions(
+        coderSessionId,
+        exec.id,
+      );
     expect(rows.map((r) => r.node_id)).toEqual(['investigate', 'validate', 'summarize']);
     expect(rows.every((r) => r.status === 'completed')).toBe(true);
 
@@ -202,7 +246,7 @@ describe('ChatPipelineExecutor — 3-node end-to-end', () => {
     expect(investigateRow.usage_json).toBeTruthy();
 
     // Usage rolled up onto the parent session.
-    const sess = sessionStore.getSession(coderSessionId);
+    const sess = await sessionStore.getSession(coderSessionId);
     expect(sess).toBeTruthy();
     expect(sess!.total_input_tokens).toBeGreaterThan(0);
     expect(sess!.total_output_tokens).toBeGreaterThan(0);
@@ -212,7 +256,12 @@ describe('ChatPipelineExecutor — 3-node end-to-end', () => {
     expect(counters.validatorCalls).toBe(1);
 
     // Final execution row is `completed`.
-    const finalExec = companyStore.getPipelineExecution(exec.id);
+    const finalExec =
+      await sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+        coderSessionId,
+        exec.id,
+      );
     expect(finalExec?.status).toBe('completed');
     expect(finalExec?.finished_at).toBeTruthy();
   }, 30000);
@@ -280,7 +329,11 @@ describe('ChatPipelineExecutor — 3-node end-to-end', () => {
     const final = await terminal;
     expect(final.name).toBe('pipeline_completed');
 
-    const rows = companyStore.listPipelineNodeExecutions(exec.id);
+    const rows =
+      await sessionStore.chatPipelines.listNodeExecutions(
+        coderSessionId,
+        exec.id,
+      );
     // investigate, validate(fail), investigate (retry), validate(pass), summarize
     expect(rows.map((r) => r.node_id)).toEqual([
       'investigate',
@@ -363,12 +416,21 @@ describe('ChatPipelineExecutor — 3-node end-to-end', () => {
     expect(paused.payload?.nodeId).toBe('b');
 
     // After pause: only `a` ran; `b` hasn't yet.
-    let rows = companyStore.listPipelineNodeExecutions(exec.id);
+    let rows =
+      await sessionStore.chatPipelines.listNodeExecutions(
+        coderSessionId,
+        exec.id,
+      );
     expect(rows.map((r) => r.node_id)).toEqual(['a']);
 
     // The execution row is paused with current_node_id pointing at the
     // node we're about to run on confirm.
-    const pausedExec = companyStore.getPipelineExecution(exec.id);
+    const pausedExec =
+      await sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+        coderSessionId,
+        exec.id,
+      );
     expect(pausedExec?.status).toBe('paused');
     expect(pausedExec?.current_node_id).toBe('b');
     expect(pausedExec?.context.vars._pending_confirmation).toBeTruthy();
@@ -383,12 +445,20 @@ describe('ChatPipelineExecutor — 3-node end-to-end', () => {
     expect(ok).toBe(true);
 
     await completed;
-    rows = companyStore.listPipelineNodeExecutions(exec.id);
+    rows = await sessionStore.chatPipelines.listNodeExecutions(
+      coderSessionId,
+      exec.id,
+    );
     expect(rows.map((r) => r.node_id)).toEqual(['a', 'b']);
     expect(agentCalls).toBeGreaterThanOrEqual(2);
 
     // _pending_confirmation marker must be cleared after confirm().
-    const finalExec = companyStore.getPipelineExecution(exec.id);
+    const finalExec =
+      await sessionStore.chatPipelines
+        .getExecution<PipelineExecutionContext>(
+        coderSessionId,
+        exec.id,
+      );
     expect(finalExec?.context.vars._pending_confirmation).toBeUndefined();
   }, 30000);
 

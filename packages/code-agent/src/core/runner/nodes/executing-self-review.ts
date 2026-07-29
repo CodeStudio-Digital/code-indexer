@@ -29,12 +29,12 @@ export function applySelfReviewDecline(ctx: RunContext, userText: string): void 
  * reviewed; falls back to the coarse `hasReviewableChanges` boolean on
  * subagents/tests that don't provide signals.
  */
-export function computeSelfReviewNudge(ctx: RunContext): boolean {
+export async function computeSelfReviewNudge(ctx: RunContext): Promise<boolean> {
   if (process.env.CODER_SELF_REVIEW === '0') return false;
   const sr = ctx.injectionState.selfReview;
   if (sr.suppressed) return false;
-  const signals = ctx.opts.collectSelfReviewSignals?.() ?? null;
-  if (!signals) return ctx.opts.hasReviewableChanges?.() ?? false;
+  const signals = await ctx.opts.collectSelfReviewSignals?.() ?? null;
+  if (!signals) return (await ctx.opts.hasReviewableChanges?.()) ?? false;
   const nudge = shouldNudgeSelfReview(signals, sr, { maxReviews: selfReviewMaxNudges() });
   if (nudge) sr.lastNudgedFingerprint = signals.pendingFingerprint;
   return nudge;

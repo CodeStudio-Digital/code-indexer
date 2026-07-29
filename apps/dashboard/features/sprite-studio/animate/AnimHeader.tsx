@@ -28,13 +28,13 @@ export function AnimHeader({
   onExport,
 }: {
   animations: SpriteAnimation[];
-  selectedId: number | null;
-  onSelect: (id: number) => void;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
   onCreate: (input: {
     name: string; fps: number; frames: number; loopMode: AnimLoopMode;
     actionKey: string; direction?: string; exportName: string;
   }) => Promise<void>;
-  onDelete: (id: number) => Promise<void>;
+  onDelete: (id: string) => Promise<void>;
   onExport?: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');
@@ -100,7 +100,7 @@ export function AnimHeader({
       <select
         className={selectCls}
         value={selectedId ?? ''}
-        onChange={(e) => onSelect(Number(e.target.value))}
+        onChange={(e) => onSelect(e.target.value)}
         aria-label={t('animate.title')}
       >
         {animations.length === 0 && <option value="">{t('animate.none')}</option>}

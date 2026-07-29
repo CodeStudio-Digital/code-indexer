@@ -1,5 +1,6 @@
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { CompactionSummaryV3 } from '@mcp/code-agent/core/summarizer-v3.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export type ExternalSessionSource = 'claude-code' | 'codex';
 
@@ -30,7 +31,7 @@ export interface ExternalSessionCandidate {
   size_bytes: number;
   reference: ExternalSessionReference;
   matches_project?: boolean;
-  already_imported_session_id?: number | null;
+  already_imported_session_id?: SessionId | null;
 }
 
 export interface ExternalSessionWarning {
@@ -88,7 +89,7 @@ export interface PersistExternalSessionInput extends ImportExternalSessionInput 
 }
 
 export interface ImportExternalSessionResult {
-  session_id: number;
+  session_id: SessionId;
   source: ExternalSessionSource;
   external_id: string;
   fingerprint: string;

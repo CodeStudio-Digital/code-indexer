@@ -310,12 +310,22 @@
     "tabBody": "Body",
     "tabCookies": "Cookies",
     "tabHeaders": "Headers",
+    "tabJsonPath": "JSONPath",
     "tabTestResults": "Test Results",
     "tabTiming": "Timing",
     "verified": "Verified"
   },
   "responseHeaders": {
     "copyAll": "Copy all"
+  },
+  "jsonPath": {
+    "expressionAria": "JSONPath expression",
+    "label": "JSONPath",
+    "matchCount_one": "{{count}} match",
+    "matchCount_other": "{{count}} matches",
+    "noMatches": "No matches.",
+    "notJson": "Response body is not JSON.",
+    "placeholder": "$.store.book[*].title"
   },
   "row": {
     "delete": "Delete",

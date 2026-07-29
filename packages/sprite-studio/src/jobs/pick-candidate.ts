@@ -8,25 +8,26 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { SpriteAssetsStore } from '@mcp/store/sprite-studio/sprite-assets-store.js';
-import type { SpriteAssetVersionRow } from '@mcp/store/sprite-studio/types.js';
-import type { SpriteJobsStore } from '@mcp/store/sprite-studio/sprite-jobs-store.js';
+import type {
+  SpriteJobStores,
+  SpriteJobVersionRecord,
+} from './deps.js';
 import { decodePng } from '../processing/png.js';
 import { appendVersion, nextVersionNumber, readAssetManifest } from '../repo/manifest.js';
 import { resolveInsideSpriteDir, versionFileName } from '../repo/paths.js';
 
 export interface PickDeps {
-  stores: { assets: SpriteAssetsStore; jobs: SpriteJobsStore };
-  scratchDir(jobId: number): string;
-  projectRoot(spriteProjectId: number): Promise<string> | string;
+  stores: Pick<SpriteJobStores, 'assets' | 'jobs'>;
+  scratchDir(jobId: string): string;
+  projectRoot(spriteProjectId: string): Promise<string> | string;
   now?(): string;
 }
 
 export interface PromoteCandidateInput {
-  jobId: number;
+  jobId: string;
   candidateIndex: number;
   /** Target asset: DB row id + repo slug (asset must already exist). */
-  asset: { id: number; slug: string };
+  asset: { id: string; slug: string };
 }
 
 /** Scratch file basename for candidate `i` (matches the runner's writes). */
@@ -37,14 +38,14 @@ export function candidateFileName(index: number): string {
 export async function promoteCandidate(
   deps: PickDeps,
   input: PromoteCandidateInput,
-): Promise<SpriteAssetVersionRow> {
+): Promise<SpriteJobVersionRecord> {
   const { jobId, candidateIndex, asset } = input;
   const candidateFile = path.join(deps.scratchDir(jobId), candidateFileName(candidateIndex));
   const png = fs.readFileSync(candidateFile);
   const { width, height } = decodePng(png);
   const contentHash = crypto.createHash('sha256').update(png).digest('hex');
 
-  const job = deps.stores.jobs.get(jobId);
+  const job = await deps.stores.jobs.get(jobId);
   if (!job) throw new Error(`Unknown sprite job ${jobId}`);
   const projectRoot = await deps.projectRoot(job.sprite_project_id);
 
@@ -70,7 +71,7 @@ export async function promoteCandidate(
     createdAt: deps.now?.() ?? new Date().toISOString(),
   });
 
-  const row = deps.stores.assets.insertVersion({
+  const row = await deps.stores.assets.insertVersion({
     asset_id: asset.id,
     version: v,
     file_rel_path: relPath,
@@ -83,7 +84,7 @@ export async function promoteCandidate(
     job_id: jobId,
     content_hash: contentHash,
   });
-  deps.stores.assets.setCurrentVersion(asset.id, row.id);
-  deps.stores.jobs.setResult(jobId, { result_version_id: row.id });
+  await deps.stores.assets.setCurrentVersion(asset.id, row.id);
+  await deps.stores.jobs.setResult(jobId, { result_version_id: row.id });
   return row;
 }

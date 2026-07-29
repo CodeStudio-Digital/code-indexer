@@ -1,5 +1,6 @@
 /**
- * Admin routes for counterfactual shadow-traffic observations.
+ * Admin routes for global counterfactual shadow-traffic observations.
+ * Session-owned observations are stored in their filesystem bundles.
  *
  *   GET  /api/admin/counterfactuals
  *   GET  /api/admin/counterfactuals/stats

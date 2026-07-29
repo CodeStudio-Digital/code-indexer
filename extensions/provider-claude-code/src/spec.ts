@@ -7,8 +7,14 @@ const CLAUDE_CODE_BASE_URL = process.env.CLAUDE_CODE_API_BASE_URL ?? 'https://ap
 
 // Effort levels mirror Claude Code's `getClaudeCodeEffort()`. Only adaptive
 // models accept them; callers still clamp against the resolved model family.
-const CLAUDE_CODE_EFFORT_LEVELS_XHIGH = ['low', 'medium', 'high', 'xhigh'] as const;
-const CLAUDE_CODE_EFFORT_LEVELS_BASE = ['low', 'medium', 'high'] as const;
+const CLAUDE_CODE_EFFORT_LEVELS_XHIGH = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+const CLAUDE_CODE_EFFORT_LEVELS_BASE = ['low', 'medium', 'high', 'max'] as const;
 
 export const CLAUDE_CODE_SEED_MODELS = [
   {
@@ -16,6 +22,19 @@ export const CLAUDE_CODE_SEED_MODELS = [
     name: 'Fable 5',
     display_name: 'Fable 5',
     description: 'Fable 5 - Claude Code most capable model for the hardest long-running tasks; requires usage credits and one-time consent.',
+    context_window: 1_000_000,
+    default_max_tokens: 64_000,
+    can_reason: true,
+    supports_attachments: true,
+    default_reasoning_level: 'high',
+    supported_reasoning_levels: [...CLAUDE_CODE_EFFORT_LEVELS_XHIGH],
+  },
+  {
+    model_id: 'opus',
+    name: 'Opus 5',
+    display_name: 'Opus 5',
+    description:
+      'Opus 5 - Claude Code current model for complex agentic coding and enterprise work.',
     context_window: 1_000_000,
     default_max_tokens: 64_000,
     can_reason: true,
@@ -36,18 +55,6 @@ export const CLAUDE_CODE_SEED_MODELS = [
     supported_reasoning_levels: [...CLAUDE_CODE_EFFORT_LEVELS_XHIGH],
   },
   {
-    model_id: 'sonnet-4-6',
-    name: 'Sonnet 4.6',
-    display_name: 'Sonnet 4.6',
-    description: 'Sonnet 4.6 - previous-generation Sonnet with 200K context.',
-    context_window: 200_000,
-    default_max_tokens: 32_000,
-    can_reason: true,
-    supports_attachments: true,
-    default_reasoning_level: 'high',
-    supported_reasoning_levels: [...CLAUDE_CODE_EFFORT_LEVELS_BASE],
-  },
-  {
     model_id: 'haiku',
     name: 'Haiku 4.5',
     display_name: 'Haiku 4.5',
@@ -60,11 +67,11 @@ export const CLAUDE_CODE_SEED_MODELS = [
     supported_reasoning_levels: null,
   },
   {
-    model_id: 'opus',
+    model_id: 'opus-4-8',
     name: 'Opus 4.8',
     display_name: 'Opus 4.8',
     description:
-      'Opus 4.8 - Claude Code current top-tier reasoning model with native 1M context.',
+      'Opus 4.8 - previous-generation Opus with native 1M context.',
     context_window: 1_000_000,
     default_max_tokens: 64_000,
     can_reason: true,
@@ -97,6 +104,18 @@ export const CLAUDE_CODE_SEED_MODELS = [
     default_reasoning_level: 'high',
     supported_reasoning_levels: [...CLAUDE_CODE_EFFORT_LEVELS_BASE],
   },
+  {
+    model_id: 'sonnet-4-6',
+    name: 'Sonnet 4.6',
+    display_name: 'Sonnet 4.6',
+    description: 'Sonnet 4.6 - previous-generation Sonnet with 200K context.',
+    context_window: 200_000,
+    default_max_tokens: 32_000,
+    can_reason: true,
+    supports_attachments: true,
+    default_reasoning_level: 'high',
+    supported_reasoning_levels: [...CLAUDE_CODE_EFFORT_LEVELS_BASE],
+  },
 ] as const;
 
 /**
@@ -118,7 +137,12 @@ export const claudeCodeSpec: ProviderSpec = {
   defaultModels: CLAUDE_CODE_SEED_MODELS.map((m) => m.model_id),
   pricing: {
     fable: { inputPer1M: 0.0, outputPer1M: 0.0 },
+    opus: { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'opus-4-8': { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'opus-4-7': { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'opus-4-6': { inputPer1M: 0.0, outputPer1M: 0.0 },
     sonnet: { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'sonnet-4-6': { inputPer1M: 0.0, outputPer1M: 0.0 },
     haiku: { inputPer1M: 0.0, outputPer1M: 0.0 },
   },
   capabilities: { supportsThinking: true, supportsVision: true, fileInput: 'pdf-only' },
@@ -144,7 +168,7 @@ export const claudeCodeSpec: ProviderSpec = {
       { whenScope: 'org:create_api_key', url: 'https://platform.claude.com/oauth/authorize' },
     ],
     tokenUrl: 'https://platform.claude.com/v1/oauth/token',
-    redirect: { port: 1456, path: '/callback' },
+    redirect: { port: 0, path: '/callback' },
     authorizeParams: { code: 'true' },
     hooks: 'claude-code',
   },

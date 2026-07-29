@@ -8,10 +8,10 @@ import type { DragEvent, MouseEvent } from 'react';
 import { Loader2 } from 'lucide-react';
 import { FileIcon, FolderIcon } from '../../../components/FileIcon.js';
 import { cn } from '../../../lib/utils.js';
-import { fmtBytes, fmtDate, fmtMode, type FsItem } from './fs-adapter.js';
+import { fmtBytes, fmtDate, fmtMode, fmtOwner, type FsItem } from './fs-adapter.js';
 import { hasPanePayload } from './pane-dnd.js';
 import type { PaneSelectionStore } from './pane-selection.js';
-import type { ColumnVisibility, ColumnWidths } from './column-config.js';
+import { ROW_HEIGHT, type ColumnVisibility, type ColumnWidths } from './column-config.js';
 
 interface RowProps {
   item: FsItem;
@@ -32,6 +32,10 @@ export function FilePaneRow({ item, useSel, busy, columns, columnWidths, onClick
   const size = isDir ? '' : fmtBytes(item.size);
   const modified = fmtDate(item.mtime);
   const permissions = fmtMode(item.mode, item.type);
+  // Falls back to the raw uid/gid when the host's passwd/group couldn't be read
+  // — same as every SFTP client. Blank on the local side, which has neither.
+  const owner = fmtOwner(item.owner, item.uid);
+  const group = fmtOwner(item.group, item.gid);
   return (
     <div
       role="option"
@@ -43,8 +47,11 @@ export function FilePaneRow({ item, useSel, busy, columns, columnWidths, onClick
       onClick={(e) => onClick(e, item)}
       onDoubleClick={() => onOpen(item)}
       onContextMenu={(e) => onContext(e, item)}
+      // Explicit height (not implied by py-1) — the pane is virtualized and
+      // `estimateSize` must match exactly or rows drift from the scrollbar.
+      style={{ height: ROW_HEIGHT }}
       className={cn(
-        'flex min-w-0 items-center gap-2 px-3 py-1 text-xs cursor-default select-none',
+        'flex min-w-0 items-center gap-2 px-3 text-xs cursor-default select-none',
         selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted',
       )}
     >
@@ -59,6 +66,12 @@ export function FilePaneRow({ item, useSel, busy, columns, columnWidths, onClick
       )}
       {columns.modified && (
         <span className="text-muted-foreground tabular-nums shrink-0 truncate whitespace-nowrap text-right" style={{ width: columnWidths.modified }} title={modified}>{modified}</span>
+      )}
+      {columns.owner && (
+        <span className="text-muted-foreground shrink-0 truncate whitespace-nowrap text-right" style={{ width: columnWidths.owner }} title={owner}>{owner}</span>
+      )}
+      {columns.group && (
+        <span className="text-muted-foreground shrink-0 truncate whitespace-nowrap text-right" style={{ width: columnWidths.group }} title={group}>{group}</span>
       )}
       {columns.permissions && (
         <span className="text-muted-foreground font-mono shrink-0 truncate whitespace-nowrap text-right" style={{ width: columnWidths.permissions }} title={permissions}>{permissions}</span>

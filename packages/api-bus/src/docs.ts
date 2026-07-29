@@ -163,8 +163,8 @@ export interface DocsApi {
 
   /** docs-agent (multi-step deep research) — wraps DocsResearchBridge. */
   research: {
-    start(input: { query: string; collection?: string }, ctx: ApiContext): Promise<{ sessionId: number }>;
-    stream(input: { sessionId: number }, ctx: ApiContext): AsyncStream<{ event: string; data: unknown }>;
-    get(input: { sessionId: number }, ctx: ApiContext): Promise<unknown>;
+    start(input: { query: string; collection?: string }, ctx: ApiContext): Promise<{ sessionId: string }>;
+    stream(input: { sessionId: string }, ctx: ApiContext): AsyncStream<{ event: string; data: unknown }>;
+    get(input: { sessionId: string }, ctx: ApiContext): Promise<unknown>;
   };
 }

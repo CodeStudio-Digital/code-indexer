@@ -35,7 +35,7 @@ interface ChatHeaderProps {
   onOpenSkillConfig?: () => void;
   onOpenMetrics?: () => void;
   onOpenSnapshots?: () => void;
-  /** Open the Tool Stats modal (aggregated coder_tool_calls breakdown).
+  /** Open the Tool Stats modal (aggregated bundle tool-output breakdown).
    *  Diagnostic helper added alongside the loop-detection banners. */
   onOpenToolStats?: () => void;
   /** Pending file-snapshot count to badge on the Snapshots button. 0 hides the badge. */

@@ -23,8 +23,8 @@ import { summariseRunI18n } from '../shared/qa-i18n.js';
 import type { QaRun, QaTestResultWithUrls } from '../shared/types.js';
 
 interface Props {
-  sessionId: number;
-  runId: number;
+  sessionId: string;
+  runId: string;
   onClose: () => void;
 }
 
@@ -95,14 +95,24 @@ export function RunDetailModal({ sessionId, runId, onClose }: Props) {
           {!data && !error && (
             <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
           )}
-          {data && <RunDetailBody run={data.run} results={data.results} />}
+          {data && (
+            <RunDetailBody sessionId={sessionId} run={data.run} results={data.results} />
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function RunDetailBody({ run, results }: { run: QaRun; results: QaTestResultWithUrls[] }) {
+function RunDetailBody({
+  sessionId,
+  run,
+  results,
+}: {
+  sessionId: string;
+  run: QaRun;
+  results: QaTestResultWithUrls[];
+}) {
   const { t } = useTranslation('agents');
   return (
     <>
@@ -138,7 +148,7 @@ function RunDetailBody({ run, results }: { run: QaRun; results: QaTestResultWith
       ) : (
         <ul className="space-y-2">
           {results.map((r) => (
-            <ResultRow key={r.id} sessionId={run.company_session_id} result={r} />
+            <ResultRow key={r.id} sessionId={sessionId} result={r} />
           ))}
         </ul>
       )}
@@ -150,7 +160,7 @@ function ResultRow({
   sessionId,
   result,
 }: {
-  sessionId: number;
+  sessionId: string;
   result: QaTestResultWithUrls;
 }) {
   const { t } = useTranslation('agents');

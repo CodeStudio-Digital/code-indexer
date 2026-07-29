@@ -4,17 +4,17 @@ import { Button } from '../../components/ui/button.js';
 import { apiPost } from '../../hooks/useApi.js';
 
 interface ReestablishMasterDialogProps {
-  sessionId: number;
+  sessionId: string;
   sessionName: string;
   onClose: () => void;
   /** Called with the new master coder_session_id on success — parent navigates. */
-  onSpawned: (args: { masterCoderSessionId: number }) => void;
+  onSpawned: (args: { masterCoderSessionId: string }) => void;
 }
 
 interface SpawnResponse {
   ok?: boolean;
-  master_coder_session_id?: number;
-  company_session_id?: number;
+  master_coder_session_id?: string;
+  company_session_id?: string;
   provider?: string;
   model?: string;
   error?: string;

@@ -88,7 +88,7 @@ const USER_RULES = [
   'Respond with EXACTLY this JSON shape and field names (no extra keys, no markdown):',
   '{"findings":[{"severity":"critical|high|medium|low",' +
     '"kind":"defect|missing_change|unfulfilled_obligation|scope_creep",' +
-    '"filePath":"path","baselineId":123,' +
+    '"filePath":"path","baselineId":"00000000-0000-4000-8000-000000000000",' +
     '"hunkFingerprint":"hex","oldLine":null,"newLine":42,"obligationId":null,' +
     '"body":"specific, actionable ' +
     'explanation of the problem and its impact","suggestedFix":"concrete corrected code or a ' +

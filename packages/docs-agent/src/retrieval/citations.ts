@@ -5,8 +5,8 @@
  * The synthesize tool emits markdown with footnotes like `[^1]`, `[^2]`,
  * where N is the 1-based index into the chunk array passed to the tool.
  * We extract the unique N values to compute the final `chunks_cited`
- * list — this is what gets persisted on `docs_research_sessions
- * .final_chunk_ids_json` and surfaced to the caller.
+ * list — this is what gets persisted in the research session bundle and
+ * surfaced to the caller.
  */
 import type { DocChunk } from '@mcp/store/doc-store.js';
 

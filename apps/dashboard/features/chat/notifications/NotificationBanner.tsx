@@ -11,7 +11,7 @@ import { NotificationRow } from './NotificationRow.js';
 import { useSessionNotifications } from './session-notifications-store.js';
 
 interface NotificationBannerProps {
-  sessionId: number;
+  sessionId: string;
 }
 
 export const NotificationBanner = memo(function NotificationBanner({ sessionId }: NotificationBannerProps) {

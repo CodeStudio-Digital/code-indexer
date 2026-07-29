@@ -5,7 +5,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
-import { subAgentResultCache081 } from '@mcp/store/migrations/081_sub_agent_result_cache.js';
 import { SubAgentResultCacheStore } from '@mcp/store/sub-agent-result-cache-store.js';
 import { SubAgentResultCache } from '../sub-agent-result-cache.js';
 import { withSubAgentCache } from '../sub-agent-cache-wrap.js';
@@ -14,6 +13,23 @@ const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
 
+function createGlobalCacheTable(db: InstanceType<typeof Database>): void {
+  db.exec(`
+    CREATE TABLE sub_agent_result_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      prompt_hash TEXT NOT NULL,
+      context_digest TEXT NOT NULL,
+      agent_type TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      ttl_seconds INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(prompt_hash, context_digest, agent_type)
+    )
+  `);
+}
+
 describe('withSubAgentCache', () => {
   let db: InstanceType<typeof Database>;
   let cache: SubAgentResultCache;
@@ -21,7 +37,7 @@ describe('withSubAgentCache', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     db.pragma('journal_mode = WAL');
-    subAgentResultCache081.up(db);
+    createGlobalCacheTable(db);
     cache = new SubAgentResultCache(new SubAgentResultCacheStore(db));
   });
   afterEach(() => db.close());

@@ -32,10 +32,9 @@ import {
 /**
  * Tools that must NEVER be trimmed by the model cap. The discovery core
  * (find_tools/expand_toolset/code_exec), the minimal read pair, the
- * interaction/lifecycle tools a session cannot function without, and
- * both goal lifecycle transitions. A bootstrap session cannot establish the
- * runtime contract without `create_goal`, and an in-progress goal with no
- * `update_goal` is deadlocked — see tiers.ts goal-tools note.
+ * interaction/lifecycle tools a session cannot function without, and both
+ * optional goal-state transitions. Keeping create/update together preserves a
+ * coherent telemetry surface under small model catalog caps.
  *
  * `task_list` is the ONE always-on task/checklist tool (the todos+tasks
  * merge — see BOOTSTRAP_TOOLS in tiers.ts). The pre-merge solo aliases

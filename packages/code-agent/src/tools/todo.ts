@@ -12,7 +12,7 @@ import { type TodoItem, generateTodoId, effectiveGate } from '@mcp/code-agent/to
  *   - approve (`submit_tasks` / `task_list({gate:'approve'})`) PAUSES for user
  *     approval and is the only thing that arms `execute_tasks`.
  *
- * Both gates write the SAME store (`coder_tasks_state`, one row per session),
+ * Both gates write the same session-local task record,
  * so a checklist and an approve list can never coexist as parallel lists.
  *
  * Each TodoItem carries a stable `id` (8-char hex). The id lets `update_todo`

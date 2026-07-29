@@ -29,7 +29,7 @@ interface NavSource {
 export interface CommandSources {
   nav: NavSource[];
   projects: Array<{ id: number; name: string }>;
-  recent: Array<{ id: number; title: string; project_id: number; project_name: string }>;
+  recent: Array<{ id: string; title: string; project_id: number; project_name: string }>;
   navigate: (to: string) => void;
   toggleTheme: () => void;
   toggleLanguage: () => void;

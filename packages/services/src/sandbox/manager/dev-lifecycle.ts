@@ -52,7 +52,7 @@ export interface DevLifecycleDeps {
     sb: Sandbox,
     status: PersistedSandboxStatus,
   ) => void;
-  syncManagedEnvs: (sessionId: string) => void;
+  syncManagedEnvs: (sessionId: string) => Promise<void>;
   syncEnvsToAllContainers: (sessionId: string) => Promise<void>;
   unpauseRuntimeContainer: (sessionId: string, serviceId: string) => Promise<Sandbox>;
   /** Deps for `startExternalNodeDevServer` — usually `{ appendLog, recordStep }`. */
@@ -276,13 +276,27 @@ export async function pauseSandbox(
   if (!sb.hostWorkdirMount) {
     try {
       const tar = await driver.exportWorkdir(sb.containerId, sb.workdir);
-      if (tar && tar.byteLength > 0) {
-        await saveArchive(sb.id, tar);
-        deps.appendLog(sb, 'info', `Archived workdir (${tar.byteLength} bytes) before pause.`);
+      if (!tar || tar.byteLength === 0) {
+        throw new Error('sandbox driver returned an empty workdir archive');
       }
+      await saveArchive(sb.id, tar);
+      deps.appendLog(sb, 'info', `Archived workdir (${tar.byteLength} bytes) before pause.`);
     } catch (e) {
-      console.warn(
-        `[sandbox-manager] pre-pause archive ${sb.id} failed: ${e instanceof Error ? e.message : String(e)}`,
+      const message =
+        `Pause refused because the session archive could not be committed: ${
+          e instanceof Error ? e.message : String(e)
+        }`;
+      deps.appendLog(sb, 'error', message);
+      deps.emit({
+        kind: 'error',
+        sandboxId: sb.id,
+        message,
+      });
+      throw new Error(
+        `[sandbox-manager] pre-pause archive ${sb.id} failed closed: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+        { cause: e },
       );
     }
   }
@@ -377,7 +391,7 @@ export async function resumeSandbox(
   deps.appendLog(sb, 'info', 'Resumed successfully.');
   deps.persist(sb, 'running');
   deps.emit({ kind: 'resumed', sandboxId: sb.id, previewUrl: sb.previewUrl });
-  deps.syncManagedEnvs(sessionId);
+  await deps.syncManagedEnvs(sessionId);
   return sb;
 }
 
@@ -441,7 +455,7 @@ export async function startServiceContainer(
   deps.appendLog(sb, 'info', 'Service started.');
   deps.persistService(sessionId, serviceId, serviceId, sb, 'running');
   deps.emit({ kind: 'ready', sandboxId: sb.id, previewUrl: sb.previewUrl });
-  deps.syncManagedEnvs(sessionId);
+  await deps.syncManagedEnvs(sessionId);
   void deps.syncEnvsToAllContainers(sessionId).catch(() => void 0);
   return sb;
 }

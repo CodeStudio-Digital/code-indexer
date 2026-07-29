@@ -91,15 +91,24 @@ export async function planVaultPush(
 // Rename-safe and unambiguous (unlike name-matching). A dangling ref resolves to
 // null (fall back) — we NEVER write a foreign numeric id.
 
-/** Build a host's portable refs: the referenced identity/jump-host as their clientDocIds. */
+/**
+ * Build a host's portable refs: the referenced identity/jump-host as their
+ * clientDocIds.
+ *
+ * The jump host arrives as a RESOLVER, not a map: `jump_host_id` is a bare
+ * numeric FK, but hostMap is keyed by scope-qualified host key (`shared:3` vs
+ * `project:3`) because the central and project DBs have independent
+ * AUTOINCREMENT sequences and their ids collide. Only the caller knows which
+ * scope a given numeric id refers to, so it does that half.
+ */
 export function hostRefs(
   host: { identity_id: number | null; jump_host_id: number | null },
   identityMap: Record<string, string>,
-  hostMap: Record<string, string>,
+  hostDocForId: (id: number) => string | undefined,
 ): { identity_ref: string | null; jump_host_ref: string | null } {
   return {
     identity_ref: host.identity_id != null ? identityMap[String(host.identity_id)] ?? null : null,
-    jump_host_ref: host.jump_host_id != null ? hostMap[String(host.jump_host_id)] ?? null : null,
+    jump_host_ref: host.jump_host_id != null ? hostDocForId(host.jump_host_id) ?? null : null,
   };
 }
 

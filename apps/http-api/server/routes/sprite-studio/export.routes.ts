@@ -17,7 +17,13 @@ export function mountSpriteExportRoutes(app: Hono, deps: ServerDeps): void {
     const request = normalizeExportRequest(await c.req.json().catch(() => null));
     if (!request) return c.json({ error: 'invalid_body' }, 400);
     try {
-      return c.json(buildSpriteExport(deps, Number(c.req.param('projectId')), request).plan);
+      return c.json(
+        (await buildSpriteExport(
+          deps,
+          Number(c.req.param('projectId')),
+          request,
+        )).plan,
+      );
     } catch (error) {
       const message = (error as Error).message;
       return c.json({ error: message }, statusFor(message));
@@ -28,7 +34,11 @@ export function mountSpriteExportRoutes(app: Hono, deps: ServerDeps): void {
     const request = normalizeExportRequest(await c.req.json().catch(() => null));
     if (!request) return c.json({ error: 'invalid_body' }, 400);
     try {
-      const built = buildSpriteExport(deps, Number(c.req.param('projectId')), request);
+      const built = await buildSpriteExport(
+        deps,
+        Number(c.req.param('projectId')),
+        request,
+      );
       fs.mkdirSync(built.destination, { recursive: true });
       const written: string[] = [];
       for (const file of built.files) {

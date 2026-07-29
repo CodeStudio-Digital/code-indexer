@@ -8,7 +8,7 @@ import { consolidateBoardToMemory, type ConsolidateBoardDeps } from '../board-co
 import { setCompanyMemoryPorts } from '../ports.js';
 
 interface Entry {
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   author_role: string;
   kind: string;
   content: string;
@@ -16,13 +16,13 @@ interface Entry {
 
 function makeDeps(entries: Entry[], opts?: { memoryEnabled?: (id: number) => boolean }): ConsolidateBoardDeps {
   return {
-    companySessionId: 9,
-    companyStore: {
-      readBoard: () => entries,
-      listAgentRuns: () => [
-        { id: 1, role: 'master', project_ids_json: '[10,20]' },
-        { id: 2, role: 'frontend', project_ids_json: '[10]' },
-        { id: 3, role: 'backend', project_ids_json: '[20]' },
+    companySessionId: 'c0000000-0000-4000-8000-000000000009',
+    companyFiles: {
+      listBoardEntriesSync: () => entries,
+      listAgentRunsSync: () => [
+        { id: 'a0000000-0000-4000-8000-000000000001', role: 'master', project_ids_json: '[10,20]' },
+        { id: 'a0000000-0000-4000-8000-000000000002', role: 'frontend', project_ids_json: '[10]' },
+        { id: 'a0000000-0000-4000-8000-000000000003', role: 'backend', project_ids_json: '[20]' },
       ],
     },
     db: {
@@ -49,9 +49,9 @@ describe('consolidateBoardToMemory', () => {
     const extract = wirePorts();
     const res = await consolidateBoardToMemory(
       makeDeps([
-        { agent_run_id: 2, author_role: 'frontend', kind: 'decision', content: 'Use zustand.' },
-        { agent_run_id: 3, author_role: 'backend', kind: 'blocker', content: 'Port 5432 busy.' },
-        { agent_run_id: 2, author_role: 'frontend', kind: 'message', content: 'chatter — must be skipped' },
+        { agent_run_id: 'a0000000-0000-4000-8000-000000000002', author_role: 'frontend', kind: 'decision', content: 'Use zustand.' },
+        { agent_run_id: 'a0000000-0000-4000-8000-000000000003', author_role: 'backend', kind: 'blocker', content: 'Port 5432 busy.' },
+        { agent_run_id: 'a0000000-0000-4000-8000-000000000002', author_role: 'frontend', kind: 'message', content: 'chatter — must be skipped' },
         { agent_run_id: null, author_role: 'system', kind: 'deliverable', content: 'Session shipped.' },
       ]),
     );
@@ -83,14 +83,14 @@ describe('consolidateBoardToMemory', () => {
   });
 
   it('no-ops without ports, without distiller binding, or on empty board', async () => {
-    expect(await consolidateBoardToMemory(makeDeps([{ agent_run_id: 2, author_role: 'f', kind: 'decision', content: 'x' }])))
+    expect(await consolidateBoardToMemory(makeDeps([{ agent_run_id: 'a0000000-0000-4000-8000-000000000002', author_role: 'f', kind: 'decision', content: 'x' }])))
       .toEqual({ projects: 0, entries: 0 }); // no ports wired
 
     setCompanyMemoryPorts({
       memoryRetriever: { retrieve: vi.fn() },
       runEndMemory: { extractAndPersist: vi.fn(), isConfigured: vi.fn().mockResolvedValue(false) },
     });
-    expect(await consolidateBoardToMemory(makeDeps([{ agent_run_id: 2, author_role: 'f', kind: 'decision', content: 'x' }])))
+    expect(await consolidateBoardToMemory(makeDeps([{ agent_run_id: 'a0000000-0000-4000-8000-000000000002', author_role: 'f', kind: 'decision', content: 'x' }])))
       .toEqual({ projects: 0, entries: 0 }); // distiller not configured
 
     wirePorts();
@@ -100,8 +100,8 @@ describe('consolidateBoardToMemory', () => {
   it('never throws — store errors degrade to zero counts', async () => {
     wirePorts();
     const deps = makeDeps([]);
-    deps.companyStore.readBoard = () => {
-      throw new Error('db locked');
+    deps.companyFiles.listBoardEntriesSync = () => {
+      throw new Error('filesystem read failed');
     };
     await expect(consolidateBoardToMemory(deps)).resolves.toEqual({ projects: 0, entries: 0 });
   });

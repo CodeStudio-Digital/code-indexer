@@ -5,11 +5,11 @@ import { buildSystemPrompt } from '../system-prompt.js';
 import { buildSubagentWorkspaceBriefing } from '../../tools/spawn-agent-core.js';
 
 const toolContext = {
-  cwd: 'C:/data/global-workspaces/abc',
-  projectName: '__global_abc',
+  cwd: 'D:/poa/backend',
+  projectName: 'poa-backend',
   globalWorkspace: {
-    syntheticProjectName: '__global_abc',
-    rootPath: 'C:/data/global-workspaces/abc',
+    sessionTitle: 'Global abc',
+    primaryRootPath: 'D:/poa/backend',
     projects: [
       {
         projectId: 7,
@@ -34,14 +34,14 @@ describe('global workspace context', () => {
     const shared = buildGlobalWorkspaceBriefing(toolContext);
     expect(buildSubagentWorkspaceBriefing(toolContext)).toBe(shared);
     expect(shared).toContain('poa-intranet-angular/ -> poa-intranet-angular');
-    expect(shared).toContain('intentionally NOT a Git repository');
+    expect(shared).toContain('There is no virtual union directory');
     expect(shared).toContain('run_command({cwd:"<project-slug>"');
   });
 
   it('injects the workspace map only into global system prompts', () => {
     const base = {
-      projectName: '__global_abc',
-      projectRoot: 'C:/data/global-workspaces/abc',
+      projectName: 'poa-backend',
+      projectRoot: 'D:/poa/backend',
       os: 'win32',
       providerFamily: 'generic' as const,
       profile: 'navigate' as const,

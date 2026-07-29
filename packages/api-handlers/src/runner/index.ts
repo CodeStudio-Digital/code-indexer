@@ -180,6 +180,11 @@ export function createRunnerHandlers(deps: HandlerDeps): RunnerApi {
       // A finished task stays visible until the user dismisses it, so its
       // bounded PTY replay buffer must follow the same lifecycle.
       retainOnExit: true,
+      meta: {
+        label: `${p.name}: ${input.label}`,
+        cwd: resolveCwdInRoot(p.root_path, input.cwd),
+        kind: 'runner',
+      },
     });
     const task: RunnerTask = {
       taskId: randomUUID(),

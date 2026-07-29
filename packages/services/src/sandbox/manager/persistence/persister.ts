@@ -36,17 +36,15 @@ export class SandboxPersister {
   constructor(private readonly stores: SandboxStoreContainer) {}
 
   /**
-   * Write the current state of a primary sandbox to DB. Called after
+   * Write the current state of a primary sandbox to its session bundle. Called after
    * every transition so a crash/restart can reconstruct.
    */
   persist(sb: Sandbox, statusOverride?: PersistedSandboxStatus): void {
     const store = this.stores.getSandboxStore();
     if (!store) return;
-    const numericId = Number(sb.id);
-    if (!Number.isFinite(numericId)) return;
     try {
       store.upsert({
-        session_id: numericId,
+        session_id: sb.id,
         container_id: sb.containerId,
         runtime: sb.runtime,
         stack: sb.stack,
@@ -73,10 +71,9 @@ export class SandboxPersister {
 
   /**
    * Persist a service row mirroring `persist()` for primary sandboxes.
-   * Silent when either the stores or the session id aren't numeric
-   * (test paths use string ids). Defensively releases stale rows that
-   * would collide with the partial unique indexes on `container_id` /
-   * `host_port` after a previous provisioning crashed mid-flight.
+   * Silent when the store is unavailable. Defensively releases stale
+   * records that would collide on `container_id` / `host_port` after a
+   * previous provisioning crashed mid-flight.
    */
   persistService(
     sessionId: string,
@@ -87,23 +84,21 @@ export class SandboxPersister {
   ): void {
     const store = this.stores.getServicesStore();
     if (!store) return;
-    const numericId = Number(sessionId);
-    if (!Number.isFinite(numericId)) return;
     try {
-      const released = store.releaseStaleContainerId(sb.containerId, numericId, serviceId);
+      const released = store.releaseStaleContainerId(sb.containerId, sessionId, serviceId);
       if (released > 0) {
         console.warn(
           `[sandbox-manager] persistService ${sessionId}:${serviceId} freed ${released} stale row(s) on container_id=${sb.containerId.slice(0, 12)}`,
         );
       }
-      const releasedPort = store.releaseStaleHostPort(sb.hostPort, numericId, serviceId);
+      const releasedPort = store.releaseStaleHostPort(sb.hostPort, sessionId, serviceId);
       if (releasedPort > 0) {
         console.warn(
           `[sandbox-manager] persistService ${sessionId}:${serviceId} freed ${releasedPort} stale row(s) on host_port=${sb.hostPort}`,
         );
       }
       store.upsert({
-        session_id: numericId,
+        session_id: sessionId,
         service_id: serviceId,
         name,
         container_id: sb.containerId,
@@ -144,10 +139,9 @@ export class SandboxPersister {
   ): void {
     if (serviceId) {
       const store = this.stores.getServicesStore();
-      const numericId = Number(sessionId);
-      if (!store || !Number.isFinite(numericId)) return;
+      if (!store) return;
       try {
-        store.patch(numericId, serviceId, {
+        store.patch(sessionId, serviceId, {
           status: 'running',
           last_access_at_ms: sb.lastAccessAt,
           paused_at_ms: null,

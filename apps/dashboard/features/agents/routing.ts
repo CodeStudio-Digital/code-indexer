@@ -23,8 +23,8 @@ import {
 export const AGENTS_ROOT = '/agents';
 
 export interface AgentsRoute {
-  rootId: number;
-  frontId: number;
+  rootId: string;
+  frontId: string;
   zone: Zone;
   tab: string;
 }
@@ -36,8 +36,8 @@ const FRONT_MAIN_ALIAS = 'main';
  * `frontId === rootId` (or `'main'`) to land on the Main tab.
  */
 export function buildAgentsUrl(
-  rootId: number,
-  frontId: number | 'main',
+  rootId: string,
+  frontId: string | 'main',
   zone: Zone,
   tab: string,
 ): string {
@@ -49,7 +49,7 @@ export function buildAgentsUrl(
  * Default destination for a session — used by the session-list sidebar
  * when no front/zone/tab is selected yet.
  */
-export function buildAgentsDefaultUrl(rootId: number): string {
+export function buildAgentsDefaultUrl(rootId: string): string {
   return buildAgentsUrl(rootId, 'main', 'work', DEFAULT_TAB_FOR_ZONE.work);
 }
 
@@ -62,22 +62,23 @@ interface RawParams {
 
 /**
  * Parse params produced by react-router's `useParams<...>()`. Returns
- * `null` if `rootId` is missing or non-numeric. The other segments are
+ * `null` if `rootId` is missing or blank. IDs are opaque UUID strings;
+ * parsing must never coerce them to numbers. The other segments are
  * normalized — bad values fall back to safe defaults rather than 404ing
  * the user. The caller can detect "redirect needed" by comparing the
  * returned route to the URL it parsed.
  */
-export function parseAgentsParams(params: RawParams, rootIdFallback?: number): AgentsRoute | null {
+export function parseAgentsParams(params: RawParams, rootIdFallback?: string): AgentsRoute | null {
   const rawRoot = params.rootId;
-  const rootId = rawRoot != null ? Number(rawRoot) : rootIdFallback;
-  if (rootId == null || !Number.isFinite(rootId)) return null;
+  const rootId = rawRoot?.trim() || rootIdFallback;
+  if (!rootId) return null;
 
   const frontRaw = params.frontId;
   const frontId =
     frontRaw == null || frontRaw === FRONT_MAIN_ALIAS
       ? rootId
-      : Number(frontRaw);
-  const resolvedFront = Number.isFinite(frontId) ? frontId : rootId;
+      : frontRaw.trim();
+  const resolvedFront = frontId || rootId;
 
   const zoneRaw = (params.zone ?? '').toLowerCase();
   const zone: Zone = (ZONES as readonly string[]).includes(zoneRaw)

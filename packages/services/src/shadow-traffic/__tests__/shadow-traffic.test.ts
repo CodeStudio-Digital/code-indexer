@@ -23,6 +23,7 @@ import {
 } from '../index.js';
 import {
   CandidatePipeline,
+  InMemoryTelemetrySink,
   type PipelineCandidate,
   type PipelineQuery,
   type Selector,
@@ -104,22 +105,31 @@ describe('ShadowTrafficRunner', () => {
     expect(rows[0].pipeline_name).toBe('tool_selection');
   });
 
-  it('persists production_choice + shadow_prediction as JSON', async () => {
+  it('routes session observations to telemetry without creating a global SQLite row', async () => {
+    const telemetry = new InMemoryTelemetrySink();
     const runner = new ShadowTrafficRunner({
       pipelineName: 'tool_selection',
       variants: [makeStubVariant('a', { picked: ['x', 'y'] })],
       store: handle.store,
+      telemetry,
       sampleRate: 1,
       scheduler: inlineScheduler,
     });
     await runner.runVariants(
-      { queryHash: 'q', payload: { id: '1' }, sessionId: 42 },
+      {
+        queryHash: 'q',
+        payload: { id: '1' },
+        sessionId: '018f0f5e-7b2d-7a45-8c11-0123456789ab',
+      },
       { picked: ['prod'] },
     );
-    const rows = handle.store.list();
-    expect(rows[0].production_choice_json).toBe(JSON.stringify({ picked: ['prod'] }));
-    expect(rows[0].shadow_prediction_json).toBe(JSON.stringify({ picked: ['x', 'y'] }));
-    expect(rows[0].session_id).toBe(42);
+    expect(handle.store.list()).toHaveLength(0);
+    expect(telemetry.events).toEqual([
+      expect.objectContaining({
+        component: 'shadow/a',
+        sessionId: '018f0f5e-7b2d-7a45-8c11-0123456789ab',
+      }),
+    ]);
   });
 
   it('one variant failing does not stop the others', async () => {

@@ -9,7 +9,16 @@
  */
 import { useCallback, useState } from 'react';
 
-export type ColumnId = 'size' | 'modified' | 'permissions';
+export type ColumnId = 'size' | 'modified' | 'permissions' | 'owner' | 'group';
+
+/**
+ * Fixed row height, in px. Exported so the row, the header and the virtualizer
+ * can't drift apart: the panes are virtualized, and `estimateSize` is only
+ * exact if every row really is this tall. Height used to be IMPLIED by
+ * `py-1 text-xs`, which is close but not guaranteed across the three column
+ * fonts (tabular-nums, mono).
+ */
+export const ROW_HEIGHT = 26;
 
 export interface ColumnDef {
   id: ColumnId;
@@ -25,38 +34,37 @@ export interface ColumnDef {
 export const COLUMNS: readonly ColumnDef[] = [
   { id: 'size', labelKey: 'size', defaultWidth: 80, minWidth: 56, maxWidth: 180 },
   { id: 'modified', labelKey: 'modified', defaultWidth: 144, minWidth: 92, maxWidth: 240 },
+  { id: 'owner', labelKey: 'owner', defaultWidth: 96, minWidth: 64, maxWidth: 180 },
+  { id: 'group', labelKey: 'group', defaultWidth: 96, minWidth: 64, maxWidth: 180 },
   { id: 'permissions', labelKey: 'permissions', defaultWidth: 112, minWidth: 84, maxWidth: 180 },
 ];
 
 const STORAGE_KEY = 'mcp-sftp:columns';
 const WIDTHS_STORAGE_KEY = 'mcp-sftp:column-widths';
 
-export interface ColumnVisibility {
-  size: boolean;
-  modified: boolean;
-  permissions: boolean;
-}
-
+export type ColumnVisibility = Record<ColumnId, boolean>;
 export type ColumnWidths = Record<ColumnId, number>;
 
-const DEFAULTS: ColumnVisibility = {
-  size: true,
-  modified: true,
-  permissions: false,
-};
+/** Off by default: the Unix-only columns, which are blank on the local side. */
+const DEFAULT_OFF: ReadonlySet<ColumnId> = new Set<ColumnId>(['permissions', 'owner', 'group']);
+
+const DEFAULTS: ColumnVisibility = Object.fromEntries(
+  COLUMNS.map((c) => [c.id, !DEFAULT_OFF.has(c.id)]),
+) as ColumnVisibility;
 
 const DEFAULT_WIDTHS: ColumnWidths = Object.fromEntries(COLUMNS.map((c) => [c.id, c.defaultWidth])) as ColumnWidths;
 
+// Derived from COLUMNS rather than enumerated: adding a column used to mean
+// editing the type, the defaults, the loader and the width loader in lockstep,
+// and missing one silently dropped the column from persistence.
 function load(): ColumnVisibility {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULTS;
     const parsed = JSON.parse(raw) as Partial<ColumnVisibility>;
-    return {
-      size: parsed.size ?? DEFAULTS.size,
-      modified: parsed.modified ?? DEFAULTS.modified,
-      permissions: parsed.permissions ?? DEFAULTS.permissions,
-    };
+    return Object.fromEntries(
+      COLUMNS.map((c) => [c.id, typeof parsed[c.id] === 'boolean' ? parsed[c.id] : DEFAULTS[c.id]]),
+    ) as ColumnVisibility;
   } catch {
     return DEFAULTS;
   }
@@ -81,11 +89,9 @@ function loadWidths(): ColumnWidths {
     const raw = localStorage.getItem(WIDTHS_STORAGE_KEY);
     if (!raw) return DEFAULT_WIDTHS;
     const parsed = JSON.parse(raw) as Partial<ColumnWidths>;
-    return {
-      size: clampWidth('size', parsed.size ?? DEFAULT_WIDTHS.size),
-      modified: clampWidth('modified', parsed.modified ?? DEFAULT_WIDTHS.modified),
-      permissions: clampWidth('permissions', parsed.permissions ?? DEFAULT_WIDTHS.permissions),
-    };
+    return Object.fromEntries(
+      COLUMNS.map((c) => [c.id, clampWidth(c.id, parsed[c.id] ?? DEFAULT_WIDTHS[c.id])]),
+    ) as ColumnWidths;
   } catch {
     return DEFAULT_WIDTHS;
   }

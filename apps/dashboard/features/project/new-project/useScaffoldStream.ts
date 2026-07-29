@@ -25,7 +25,7 @@ export interface ScaffoldStartBody {
   /** Builder mode (react-vite only) — Tailwind+shadcn+element selection. */
   builder?: boolean;
   /** Published DS (DS Studio session id) to link after the builder scaffold. */
-  dsSessionId?: number;
+  dsSessionId?: string;
 }
 
 export interface CreatedProject {

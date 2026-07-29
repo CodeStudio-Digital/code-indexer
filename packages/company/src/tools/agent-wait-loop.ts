@@ -46,7 +46,7 @@ export type AgentWaitOutcome =
   /** Master only: a notification is buffered; return so the runner drains it. */
   | { kind: 'pending_messages' }
   /** Master only: a subordinate posted something the master must resolve. */
-  | { kind: 'attention'; event: { kind: 'question' | 'plan' | 'tasks'; agentRunId: number; role: string } }
+  | { kind: 'attention'; event: { kind: 'question' | 'plan' | 'tasks'; agentRunId: string; role: string } }
   /** Master only: a notify/user_message wake landed — read the queue. */
   | { kind: 'message'; via: 'notify' | 'user_message' }
   /** The caller's own internal wait window elapsed (soft for fleet, hard for targets). */
@@ -55,14 +55,14 @@ export type AgentWaitOutcome =
 /** Narrow structural slice of the orchestrator the loop needs. */
 export interface WaitLoopOrchestrator {
   hasRunningSubordinates(): boolean;
-  listSubordinates(): ReadonlyArray<{ agentRunId: number; status: string }>;
+  listSubordinates(): ReadonlyArray<{ agentRunId: string; status: string }>;
   onSubordinateAttention(listener: AttentionListener): () => void;
   masterHasPendingMessages(): boolean;
 }
 
 export interface AgentWaitLoopOpts {
   /** `null` = whole running fleet (dynamic). `Set` = these fixed targets. */
-  targetIds: ReadonlySet<number> | null;
+  targetIds: ReadonlySet<string> | null;
   /** Master gets the early-returns; subordinates only get `all_done`/`deadline`. */
   isMaster: boolean;
   /** Absolute wall-clock deadline (ms epoch). */
@@ -79,7 +79,7 @@ export interface AgentWaitLoopOpts {
    * `STUCK_TOOL`. No-op when the supervisor is disabled or the agent isn't
    * tracked. This is what makes wiring the master into the supervisor safe.
    */
-  heartbeatAgentRunId?: number;
+  heartbeatAgentRunId?: string;
 }
 
 export async function runAgentWaitLoop(
@@ -128,6 +128,7 @@ export async function runAgentWaitLoop(
           targetIds !== null &&
           ev.kind !== 'notify' &&
           ev.kind !== 'user_message' &&
+          ev.agentRunId != null &&
           !targetIds.has(ev.agentRunId)
         ) {
           return;
@@ -159,6 +160,7 @@ export async function runAgentWaitLoop(
     if (event.kind === 'notify' || event.kind === 'user_message') {
       return { kind: 'message', via: event.kind };
     }
+    if (event.agentRunId == null) continue;
     // question | plan | tasks — only the master can resolve these.
     return {
       kind: 'attention',

@@ -43,7 +43,7 @@ export interface DestroyServiceDeps {
   allocator: { release(port: number): void };
   servicesStore: CompanySandboxServicesStore | null;
   emit: (event: SandboxEvent) => void;
-  syncManagedEnvs: (sessionId: string) => void;
+  syncManagedEnvs: (sessionId: string) => Promise<void>;
   syncEnvsToAllContainers: (sessionId: string) => Promise<void>;
   destroySessionNetwork: (sessionId: string) => Promise<void>;
 }
@@ -77,7 +77,7 @@ export async function executeServiceDestroy(
 
     // Prune the managed PREVIEW_URL_* env for the removed service
     // and push fresh .env into the survivors.
-    deps.syncManagedEnvs(sessionId);
+    await deps.syncManagedEnvs(sessionId);
     void deps.syncEnvsToAllContainers(sessionId).catch(() => void 0);
 
     // When the session has no more additional services AND the primary
@@ -99,13 +99,12 @@ function persistAfterDestroy(
   sb: Sandbox,
   reason: string,
 ): void {
-  const numericId = Number(sessionId);
-  if (!servicesStore || !Number.isFinite(numericId)) return;
+  if (!servicesStore) return;
   try {
     if (shouldHardDeleteService(reason)) {
-      servicesStore.delete(numericId, serviceId);
+      servicesStore.delete(sessionId, serviceId);
     } else {
-      servicesStore.patch(numericId, serviceId, {
+      servicesStore.patch(sessionId, serviceId, {
         status: 'destroyed',
         error: `destroyed (${reason})`,
         container_id: sb.containerId,

@@ -11,7 +11,7 @@ import type { CoderMessageRow } from '@mcp/code-agent';
 
 interface SessionData {
   session: {
-    id: number;
+    id: string;
     title: string;
     provider: string;
     model: string;
@@ -34,7 +34,7 @@ interface SessionData {
 }
 
 interface AgentSessionModalProps {
-  coderSessionId: number;
+  coderSessionId: string;
   role: string;
   status: string;
   onClose: () => void;

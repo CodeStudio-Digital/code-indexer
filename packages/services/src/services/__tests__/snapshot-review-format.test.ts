@@ -6,7 +6,7 @@ function finding(over: Partial<SnapshotReviewFinding>): SnapshotReviewFinding {
   return {
     severity: 'medium',
     filePath: 'src/a.ts',
-    baselineId: 1,
+    baselineId: '00000000-0000-4000-8000-000000000001',
     hunkFingerprint: null,
     oldLine: null,
     newLine: null,

@@ -31,21 +31,21 @@ export interface UseKanbanStateResult {
     tag?: KanbanTag;
     checklist?: string[];
   }) => Promise<KanbanCardFull | null>;
-  moveCard: (cardId: number, column: KanbanColumn, position?: number) => Promise<boolean>;
+  moveCard: (cardId: string, column: KanbanColumn, position?: number) => Promise<boolean>;
   updateCard: (
-    cardId: number,
+    cardId: string,
     patch: { title?: string; description?: string; tag?: KanbanTag | null },
   ) => Promise<boolean>;
-  deleteCard: (cardId: number) => Promise<boolean>;
-  addComment: (cardId: number, content: string) => Promise<boolean>;
-  addChecklistItem: (cardId: number, text: string) => Promise<boolean>;
-  updateChecklistItem: (itemId: number, patch: { text?: string; checked?: boolean }) => Promise<boolean>;
-  addDependency: (cardId: number, dependsOnCardId: number) => Promise<boolean>;
-  removeDependency: (cardId: number, dependsOnCardId: number) => Promise<boolean>;
-  refreshCard: (cardId: number) => Promise<void>;
+  deleteCard: (cardId: string) => Promise<boolean>;
+  addComment: (cardId: string, content: string) => Promise<boolean>;
+  addChecklistItem: (cardId: string, text: string) => Promise<boolean>;
+  updateChecklistItem: (itemId: string, patch: { text?: string; checked?: boolean }) => Promise<boolean>;
+  addDependency: (cardId: string, dependsOnCardId: string) => Promise<boolean>;
+  removeDependency: (cardId: string, dependsOnCardId: string) => Promise<boolean>;
+  refreshCard: (cardId: string) => Promise<void>;
 }
 
-export function useKanbanState(companySessionId: number | null): UseKanbanStateResult {
+export function useKanbanState(companySessionId: string | null): UseKanbanStateResult {
   const slot = useCompanyStore((s) => selectKanban(s, companySessionId));
   const kanbanHydrate = useCompanyStore((s) => s.kanbanHydrate);
   const kanbanUpsertCard = useCompanyStore((s) => s.kanbanUpsertCard);
@@ -87,7 +87,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
   // ─── Mutations ───────────────────────────────────────────────
 
   const refreshCard = useCallback(
-    async (cardId: number): Promise<void> => {
+    async (cardId: string): Promise<void> => {
       if (companySessionId == null || base == null) return;
       try {
         const res = await fetch(`${base}/${cardId}`);
@@ -133,7 +133,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
   );
 
   const moveCard = useCallback(
-    async (cardId: number, column: KanbanColumn, position?: number): Promise<boolean> => {
+    async (cardId: string, column: KanbanColumn, position?: number): Promise<boolean> => {
       if (companySessionId == null || base == null) return false;
       try {
         const res = await fetch(`${base}/${cardId}/move`, {
@@ -160,7 +160,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
 
   const updateCard = useCallback(
     async (
-      cardId: number,
+      cardId: string,
       patch: { title?: string; description?: string; tag?: KanbanTag | null },
     ): Promise<boolean> => {
       if (companySessionId == null || base == null) return false;
@@ -185,7 +185,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
   );
 
   const deleteCard = useCallback(
-    async (cardId: number): Promise<boolean> => {
+    async (cardId: string): Promise<boolean> => {
       if (companySessionId == null || base == null) return false;
       try {
         const res = await fetch(`${base}/${cardId}`, { method: 'DELETE' });
@@ -204,7 +204,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
   );
 
   const addComment = useCallback(
-    async (cardId: number, content: string): Promise<boolean> => {
+    async (cardId: string, content: string): Promise<boolean> => {
       if (companySessionId == null || base == null) return false;
       try {
         const res = await fetch(`${base}/${cardId}/comments`, {
@@ -222,7 +222,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
   );
 
   const addChecklistItem = useCallback(
-    async (cardId: number, text: string): Promise<boolean> => {
+    async (cardId: string, text: string): Promise<boolean> => {
       if (companySessionId == null || base == null) return false;
       try {
         const res = await fetch(`${base}/${cardId}/checklist`, {
@@ -240,7 +240,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
   );
 
   const updateChecklistItem = useCallback(
-    async (itemId: number, patch: { text?: string; checked?: boolean }): Promise<boolean> => {
+    async (itemId: string, patch: { text?: string; checked?: boolean }): Promise<boolean> => {
       if (companySessionId == null) return false;
       try {
         const res = await fetch(
@@ -260,7 +260,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
   );
 
   const addDependency = useCallback(
-    async (cardId: number, dependsOnCardId: number): Promise<boolean> => {
+    async (cardId: string, dependsOnCardId: string): Promise<boolean> => {
       if (companySessionId == null || base == null) return false;
       try {
         const res = await fetch(`${base}/${cardId}/dependencies`, {
@@ -284,7 +284,7 @@ export function useKanbanState(companySessionId: number | null): UseKanbanStateR
   );
 
   const removeDependency = useCallback(
-    async (cardId: number, dependsOnCardId: number): Promise<boolean> => {
+    async (cardId: string, dependsOnCardId: string): Promise<boolean> => {
       if (companySessionId == null || base == null) return false;
       try {
         const res = await fetch(`${base}/${cardId}/dependencies/${dependsOnCardId}`, {

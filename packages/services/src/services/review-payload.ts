@@ -35,13 +35,14 @@ const TRIMMED_HUNK_LINES = 30;
 const IMPORT_SCAN_CHARS = 30_000;
 const IMPORT_SPEC_RE = /(?:from|import)\s+['"]([^'"]+)['"]|require(?:_once)?\s*\(\s*['"]([^'"]+)['"]/g;
 
-type PendingHunk = FileDiff['hunks'][number];
+type ReviewFileDiff = FileDiff<string>;
+type PendingHunk = ReviewFileDiff['hunks'][number];
 
 function linePrefix(type: 'context' | 'add' | 'remove'): string {
   return type === 'add' ? '+' : type === 'remove' ? '-' : ' ';
 }
 
-function hunkHeader(diff: FileDiff, hunk: PendingHunk): string {
+function hunkHeader(diff: ReviewFileDiff, hunk: PendingHunk): string {
   return [
     `file=${diff.baseline.filePath}`,
     `baselineId=${diff.baseline.id}`,
@@ -50,7 +51,7 @@ function hunkHeader(diff: FileDiff, hunk: PendingHunk): string {
   ].join(' ');
 }
 
-function renderHunk(diff: FileDiff, hunk: PendingHunk, maxLines?: number): string {
+function renderHunk(diff: ReviewFileDiff, hunk: PendingHunk, maxLines?: number): string {
   const rendered = hunk.lines.map((line) => {
     const oldPart = line.oldLine == null ? ' ' : String(line.oldLine);
     const newPart = line.newLine == null ? ' ' : String(line.newLine);
@@ -63,7 +64,7 @@ function renderHunk(diff: FileDiff, hunk: PendingHunk, maxLines?: number): strin
   return `${hunkHeader(diff, hunk)}\n${body.join('\n')}`;
 }
 
-function mechanicalSummary(diff: FileDiff, hunk: PendingHunk, shape: HunkShape, detail?: string): string {
+function mechanicalSummary(diff: ReviewFileDiff, hunk: PendingHunk, shape: HunkShape, detail?: string): string {
   const suffix = detail ? ` (${detail})` : '';
   return (
     `MECHANICAL ${hunkHeader(diff, hunk)} kind=${shape}${suffix} ` +
@@ -92,7 +93,7 @@ function resolveRelative(fromFile: string, spec: string): string | null {
  * B's chapter comes first. Layered Kahn walk, stable within a layer; a cycle
  * falls back to the incoming order for the files still unplaced.
  */
-function orderDiffs(diffs: FileDiff[]): { order: number[]; uses: Map<number, Set<number>> } {
+function orderDiffs(diffs: ReviewFileDiff[]): { order: number[]; uses: Map<number, Set<number>> } {
   // Extensionless keys can collide (Button.tsx + Button.css). An ambiguous
   // key yields NO edge — falling back to incoming order beats pointing a
   // "[uses]" annotation at the wrong file.
@@ -162,7 +163,7 @@ interface Item {
 }
 
 export function renderReviewPayload(
-  diffs: FileDiff[],
+  diffs: ReviewFileDiff[],
   opts: ReviewPayloadOptions = {},
 ): ReviewPayload {
   const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;

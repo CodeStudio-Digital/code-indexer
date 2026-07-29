@@ -8,10 +8,12 @@
  * the central database. Worker/no-host runs leave the port null and therefore
  * remain lexical-only.
  */
+import type { ProjectId, SessionId } from '@mcp/session-storage';
+
 export interface InvestigationSemanticRecord {
-  id: number;
-  project_id: number | null;
-  session_id: number | null;
+  id: string;
+  project_id: ProjectId | null;
+  session_id: SessionId;
   topic: string;
   summary: string;
   body: string;
@@ -22,14 +24,14 @@ export interface InvestigationSemanticRecord {
 }
 
 export interface InvestigationSemanticIndexPort {
-  /** Wake the host after SessionStore has durably fenced + committed the row. */
+  /** Wake the host after the bundle writer durably commits the record. */
   wakeUpsert(record: InvestigationSemanticRecord): void;
   /** Return investigation ids in vector rank order. Empty means lexical fallback. */
   search(input: {
-    sessionId: number;
+    sessionId: SessionId;
     query: string;
     limit: number;
-  }): Promise<number[]>;
+  }): Promise<string[]>;
 }
 
 let indexPort: InvestigationSemanticIndexPort | null = null;

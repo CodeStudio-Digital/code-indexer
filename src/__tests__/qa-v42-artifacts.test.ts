@@ -23,6 +23,11 @@ import {
 } from '@apps/dashboard/features/agents/tests/shared/TraceLinkButton.js';
 import type { QaTestResult } from '@mcp/services/qa/types.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const RUN_ID = '00000000-0000-4000-8000-000000000007';
+const RESULT_A_ID = '00000000-0000-4000-8000-000000000001';
+const RESULT_B_ID = '00000000-0000-4000-8000-000000000002';
+
 // ─── mimeForExtension ────────────────────────────────────────────
 
 describe('mimeForExtension', () => {
@@ -103,9 +108,10 @@ describe('isValidServiceId', () => {
 
 // ─── enrichResultsWithUrls ───────────────────────────────────────
 
-function mkResult(partial: Partial<QaTestResult> & { id: number; test_name: string }): QaTestResult {
+function mkResult(partial: Partial<QaTestResult> & { id: string; test_name: string }): QaTestResult {
   return {
-    run_id: 1,
+    seq: 1,
+    run_id: RUN_ID,
     spec_file: 'tests/e2e/login.spec.ts',
     status: 'failed',
     duration_ms: null,
@@ -122,7 +128,11 @@ function mkResult(partial: Partial<QaTestResult> & { id: number; test_name: stri
 
 describe('enrichResultsWithUrls', () => {
   it('produces null URLs when there are no paths', () => {
-    const out = enrichResultsWithUrls([mkResult({ id: 1, test_name: 'a' })], 7, 'main');
+    const out = enrichResultsWithUrls(
+      [mkResult({ id: RESULT_A_ID, test_name: 'a' })],
+      SESSION_ID,
+      'main',
+    );
     expect(out[0].trace_url).toBeNull();
     expect(out[0].screenshot_url).toBeNull();
     expect(out[0].video_url).toBeNull();
@@ -132,18 +142,18 @@ describe('enrichResultsWithUrls', () => {
     const out = enrichResultsWithUrls(
       [
         mkResult({
-          id: 2,
+          id: RESULT_B_ID,
           test_name: 'a',
           trace_path: 'test-results/a/trace.zip',
           screenshot_path: 'test-results/a/test-failed-1.png',
           video_path: 'test-results/a/video.webm',
         }),
       ],
-      42,
+      SESSION_ID,
       'api',
     );
     const r = out[0];
-    expect(r.trace_url).toContain('/api/company/sessions/42/qa/artifact');
+    expect(r.trace_url).toContain(`/api/company/sessions/${SESSION_ID}/qa/artifact`);
     expect(r.trace_url).toContain('service=api');
     expect(r.trace_url).toContain(encodeURIComponent('test-results/a/trace.zip'));
     expect(r.screenshot_url).toContain(encodeURIComponent('test-results/a/test-failed-1.png'));
@@ -155,28 +165,28 @@ describe('enrichResultsWithUrls', () => {
 
 describe('buildArtifactUrl / buildPlaywrightReportUrl', () => {
   it('defaults service to main when omitted', () => {
-    expect(buildArtifactUrl({ sessionId: 1, path: 'tests/e2e/x.zip' })).toContain('service=main');
-    expect(buildPlaywrightReportUrl({ sessionId: 1 })).toContain('service=main');
-    expect(buildPlaywrightReportUrl({ sessionId: 1 })).toContain('file=index.html');
+    expect(buildArtifactUrl({ sessionId: SESSION_ID, path: 'tests/e2e/x.zip' })).toContain('service=main');
+    expect(buildPlaywrightReportUrl({ sessionId: SESSION_ID })).toContain('service=main');
+    expect(buildPlaywrightReportUrl({ sessionId: SESSION_ID })).toContain('file=index.html');
   });
   it('honours explicit service + file', () => {
-    expect(buildArtifactUrl({ sessionId: 9, serviceId: 'api', path: 'tests/e2e/login.spec.ts' }))
-      .toBe('/api/company/sessions/9/qa/artifact?service=api&path=tests%2Fe2e%2Flogin.spec.ts');
-    expect(buildPlaywrightReportUrl({ sessionId: 9, serviceId: 'api', file: 'data/styles.css' }))
-      .toBe('/api/company/sessions/9/qa/playwright-report?service=api&file=data%2Fstyles.css');
+    expect(buildArtifactUrl({ sessionId: SESSION_ID, serviceId: 'api', path: 'tests/e2e/login.spec.ts' }))
+      .toBe(`/api/company/sessions/${SESSION_ID}/qa/artifact?service=api&path=tests%2Fe2e%2Flogin.spec.ts`);
+    expect(buildPlaywrightReportUrl({ sessionId: SESSION_ID, serviceId: 'api', file: 'data/styles.css' }))
+      .toBe(`/api/company/sessions/${SESSION_ID}/qa/playwright-report?service=api&file=data%2Fstyles.css`);
   });
 });
 
 describe('buildLocalTraceUrl', () => {
   it('uses /qa/artifact (not legacy /qa/trace)', () => {
-    const url = buildLocalTraceUrl({ sessionId: 7, tracePath: 'test-results/x/trace.zip' });
+    const url = buildLocalTraceUrl({ sessionId: SESSION_ID, tracePath: 'test-results/x/trace.zip' });
     expect(url).toContain('/qa/artifact');
     expect(url).toContain('service=main');
     expect(url).toContain(encodeURIComponent('test-results/x/trace.zip'));
   });
   it('honours service override', () => {
     const url = buildLocalTraceUrl({
-      sessionId: 7,
+      sessionId: SESSION_ID,
       tracePath: 'test-results/x/trace.zip',
       serviceId: 'api',
     });
@@ -211,11 +221,11 @@ describe('resolveRelative', () => {
 });
 
 describe('rewriteUrl', () => {
-  const opts = { sessionId: 7, serviceId: 'api', filePath: 'playwright-report/index.html' };
+  const opts = { sessionId: SESSION_ID, serviceId: 'api', filePath: 'playwright-report/index.html' };
 
   it('rewrites simple relative URLs', () => {
     const url = rewriteUrl('styles.css', opts);
-    expect(url).toContain('/api/company/sessions/7/qa/playwright-report');
+    expect(url).toContain(`/api/company/sessions/${SESSION_ID}/qa/playwright-report`);
     expect(url).toContain('service=api');
     expect(url).toContain(encodeURIComponent('playwright-report/styles.css'));
   });
@@ -251,7 +261,7 @@ describe('rewritePlaywrightReportHtml', () => {
       <a href="https://external.test">absolute</a>
     `;
     const out = rewritePlaywrightReportHtml(html, {
-      sessionId: 7,
+      sessionId: SESSION_ID,
       serviceId: 'api',
       filePath: 'playwright-report/index.html',
     });
@@ -268,7 +278,7 @@ describe('rewritePlaywrightReportHtml', () => {
   it('handles single-quoted attributes', () => {
     const html = `<link href='nested/data.json'>`;
     const out = rewritePlaywrightReportHtml(html, {
-      sessionId: 1,
+      sessionId: SESSION_ID,
       serviceId: 'main',
       filePath: 'playwright-report/index.html',
     });
@@ -278,7 +288,7 @@ describe('rewritePlaywrightReportHtml', () => {
   it('respects the filePath base directory', () => {
     const html = `<link href="../styles.css">`;
     const out = rewritePlaywrightReportHtml(html, {
-      sessionId: 1,
+      sessionId: SESSION_ID,
       serviceId: 'main',
       filePath: 'playwright-report/data/inner.html',
     });

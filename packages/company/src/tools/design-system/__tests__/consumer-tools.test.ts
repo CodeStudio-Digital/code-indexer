@@ -3,8 +3,11 @@ import type { DesignSystemStore } from '@mcp/store/design-system-store.js';
 import { setDesignSystemStore } from '../store-binding.js';
 import { buildDesignSystemConsumerTools } from '../consumer-tools.js';
 import type { DsConsumerBinding } from '../consumer-resolve.js';
+import { asSessionId } from '@mcp/session-storage';
 
-const BINDING: DsConsumerBinding = { sessionId: 3, packageName: '@acme/ui', semver: '1.2.0' };
+const SESSION_ID = asSessionId('11111111-1111-4111-8111-111111111111');
+const VERSION_ID = '22222222-2222-4222-8222-222222222222';
+const BINDING: DsConsumerBinding = { sessionId: SESSION_ID, packageName: '@acme/ui', semver: '1.2.0' };
 
 const MANIFEST = JSON.stringify({
   manifest_version: '2',
@@ -16,8 +19,8 @@ const MANIFEST = JSON.stringify({
 
 const COMPONENTS = [
   {
-    id: 1,
-    version_id: 7,
+    id: '33333333-3333-4333-8333-333333333333',
+    version_id: VERSION_ID,
     name: 'Card',
     kind: 'atom' as const,
     props_schema_json: null,
@@ -25,8 +28,8 @@ const COMPONENTS = [
     created_at: 'x',
   },
   {
-    id: 2,
-    version_id: 7,
+    id: '44444444-4444-4444-8444-444444444444',
+    version_id: VERSION_ID,
     name: 'Button',
     kind: 'atom' as const,
     props_schema_json: JSON.stringify({
@@ -41,14 +44,14 @@ function fakeStore(
   over: Partial<Record<'getSession' | 'getVersionBySemver' | 'listComponents' | 'getLatestPublishedVersion', unknown>> = {},
 ): DesignSystemStore {
   return {
-    getSession: (id: number) => (id === 3 ? { id: 3, package_name: '@acme/ui', stack: 'react-ts' } : null),
-    getVersionBySemver: (_id: number, semver: string) =>
+    getSession: async (id: string) => (id === SESSION_ID ? { id: SESSION_ID, package_name: '@acme/ui', stack: 'react-ts' } : null),
+    getVersionBySemver: async (_id: string, semver: string) =>
       semver === '1.2.0'
-        ? { id: 7, semver: '1.2.0', status: 'published', manifest_json: MANIFEST, docs_md: DOCS }
+        ? { id: VERSION_ID, semver: '1.2.0', status: 'published', manifest_json: MANIFEST, docs_md: DOCS }
         : null,
     // Default: the pin IS the latest → no "newer available" note.
-    getLatestPublishedVersion: () => ({ id: 7, semver: '1.2.0', status: 'published' }),
-    listComponents: () => COMPONENTS,
+    getLatestPublishedVersion: async () => ({ id: VERSION_ID, semver: '1.2.0', status: 'published' }),
+    listComponents: async () => COMPONENTS,
     ...over,
   } as unknown as DesignSystemStore;
 }
@@ -103,7 +106,7 @@ describe('ds_components', () => {
   it('points at a newer published version when the pin is behind', async () => {
     setDesignSystemStore(
       fakeStore({
-        getLatestPublishedVersion: () => ({ id: 9, semver: '1.3.0', status: 'published' }),
+        getLatestPublishedVersion: async () => ({ id: '55555555-5555-4555-8555-555555555555', semver: '1.3.0', status: 'published' }),
       }),
     );
     const r = await tools().components.handler({}, ctx);
@@ -171,7 +174,7 @@ describe('ds_docs', () => {
     const long = `# t\n${'x'.repeat(9_000)}\n## A\na\n## B\nb`;
     setDesignSystemStore(
       fakeStore({
-        getVersionBySemver: () => ({ id: 7, semver: '1.2.0', status: 'published', manifest_json: null, docs_md: long }),
+        getVersionBySemver: async () => ({ id: VERSION_ID, semver: '1.2.0', status: 'published', manifest_json: null, docs_md: long }),
       }),
     );
     const r = await tools().docs.handler({}, ctx);
@@ -184,7 +187,7 @@ describe('ds_docs', () => {
   it('says so when the version shipped no docs', async () => {
     setDesignSystemStore(
       fakeStore({
-        getVersionBySemver: () => ({ id: 7, semver: '1.2.0', status: 'published', manifest_json: null, docs_md: null }),
+        getVersionBySemver: async () => ({ id: VERSION_ID, semver: '1.2.0', status: 'published', manifest_json: null, docs_md: null }),
       }),
     );
     const r = await tools().docs.handler({}, ctx);

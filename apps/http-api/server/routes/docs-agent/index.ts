@@ -20,7 +20,14 @@
 import type { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, parseIntQuery, notFound } from '../_helpers.js';
+import {
+  parseIdParam,
+  parseJsonBody,
+  parseIntQuery,
+  parseSessionIdParam,
+  parseSessionIdValue,
+  notFound,
+} from '../_helpers.js';
 import { attachHeartbeat } from '../../../sse/SSEHeartbeat.js';
 import { DocsResearchSessionsStore } from '@mcp/docs-agent/session-store/docs-research-sessions-store.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
@@ -29,7 +36,7 @@ import { AutoDiscoveryService } from '@mcp/services/services/docs/index.js';
 interface ResearchBody {
   query: string;
   collections?: string[];
-  parent_coder_session_id?: number | null;
+  parent_coder_session_id?: string | null;
   max_turns?: number;
 }
 
@@ -38,7 +45,7 @@ export function mountDocsAgentRoutes(
   deps: ServerDeps,
   bridge: DocsResearchBridge,
 ): void {
-  const sessionsStore = new DocsResearchSessionsStore(deps.db.raw());
+  const sessionsStore = new DocsResearchSessionsStore(deps.sessionStore);
 
   // ─── Research: one-shot JSON ──────────────────────────────────────
 
@@ -49,8 +56,9 @@ export function mountDocsAgentRoutes(
     const collections = Array.isArray(body.collections)
       ? body.collections.filter((s): s is string => typeof s === 'string')
       : undefined;
-    const parentCoderSessionId = typeof body.parent_coder_session_id === 'number'
-      ? body.parent_coder_session_id
+    const parentCoderSessionId =
+      typeof body.parent_coder_session_id === 'string'
+      ? parseSessionIdValue(body.parent_coder_session_id, 'parent_coder_session_id')
       : null;
     const maxTurns = typeof body.max_turns === 'number' && body.max_turns > 0
       ? Math.min(8, Math.floor(body.max_turns))
@@ -86,8 +94,9 @@ export function mountDocsAgentRoutes(
     const collections = Array.isArray(body.collections)
       ? body.collections.filter((s): s is string => typeof s === 'string')
       : undefined;
-    const parentCoderSessionId = typeof body.parent_coder_session_id === 'number'
-      ? body.parent_coder_session_id
+    const parentCoderSessionId =
+      typeof body.parent_coder_session_id === 'string'
+      ? parseSessionIdValue(body.parent_coder_session_id, 'parent_coder_session_id')
       : null;
     const maxTurns = typeof body.max_turns === 'number' && body.max_turns > 0
       ? Math.min(8, Math.floor(body.max_turns))
@@ -121,22 +130,25 @@ export function mountDocsAgentRoutes(
 
   // ─── Sessions: list + detail + delete ─────────────────────────────
 
-  app.get('/api/docs-agent/sessions', (c) => {
+  app.get('/api/docs-agent/sessions', async (c) => {
     const parentRaw = c.req.query('parent_coder_session_id');
-    const parentCoderSessionId = parentRaw != null ? parseInt(parentRaw, 10) : undefined;
+    const parentCoderSessionId =
+      parentRaw != null
+        ? parseSessionIdValue(parentRaw, 'parent_coder_session_id')
+        : undefined;
     const limit = parseIntQuery(c, 'limit', 50);
     const status = c.req.query('status') as 'running' | 'completed' | 'failed' | 'aborted' | undefined;
-    const sessions = sessionsStore.list({
-      parentCoderSessionId: Number.isFinite(parentCoderSessionId) ? parentCoderSessionId : undefined,
+    const sessions = await sessionsStore.list({
+      parentCoderSessionId,
       status,
       limit,
     });
     return c.json({ sessions });
   });
 
-  app.get('/api/docs-agent/sessions/:id', (c) => {
-    const id = parseIdParam(c);
-    const session = sessionsStore.get(id);
+  app.get('/api/docs-agent/sessions/:id', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await sessionsStore.get(id);
     if (!session) return notFound(c);
     // Hydrate cited chunks (chunk_id → heading_path + source_uri) so the
     // dashboard can render footnote anchors without a second roundtrip.
@@ -160,14 +172,18 @@ export function mountDocsAgentRoutes(
     return c.json({ session, cited_chunks: citedChunks });
   });
 
-  app.delete('/api/docs-agent/sessions/:id', (c) => {
-    const id = parseIdParam(c);
-    const ok = sessionsStore.delete(id);
+  app.delete('/api/docs-agent/sessions/:id', async (c) => {
+    const id = parseSessionIdParam(c);
+    const ok = await sessionsStore.delete(id);
     if (!ok) return notFound(c);
     return c.json({ ok: true });
   });
 
-  // ─── Auto-discovery suggestions ───────────────────────────────────
+  // ─── Project-scoped corpus/discovery catalog ──────────────────────
+  //
+  // This is intentionally SQLite-backed: suggestions, collections, sources
+  // and chunks are shared project/global knowledge, not research-session
+  // state. DocsResearchSessionsStore above remains filesystem-only.
 
   const autoDiscovery = new AutoDiscoveryService({ db: deps.db.raw() });
 

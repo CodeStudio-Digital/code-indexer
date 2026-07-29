@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { withConcurrency } from '../indexer/enrich-references.js';
-import { resolveStructuralWriteSchedule } from '../structural.js';
+import { resolveStructuralPipelineSchedule } from '../structural.js';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -44,17 +44,19 @@ describe('structural progress (Bug B)', () => {
   });
 });
 
-describe('structural central-writer fairness', () => {
-  it('serializes and yields every central-DB file', () => {
-    expect(resolveStructuralWriteSchedule(false, 5)).toEqual({
-      concurrency: 1,
+describe('structural parser-pool / single-writer schedule', () => {
+  it('keeps parser concurrency but commits one file at a time on the central DB', () => {
+    expect(resolveStructuralPipelineSchedule(false, 5)).toEqual({
+      parseConcurrency: 5,
+      writeBatchSize: 1,
       yieldEvery: 1,
     });
   });
 
-  it('retains requested concurrency for an isolated project DB', () => {
-    expect(resolveStructuralWriteSchedule(true, 5)).toEqual({
-      concurrency: 5,
+  it('uses bounded write waves on an isolated project DB', () => {
+    expect(resolveStructuralPipelineSchedule(true, 5)).toEqual({
+      parseConcurrency: 5,
+      writeBatchSize: 50,
       yieldEvery: 50,
     });
   });

@@ -23,8 +23,8 @@ export interface AutonomyEvent {
   /** Original wire event name (e.g. 'scheduler_sweep') or REST source tag. */
   event?: string;
   role?: string;
-  agentRunId?: number;
-  cardId?: number;
+  agentRunId?: string;
+  cardId?: string;
   /** Incident kind / nudge case. */
   kind?: string;
   /** Skip reason ('no_role' | 'recommend_failed' | 'spawn_failed'). */
@@ -64,21 +64,21 @@ export const INITIAL_AUTONOMY_STATE: AutonomyState = {
 };
 
 export interface AutonomySlice {
-  autonomy: Map<number, AutonomyState>;
-  autonomyPushEvent: (sessionId: number, ev: AutonomyEvent) => void;
+  autonomy: Map<string, AutonomyState>;
+  autonomyPushEvent: (sessionId: string, ev: AutonomyEvent) => void;
   autonomyHydrate: (
-    sessionId: number,
+    sessionId: string,
     snapshot: { config?: AutonomyConfigLike | null; events?: AutonomyEvent[] },
   ) => void;
-  autonomySetConfig: (sessionId: number, config: AutonomyConfigLike | null) => void;
-  autonomyReset: (sessionId: number) => void;
+  autonomySetConfig: (sessionId: string, config: AutonomyConfigLike | null) => void;
+  autonomyReset: (sessionId: string) => void;
 }
 
 function withSlot(
-  prev: Map<number, AutonomyState>,
-  sessionId: number,
+  prev: Map<string, AutonomyState>,
+  sessionId: string,
   patch: (slot: AutonomyState) => AutonomyState,
-): Map<number, AutonomyState> {
+): Map<string, AutonomyState> {
   const next = new Map(prev);
   const current = next.get(sessionId) ?? INITIAL_AUTONOMY_STATE;
   next.set(sessionId, patch(current));

@@ -9,38 +9,52 @@ import {
   type SchedulerRun,
 } from '../dispatch-core.js';
 
-function card(over: Partial<SchedulerCard> & { id: number }): SchedulerCard {
+function id(value: number): string {
+  return `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+}
+
+type TestCardInput = Omit<
+  Partial<SchedulerCard>,
+  'id' | 'blockedBy' | 'assignedAgentRunIds'
+> & {
+  id: number;
+  blockedBy?: number[];
+  assignedAgentRunIds?: number[];
+};
+
+function card(over: TestCardInput): SchedulerCard {
   return {
     column: 'todo',
-    blockedBy: [],
-    assignedAgentRunIds: [],
     ...over,
+    id: id(over.id),
+    blockedBy: (over.blockedBy ?? []).map(id),
+    assignedAgentRunIds: (over.assignedAgentRunIds ?? []).map(id),
   };
 }
 
 describe('findOrphanedCards', () => {
   it('flags an in_progress card whose only agent is dead', () => {
     const cards = [card({ id: 1, column: 'in_progress', assignedAgentRunIds: [10] })];
-    const runs: SchedulerRun[] = [{ agentRunId: 10, live: false }];
-    expect(findOrphanedCards(cards, runs)).toEqual([1]);
+    const runs: SchedulerRun[] = [{ agentRunId: id(10), live: false }];
+    expect(findOrphanedCards(cards, runs)).toEqual([id(1)]);
   });
 
   it('does NOT flag an in_progress card with a live agent', () => {
     const cards = [card({ id: 1, column: 'in_progress', assignedAgentRunIds: [10] })];
-    const runs: SchedulerRun[] = [{ agentRunId: 10, live: true }];
+    const runs: SchedulerRun[] = [{ agentRunId: id(10), live: true }];
     expect(findOrphanedCards(cards, runs)).toEqual([]);
   });
 
   it('flags an in_progress card with NO assigned agents (moved but never picked up)', () => {
     const cards = [card({ id: 2, column: 'in_progress', assignedAgentRunIds: [] })];
-    expect(findOrphanedCards(cards, [])).toEqual([2]);
+    expect(findOrphanedCards(cards, [])).toEqual([id(2)]);
   });
 
   it('keeps a card alive if ANY assigned agent is live', () => {
     const cards = [card({ id: 3, column: 'in_progress', assignedAgentRunIds: [10, 11] })];
     const runs: SchedulerRun[] = [
-      { agentRunId: 10, live: false },
-      { agentRunId: 11, live: true },
+      { agentRunId: id(10), live: false },
+      { agentRunId: id(11), live: true },
     ];
     expect(findOrphanedCards(cards, runs)).toEqual([]);
   });
@@ -64,7 +78,11 @@ describe('selectDispatchTargets', () => {
       card({ id: 2, column: 'backlog' }),
       card({ id: 3, column: 'todo' }),
     ];
-    expect(selectDispatchTargets({ ...base, prioritizedCards })).toEqual([1, 2, 3]);
+    expect(selectDispatchTargets({ ...base, prioritizedCards })).toEqual([
+      id(1),
+      id(2),
+      id(3),
+    ]);
   });
 
   it('skips blocked cards', () => {
@@ -72,7 +90,7 @@ describe('selectDispatchTargets', () => {
       card({ id: 1, column: 'todo', blockedBy: [99] }),
       card({ id: 2, column: 'todo' }),
     ];
-    expect(selectDispatchTargets({ ...base, prioritizedCards })).toEqual([2]);
+    expect(selectDispatchTargets({ ...base, prioritizedCards })).toEqual([id(2)]);
   });
 
   it('skips already-assigned cards', () => {
@@ -80,7 +98,7 @@ describe('selectDispatchTargets', () => {
       card({ id: 1, column: 'todo', assignedAgentRunIds: [5] }),
       card({ id: 2, column: 'todo' }),
     ];
-    expect(selectDispatchTargets({ ...base, prioritizedCards })).toEqual([2]);
+    expect(selectDispatchTargets({ ...base, prioritizedCards })).toEqual([id(2)]);
   });
 
   it('skips cards not in a dispatchable column', () => {
@@ -89,14 +107,14 @@ describe('selectDispatchTargets', () => {
       card({ id: 2, column: 'review' }),
       card({ id: 3, column: 'todo' }),
     ];
-    expect(selectDispatchTargets({ ...base, prioritizedCards })).toEqual([3]);
+    expect(selectDispatchTargets({ ...base, prioritizedCards })).toEqual([id(3)]);
   });
 
   it('caps dispatch at the free concurrency slots', () => {
     const prioritizedCards = [card({ id: 1 }), card({ id: 2 }), card({ id: 3 })];
     expect(
       selectDispatchTargets({ prioritizedCards, runningCount: 8, concurrencyLimit: 10 }),
-    ).toEqual([1, 2]);
+    ).toEqual([id(1), id(2)]);
   });
 
   it('returns nothing when the fleet is already at the cap', () => {
@@ -110,7 +128,7 @@ describe('selectDispatchTargets', () => {
     const prioritizedCards = [card({ id: 1 }), card({ id: 2 }), card({ id: 3 })];
     expect(
       selectDispatchTargets({ ...base, prioritizedCards, maxPerSweep: 1 }),
-    ).toEqual([1]);
+    ).toEqual([id(1)]);
   });
 
   // ── C3 — soft WIP limit on in_progress ─────────────────────────
@@ -123,7 +141,7 @@ describe('selectDispatchTargets', () => {
           ...base, prioritizedCards: three,
           wip: { inProgressCount: 1, limit: 3 },
         }),
-      ).toEqual([1, 2]);
+      ).toEqual([id(1), id(2)]);
     });
 
     it('returns nothing when in_progress is already AT the limit', () => {
@@ -150,7 +168,7 @@ describe('selectDispatchTargets', () => {
           ...base, prioritizedCards: three,
           wip: { inProgressCount: 99, limit: null },
         }),
-      ).toEqual([1, 2, 3]);
+      ).toEqual([id(1), id(2), id(3)]);
     });
 
     it('composes with maxPerSweep and free slots (tightest wins)', () => {
@@ -162,7 +180,7 @@ describe('selectDispatchTargets', () => {
           maxPerSweep: 2,
           wip: { inProgressCount: 2, limit: 3 }, // 1 of WIP room
         }),
-      ).toEqual([1]);
+      ).toEqual([id(1)]);
     });
   });
 });

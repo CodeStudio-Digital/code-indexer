@@ -1,6 +1,6 @@
 /**
  * Map tab — the "guide files": which files this session has changed vs only
- * read. Derived server-side from `coder_tool_calls`. Helps you (and, via
+ * read. Derived server-side from the session tool-output journal. Helps you (and, via
  * injection, the agent) see what's already been touched.
  */
 import { useTranslation } from 'react-i18next';

@@ -19,10 +19,15 @@ import {
 } from '../index.js';
 import { CompanyEventBus } from '../../CompanyEventBus.js';
 import { SubordinateCompletionBus } from '../../subordinate/completion-events.js';
+import { agentRunId as makeAgentRunId, companySessionId } from './uuid-fixtures.js';
+
+const SESSION = companySessionId(100);
+const AGENT_1 = makeAgentRunId(1);
+const AGENT_2 = makeAgentRunId(2);
 
 function makeDeps(over: Partial<AgentSupervisorDeps> = {}): AgentSupervisorDeps {
   return {
-    companySessionId: 100,
+    companySessionId: SESSION,
     companyEventBus: new CompanyEventBus(),
     completionBus: new SubordinateCompletionBus(),
     tickIntervalMs: 60_000,
@@ -53,11 +58,11 @@ function makeFailingRecovery(): RecoveryContext {
  */
 function setupStuckAgent(
   sup: AgentSupervisor,
-  agentRunId: number,
+  agentRunId: string,
   role: string,
   now: number,
 ): void {
-  sup.registerSubordinate({ agentRunId, companySessionId: 100, role });
+  sup.registerSubordinate({ agentRunId, companySessionId: SESSION, role });
   sup.transition(agentRunId, 'RUNNING_TURN');
   // Move the agent into AWAITING_MASTER_APPROVAL and backdate lastHeartbeatAt
   sup.transition(agentRunId, 'AWAITING_MASTER_APPROVAL');
@@ -86,7 +91,7 @@ describe('successful recovery does NOT bump breakers', () => {
       }),
     );
     const now = Date.now();
-    setupStuckAgent(sup, 1, 'frontend', now);
+    setupStuckAgent(sup, AGENT_1, 'frontend', now);
     await sup.tickOnce(now);
     // Allow microtasks to flush
     await new Promise((r) => setImmediate(r));
@@ -115,16 +120,20 @@ describe('per-agent breaker', () => {
       }),
     );
     const now = Date.now();
-    setupStuckAgent(sup, 1, 'frontend', now);
+    setupStuckAgent(sup, AGENT_1, 'frontend', now);
 
     await sup.tickOnce(now);
     await new Promise((r) => setImmediate(r));
 
     const status = sup.getStatus(now + 1);
-    const agentEntry = status.breakers.agents.find((a) => a.agentRunId === 1);
+    const agentEntry = status.breakers.agents.find(
+      (agent) => agent.agentRunId === AGENT_1,
+    );
     expect(agentEntry?.tripped).toBe(true);
     expect(incidents.some((i) => i.kind === 'agent_quarantined')).toBe(true);
-    const record = sup.listRecords().find((r) => r.agentRunId === 1);
+    const record = sup.listRecords().find(
+      (candidate) => candidate.agentRunId === AGENT_1,
+    );
     expect(record?.state).toBe('QUARANTINED');
   });
 });
@@ -146,12 +155,12 @@ describe('per-role breaker', () => {
       }),
     );
     const now = Date.now();
-    setupStuckAgent(sup, 1, 'qa', now);
+    setupStuckAgent(sup, AGENT_1, 'qa', now);
     await sup.tickOnce(now);
     await new Promise((r) => setImmediate(r));
 
     sup.clearStuckDedupForTests();
-    setupStuckAgent(sup, 2, 'qa', now + 1);
+    setupStuckAgent(sup, AGENT_2, 'qa', now + 1);
     await sup.tickOnce(now + 1);
     await new Promise((r) => setImmediate(r));
 
@@ -170,7 +179,7 @@ describe('per-role breaker', () => {
       }),
     );
     const now = Date.now();
-    setupStuckAgent(sup, 1, 'qa', now);
+    setupStuckAgent(sup, AGENT_1, 'qa', now);
     await sup.tickOnce(now);
     await new Promise((r) => setImmediate(r));
     expect(sup.isRoleQuarantined('qa', now + 1)).not.toBeNull();
@@ -201,7 +210,7 @@ describe('global breaker (read-only mode)', () => {
       }),
     );
     const now = Date.now();
-    setupStuckAgent(sup, 1, 'frontend', now);
+    setupStuckAgent(sup, AGENT_1, 'frontend', now);
     // First tick: incident records → trips global breaker (limit=1).
     // The check `isReadOnlyMode` happens AFTER the incident recording,
     // so this tick's recovery still runs. The NEXT tick is silenced.
@@ -210,7 +219,7 @@ describe('global breaker (read-only mode)', () => {
 
     resume.mockClear();
     sup.clearStuckDedupForTests();
-    setupStuckAgent(sup, 2, 'backend', now + 1);
+    setupStuckAgent(sup, AGENT_2, 'backend', now + 1);
     await sup.tickOnce(now + 1);
     await new Promise((r) => setImmediate(r));
 
@@ -226,7 +235,7 @@ describe('global breaker (read-only mode)', () => {
       }),
     );
     const now = Date.now();
-    setupStuckAgent(sup, 1, 'frontend', now);
+    setupStuckAgent(sup, AGENT_1, 'frontend', now);
     await sup.tickOnce(now);
     await new Promise((r) => setImmediate(r));
 

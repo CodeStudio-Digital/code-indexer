@@ -22,7 +22,13 @@ type WireParts = Pick<
   'createCoder' | 'fetchModels' | 'testConnection'
 >;
 
-const CLAUDE_CODE_VALID_EFFORTS: readonly ClaudeCodeEffort[] = ['low', 'medium', 'high', 'xhigh'];
+const CLAUDE_CODE_VALID_EFFORTS: readonly ClaudeCodeEffort[] = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
 
 /**
  * Read the per-model `default_reasoning_level` set in the admin UI. Returns

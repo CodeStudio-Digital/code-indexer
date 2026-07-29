@@ -25,7 +25,7 @@ export function researchBrowserRpcTimeoutMs(request: ResearchBrowserInvoke): num
 }
 
 export function researchBrowserKey(ctx: ToolContext): string {
-  const company = ctx.companyContext as { agentRunId?: number; companySessionId?: number } | undefined;
+  const company = ctx.companyContext as { agentRunId?: string; companySessionId?: string } | undefined;
   if (company?.agentRunId != null && company.companySessionId != null) {
     return `company-session-${company.companySessionId}-agent-${company.agentRunId}`;
   }

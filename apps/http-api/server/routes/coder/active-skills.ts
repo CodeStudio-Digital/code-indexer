@@ -5,22 +5,23 @@
  * Historical note: this module used to prepend an `<active_skills>` block
  * directly into the user's message body so the model would see the skills
  * inline on the next turn. The downside was that the enriched (huge)
- * content got persisted into `coder_messages.content_json`, bloating the
+ * content got persisted into conversation payloads, bloating the
  * chat transcript with thousands of tokens of skill instructions per turn.
  *
  * Today the route handler stores the user's raw text + a small array of
- * skill IDs (`coder_messages.selected_skill_ids_json`, migration 095). The
+ * skill IDs in the session conversation journal. The
  * runner re-resolves the IDs every turn inside `assembleMessagesForChat`
  * and inlines the bodies as a per-turn `<active_skills>` block on the
  * trailing user message — same mechanism as `<active-context>`, never
  * persisted. This module is no longer used by the request handler; it
- * stays only as a deprecated helper kept available to legacy callers.
+ * stays only as a deprecated helper for callers that still pre-render blocks.
  *
  * @deprecated The block is now assembled by the runner per turn; do not
  *   pre-compute it from the HTTP layer.
  */
 import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js';
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { CoderDeps, CoreDeps } from '../../deps.js';
 
 export interface PreparedActiveSkills {
@@ -40,20 +41,22 @@ type EnrichDeps = Pick<CoderDeps, 'sessionStore' | 'skillStore'> & Pick<CoreDeps
  * for wrapping them into `<active_skills>…</active_skills>` and deciding
  * where to inject (system prompt, last user message, etc.).
  */
-export function prepareActiveSkillsBlocks(
+export async function prepareActiveSkillsBlocks(
   userInput: string,
   skillIds: readonly string[],
-  sessionId: number,
+  sessionId: SessionId,
   deps: EnrichDeps,
-): PreparedActiveSkills {
+): Promise<PreparedActiveSkills> {
   if (skillIds.length === 0) {
     return { blocks: [], applied: [], missing: [] };
   }
-  const session = deps.sessionStore.getSession(sessionId);
+  const session = await deps.sessionStore.getSession(sessionId);
   if (!session) {
     return { blocks: [], applied: [], missing: [...skillIds] };
   }
-  const project = deps.db.getProject(session.project_id);
+  const project = session.project_id == null
+    ? null
+    : deps.db.getProject(session.project_id);
   const store = deps.skillStore;
   const templateCtx: SkillTemplateContext = {
     SESSION_ID: String(sessionId),

@@ -72,7 +72,7 @@ const SECTION_BUDGETS: Record<string, number> = {
   '(preamble)': 360,
   '(base-intro)': 280,
   '# Project context': 1250, // Windows shell guidance measured 1178 (2026-07-23)
-  '# Goal lifecycle': 160, // compact first-batch + verified finish contract
+  '# Goal lifecycle': 500, // optional telemetry + advisory completion contract
   '# Tool tiers': 420,
   '# Tool tiers (IMPORTANT)': 720,
   '# Tool strategy — token economy': 1150,

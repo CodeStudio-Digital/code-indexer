@@ -124,12 +124,9 @@ export class IdleController implements IIdleController {
     // Transition this session to "paused" — bus stays alive for follow-up
     // messages. With migration 067, sub-sessions are full CompanySession
     // rows so this single status field is naturally per-tab.
-    try {
-      this.deps.ctx.companyStore.updateCompanySessionStatus(
-        this.deps.ctx.companySessionId,
-        'paused',
-      );
-    } catch { /* ignore */ }
+    void this.deps.ctx.companyFiles
+      .updateSessionStatus('paused')
+      .catch(() => undefined);
 
     const err = this.deps.master.endedWithError;
     const endedAt = this.deps.master.endedAt ?? null;
@@ -170,12 +167,9 @@ export class IdleController implements IIdleController {
         !this.deps.ctx.isAborted &&
         !this.deps.ctx.isBusEnded
       ) {
-        try {
-          this.deps.ctx.companyStore.updateCompanySessionStatus(
-            this.deps.ctx.companySessionId,
-            'completed',
-          );
-        } catch { /* ignore */ }
+        void this.deps.ctx.companyFiles
+          .updateSessionStatus('completed')
+          .catch(() => undefined);
         this.deps.bus.markEnded('done', { reason: 'idle_timeout' });
       }
     }, this.timeoutMs);

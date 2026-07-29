@@ -9,6 +9,12 @@ import {
   classifyAttachment,
 } from '@mcp/shared/attachments/policy.js';
 import { TEXT_LIKE_EXTS } from './constants.js';
+import {
+  normalizeRunText,
+  normalizedCovers,
+  normalizedDuplicated,
+  persistedCoveragePrefixEnd,
+} from './live-run-alignment.js';
 import type { AgentAttachment, MessageRow, PersistedMessage, VisualGroup } from './types.js';
 
 export function formatDuration(ms: number): string {
@@ -500,8 +506,10 @@ export interface PersistedLiveReconciliation {
   precedingUserMessageId: number | null;
   persistedText: string;
   persistedThinking: string;
-  persistedTextBlocks: Set<string>;
-  persistedThinkingBlocks: Set<string>;
+  /** Whitespace-stripped companions — see `live-run-alignment.ts` for why every
+   *  live⇄persisted comparison runs on these instead of the raw strings. */
+  persistedTextNormalized: string;
+  persistedThinkingNormalized: string;
   /** Raw sizes of the newest durable assistant row for one-shot replay readiness. */
   tailTextLength: number;
   tailThinkingLength: number;
@@ -544,8 +552,6 @@ export function buildPersistedLiveReconciliation(
 
   const textParts: string[] = [];
   const thinkingParts: string[] = [];
-  const persistedTextBlocks = new Set<string>();
-  const persistedThinkingBlocks = new Set<string>();
   let assistantRunToolUseCount = 0;
   for (const message of assistantRun) {
     const text = getPersistedAssistantText(message);
@@ -553,21 +559,23 @@ export function buildPersistedLiveReconciliation(
     const thinking = getPersistedAssistantThinkingText(message);
     if (thinking.trim()) thinkingParts.push(thinking);
     for (const block of message.content) {
-      if (block.type === 'text' && block.text) persistedTextBlocks.add(block.text);
-      if (block.type === 'thinking' && block.text) persistedThinkingBlocks.add(block.text);
       if (block.type !== 'tool_use') continue;
       assistantRunToolUseCount++;
     }
   }
 
+  const persistedText = textParts.join('\n').trim();
+  const persistedThinking = thinkingParts.join('\n').trim();
+
   return {
     assistantRun,
     startsMidTurn,
     precedingUserMessageId: precedingUserMessageId ?? null,
-    persistedText: textParts.join('\n').trim(),
-    persistedThinking: thinkingParts.join('\n').trim(),
-    persistedTextBlocks,
-    persistedThinkingBlocks,
+    persistedText,
+    persistedThinking,
+    // Normalized once per history refetch, never per token frame.
+    persistedTextNormalized: normalizeRunText(persistedText),
+    persistedThinkingNormalized: normalizeRunText(persistedThinking),
     tailTextLength: assistantRun.length > 0
       ? getPersistedAssistantText(assistantRun[assistantRun.length - 1]).length
       : 0,
@@ -610,48 +618,43 @@ export function visibleLiveBlocks(
   );
   const hasPresentationOverlap = hasTaskRun || liveAgentToolUseIds.size > 0
     || blocks.some((block) => block.type === 'agents' && block.group.groupId.startsWith('tasks-wave-'));
+  const hasPersistedRunContent = Boolean(
+    reconciliation?.persistedTextNormalized || reconciliation?.persistedThinkingNormalized,
+  );
   if (
     persistedIds.size === 0
     && persistedInteractivePromptSignatures.size === 0
     && !hasPresentationOverlap
-    && !reconciliation?.startsMidTurn
+    && !hasPersistedRunContent
   ) return blocks;
-  // A cold replay can begin inside the durable tail and then continue with new
-  // events. In that case neither "all live" nor "all persisted" is canonical.
-  // Cut the proven persisted prefix at its last ordered identity/text match and
-  // append only the genuinely new live suffix after the durable transcript.
+  // Whatever the durable transcript already renders must not render a second
+  // time here. Cut the proven persisted prefix at its last ordered match and
+  // append only the genuinely new live suffix after it.
+  //
+  // This runs on EVERY non-canonical path, not just a cold mid-turn replay:
+  // when the coverage check declines, the persisted run renders above AND the
+  // live copy renders below with its tool blocks removed by the id dedup at the
+  // bottom of this filter — a text/thinking-only ghost of the same turn.
   let persistedOverlapPrefixEnd = -1;
-  if (!preferCompleteLiveRun && reconciliation?.startsMidTurn) {
-    for (let index = 0; index < blocks.length; index++) {
-      const block = blocks[index];
-      const id = liveBlockPersistedId(block);
-      const signature = liveBlockPersistedSignature(block);
-      const matchesPersisted = Boolean(
-        (id && persistedIds.has(id))
-        || (
-          signature
-          && persistedInteractivePromptSignatures.has(signature)
-        )
-        || (
-          block.type === 'text'
-          && reconciliation.persistedTextBlocks.has(block.text)
-        )
-        || (
-          block.type === 'thinking'
-          && reconciliation.persistedThinkingBlocks.has(block.text)
-        )
-      );
-      if (matchesPersisted) {
-        persistedOverlapPrefixEnd = index;
-        continue;
-      }
-      // A new identity is a hard chronological boundary. Do not let repeated
-      // text later in the fresh suffix be mistaken for old durable content.
-      if (id) break;
-    }
+  if (!preferCompleteLiveRun && reconciliation) {
+    persistedOverlapPrefixEnd = persistedCoveragePrefixEnd(blocks, {
+      persistedTextNormalized: reconciliation.persistedTextNormalized,
+      persistedThinkingNormalized: reconciliation.persistedThinkingNormalized,
+      persistedIds,
+      persistedSignatures: persistedInteractivePromptSignatures,
+      blockId: liveBlockPersistedId,
+      blockSignature: liveBlockPersistedSignature,
+    });
   }
   return blocks.filter((b, index) => {
-    if (index <= persistedOverlapPrefixEnd) return false;
+    // `agents`/`task_run` are rich live cards that stay canonical while they
+    // run (see below), so a covered prefix must not sweep them out by position
+    // just because their spawn tool_use already checkpointed.
+    if (
+      index <= persistedOverlapPrefixEnd
+      && b.type !== 'agents'
+      && b.type !== 'task_run'
+    ) return false;
     if (b.type === 'agents') {
       if (b.group.groupId.startsWith('tasks-wave-')) return false;
       if (preferCompleteLiveRun) return true;
@@ -702,10 +705,13 @@ export function isLiveTurnDuplicatedInHistory(
   if (reconciliation.assistantRun.length === 0) return false;
   const effectivePersistedIds = persistedIds ?? reconciliation.persistedToolUseIds;
 
-  const liveText = getCurrentTurnText(turn).trim();
-  const persistedText = reconciliation.persistedText;
-  const liveThinking = getCurrentTurnThinkingText(turn).trim();
-  const persistedThinking = reconciliation.persistedThinking;
+  // Normalized on both sides — same block-boundary mismatch as the coverage
+  // check above. Until this returns true `onClearCurrentTurn()` never fires, so
+  // a raw-string miss leaves the live buffer on screen after the turn ended.
+  const liveText = normalizeRunText(getCurrentTurnText(turn));
+  const persistedText = reconciliation.persistedTextNormalized;
+  const liveThinking = normalizeRunText(getCurrentTurnThinkingText(turn));
+  const persistedThinking = reconciliation.persistedThinkingNormalized;
   let checkedText = false;
   let checkedThinking = false;
 
@@ -725,28 +731,18 @@ export function isLiveTurnDuplicatedInHistory(
     }
     if (block.type === 'text') {
       if (!checkedText) {
-        if (
-          !liveText
-          || (
-            reconciliation.startsMidTurn
-              ? !persistedText.endsWith(liveText)
-              : persistedText !== liveText
-          )
-        ) return false;
+        if (!normalizedDuplicated(persistedText, liveText, reconciliation.startsMidTurn)) {
+          return false;
+        }
         checkedText = true;
       }
       continue;
     }
     if (block.type === 'thinking') {
       if (!checkedThinking) {
-        if (
-          !liveThinking
-          || (
-            reconciliation.startsMidTurn
-              ? !persistedThinking.endsWith(liveThinking)
-              : persistedThinking !== liveThinking
-          )
-        ) return false;
+        if (!normalizedDuplicated(persistedThinking, liveThinking, reconciliation.startsMidTurn)) {
+          return false;
+        }
         checkedThinking = true;
       }
       continue;
@@ -795,24 +791,16 @@ export function liveTurnCoversPersistedAssistantRun(
   if (reconciliation.assistantRun.length === 0) return false;
   const persistedText = reconciliation.persistedText;
   const persistedThinking = reconciliation.persistedThinking;
-  const liveText = getCurrentTurnText(turn).trim();
-  const liveThinking = getCurrentTurnThinkingText(turn).trim();
-  if (
-    persistedText
-    && (
-      reconciliation.startsMidTurn
-        ? !liveText.includes(persistedText)
-        : !liveText.startsWith(persistedText)
-    )
-  ) return false;
-  if (
-    persistedThinking
-    && (
-      reconciliation.startsMidTurn
-        ? !liveThinking.includes(persistedThinking)
-        : !liveThinking.startsWith(persistedThinking)
-    )
-  ) return false;
+  // Normalized: the backend concatenates a round's reasoning into one block
+  // while the live coalescer splits it at every tool boundary, so the raw
+  // strings differ by separators even for an identical run.
+  const liveText = normalizeRunText(getCurrentTurnText(turn));
+  const liveThinking = normalizeRunText(getCurrentTurnThinkingText(turn));
+  const anywhere = reconciliation.startsMidTurn;
+  if (!normalizedCovers(liveText, reconciliation.persistedTextNormalized, anywhere)) return false;
+  if (!normalizedCovers(liveThinking, reconciliation.persistedThinkingNormalized, anywhere)) {
+    return false;
+  }
 
   const liveIds = new Set<string>();
   const liveSignatures = new Set<string>();
@@ -945,9 +933,9 @@ export function groupMessages(
       groups.push({
         kind: 'user',
         message: msg,
-        // Optimistic ids are client-only. Do not expose fork/rollback or lazy
-        // attachment endpoints until the authoritative DB row replaces them.
-        messageId: row?.optimistic ? undefined : row?.id,
+        // Optimistic sequences are client-only. Do not expose fork/rollback or
+        // lazy attachment endpoints until the authoritative row replaces them.
+        messageId: row?.optimistic ? undefined : row?.seq,
         usage: row,
       });
       continue;
@@ -959,7 +947,7 @@ export function groupMessages(
       groups.push({
         kind: 'assistant',
         messages: [msg],
-        messageIds: [row?.id],
+        messageIds: [row?.seq],
         usages: [row],
         hasText: true,
       });
@@ -969,7 +957,7 @@ export function groupMessages(
         pending = { messages: [], messageIds: [], usages: [] };
       }
       pending.messages.push(msg);
-      pending.messageIds.push(row?.id);
+      pending.messageIds.push(row?.seq);
       pending.usages.push(row);
     }
   }

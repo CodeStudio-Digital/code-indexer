@@ -136,8 +136,8 @@ function guardMcpToolResult(
  * `project_name` is a bridge concern, not a model concern. The MCP server still
  * requires it, but the bridge knows the exact project behind this tool instance
  * and injects it at call time. Hiding the field prevents weak models/subagents
- * from sending placeholders like `project` or `""`, which breaks global
- * sessions whose real search scope is the synthetic union project.
+ * from sending placeholders like `project` or `""`. In global sessions each
+ * bridge instance is bound to one explicit linked real project.
  */
 export function stripInjectedProjectName(schema: JsonSchema): JsonSchema {
   const props = schemaProperties(schema);
@@ -209,7 +209,11 @@ export class McpToolBridge {
     await this.client.connect(this.transport);
   }
 
-  async listTools(ctx: { projectName: string; overlay?: SessionOverlay }): Promise<CoderTool[]> {
+  async listTools(ctx: {
+    projectName: string;
+    projectRoot?: string;
+    overlay?: SessionOverlay;
+  }): Promise<CoderTool[]> {
     if (!this.client) throw new Error('McpToolBridge not connected');
     const res = await this.client.listTools();
 
@@ -245,10 +249,19 @@ export class McpToolBridge {
           }
 
           const overlay = ctx.overlay ?? toolCtx.overlay;
-          const projectRoot = toolCtx.cwd;
+          const projectRoot = ctx.projectRoot ?? toolCtx.cwd;
           const finalArgs = { ...args };
           if (hasProjectName) {
             finalArgs.project_name = ctx.projectName;
+          }
+          if (t.name === 'search' || t.name === 'semantic_neighbors') {
+            if (toolCtx.sessionId) {
+              finalArgs.__mcp_session_id = toolCtx.sessionId;
+            }
+            if (toolCtx.companyContext?.companySessionId) {
+              finalArgs.__mcp_company_session_id =
+                toolCtx.companyContext.companySessionId;
+            }
           }
           // Clamp read_file.max_lines to a hard absolute maximum and tell
           // the caller via a tiny synthetic prefix on the response when the

@@ -13,7 +13,7 @@ import React from 'react';
 import { ExternalLink } from 'lucide-react';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   /** Workspace-relative path stored on the test result row. */
   tracePath: string;
   /**
@@ -43,7 +43,7 @@ export function TraceLinkButton({ sessionId, tracePath, serviceId }: Props) {
 
 /** Pure: build the local URL for the trace via the artifact route. */
 export function buildLocalTraceUrl(opts: {
-  sessionId: number;
+  sessionId: string;
   tracePath: string;
   serviceId?: string;
 }): string {

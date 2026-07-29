@@ -3,7 +3,12 @@
  * firehose into its in-memory store. Chat text/thinking already has a canonical
  * rendered/persisted representation, while repeated heartbeats are sampled per
  * operation. Semantic transitions and changed progress notes pass immediately.
+ *
+ * Two halves of the same projection live here: the policy decides WHAT gets
+ * captured, `buildLogEntry` decides how the raw SSE event is SHAPED into a
+ * panel row.
  */
+import type { WorkerLogEntry } from './types.js';
 
 const DEFAULT_PROGRESS_SAMPLE_MS = 5_000;
 
@@ -58,4 +63,62 @@ function shouldSample(
   }
   samples.set(key, { at: now, signature });
   return true;
+}
+
+/**
+ * Derive `{level, category, message}` for the worker-log entry from the
+ * raw SSE event name + payload. Most events flow through this fallback;
+ * the `worker_log` event itself carries those fields explicitly and is
+ * special-cased.
+ */
+export function buildLogEntry(eventName: string, data: Record<string, unknown>): WorkerLogEntry {
+  if (eventName === 'worker_log') {
+    const w = data as {
+      ts?: number;
+      level?: WorkerLogEntry['level'];
+      category?: WorkerLogEntry['category'];
+      message?: string;
+    };
+    return {
+      ts: typeof w.ts === 'number' ? w.ts : Date.now(),
+      event: 'worker_log',
+      level: w.level ?? 'info',
+      category: w.category ?? 'other',
+      message: w.message ?? '(no message)',
+      data,
+    };
+  }
+  // Coarse mapping: keep this table tiny — categories are for filtering,
+  // not for forensics. The full event name stays in `event` for power users.
+  let category: WorkerLogEntry['category'] = 'other';
+  let level: WorkerLogEntry['level'] = 'info';
+  if (eventName.startsWith('tool_') || eventName.startsWith('task_run_')) category = 'tool';
+  else if (eventName.startsWith('operation_') || eventName === 'bt_state_dwell') category = 'runner';
+  else if (eventName.startsWith('quality_') || eventName === 'tool_loop_intervention')
+    category = 'quality';
+  else if (
+    eventName === 'provider_call' ||
+    eventName === 'provider_swapped' ||
+    eventName === 'fallback_activated'
+  )
+    category = 'provider';
+  else if (
+    eventName === 'turn_start' ||
+    eventName === 'message_complete' ||
+    eventName === 'history_compacted' ||
+    eventName === 'auto_continue'
+  )
+    category = 'lifecycle';
+  else if (eventName === 'text' || eventName === 'thinking') category = 'message';
+  else if (eventName === 'run_started' || eventName === 'done') category = 'runner';
+  if (eventName === 'error') level = 'error';
+  else if (eventName === 'warning' || eventName === 'tool_loop_intervention') level = 'warn';
+  return {
+    ts: Date.now(),
+    event: eventName,
+    level,
+    category,
+    message: eventName,
+    data,
+  };
 }

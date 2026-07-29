@@ -14,12 +14,16 @@
  * (scaffold de projeto-workspace + sessão single de chat). Sessões legacy
  * (kind='company') ficam somente leitura — versões/docs/storybook.
  */
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { designSystemMcpDir, designSystemUploadsDir } from '@mcp/shared/utils/data-paths.js';
+import { designSystemMcpDir } from '@mcp/shared/utils/data-paths.js';
 import type { Hono } from 'hono';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseJsonBody,
+  parseSessionIdParam,
+  notFound,
+} from '../_helpers.js';
 import type { ServerDeps } from '../../deps.js';
 import { extractZipToDir } from '@mcp/design-system/extract-zip.js';
 import { writeSourceInventory } from '@mcp/design-system/source-inventory.js';
@@ -29,7 +33,6 @@ import { roadmapProgress } from '@mcp/design-system/pipeline/roadmap.js';
 import type { DesignSystemSession, DsBumpHint } from '@mcp/store/design-system-store.js';
 import { McpServerStore } from '@mcp/store/mcp-server-store.js';
 import { runNpm } from '@mcp/design-system/run-npm.js';
-import { hasCompanyOrchestrator } from '../../../sse/companyOrchestrator.js';
 import { tryGetVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
 
 /** Legacy: pasta do tema extraído dentro do virtual project (company pipeline). */
@@ -57,11 +60,11 @@ function parseBuilderJson(raw: string | null | undefined): BuilderProjectConfig 
 }
 
 export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): void {
-  const { designSystemStore, companyStore, db } = deps;
+  const { designSystemStore, sessionStore, db } = deps;
 
   /** Enrichment compartilhado entre list e detail. */
-  function enrich(s: DesignSystemSession) {
-    const latest = designSystemStore.getLatestPublishedVersion(s.id);
+  async function enrich(s: DesignSystemSession) {
+    const latest = await designSystemStore.getLatestPublishedVersion(s.id);
     const base = {
       ...s,
       latest_published_semver: latest?.semver ?? null,
@@ -80,13 +83,19 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
           : null,
       };
     }
-    const cs = s.company_session_id != null
-      ? companyStore.getCompanySession(s.company_session_id)
-      : null;
+    await sessionStore.ensureCatalog();
+    const companyEntry = s.company_session_id == null
+      ? null
+      : sessionStore.catalog.get(s.company_session_id);
     return {
       ...base,
-      company_session_status: cs?.status ?? 'unknown',
-      is_running: s.company_session_id != null && hasCompanyOrchestrator(s.company_session_id),
+      company_session_status:
+        companyEntry?.session.kind === 'company'
+          ? companyEntry.state?.status ?? 'unknown'
+          : 'unknown',
+      // The autonomous Company-backed DS pipeline is retired. Migration
+      // normalizes any legacy running state to interrupted.
+      is_running: false,
       builder_port: null,
       project: null,
     };
@@ -104,21 +113,27 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
     );
   });
 
-  app.get('/api/design-system/sessions', (c) => {
-    const sessions = designSystemStore.listSessions();
-    return c.json({ sessions: sessions.map(enrich) });
+  app.get('/api/design-system/sessions', async (c) => {
+    const sessions = await designSystemStore.listSessions();
+    return c.json({ sessions: await Promise.all(sessions.map(enrich)) });
   });
 
   /** View da máquina de etapas p/ a UI: progresso do roadmap DERIVADO em leitura. */
-  function pipelineView(session: DesignSystemSession) {
+  async function pipelineView(session: DesignSystemSession) {
     const state = parsePipelineState(session.pipeline_json);
     if (!state) return null;
     const recorded: string[] = [];
-    const published = designSystemStore.getLatestPublishedVersion(session.id);
-    if (published) for (const comp of designSystemStore.listComponents(published.id)) recorded.push(comp.name);
-    const draft = designSystemStore.getLatestVersionAny(session.id);
+    const published = await designSystemStore.getLatestPublishedVersion(session.id);
+    if (published) {
+      for (const comp of await designSystemStore.listComponents(published.id)) {
+        recorded.push(comp.name);
+      }
+    }
+    const draft = await designSystemStore.getLatestVersionAny(session.id);
     if (draft && (draft.status === 'draft' || draft.status === 'building')) {
-      for (const comp of designSystemStore.listComponents(draft.id)) recorded.push(comp.name);
+      for (const comp of await designSystemStore.listComponents(draft.id)) {
+        recorded.push(comp.name);
+      }
     }
     return {
       stages: state.stages,
@@ -128,13 +143,16 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
     };
   }
 
-  app.get('/api/design-system/sessions/:id', (c) => {
-    const id = parseIdParam(c);
-    const session = designSystemStore.getSession(id);
+  app.get('/api/design-system/sessions/:id', async (c) => {
+    const id = parseSessionIdParam(c);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
-    const versions = designSystemStore.listVersions(id);
-    const latestPublished = designSystemStore.getLatestPublishedVersion(id);
-    const enriched = enrich(session);
+    const [versions, latestPublished, enriched, pipeline] = await Promise.all([
+      designSystemStore.listVersions(id),
+      designSystemStore.getLatestPublishedVersion(id),
+      enrich(session),
+      pipelineView(session),
+    ]);
     return c.json({
       session,
       versions,
@@ -143,26 +161,26 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       company_session_status: enriched.company_session_status,
       builder_port: enriched.builder_port,
       project: enriched.project,
-      pipeline: pipelineView(session),
+      pipeline,
     });
   });
 
   app.patch('/api/design-system/sessions/:id/next-bump-hint', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ hint: DsBumpHint }>(c);
     const hint = body.hint;
     if (!hint || !VALID_HINTS.has(hint)) {
       return c.json({ error: 'Body must include `hint` ∈ {patch, minor, major}.' }, 400);
     }
-    const session = designSystemStore.getSession(id);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
-    const updated = designSystemStore.setNextBumpHint(id, hint);
+    const updated = await designSystemStore.setNextBumpHint(id, hint);
     return c.json({ session: updated });
   });
 
   app.post('/api/design-system/sessions/:id/re-extract', async (c) => {
-    const id = parseIdParam(c);
-    const dsSession = designSystemStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    let dsSession = await designSystemStore.getSession(id);
     if (!dsSession) return notFound(c);
 
     // Resolve the extraction root per kind. Studio: the workspace project
@@ -180,8 +198,12 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       if (dsSession.company_session_id == null) {
         return c.json({ error: 'Legacy session without company_session_id — inconsistent state.' }, 500);
       }
-      const linked = companyStore.listCompanySessionProjects(dsSession.company_session_id);
-      const virtualProject = linked
+      await sessionStore.ensureCatalog();
+      const companyEntry = sessionStore.catalog.get(dsSession.company_session_id);
+      if (!companyEntry || companyEntry.session.kind !== 'company') {
+        return c.json({ error: 'Parent Company session bundle missing — inconsistent state.' }, 500);
+      }
+      const virtualProject = companyEntry.session.linked_projects
         .map((p) => db.getProject(p.project_id))
         .find((p): p is NonNullable<typeof p> => !!p && p.name.startsWith('_design-system_'));
       if (!virtualProject || !virtualProject.root_path) {
@@ -194,7 +216,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
     // replace the persisted zip; (b) no upload → re-extract the
     // existing zip (handy when the on-disk folder was tampered with).
     let zipPathToUse = dsSession.source_zip_path;
-    let newHash: string | null = dsSession.source_zip_hash;
+    let zipReplaced = false;
 
     const ct = c.req.header('content-type') ?? '';
     if (ct.includes('multipart/form-data')) {
@@ -214,11 +236,10 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
         }
         try {
           const buf = Buffer.from(await file.arrayBuffer());
-          newHash = createHash('sha256').update(buf).digest('hex');
-          const uploadsDir = designSystemUploadsDir();
-          mkdirSync(uploadsDir, { recursive: true });
-          zipPathToUse = join(uploadsDir, `${newHash.slice(0, 12)}-${randomUUID()}.zip`);
-          writeFileSync(zipPathToUse, buf);
+          const newHash = createHash('sha256').update(buf).digest('hex');
+          dsSession = await designSystemStore.setSourceZip(id, buf, newHash);
+          zipPathToUse = dsSession.source_zip_path;
+          zipReplaced = true;
         } catch (e) {
           return c.json({ error: `Failed to persist new zip: ${(e as Error).message}` }, 500);
         }
@@ -267,14 +288,6 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       }
     }
 
-    // Persist the (possibly new) zip path + hash on the DS session.
-    if (zipPathToUse !== dsSession.source_zip_path || newHash !== dsSession.source_zip_hash) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (designSystemStore as any).db
-        .prepare('UPDATE design_system_sessions SET source_zip_path = ?, source_zip_hash = ? WHERE id = ?')
-        .run(zipPathToUse, newHash, id);
-    }
-
     return c.json({
       ok: true,
       extracted: {
@@ -285,16 +298,16 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       inventory: inventoryStats,
       digest,
       digest_error: digestError,
-      zip_replaced: zipPathToUse !== dsSession.source_zip_path,
+      zip_replaced: zipReplaced,
     });
   });
 
   app.delete('/api/design-system/sessions/:id', async (c) => {
-    const id = parseIdParam(c);
-    const session = designSystemStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
 
-    // Best-effort: unpublish from Verdaccio before removing DB rows.
+    // Best-effort: unpublish from Verdaccio before trashing the bundle.
     // Do not block deletion if registry is down or package was never published.
     const verdaccio = tryGetVerdaccioService();
     if (verdaccio) {
@@ -307,12 +320,12 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       }
     }
 
-    // Studio: removes only the DS face (session + versions via CASCADE).
+    // Studio: removes only the DS bundle (versions/components included).
     // The workspace project row and the files on disk stay — it's a real
     // host project the user may keep working on or delete separately.
-    // Legacy: company_session CASCADE also drops DS rows; the DS-level
-    // delete keeps isolated tests clean when company rows go separately.
-    designSystemStore.deleteSession(id);
+    // Legacy Company deletion is separately recoverable; this explicit
+    // Design deletion trashes only the Design bundle.
+    await designSystemStore.deleteSession(id);
     return c.json({ ok: true });
   });
 
@@ -328,13 +341,13 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
    * extraction and updates the server config in place.
    */
   app.post('/api/design-system/sessions/:id/versions/:semver/install-mcp', async (c) => {
-    const id = parseIdParam(c);
+    const id = parseSessionIdParam(c);
     const semver = decodeURIComponent(c.req.param('semver'));
 
-    const session = designSystemStore.getSession(id);
+    const session = await designSystemStore.getSession(id);
     if (!session) return notFound(c);
 
-    const version = designSystemStore.getVersionBySemver(id, semver);
+    const version = await designSystemStore.getVersionBySemver(id, semver);
     if (!version) return notFound(c);
     if (version.status !== 'published') {
       return c.json({ error: 'Only published versions can be installed as an MCP server.' }, 400);
@@ -383,7 +396,7 @@ export function mountDesignSystemSessionRoutes(app: Hono, deps: ServerDeps): voi
       default_tier: 'navigate',
     });
 
-    designSystemStore.setMcpServerConfigId(id, mcpServerId);
+    await designSystemStore.setMcpServerConfigId(id, mcpServerId);
 
     return c.json({ ok: true, mcp_server_config_id: mcpServerId, server_js_path: serverJsPath });
   });

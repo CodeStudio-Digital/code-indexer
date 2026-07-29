@@ -23,6 +23,7 @@
  */
 
 import { getGlobalAgentSupervisor } from '@mcp/company/services/supervisor/global.js';
+import { asAgentRunId, type AgentRunId } from '@mcp/session-storage';
 
 /** Minimal structural slice of CoderRunner this helper needs. */
 export interface MasterWaitRunner {
@@ -54,7 +55,7 @@ export const MASTER_WAIT_TIMEOUT = {
  */
 export async function awaitMasterDecision(
   runner: MasterWaitRunner,
-  opts: { heartbeatAgentRunId?: number } = {},
+  opts: { heartbeatAgentRunId?: AgentRunId | string } = {},
 ): Promise<string> {
   const timeoutMs = resolveMasterWaitMs();
   let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
@@ -77,7 +78,7 @@ export async function awaitMasterDecision(
   // abort it. No-op when the supervisor is off or the agent isn't tracked.
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   if (opts.heartbeatAgentRunId != null) {
-    const id = opts.heartbeatAgentRunId;
+    const id = asAgentRunId(String(opts.heartbeatAgentRunId));
     getGlobalAgentSupervisor()?.heartbeat(id);
     heartbeat = setInterval(() => { getGlobalAgentSupervisor()?.heartbeat(id); }, MASTER_WAIT_HEARTBEAT_MS);
     (heartbeat as { unref?: () => void }).unref?.();

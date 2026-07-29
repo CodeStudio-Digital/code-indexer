@@ -4,7 +4,7 @@
  * since I last looked" without spending tokens on `read_board` calls.
  *
  * Side effects (intentional):
- *   - Advances the master's board watermark to the last-seen entry id,
+ *   - Advances the master's board watermark to the last-seen entry sequence,
  *     so subsequent enrichments don't duplicate context.
  *
  * Errors are swallowed — a board read failure must never block a
@@ -16,14 +16,14 @@ import type { IBoardPoster } from '@mcp/company/services/ports.js';
 export interface BoardEnrichmentDeps {
   ctx: SessionContext;
   /** Subset of `IBoardPoster` actually consumed here. */
-  board: Pick<IBoardPoster, 'lastMasterSeenId' | 'advanceMasterWatermark'>;
+  board: Pick<IBoardPoster, 'lastMasterSeenSeq' | 'advanceMasterWatermark'>;
 }
 
 /**
  * Read up to 30 board entries since the master's watermark, format
  * them as a `[@role] (kind) content` block, and append to `message`.
  * Truncates entries longer than 600 chars. Advances the watermark to
- * the latest entry id read.
+ * the latest entry sequence read.
  *
  * Returns the original message unchanged when:
  *   - The board has no new entries.
@@ -31,8 +31,8 @@ export interface BoardEnrichmentDeps {
  */
 export function enrichMessageWithBoard(deps: BoardEnrichmentDeps, message: string): string {
   try {
-    const recent = deps.ctx.companyStore.readBoard(deps.ctx.companySessionId, {
-      sinceId: deps.board.lastMasterSeenId,
+    const recent = deps.ctx.companyFiles.listBoardEntriesSync({
+      sinceSeq: deps.board.lastMasterSeenSeq,
       limit: 30,
     });
     if (recent.length === 0) return message;
@@ -44,9 +44,9 @@ export function enrichMessageWithBoard(deps: BoardEnrichmentDeps, message: strin
       .join('\n');
     const enriched =
       message +
-      `\n\n--- Board updates since your last activity (since_id=${deps.board.lastMasterSeenId}) ---\n` +
+      `\n\n--- Board updates since your last activity (since_seq=${deps.board.lastMasterSeenSeq}) ---\n` +
       summary;
-    deps.board.advanceMasterWatermark(recent[recent.length - 1].id);
+    deps.board.advanceMasterWatermark(recent[recent.length - 1].seq);
     return enriched;
   } catch {
     return message;

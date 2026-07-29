@@ -1,3 +1,5 @@
+import type { SessionId } from '@mcp/session-storage';
+
 /**
  * Project-memory ports for company sessions (Mem C).
  *
@@ -35,7 +37,7 @@ export interface CompanyRunEndInput {
   succeeded?: boolean;
   /** Distill moment for the diagnostics log (mirrors RunCoderOptions). */
   trigger?: string;
-  sessionId?: number;
+  sessionId?: SessionId;
   sessionNotes?: Array<{ title: string; body: string; kind: string; pinned: boolean }>;
 }
 

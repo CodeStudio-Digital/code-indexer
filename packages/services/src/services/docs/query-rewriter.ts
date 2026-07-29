@@ -243,9 +243,10 @@ export class QueryRewriter {
   private emitTelemetry(result: RewriteResult, opts: RewriteOpts): void {
     if (!this.opts.telemetry) return;
     const ctx = opts.resolveContext ?? {};
+    // This dependency is the global SQLite store. Session-owned telemetry is
+    // committed by the session runtime; never flatten it into a global row.
+    if (ctx.sessionId != null || ctx.companySessionId != null) return;
     const row: PipelineTelemetryInsert = {
-      session_id: ctx.sessionId ?? null,
-      company_session_id: ctx.companySessionId ?? null,
       pipeline_name: 'doc_search',
       stage: 'query_rewrite',
       component_name: 'QueryRewriter',

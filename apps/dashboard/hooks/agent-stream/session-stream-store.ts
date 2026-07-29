@@ -1,6 +1,7 @@
 import { pruneSessions } from './prune-sessions.js';
 import type {
   AssistantTurn,
+  SessionId,
   SessionPatch,
   SessionState,
   UpdateSession,
@@ -14,25 +15,25 @@ import { EMPTY_STATE } from './types.js';
  * cursor/live turn during cleanup.
  */
 
-let sessionStates: Record<number, SessionState> = {};
-const sessionTouchedAt = new Map<number, number>();
-const sessionListeners = new Map<number, Set<() => void>>();
-const currentTurns = new Map<number, AssistantTurn>();
-const currentTurnListeners = new Map<number, Set<() => void>>();
+let sessionStates: Record<SessionId, SessionState> = {};
+const sessionTouchedAt = new Map<SessionId, number>();
+const sessionListeners = new Map<SessionId, Set<() => void>>();
+const currentTurns = new Map<SessionId, AssistantTurn>();
+const currentTurnListeners = new Map<SessionId, Set<() => void>>();
 
-export const agentStreamAbortMap = new Map<number, AbortController>();
-export const agentStreamLastSeenSeqMap = new Map<number, number>();
-export const agentStreamLastSeenBusIdMap = new Map<number, string>();
-export const agentStreamAbortRequestMap = new Map<number, Promise<void>>();
+export const agentStreamAbortMap = new Map<SessionId, AbortController>();
+export const agentStreamLastSeenSeqMap = new Map<SessionId, number>();
+export const agentStreamLastSeenBusIdMap = new Map<SessionId, string>();
+export const agentStreamAbortRequestMap = new Map<SessionId, Promise<void>>();
 export const agentStreamAbortFallbackTimerMap =
-  new Map<number, ReturnType<typeof setTimeout>>();
+  new Map<SessionId, ReturnType<typeof setTimeout>>();
 
-export function getAgentSessionSnapshot(sessionId: number | null): SessionState {
+export function getAgentSessionSnapshot(sessionId: SessionId | null): SessionState {
   return sessionId === null ? EMPTY_STATE : (sessionStates[sessionId] ?? EMPTY_STATE);
 }
 
 export function subscribeAgentSession(
-  sessionId: number | null,
+  sessionId: SessionId | null,
   listener: () => void,
 ): () => void {
   if (sessionId === null) return () => undefined;
@@ -49,13 +50,13 @@ export function subscribeAgentSession(
 }
 
 export function getAgentCurrentTurnSnapshot(
-  sessionId: number | null,
+  sessionId: SessionId | null,
 ): AssistantTurn | null {
   return sessionId === null ? null : (currentTurns.get(sessionId) ?? null);
 }
 
 export function subscribeAgentCurrentTurn(
-  sessionId: number | null,
+  sessionId: SessionId | null,
   listener: () => void,
 ): () => void {
   if (sessionId === null) return () => undefined;
@@ -72,7 +73,7 @@ export function subscribeAgentCurrentTurn(
 }
 
 function publishCurrentTurn(
-  sessionId: number,
+  sessionId: SessionId,
   turn: AssistantTurn | null,
 ): void {
   if ((currentTurns.get(sessionId) ?? null) === turn) return;
@@ -81,7 +82,7 @@ function publishCurrentTurn(
   for (const listener of currentTurnListeners.get(sessionId) ?? []) listener();
 }
 
-function notifySession(sessionId: number): void {
+function notifySession(sessionId: SessionId): void {
   for (const listener of sessionListeners.get(sessionId) ?? []) listener();
 }
 
@@ -102,12 +103,11 @@ export const updateAgentSession: UpdateSession = (sessionId, patch) => {
     sessionTouchedAt,
   );
 
-  const removed: number[] = [];
+  const removed: SessionId[] = [];
   for (const previousId of Object.keys(previous)) {
-    const numericId = Number(previousId);
-    if (!(numericId in merged)) {
-      removed.push(numericId);
-      publishCurrentTurn(numericId, null);
+    if (!(previousId in merged)) {
+      removed.push(previousId);
+      publishCurrentTurn(previousId, null);
     }
   }
   sessionStates = merged;
@@ -130,7 +130,7 @@ export interface AgentStreamCursor {
 }
 
 /** A sequence is valid only together with the bus that allocated it. */
-export function readAgentStreamCursor(sessionId: number): AgentStreamCursor {
+export function readAgentStreamCursor(sessionId: SessionId): AgentStreamCursor {
   const busId = agentStreamLastSeenBusIdMap.get(sessionId);
   return busId
     ? { busId, seq: agentStreamLastSeenSeqMap.get(sessionId) ?? -1 }
@@ -152,12 +152,12 @@ interface ActiveStream {
  * callbacks are fan-out subscriptions, so both visible surfaces refetch.
  */
 export class AgentStreamOwnership {
-  private readonly active = new Map<number, ActiveStream>();
+  private readonly active = new Map<SessionId, ActiveStream>();
   private readonly completionCallbacks =
-    new Map<number, Map<AgentStreamConsumerId, () => void>>();
+    new Map<SessionId, Map<AgentStreamConsumerId, () => void>>();
 
   run(
-    sessionId: number,
+    sessionId: SessionId,
     consumerId: AgentStreamConsumerId,
     kind: AgentStreamStartKind,
     onMessageComplete: (() => void) | undefined,
@@ -193,7 +193,7 @@ export class AgentStreamOwnership {
 
   releaseConsumer(
     consumerId: AgentStreamConsumerId,
-    sessionId?: number,
+    sessionId?: SessionId,
   ): void {
     const entries = sessionId === undefined
       ? [...this.completionCallbacks.entries()]
@@ -205,11 +205,11 @@ export class AgentStreamOwnership {
     }
   }
 
-  isActive(sessionId: number): boolean {
+  isActive(sessionId: SessionId): boolean {
     return this.active.has(sessionId);
   }
 
-  private notifyMessageComplete(sessionId: number): void {
+  private notifyMessageComplete(sessionId: SessionId): void {
     const callbacks = [
       ...(this.completionCallbacks.get(sessionId)?.values() ?? []),
     ];

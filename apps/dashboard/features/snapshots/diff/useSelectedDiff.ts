@@ -15,8 +15,8 @@ import type { SessionScope, SnapshotFileDiff } from '../types.js';
 
 interface Options {
   scope: SessionScope;
-  sessionId: number;
-  selectedBaselineId: number | null;
+  sessionId: string;
+  selectedBaselineId: string | null;
   contextBefore: number;
   contextAfter: number;
   /** Bumping value mirroring live `session_snapshot_changed` SSE pings. */
@@ -30,7 +30,7 @@ interface Result {
   diff: SnapshotFileDiff | null;
   diffLoading: boolean;
   /** Authoritative reload of one file's diff (e.g. after keep/undo hunk). */
-  reloadDiff: (baselineId: number) => Promise<void>;
+  reloadDiff: (baselineId: string) => Promise<void>;
 }
 
 export function useSelectedDiff({
@@ -53,7 +53,7 @@ export function useSelectedDiff({
   selectedRef.current = selectedBaselineId;
 
   const reloadDiff = useCallback(
-    async (baselineId: number) => {
+    async (baselineId: string) => {
       token.current++; // cancel any in-flight live refetch
       setDiffLoading(true);
       try {

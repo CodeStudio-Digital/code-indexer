@@ -17,7 +17,7 @@ import { UrlsDrawer } from './shared/UrlsDrawer.js';
 import { RestoreQaConfigButton } from './shared/RestoreQaConfigButton.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
 }
 
 export function TestsTab({ sessionId }: Props) {

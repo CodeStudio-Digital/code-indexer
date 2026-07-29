@@ -282,11 +282,9 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // todo_write / update_todo demoted to NAVIGATE (merge): they are now
   // back-compat aliases of task_list({gate:'track', ...}); only task_list is on
   // the bootstrap surface so the model sees ONE task tool.
-  // Goal tools — session objective state. create_goal + update_goal stay in
-  // bootstrap: the goal-gate hides/exposes create_goal by name on status, and
-  // without update_goal reachable a bootstrap-only session could never clear
-  // an in-progress goal (deadlock). get_goal demoted to navigate (Phase B) —
-  // only 12 calls in 12k turns.
+  // Goal tools — optional session objective telemetry. create_goal +
+  // update_goal stay in bootstrap as a coherent write/close pair; goal state
+  // never gates unrelated work. get_goal is demoted to navigate (Phase B).
   'create_goal',
   'update_goal',
   'invoke_skill',

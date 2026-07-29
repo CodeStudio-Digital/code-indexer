@@ -9,14 +9,15 @@ import { mergeBoardMessages, mergeSubordinates } from '../merge-live-persisted.j
 import type { AgentStreamState, BoardMessage } from '../../../../state/company/types.js';
 import type { PersistedAgentRun } from '../types.js';
 
-const board = (id: number, content: string): BoardMessage => ({
-  id,
+const board = (seq: number, content: string): BoardMessage => ({
+  id: `b0000000-0000-4000-8000-${String(seq).padStart(12, '0')}`,
+  seq,
   author_role: 'system',
   agent_run_id: null,
   kind: 'message',
   content,
   mentions: [],
-  created_at: `2026-01-01T00:00:0${id}Z`,
+  created_at: `2026-01-01T00:00:0${seq}Z`,
 });
 
 describe('mergeBoardMessages', () => {
@@ -25,9 +26,9 @@ describe('mergeBoardMessages', () => {
       [board(1, 'old-1'), board(2, 'old-2')],
       [board(2, 'live-2'), board(3, 'live-3')],
     );
-    expect(merged.map((m) => m.id).sort((a, b) => a - b)).toEqual([1, 2, 3]);
-    expect(merged.find((m) => m.id === 2)?.content).toBe('live-2'); // live wins
-    expect(merged.find((m) => m.id === 1)?.content).toBe('old-1'); // history kept
+    expect(merged.map((m) => m.seq).sort((a, b) => a - b)).toEqual([1, 2, 3]);
+    expect(merged.find((m) => m.seq === 2)?.content).toBe('live-2'); // live wins
+    expect(merged.find((m) => m.seq === 1)?.content).toBe('old-1'); // history kept
   });
 
   it('a single live entry never drops persisted history', () => {
@@ -36,20 +37,23 @@ describe('mergeBoardMessages', () => {
   });
 });
 
-const run = (id: number, role: string, over: Partial<PersistedAgentRun> = {}): PersistedAgentRun => ({
-  id,
+const uuid = (n: number): string =>
+  `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+const run = (n: number, role: string, over: Partial<PersistedAgentRun> = {}): PersistedAgentRun => ({
+  id: uuid(n),
   role,
   status: 'completed',
   provider: 'anthropic',
   model: 'opus',
   project_ids_json: '[]',
-  coder_session_id: 100 + id,
+  coder_session_id: uuid(100 + n),
   ...over,
 });
 
-const live = (id: number, over: Partial<AgentStreamState> = {}): AgentStreamState => ({
+const live = (n: number, over: Partial<AgentStreamState> = {}): AgentStreamState => ({
   role: 'backend',
-  agentRunId: id,
+  agentRunId: uuid(n),
   textChunks: [],
   toolCalls: [],
   status: 'running',
@@ -59,14 +63,14 @@ const live = (id: number, over: Partial<AgentStreamState> = {}): AgentStreamStat
 describe('mergeSubordinates', () => {
   it('shows persisted-only agents (excludes master) with their coder_session_id', () => {
     const merged = mergeSubordinates([run(1, 'master'), run(2, 'frontend'), run(3, 'backend')], new Map());
-    expect(merged.map((a) => a.agentRunId)).toEqual([2, 3]);
-    expect(merged.find((a) => a.agentRunId === 2)?.coderSessionId).toBe(102);
+    expect(merged.map((a) => a.agentRunId)).toEqual([uuid(2), uuid(3)]);
+    expect(merged.find((a) => a.agentRunId === uuid(2))?.coderSessionId).toBe(uuid(102));
   });
 
   it('overlays live state by agentRunId (live wins) and dedups', () => {
     const merged = mergeSubordinates(
       [run(2, 'frontend')],
-      new Map([[2, live(2, { status: 'running', textChunks: ['x'] })]]),
+      new Map([[uuid(2), live(2, { status: 'running', textChunks: ['x'] })]]),
     );
     expect(merged).toHaveLength(1);
     expect(merged[0].status).toBe('running');
@@ -74,13 +78,21 @@ describe('mergeSubordinates', () => {
   });
 
   it('preserves persisted coderSessionId when the live seed lacks it', () => {
-    const merged = mergeSubordinates([run(2, 'frontend', { coder_session_id: 555 })], new Map([[2, live(2)]]));
-    expect(merged[0].coderSessionId).toBe(555);
+    const persistedCoderSessionId = uuid(555);
+    const merged = mergeSubordinates(
+      [run(2, 'frontend', { coder_session_id: persistedCoderSessionId })],
+      new Map([[uuid(2), live(2)]]),
+    );
+    expect(merged[0].coderSessionId).toBe(persistedCoderSessionId);
   });
 
   it('includes live-only agents not yet persisted', () => {
-    const merged = mergeSubordinates([], new Map([[9, live(9, { coderSessionId: 909 })]]));
-    expect(merged.map((a) => a.agentRunId)).toEqual([9]);
-    expect(merged[0].coderSessionId).toBe(909);
+    const coderSessionId = uuid(909);
+    const merged = mergeSubordinates(
+      [],
+      new Map([[uuid(9), live(9, { coderSessionId })]]),
+    );
+    expect(merged.map((a) => a.agentRunId)).toEqual([uuid(9)]);
+    expect(merged[0].coderSessionId).toBe(coderSessionId);
   });
 });

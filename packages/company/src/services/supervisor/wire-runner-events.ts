@@ -48,7 +48,7 @@ import { getGlobalToolBaseline } from './tool-duration-baseline.js';
  */
 export function wireSupervisorToRunner(
   runner: CoderRunner,
-  agentRunId: number,
+  agentRunId: string,
 ): () => void {
   const supervisor = getGlobalAgentSupervisor();
   if (!supervisor) return () => { /* no-op */ };

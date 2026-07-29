@@ -14,6 +14,8 @@ import {
 } from '../health-target.js';
 import { evaluateProbe } from '../health-core.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000012';
+
 function io(over: Partial<LocalProbeIo> = {}): LocalProbeIo {
   return {
     probeHttp: async () => ({ replied: false, status: 0 }),
@@ -25,7 +27,7 @@ function io(over: Partial<LocalProbeIo> = {}): LocalProbeIo {
 
 describe('localServiceId', () => {
   it('prefixes the session id', () => {
-    expect(localServiceId(12)).toBe('local:12');
+    expect(localServiceId(SESSION_ID)).toBe(`local:${SESSION_ID}`);
   });
 });
 
@@ -125,7 +127,12 @@ describe('probeHealthTarget', () => {
 
   it('local target dispatches to the local probe with the injected IO', async () => {
     const outcome = await probeHealthTarget(
-      { kind: 'local', serviceId: 'local:12', hostPort: 3000, pid: 42 },
+      {
+        kind: 'local',
+        serviceId: `local:${SESSION_ID}`,
+        hostPort: 3000,
+        pid: 42,
+      },
       { local: io({ probeHttp: async () => ({ replied: true, status: 200 }) }) },
     );
     expect(outcome).toEqual({ httpStatus: 200 });

@@ -42,7 +42,9 @@ function cap(text: string, max: number): string {
  * fully visible inside the hunk's rendered window, and never throws — a
  * single unreadable file must not kill the review.
  */
-export function buildEnclosingSymbolContext(diffs: FileDiff[]): string | null {
+export function buildEnclosingSymbolContext(
+  diffs: FileDiff<string>[],
+): string | null {
   const chunks: string[] = [];
   const seen = new Set<string>();
   let total = 0;

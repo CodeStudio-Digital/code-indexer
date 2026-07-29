@@ -24,7 +24,7 @@ import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 interface AgentLine {
   path: string;
   role: string;
-  agent_run_id: number | null;
+  agent_run_id: string | null;
   status: string;
   is_self: boolean;
   is_master: boolean;

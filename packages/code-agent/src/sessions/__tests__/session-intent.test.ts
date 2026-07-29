@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionIntent } from '../session-intent.js';
-import type { SessionStore } from '../store.js';
+import { asSessionId, type SessionId } from '@mcp/session-storage';
+import {
+  buildSessionIntent,
+  type SessionIntentStore,
+} from '../session-intent.js';
 
 interface StubState {
   title?: string | null;
@@ -10,59 +13,61 @@ interface StubState {
   tasks?: { summary?: string; tasks: Array<{ status: string; title?: string; content?: string; id: string }> } | null;
 }
 
-function stubStore(state: StubState): SessionStore {
+const SESSION_ID = asSessionId('00000000-0000-4000-8000-000000000001');
+
+function stubStore(state: StubState): SessionIntentStore<SessionId> {
   return {
     getSession: () => (state.title !== undefined ? { title: state.title } : null),
     getFirstUserMessageText: () => state.firstMsg ?? null,
     getLatestNonMetaUserMessageText: () => state.latestMsg ?? null,
     listPlans: () => state.plans ?? [],
     getTasksState: () => state.tasks ?? null,
-  } as unknown as SessionStore;
+  };
 }
 
 describe('buildSessionIntent', () => {
-  it('returns null when there is nothing to say', () => {
-    expect(buildSessionIntent(stubStore({}), 1)).toBeNull();
+  it('returns null when there is nothing to say', async () => {
+    await expect(buildSessionIntent(stubStore({}), SESSION_ID)).resolves.toBeNull();
   });
 
-  it('includes the original request only when the latest one matches', () => {
-    const intent = buildSessionIntent(
+  it('includes the original request only when the latest one matches', async () => {
+    const intent = (await buildSessionIntent(
       stubStore({ firstMsg: 'Fix the login bug', latestMsg: 'Fix the login bug' }),
-      1,
-    )!;
+      SESSION_ID,
+    ))!;
     expect(intent).toContain('Original request:\nFix the login bug');
     expect(intent).not.toContain('Latest request:');
   });
 
-  it('surfaces a pivoted latest request distinct from the original', () => {
-    const intent = buildSessionIntent(
+  it('surfaces a pivoted latest request distinct from the original', async () => {
+    const intent = (await buildSessionIntent(
       stubStore({ firstMsg: 'Add dark mode', latestMsg: 'Actually, add a settings page instead' }),
-      1,
-    )!;
+      SESSION_ID,
+    ))!;
     expect(intent).toContain('Original request:\nAdd dark mode');
     expect(intent).toContain('Latest request:\nActually, add a settings page instead');
   });
 
-  it('includes an approved plan but ignores a pending one', () => {
-    const approved = buildSessionIntent(
+  it('includes an approved plan but ignores a pending one', async () => {
+    const approved = (await buildSessionIntent(
       stubStore({ firstMsg: 'x', plans: [{ status: 'approved', plan_text: 'Step 1\nStep 2' }] }),
-      1,
-    )!;
+      SESSION_ID,
+    ))!;
     expect(approved).toContain('Approved plan:\nStep 1\nStep 2');
 
-    const pending = buildSessionIntent(
+    const pending = (await buildSessionIntent(
       stubStore({ firstMsg: 'x', plans: [{ status: 'pending', plan_text: 'draft' }] }),
-      1,
-    )!;
+      SESSION_ID,
+    ))!;
     expect(pending).not.toContain('Approved plan:');
   });
 
-  it('degrades to null when the store throws', () => {
+  it('degrades to null when the store throws', async () => {
     const broken = {
       getSession: () => {
         throw new Error('boom');
       },
-    } as unknown as SessionStore;
-    expect(buildSessionIntent(broken, 1)).toBeNull();
+    } as unknown as SessionIntentStore<SessionId>;
+    await expect(buildSessionIntent(broken, SESSION_ID)).resolves.toBeNull();
   });
 });

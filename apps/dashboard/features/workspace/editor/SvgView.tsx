@@ -1,4 +1,5 @@
 import { Suspense, lazy, useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Eye, FileEdit, Image as ImageIcon, LayoutPanelLeft, Loader2 } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import type { OpenFile } from '../../../state/workspace.js';
@@ -33,6 +34,7 @@ function saveMode(filePath: string, mode: SvgMode): void {
 }
 
 export function SvgView({ file }: { file: OpenFile }) {
+  const { t } = useTranslation('workspace');
   const [mode, setMode] = useState<SvgMode>(() => loadMode(file.path));
   useEnsureFileContent(file);
 
@@ -44,9 +46,9 @@ export function SvgView({ file }: { file: OpenFile }) {
   return (
     <div className="h-full min-h-0 flex flex-col">
       <div className="h-7 shrink-0 border-b bg-card/40 flex items-center px-2 gap-0.5 text-[10.5px]">
-        <ModeButton icon={FileEdit} label="Edit" active={mode === 'edit'} onClick={() => changeMode('edit')} />
-        <ModeButton icon={Eye} label="Preview" active={mode === 'preview'} onClick={() => changeMode('preview')} />
-        <ModeButton icon={LayoutPanelLeft} label="Split" active={mode === 'split'} onClick={() => changeMode('split')} />
+        <ModeButton icon={FileEdit} label={t('editorPreview.edit')} active={mode === 'edit'} onClick={() => changeMode('edit')} />
+        <ModeButton icon={Eye} label={t('editorPreview.preview')} active={mode === 'preview'} onClick={() => changeMode('preview')} />
+        <ModeButton icon={LayoutPanelLeft} label={t('editorPreview.split')} active={mode === 'split'} onClick={() => changeMode('split')} />
         <span className="ml-auto inline-flex items-center gap-1 font-mono text-muted-foreground/70 text-[10px]">
           <ImageIcon className="h-3 w-3" />
           {file.path.split('/').pop()}
@@ -78,13 +80,14 @@ export function SvgView({ file }: { file: OpenFile }) {
 }
 
 function SvgEditorSurface({ file }: { file: OpenFile }) {
+  const { t } = useTranslation('workspace');
   return (
     <div className="relative h-full min-w-0 min-h-0 overflow-hidden">
       <Suspense
         fallback={
           <div className="absolute inset-0 grid place-items-center text-[11px] text-muted-foreground gap-1">
             <Loader2 className="h-3 w-3 animate-spin" />
-            Loading editor…
+            {t('editorPreview.loadingEditor')}
           </div>
         }
       >
@@ -95,6 +98,7 @@ function SvgEditorSurface({ file }: { file: OpenFile }) {
 }
 
 function SvgPreview({ source, fileName }: { source: string | null; fileName: string }) {
+  const { t } = useTranslation('workspace');
   const previewUrl = useBlobUrl(source, 'image/svg+xml');
   const [invalid, setInvalid] = useState(false);
   useEffect(() => setInvalid(false), [previewUrl]);
@@ -113,12 +117,12 @@ function SvgPreview({ source, fileName }: { source: string | null; fileName: str
       {source === null || (!previewUrl && !invalid) ? (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Preparing preview…
+          {t('mediaPreview.preparing')}
         </div>
       ) : invalid ? (
         <div className="max-w-sm text-center text-sm text-muted-foreground">
-          <p className="text-foreground font-medium">Invalid SVG</p>
-          <p className="mt-1 text-xs">Fix the XML in Edit mode and the preview will refresh.</p>
+          <p className="text-foreground font-medium">{t('mediaPreview.invalidSvg')}</p>
+          <p className="mt-1 text-xs">{t('mediaPreview.invalidSvgHint')}</p>
         </div>
       ) : (
         <img

@@ -10,7 +10,7 @@ import { useResizableWidth } from '../../../../hooks/useResizableWidth.js';
 import { cn } from '../../../../lib/utils.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projects: SessionProject[];
 }
 
@@ -18,7 +18,7 @@ function FilesTabBody({
   sessionId,
   projectId,
 }: {
-  sessionId: number;
+  sessionId: string;
   projectId: number | null;
 }) {
   const { t } = useTranslation('agents');

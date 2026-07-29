@@ -31,7 +31,7 @@ const pipelineStreamBackoff = {
  * `POST /pipelines/:pid/start`). This avoids the 404-reconnect loop that
  * happens when no executor has ever been registered for the session.
  */
-export function usePipelineStream(sessionId: number | null, _notificationContext?: NotificationSourceContext): {
+export function usePipelineStream(sessionId: string | null, _notificationContext?: NotificationSourceContext): {
   pipelineRuntime: PipelineRuntimeState | null;
   openStream: () => void;
   reset: () => void;
@@ -54,7 +54,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
 
     const handleEvent = (eventName: string, data: Record<string, unknown>) => {
       if (eventName === 'pipeline_started') {
-        const d = data as { executionId: number; pipelineId: number; startNodeId?: string };
+        const d = data as { executionId: string; pipelineId: number | string; startNodeId?: string };
         setRuntime({
           executionId: d.executionId,
           pipelineId: d.pipelineId,
@@ -68,7 +68,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
 
       if (eventName === 'pipeline_node_started') {
         const d = data as {
-          executionId: number;
+          executionId: string;
           nodeId: string;
           nodeLabel?: string;
           kind?: 'agent' | 'validate';
@@ -94,7 +94,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
 
       if (eventName === 'pipeline_node_completed') {
         const d = data as {
-          executionId: number;
+          executionId: string;
           nodeId: string;
           outcome?: string | null;
           verdict?: 'pass' | 'fail' | 'review' | null;
@@ -120,7 +120,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
       }
 
       if (eventName === 'pipeline_node_failed') {
-        const d = data as { executionId: number; nodeId: string; error?: string };
+        const d = data as { executionId: string; nodeId: string; error?: string };
         setRuntime((cur) => {
           if (!cur || cur.executionId !== d.executionId) return cur;
           return {
@@ -140,7 +140,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
 
       if (eventName === 'pipeline_paused') {
         const d = data as {
-          executionId: number;
+          executionId: string;
           nodeId?: string | null;
           awaitingConfirmation?: boolean;
         };
@@ -157,7 +157,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
       }
 
       if (eventName === 'pipeline_resumed') {
-        const d = data as { executionId: number; nodeId?: string };
+        const d = data as { executionId: string; nodeId?: string };
         setRuntime((cur) => {
           if (!cur || cur.executionId !== d.executionId) return cur;
           return {
@@ -171,7 +171,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
       }
 
       if (eventName === 'pipeline_completed') {
-        const d = data as { executionId: number };
+        const d = data as { executionId: string };
         setRuntime((cur) => {
           if (!cur || cur.executionId !== d.executionId) return cur;
           return { ...cur, status: 'completed', currentNodeId: null };
@@ -180,7 +180,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
       }
 
       if (eventName === 'pipeline_aborted') {
-        const d = data as { executionId: number; reason?: string | null };
+        const d = data as { executionId: string; reason?: string | null };
         setRuntime((cur) => {
           if (!cur || cur.executionId !== d.executionId) return cur;
           return {
@@ -194,7 +194,7 @@ export function usePipelineStream(sessionId: number | null, _notificationContext
       }
 
       if (eventName === 'pipeline_failed') {
-        const d = data as { executionId: number; error?: string };
+        const d = data as { executionId: string; error?: string };
         setRuntime((cur) => {
           if (!cur || cur.executionId !== d.executionId) return cur;
           return {

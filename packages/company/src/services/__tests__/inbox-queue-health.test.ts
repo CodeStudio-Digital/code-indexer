@@ -15,24 +15,36 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { InboxQueue, TargetHealthCheckError, type InboxQueueDeps } from '../InboxQueue.js';
-import type {
-  AgentInboxMessage,
-  CompanyAgentRun,
-} from '@mcp/company/types.js';
+import type { AgentInboxMessage } from '@mcp/company/types.js';
+import type { CompanyAgentRunFileRow } from '../CompanySessionFiles.js';
+import {
+  asAgentRunId,
+  asCompanySessionId,
+  asSessionId,
+} from '@mcp/session-storage';
 
-const COMPANY_SESSION_ID = 100;
+const COMPANY_SESSION_ID = asCompanySessionId('c0000000-0000-4000-8000-000000000100');
+const runId = (n: number) =>
+  asAgentRunId(`a0000000-0000-4000-8000-${String(n).padStart(12, '0')}`);
+const messageId = (n: number): string =>
+  `b0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const coderSessionId = (n: number) =>
+  asSessionId(`d0000000-0000-4000-8000-${String(n).padStart(12, '0')}`);
 
 interface MockState {
-  runs: CompanyAgentRun[];
-  inboxByRunId: Map<number, AgentInboxMessage[]>;
+  runs: CompanyAgentRunFileRow[];
+  inboxByRunId: Map<string, AgentInboxMessage[]>;
 }
 
-function makeRun(over: Partial<CompanyAgentRun> & Pick<CompanyAgentRun, 'id' | 'role'>): CompanyAgentRun {
+function makeRun(
+  over: Partial<CompanyAgentRunFileRow> &
+    Pick<CompanyAgentRunFileRow, 'id' | 'role'>,
+): CompanyAgentRunFileRow {
   return {
     id: over.id,
     company_session_id: COMPANY_SESSION_ID,
     role: over.role,
-    coder_session_id: over.coder_session_id ?? 0,
+    coder_session_id: over.coder_session_id ?? coderSessionId(1),
     project_ids_json: over.project_ids_json ?? '[]',
     status: over.status ?? 'waiting',
     status_message: over.status_message ?? '',
@@ -45,14 +57,16 @@ function makeRun(over: Partial<CompanyAgentRun> & Pick<CompanyAgentRun, 'id' | '
     created_at: over.created_at ?? '2026-05-25T10:00:00Z',
     updated_at: over.updated_at ?? '2026-05-25T10:00:00Z',
     archive_id: over.archive_id ?? null,
+    board_watermark_seq: over.board_watermark_seq ?? 0,
   };
 }
 
-function makeInboxMsg(id: number, toAgentRunId: number): AgentInboxMessage {
+function makeInboxMsg(seq: number, toAgentRunId: string): AgentInboxMessage {
   return {
-    id,
+    id: messageId(seq),
+    seq,
     company_session_id: COMPANY_SESSION_ID,
-    from_agent_run_id: 99,
+    from_agent_run_id: runId(99),
     from_role: 'sender',
     to_role: null,
     to_agent_run_id: toAgentRunId,
@@ -64,28 +78,30 @@ function makeInboxMsg(id: number, toAgentRunId: number): AgentInboxMessage {
     delivered_at: null,
     answered_at: null,
     created_at: '2026-05-25T10:00:00Z',
-  } as AgentInboxMessage;
+  };
 }
 
 function makeInboxQueue(state: MockState): InboxQueue {
   // Tiny mock — only the surface assessTargetHealth() reads.
-  const mockStore = {
-    listAgentRuns(_sid: number): CompanyAgentRun[] {
+  const companyFiles = {
+    listAgentRunsSync(): CompanyAgentRunFileRow[] {
       return state.runs;
     },
-    getAgentRun(id: number): CompanyAgentRun | null {
+    getAgentRunSync(id: string): CompanyAgentRunFileRow | null {
       return state.runs.find((r) => r.id === id) ?? null;
     },
-    listInboxMessages(opts: { toAgentRunId?: number }): AgentInboxMessage[] {
-      if (typeof opts.toAgentRunId !== 'number') return [];
+    listInboxMessagesSync(opts: { toAgentRunId?: string }): AgentInboxMessage[] {
+      if (!opts.toAgentRunId) return [];
       return state.inboxByRunId.get(opts.toAgentRunId) ?? [];
     },
-    getCompanySession() { return null; },
+    getSession() {
+      return { id: COMPANY_SESSION_ID, name: 'test' };
+    },
   };
   const deps: InboxQueueDeps = {
     ctx: {
       companySessionId: COMPANY_SESSION_ID,
-      companyStore: mockStore as unknown as InboxQueueDeps['ctx']['companyStore'],
+      companyFiles,
     } as unknown as InboxQueueDeps['ctx'],
     subordinates: {} as unknown as InboxQueueDeps['subordinates'],
     attention: {
@@ -121,7 +137,7 @@ describe('InboxQueue.assessTargetHealth', () => {
 
   it('no_target_run when toAgentRunId is unknown', () => {
     const queue = makeInboxQueue({ runs: [], inboxByRunId: new Map() });
-    const a = queue.assessTargetHealth({ toAgentRunId: 999 });
+    const a = queue.assessTargetHealth({ toAgentRunId: runId(999) });
     expect(a.healthy).toBe(false);
     expect(a.reason).toBe('no_target_run');
   });
@@ -134,33 +150,40 @@ describe('InboxQueue.assessTargetHealth', () => {
   });
 
   it('failed_status when target is error', () => {
-    const run = makeRun({ id: 1, role: 'qa', status: 'error' });
+    const run = makeRun({ id: runId(1), role: 'qa', status: 'error' });
     const queue = makeInboxQueue({ runs: [run], inboxByRunId: new Map() });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const a = queue.assessTargetHealth({ toAgentRunId: run.id });
     expect(a.healthy).toBe(false);
     expect(a.reason).toBe('failed_status');
     expect(a.targetStatus).toBe('error');
   });
 
   it('failed_status when target is aborted', () => {
-    const run = makeRun({ id: 1, role: 'qa', status: 'aborted' });
+    const run = makeRun({ id: runId(1), role: 'qa', status: 'aborted' });
     const queue = makeInboxQueue({ runs: [run], inboxByRunId: new Map() });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const a = queue.assessTargetHealth({ toAgentRunId: run.id });
     expect(a.reason).toBe('failed_status');
   });
 
   it('failed_status when target is interrupted', () => {
-    const run = makeRun({ id: 1, role: 'qa', status: 'interrupted' });
+    const run = makeRun({ id: runId(1), role: 'qa', status: 'interrupted' });
     const queue = makeInboxQueue({ runs: [run], inboxByRunId: new Map() });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const a = queue.assessTargetHealth({ toAgentRunId: run.id });
     expect(a.reason).toBe('failed_status');
   });
 
   it('overloaded when pending ≥ default 3', () => {
-    const run = makeRun({ id: 1, role: 'qa' });
-    const messages = [makeInboxMsg(10, 1), makeInboxMsg(11, 1), makeInboxMsg(12, 1)];
-    const queue = makeInboxQueue({ runs: [run], inboxByRunId: new Map([[1, messages]]) });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const run = makeRun({ id: runId(1), role: 'qa' });
+    const messages = [
+      makeInboxMsg(10, run.id),
+      makeInboxMsg(11, run.id),
+      makeInboxMsg(12, run.id),
+    ];
+    const queue = makeInboxQueue({
+      runs: [run],
+      inboxByRunId: new Map([[run.id, messages]]),
+    });
+    const a = queue.assessTargetHealth({ toAgentRunId: run.id });
     expect(a.healthy).toBe(false);
     expect(a.reason).toBe('overloaded');
     expect(a.pendingCount).toBe(3);
@@ -168,60 +191,63 @@ describe('InboxQueue.assessTargetHealth', () => {
 
   it('overloaded threshold honors MCP_COMPANY_INBOX_MAX_PENDING', () => {
     process.env.MCP_COMPANY_INBOX_MAX_PENDING = '1';
-    const run = makeRun({ id: 1, role: 'qa' });
-    const messages = [makeInboxMsg(10, 1)];
-    const queue = makeInboxQueue({ runs: [run], inboxByRunId: new Map([[1, messages]]) });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const run = makeRun({ id: runId(1), role: 'qa' });
+    const messages = [makeInboxMsg(10, run.id)];
+    const queue = makeInboxQueue({
+      runs: [run],
+      inboxByRunId: new Map([[run.id, messages]]),
+    });
+    const a = queue.assessTargetHealth({ toAgentRunId: run.id });
     expect(a.reason).toBe('overloaded');
   });
 
   it('stale_idle when target is idle and updated_at older than threshold', () => {
     const longAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString(); // 10 min
-    const run = makeRun({ id: 1, role: 'qa', status: 'waiting', updated_at: longAgo });
+    const run = makeRun({ id: runId(1), role: 'qa', status: 'waiting', updated_at: longAgo });
     const queue = makeInboxQueue({ runs: [run], inboxByRunId: new Map() });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const a = queue.assessTargetHealth({ toAgentRunId: run.id });
     expect(a.healthy).toBe(false);
     expect(a.reason).toBe('stale_idle');
   });
 
   it('healthy when status is fine, pending below threshold, recent activity', () => {
     const recent = new Date(Date.now() - 30_000).toISOString();
-    const run = makeRun({ id: 1, role: 'qa', status: 'waiting', updated_at: recent });
+    const run = makeRun({ id: runId(1), role: 'qa', status: 'waiting', updated_at: recent });
     const queue = makeInboxQueue({ runs: [run], inboxByRunId: new Map() });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const a = queue.assessTargetHealth({ toAgentRunId: run.id });
     expect(a.healthy).toBe(true);
     expect(a.pendingCount).toBe(0);
   });
 
   it('busy running target is healthy (drain will happen later)', () => {
     const recent = new Date(Date.now() - 1000).toISOString();
-    const run = makeRun({ id: 1, role: 'qa', status: 'running', updated_at: recent });
+    const run = makeRun({ id: runId(1), role: 'qa', status: 'running', updated_at: recent });
     const queue = makeInboxQueue({ runs: [run], inboxByRunId: new Map() });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const a = queue.assessTargetHealth({ toAgentRunId: run.id });
     expect(a.healthy).toBe(true);
   });
 
   it('alternativeRoles populated on failure when other roles exist', () => {
     // Target role qa with status=error; alternative role backend exists healthy.
-    const qa = makeRun({ id: 1, role: 'qa', status: 'error' });
-    const backend = makeRun({ id: 2, role: 'backend', status: 'waiting' });
+    const qa = makeRun({ id: runId(1), role: 'qa', status: 'error' });
+    const backend = makeRun({ id: runId(2), role: 'backend', status: 'waiting' });
     const queue = makeInboxQueue({ runs: [qa, backend], inboxByRunId: new Map() });
-    const a = queue.assessTargetHealth({ toAgentRunId: 1 });
+    const a = queue.assessTargetHealth({ toAgentRunId: qa.id });
     expect(a.alternativeRoles).toContain('backend');
   });
 
   it('alternativeRoles excludes the target role and master', () => {
-    const qa1 = makeRun({ id: 1, role: 'qa' });
-    const qa2 = makeRun({ id: 2, role: 'qa' });
-    const backend = makeRun({ id: 3, role: 'backend' });
-    const master = makeRun({ id: 4, role: 'master' });
+    const qa1 = makeRun({ id: runId(1), role: 'qa' });
+    const qa2 = makeRun({ id: runId(2), role: 'qa' });
+    const backend = makeRun({ id: runId(3), role: 'backend' });
+    const master = makeRun({ id: runId(4), role: 'master' });
     // toRole='qa' resolves to qa1 (smallest backlog); make it unhealthy.
     process.env.MCP_COMPANY_INBOX_MAX_PENDING = '1';
     const queue = makeInboxQueue({
       runs: [{ ...qa1 }, qa2, backend, master],
       inboxByRunId: new Map([
-        [1, [makeInboxMsg(10, 1)]],
-        [2, [makeInboxMsg(11, 2)]],
+        [qa1.id, [makeInboxMsg(10, qa1.id)]],
+        [qa2.id, [makeInboxMsg(11, qa2.id)]],
       ]),
     });
     const a = queue.assessTargetHealth({ toRole: 'qa' });

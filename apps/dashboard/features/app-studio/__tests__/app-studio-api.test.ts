@@ -3,17 +3,25 @@ import {
   createAppStudio,
   getAppTeamConfig,
   getAppStudioSession,
+  isAppStudioUuid,
   runAppAction,
   updateAppTeamConfig,
   type AppStudioSessionDetail,
 } from '../app-studio-api.js';
+import { appStudioEventsUrl, latestAppStudioEventSeq } from '../useAppStudioSession.js';
+
+const APP_ID = '00000000-0000-0000-0000-000000000001';
+const COMPANY_ID = '00000000-0000-0000-0000-000000000002';
+const MASTER_ID = '00000000-0000-0000-0000-000000000003';
+const MASTER_RUN_ID = '00000000-0000-0000-0000-000000000004';
 
 function detail(): AppStudioSessionDetail {
   return {
     session: {
-      id: 1,
+      id: APP_ID,
+      seq: 1,
       project_id: 104,
-      company_session_id: 106,
+      company_session_id: COMPANY_ID,
       name: 'Lontras',
       app_slug: 'lontras',
       stack_profile_id: 'cf-fullstack-v1',
@@ -30,7 +38,7 @@ function detail(): AppStudioSessionDetail {
     deployment: null,
     evidence_current: false,
     team: null,
-    master_session_id: 1265,
+    master_session_id: MASTER_ID,
   };
 }
 
@@ -39,15 +47,28 @@ afterEach(() => {
 });
 
 describe('App Studio v6 API client', () => {
+  it('accepts only UUID session identifiers and builds SSE replay cursors from seq', () => {
+    const expected = detail();
+    expected.recent_events = [
+      { id: '00000000-0000-0000-0000-000000000011', seq: 11, kind: 'work.status', created_at: '2026-07-17T00:00:01.000Z' },
+      { id: '00000000-0000-0000-0000-000000000012', seq: 12, kind: 'work.status', created_at: '2026-07-17T00:00:02.000Z' },
+    ];
+
+    expect(isAppStudioUuid(APP_ID)).toBe(true);
+    expect(isAppStudioUuid('1')).toBe(false);
+    expect(latestAppStudioEventSeq(expected)).toBe(12);
+    expect(appStudioEventsUrl(APP_ID, 12)).toBe(`/api/app-studio/apps/${APP_ID}/events?after=12`);
+  });
+
   it('sends execution mode independently from provider-native reasoning effort', async () => {
     const created = {
       project: { id: 104, name: 'Lontras', root_path: 'C:/apps/lontras' },
       app_session: detail().session,
-      master_session_id: 1265,
-      company_session_id: 106,
+      master_session_id: MASTER_ID,
+      company_session_id: COMPANY_ID,
       team: {
-        runtime_kind: 'app_studio', state: 'ready', company_session_id: 106,
-        company_status: 'idle', master_session_id: 1265, master_agent_run_id: 1266,
+        runtime_kind: 'app_studio', state: 'ready', company_session_id: COMPANY_ID,
+        company_status: 'idle', master_session_id: MASTER_ID, master_agent_run_id: MASTER_RUN_ID,
       },
     };
     const fetchMock = vi.fn(async () => new Response(
@@ -82,7 +103,7 @@ describe('App Studio v6 API client', () => {
       headers: { 'Content-Type': 'application/json' },
     })));
 
-    await expect(getAppStudioSession(1)).resolves.toEqual(expected);
+    await expect(getAppStudioSession(APP_ID)).resolves.toEqual(expected);
   });
 
   it('awaits action responses that use the same central unwrap path', async () => {
@@ -92,8 +113,8 @@ describe('App Studio v6 API client', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(runAppAction(1, 'pause')).resolves.toEqual({ ok: true });
-    expect(fetchMock).toHaveBeenCalledWith('/api/app-studio/apps/1/actions', expect.objectContaining({
+    await expect(runAppAction(APP_ID, 'pause')).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(`/api/app-studio/apps/${APP_ID}/actions`, expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ action: 'pause' }),
     }));
@@ -106,8 +127,8 @@ describe('App Studio v6 API client', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(runAppAction(2, 'dispatch_ready_work')).resolves.toEqual({ ok: true });
-    expect(fetchMock).toHaveBeenCalledWith('/api/app-studio/apps/2/actions', expect.objectContaining({
+    await expect(runAppAction(APP_ID, 'dispatch_ready_work')).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(`/api/app-studio/apps/${APP_ID}/actions`, expect.objectContaining({
       method: 'POST',
       body: JSON.stringify({ action: 'dispatch_ready_work' }),
     }));
@@ -122,12 +143,12 @@ describe('App Studio v6 API client', () => {
       headers: { 'Content-Type': 'application/json' },
     })));
 
-    await expect(getAppStudioSession(1)).rejects.toThrow('409: The current plan is blocked.');
+    await expect(getAppStudioSession(APP_ID)).rejects.toThrow('409: The current plan is blocked.');
   });
 
   it('reads and updates team config through the App-owned facade', async () => {
     const team = {
-      company_session_id: 106,
+      company_session_id: COMPANY_ID,
       status: 'idle' as const,
       operational_rules: 'Always verify.',
       roles: [{
@@ -141,10 +162,10 @@ describe('App Studio v6 API client', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(getAppTeamConfig(1)).resolves.toEqual(team);
-    await expect(updateAppTeamConfig(1, { operational_rules: 'Always verify.' })).resolves.toEqual(team);
-    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/app-studio/apps/1/team/config');
-    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/app-studio/apps/1/team/config', expect.objectContaining({
+    await expect(getAppTeamConfig(APP_ID)).resolves.toEqual(team);
+    await expect(updateAppTeamConfig(APP_ID, { operational_rules: 'Always verify.' })).resolves.toEqual(team);
+    expect(fetchMock).toHaveBeenNthCalledWith(1, `/api/app-studio/apps/${APP_ID}/team/config`);
+    expect(fetchMock).toHaveBeenNthCalledWith(2, `/api/app-studio/apps/${APP_ID}/team/config`, expect.objectContaining({
       method: 'PATCH',
       body: JSON.stringify({ operational_rules: 'Always verify.' }),
     }));

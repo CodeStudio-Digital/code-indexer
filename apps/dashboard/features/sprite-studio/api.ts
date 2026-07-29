@@ -117,20 +117,20 @@ export const createAsset = (
 ): Promise<SpriteAsset> =>
   MOCK ? mock.mockCreateAsset(p, input) : req<SpriteAsset>(`${root(p)}/assets`, j(input));
 
-export const patchAsset = (p: number, assetId: number, patch: Partial<SpriteAsset>): Promise<SpriteAsset> =>
+export const patchAsset = (p: number, assetId: string, patch: Partial<SpriteAsset>): Promise<SpriteAsset> =>
   MOCK ? mock.mockPatchAsset(p, assetId, patch)
     : req<SpriteAsset>(`${root(p)}/assets/${assetId}`, { method: 'PATCH', body: JSON.stringify(patch) });
 
-export const deleteAsset = (p: number, assetId: number): Promise<void> =>
+export const deleteAsset = (p: number, assetId: string): Promise<void> =>
   MOCK ? mock.mockDeleteAsset(p, assetId)
     : req<{ ok: true }>(`${root(p)}/assets/${assetId}`, { method: 'DELETE' }).then(() => undefined);
 
 /** Curation delete of one version (repo file + manifest entry + mirror row). */
-export const deleteVersion = (p: number, versionId: number): Promise<void> =>
+export const deleteVersion = (p: number, versionId: string): Promise<void> =>
   req<{ ok: true }>(`${root(p)}/versions/${versionId}`, { method: 'DELETE' }).then(() => undefined);
 
 // ─── Versions ───────────────────────────────────────────────────────────
-export const listVersions = (p: number, assetId: number): Promise<AssetVersion[]> =>
+export const listVersions = (p: number, assetId: string): Promise<AssetVersion[]> =>
   MOCK ? mock.mockListVersions(p, assetId)
     // In-flight dedupe (no TTL cache): the controller's selectAsset and the
     // lifted useAssetVersions both issue this GET for the same asset on every
@@ -141,18 +141,18 @@ export const listVersions = (p: number, assetId: number): Promise<AssetVersion[]
 /** URL of a version's full-resolution PNG (usable directly in <img src>).
  *  `bust` = contentHash (or a prefix): in-place overwrites keep the id but
  *  change the hash, so passing it defeats the browser/img cache. */
-export const versionFileUrl = (p: number, versionId: number, bust?: string | null): string =>
+export const versionFileUrl = (p: number, versionId: string, bust?: string | null): string =>
   `${apiBaseUrl()}${root(p)}/versions/${versionId}/file${bust ? `?h=${bust.slice(0, 8)}` : ''}`;
 
 /** URL of a version's thumbnail (server-side downscale, default 128px). */
-export const versionThumbUrl = (p: number, versionId: number, s = 128, bust?: string | null): string =>
+export const versionThumbUrl = (p: number, versionId: string, s = 128, bust?: string | null): string =>
   `${apiBaseUrl()}${root(p)}/versions/${versionId}/thumb?s=${s}${bust ? `&h=${bust.slice(0, 8)}` : ''}`;
 
 /** Overwrite an existing version IN PLACE (focused frame edit "Salvar
  *  Sprite") — same version number/file, new bytes; returns the updated DTO. */
 export const overwriteVersion = async (
   p: number,
-  versionId: number,
+  versionId: string,
   blob: Blob,
 ): Promise<AssetVersion> => {
   const form = new FormData();
@@ -171,7 +171,7 @@ export const overwriteVersion = async (
  */
 export const saveEditedVersion = async (
   p: number,
-  assetId: number,
+  assetId: string,
   blob: Blob,
 ): Promise<AssetVersion> => {
   const form = new FormData();
@@ -185,12 +185,12 @@ export const saveEditedVersion = async (
 
 // ─── Jobs ───────────────────────────────────────────────────────────────
 /** Enqueue a job (body is the discriminated SpriteJobParams union). */
-export const startJob = (p: number, params: SpriteJobParams): Promise<{ jobId: number }> => {
+export const startJob = (p: number, params: SpriteJobParams): Promise<{ jobId: string }> => {
   if (MOCK) return Promise.reject(new Error('jobs are not available in mock mode'));
-  return req<{ jobId: number }>(`${root(p)}/generate`, j(params));
+  return req<{ jobId: string }>(`${root(p)}/generate`, j(params));
 };
 
-export const cancelJob = (jobId: number): Promise<{ ok: true }> => {
+export const cancelJob = (jobId: string): Promise<{ ok: true }> => {
   if (MOCK) return Promise.resolve({ ok: true as const });
   return req<{ ok: true }>(`/api/sprite-studio/jobs/${jobId}/cancel`, j({}));
 };
@@ -198,17 +198,17 @@ export const cancelJob = (jobId: number): Promise<{ ok: true }> => {
 /** Rehydration payload for a job (row + staged candidates on disk). */
 export interface RestoredJob {
   job: {
-    id: number; status: string; kind: string;
+    id: string; status: string; kind: string;
     userIntent: string | null;
     request: { n?: number; rawPrompt?: boolean; seed?: number | null } | null;
-    error: string | null; resultVersionId: number | null;
-    assetId: number | null; createdAt: string;
+    error: string | null; resultVersionId: string | null;
+    assetId: string | null; createdAt: string;
   };
   candidates: Array<{ index: number; candidateId: string }>;
 }
 
 /** Fetch a job's current state + surviving candidates (panel remount restore). */
-export const getJob = (jobId: number): Promise<RestoredJob> =>
+export const getJob = (jobId: string): Promise<RestoredJob> =>
   req<RestoredJob>(`/api/sprite-studio/jobs/${jobId}`);
 
 /**
@@ -216,7 +216,7 @@ export const getJob = (jobId: number): Promise<RestoredJob> =>
  * prefixed) — the SSE payload's thumbUrl is origin-relative and would resolve
  * against the renderer origin in Electron instead of mcp://app.
  */
-export const candidateThumbUrl = (jobId: number, index: number): string =>
+export const candidateThumbUrl = (jobId: string, index: number): string =>
   `${apiBaseUrl()}/api/sprite-studio/jobs/${jobId}/candidates/${index}/thumb`;
 
 /**
@@ -226,8 +226,8 @@ export const candidateThumbUrl = (jobId: number, index: number): string =>
  */
 export const pickCandidate = (
   p: number,
-  assetId: number,
-  jobId: number,
+  assetId: string,
+  jobId: string,
   candidateIndex: number,
 ): Promise<AssetVersion> =>
   req<AssetVersion>(`${root(p)}/assets/${assetId}/pick`, j({ jobId, candidateIndex }));
@@ -238,8 +238,8 @@ export const streamUrl = (p: number): string =>
 
 // ─── Export ─────────────────────────────────────────────────────────────
 export type ExportScopeV2 =
-  | { kind: 'asset'; assetIds: number[]; includeAnimations?: boolean }
-  | { kind: 'animation'; assetId: number; animationIds: number[] }
+  | { kind: 'asset'; assetIds: string[]; includeAnimations?: boolean }
+  | { kind: 'animation'; assetId: string; animationIds: string[] }
   | { kind: 'category'; category: SpriteCategory; includeAnimations?: boolean }
   | { kind: 'approved'; includeAnimations?: boolean };
 

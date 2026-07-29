@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { LspServerInfo, LspServerStatus } from '@mcp/api-bus';
 import { apiCall } from '../../../lib/api-client.js';
 
@@ -22,6 +23,7 @@ export function AngularProfilePrompt({
   onApplied,
   onDismiss,
 }: AngularProfilePromptProps) {
+  const { t } = useTranslation('workspace');
   const [catalog, setCatalog] = useState<LspServerInfo[]>([]);
   const [selected, setSelected] = useState('');
   const [saving, setSaving] = useState(false);
@@ -64,22 +66,22 @@ export function AngularProfilePrompt({
   return (
     <div className="pointer-events-auto w-full rounded-md border bg-card/95 shadow-md px-3 py-2 text-[12px]">
       <div className="text-amber-500">
-        {status.reason ?? 'Angular version needs an explicit compatibility profile.'}
+        {status.reason ?? t('angularProfile.explicitProfileRequired')}
       </div>
       {route && <div className="mt-1 text-[11px] text-muted-foreground">{route.workspacePath}</div>}
       {canSelect && (
         <div className="mt-2 flex items-center gap-2">
           <select
-            aria-label="Angular compatibility version"
+            aria-label={t('angularProfile.versionAria')}
             value={selected}
             onChange={(event) => setSelected(event.target.value)}
             className="h-7 min-w-0 flex-1 rounded border bg-background px-2 text-[11px]"
           >
-            <option value="">Select Angular version...</option>
+            <option value="">{t('angularProfile.selectVersion')}</option>
             {profiles.map((profile) => (
               <option key={profile.id} value={profile.profileId}>
-                Angular {profileMajor(profile.profileId)}
-                {profile.supportTier === 'best-effort' ? ' (legacy)' : ''}
+                {t('angularProfile.versionOption', { version: profileMajor(profile.profileId) })}
+                {profile.supportTier === 'best-effort' ? ` (${t('angularProfile.legacy')})` : ''}
               </option>
             ))}
           </select>
@@ -90,7 +92,7 @@ export function AngularProfilePrompt({
             className="inline-flex h-7 items-center gap-1 rounded bg-primary px-2 text-[11px] text-primary-foreground disabled:opacity-50"
           >
             {saving && <Loader2 className="h-3 w-3 animate-spin" />}
-            Apply
+            {t('angularProfile.apply')}
           </button>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { newSessionId } from '@mcp/session-storage';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import { SUBAGENT_TOOL_RESULT_CAP, type CoderRunner } from '@mcp/code-agent/core/runner.js';
@@ -129,6 +130,7 @@ describe('subagent execution fencing', () => {
   });
 
   it('aborts before any provider call when enforced fence creation fails', async () => {
+    const sessionId = newSessionId();
     process.env.CODER_AGENT_RUN_STORE_ENFORCE = '1';
     let physicalCalls = 0;
     const provider: ChatProvider = {
@@ -149,9 +151,10 @@ describe('subagent execution fencing', () => {
       ctx: {
         cwd: process.cwd(),
         projectName: 'test',
-        controlPlaneParentAgentRunId: 'agent-run:root',
+        controlPlaneParentAgentRunId:
+          '11111111-1111-4111-8111-111111111111',
       } as ToolContext,
-      sessionId: 42,
+      sessionId,
       sessionStore: { startSubagentRun } as never,
     }, {
       systemPrompt: 'test',
@@ -221,6 +224,7 @@ describe('subagent execution fencing', () => {
   });
 
   it('composes foreground and background children with child-local policy before mutation', async () => {
+    const sessionId = newSessionId();
     const scoped: Array<{
       background: boolean;
       taskScope: { id: string; files: string[] } | null;
@@ -293,7 +297,7 @@ describe('subagent execution fencing', () => {
           projectName: 'test',
           runner: parentRunner,
         } as ToolContext,
-        sessionId: 42,
+        sessionId,
       }, {
         systemPrompt: 'test',
         allowlist: null,
@@ -317,25 +321,26 @@ describe('subagent execution fencing', () => {
         taskScope: { id: 'spawn-background', files: ['child.ts'] },
       },
     ]);
-    expect(scoped.every((entry) => entry.agentRunId?.startsWith('agent-run:subagent:'))).toBe(true);
+    expect(
+      scoped.every((entry) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+          .test(entry.agentRunId ?? ''),
+      ),
+    ).toBe(true);
   });
 
   it('reasserts the child fence after deterministic output spill and before terminal commit', async () => {
     process.env.CODER_AGENT_RUN_STORE_SHADOW = '1';
+    const sessionId = newSessionId();
     let owned = true;
     const fence = {
-      sessionId: 'session:test',
-      legacySessionId: 42,
-      commandId: 'command:test',
-      correlationId: 'correlation:test',
-      actor: { actorId: 'test', actorType: 'system', source: 'runtime' },
-      agentRunId: 'agent-run:child',
-      attemptId: 'attempt:child',
-      executorOwnerId: 'worker:test',
-      fencingEpoch: 1,
+      session_id: sessionId,
+      run_id: '22222222-2222-4222-8222-222222222222',
+      entity_id: newSessionId(),
+      fence_token: newSessionId(),
     };
-    const completeSubagentRun = vi.fn();
-    const assertSubagentRunFence = vi.fn(() => {
+    const completeSubagentRun = vi.fn(async () => {});
+    const assertSubagentRunFence = vi.fn(async () => {
       if (!owned) throw new Error('fenced after output spill');
     });
     const put = vi.fn(() => {
@@ -363,10 +368,12 @@ describe('subagent execution fencing', () => {
         projectName: 'test',
         toolOutputStore: { put } as never,
       } as ToolContext,
-      sessionId: 42,
+      sessionId,
       sessionStore: {
-        startSubagentRun: vi.fn(() => fence),
+        startSubagentRun: vi.fn(async () => fence),
+        heartbeatSubagentRun: vi.fn(async () => {}),
         assertSubagentRunFence,
+        recordTurnTelemetry: vi.fn(async () => null),
         completeSubagentRun,
       } as never,
     }, {

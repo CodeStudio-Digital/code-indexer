@@ -9,11 +9,11 @@ import type { SnapshotReviewComment } from './types.js';
 
 interface Props {
   comments: SnapshotReviewComment[];
-  selectedBaselineId: number | null;
+  selectedBaselineId: string | null;
   busy: boolean;
   canSubmit: boolean;
-  onSelectBaseline: (baselineId: number) => void;
-  onUpdateComment: (id: number, patch: Partial<Pick<SnapshotReviewComment, 'status'>>) => Promise<void>;
+  onSelectBaseline: (baselineId: string) => void;
+  onUpdateComment: (id: string, patch: Partial<Pick<SnapshotReviewComment, 'status'>>) => Promise<void>;
   onSubmit: () => Promise<void>;
 }
 

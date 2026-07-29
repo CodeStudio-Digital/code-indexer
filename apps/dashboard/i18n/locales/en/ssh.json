@@ -23,11 +23,13 @@
     "exited": "Finished — output kept (close to dismiss)",
     "dropped": "Disconnected — Reconnect or close",
     "disconnected": "Connection lost.",
-    "reconnect": "Reconnect",
     "reconnecting": "Reconnecting…",
     "autoReconnect": "Auto-reconnect",
     "autoReconnectOn": "Auto-reconnect: on",
-    "autoReconnectOff": "Auto-reconnect: off"
+    "autoReconnectOff": "Auto-reconnect: off",
+    "insecureTitle": "Credentials stored unencrypted",
+    "insecureBody_one": "{{count}} saved host has its password or private key stored in the clear (written before the OS keychain was required). Edit the host and re-enter it to seal it.",
+    "insecureBody_other": "{{count}} saved hosts have their password or private key stored in the clear (written before the OS keychain was required). Edit each host and re-enter it to seal it."
   },
   "dialog": {
     "titleNew": "New SSH host",
@@ -120,7 +122,37 @@
       "name": "Name",
       "size": "Size",
       "modified": "Modified",
-      "permissions": "Permissions"
+      "permissions": "Permissions",
+      "owner": "Owner",
+      "group": "Group"
+    },
+    "resizeColumn": "Resize {{column}} column",
+    "copy": "Copy",
+    "copyName": "Name",
+    "copyPath": "Path",
+    "copyAbsPath": "Absolute path",
+    "copied": "Copied to clipboard",
+    "copyFailed": "Could not copy to clipboard",
+    "reveal": "Reveal in file manager",
+    "newFile": "New file",
+    "newFilePrompt": "File name",
+    "fileCreated": "Created \"{{name}}\"",
+    "permissions": "Permissions…",
+    "permissionsTitle": "Permissions",
+    "octal": "Octal",
+    "apply": "Apply",
+    "applyRecursively": "Apply to all contents",
+    "unknownAccount": "Unknown user or group — type an existing name or a numeric id.",
+    "chownHint": "Changing owner or group usually requires root on the server.",
+    "class": {
+      "user": "Owner",
+      "group": "Group",
+      "other": "Others"
+    },
+    "bit": {
+      "r": "Read",
+      "w": "Write",
+      "x": "Execute"
     }
   },
   "files": {
@@ -141,7 +173,8 @@
     "overwrite": "Overwrite",
     "skip": "Skip",
     "keepBoth": "Keep both",
-    "applyToAll": "Apply to all conflicts"
+    "applyToAll": "Apply to all conflicts",
+    "zipStillRunning": "Still running on the server — it is taking longer than the client waits. Refresh the pane in a moment to see the archive."
   },
   "snippets": {
     "title": "Snippets",
@@ -242,7 +275,25 @@
     "linkConfirmBody": "Joining a workspace resets this project's vault sync bookkeeping and pulls that workspace fresh.",
     "teams": "Team sharing",
     "selectOrg": "Select a team",
-    "share": "Share my hosts",
+    "share": {
+      "title": "Share hosts with {{org}}",
+      "subtitle": "Pick exactly what leaves this machine. Credentials stay here unless you tick them — a teammate using their own key only needs the endpoint.",
+      "loadingRecipients": "Loading recipients…",
+      "recipients_one": "{{count}} recipient",
+      "recipients_other": "{{count}} recipients",
+      "firstSeen": "first seen",
+      "keyChangedSkipped_one": "{{count}} member will be SKIPPED: their encryption key changed since you pinned it.",
+      "keyChangedSkipped_other": "{{count}} members will be SKIPPED: their encryption keys changed since you pinned them.",
+      "includeCredentials": "Also send {{kinds}}",
+      "noSecrets": "No stored credentials — endpoint only.",
+      "summary": "{{hosts}} host(s) · {{withCredentials}} with credentials → {{members}} member(s)",
+      "confirm": "Share",
+      "secretKind": {
+        "password": "password",
+        "privateKey": "private key",
+        "passphrase": "passphrase"
+      }
+    },
     "pullTeam": "Pull team hosts",
     "teamHint": "An admin shares the project's hosts; members pull them. Re-sharing rotates the team key.",
     "noOrgs": "You're not in any team yet.",
@@ -253,6 +304,6 @@
   },
   "error": {
     "connectFailed": "Connection failed: {{reason}}"
-  }
-  ,"secrets.reference": "${secret:{{name}}}"
+  },
+  "secrets.reference": "${secret:{{name}}}"
 }

@@ -1,5 +1,10 @@
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import {
+  asCompanySessionId,
+  type CompanySessionId,
+} from '@mcp/session-storage';
 import { createBus, addBusEventSink, type CoderRunBus } from '@apps/http-api/coder-bus.js';
 
 import { SessionContext } from '../services/SessionContext.js';
@@ -33,6 +38,7 @@ import { CompanyDriveStore } from '../services/CompanyDriveStore.js';
 import { CompanyEventBus } from '../services/CompanyEventBus.js';
 import { createAutonomyProvider, type AutonomyProvider } from '../services/autonomy/autonomy-provider.js';
 import type { CompanyOrchestrator } from '../orchestrator.js';
+import { CompanySessionFiles } from '../services/CompanySessionFiles.js';
 
 export interface WiredServices {
   ctx: SessionContext;
@@ -73,7 +79,7 @@ export interface WiredServices {
   autonomy: AutonomyProvider;
   driveStore: CompanyDriveStore;
   metaBus: CoderRunBus;
-  parentSessionId: number | null;
+  parentSessionId: CompanySessionId | null;
 }
 
 /**
@@ -85,27 +91,30 @@ export interface WiredServices {
  * Subordinate ↔ Idle no longer cross-cycle — both flow through `eventBus`.
  */
 export function wireServices(args: {
-  companySessionId: number;
+  companySessionId: CompanySessionId | string;
+  sessionStore: FsSessionStore;
   companyStore: CompanyStore;
   db: CodeIndexDB;
   orchestratorRef: CompanyOrchestrator;
 }): WiredServices {
   const metaBus = createBus(new AbortController());
-  // Resolve parent linkage (migration 067).
-  const sessionRow = args.companyStore.getCompanySession(args.companySessionId);
+  const companySessionId = asCompanySessionId(String(args.companySessionId));
+  const companyFiles = new CompanySessionFiles({
+    companySessionId,
+    sessionStore: args.sessionStore,
+  });
+  const sessionRow = companyFiles.getSession();
   const parentSessionId = sessionRow?.parent_session_id ?? null;
+  const effectiveCompanyFiles =
+    parentSessionId == null
+      ? companyFiles
+      : new CompanySessionFiles({
+          companySessionId: parentSessionId,
+          sessionStore: args.sessionStore,
+        });
   const runtimeKind = sessionRow?.runtime_kind ?? 'company';
-  let appStudioSessionId: number | null = null;
-  if (runtimeKind === 'app_studio') {
-    try {
-      const row = args.db.raw().prepare(
-        'SELECT id FROM app_studio_sessions WHERE company_session_id = ? LIMIT 1',
-      ).get(args.companySessionId) as { id: number } | undefined;
-      appStudioSessionId = row?.id ?? null;
-    } catch {
-      // Compatibility with a DB that has not run the App/Company migration.
-    }
-  }
+  const appStudioSessionId =
+    runtimeKind === 'app_studio' ? companySessionId : null;
   const capabilities = resolveCompanySessionCapabilities(runtimeKind, appStudioSessionId);
   const servicePlan = resolveCompanyServiceWiringPlan(capabilities);
 
@@ -113,8 +122,10 @@ export function wireServices(args: {
   // `session.config_updated` on this same metaBus after persisting, so the
   // sink below keeps the cache coherent without timers.
   const persistedAutonomy = createAutonomyProvider({
-    companyStore: args.companyStore,
-    sessionId: args.companySessionId,
+    sessionSource: {
+      getCompanySession: () => companyFiles.getSession(),
+    },
+    sessionId: companySessionId,
   });
   const autonomy: AutonomyProvider = capabilities.autonomyPolicy === 'controlled_app_work'
     ? {
@@ -127,7 +138,9 @@ export function wireServices(args: {
   });
 
   const ctx = new SessionContext({
-    companySessionId: args.companySessionId,
+    companySessionId,
+    companyFiles,
+    effectiveCompanyFiles,
     companyStore: args.companyStore,
     db: args.db,
     metaBus,
@@ -270,7 +283,7 @@ export function wireServices(args: {
       kanban: servicePlan.allowIncidentKanbanCards ? kanban ?? undefined : undefined,
       inbox,
       getSessionConfigJson: () =>
-        args.companyStore.getCompanySession(args.companySessionId)?.config_json ?? null,
+        ctx.effectiveCompanyFiles.getSession().config_json,
     },
   });
   (master as unknown as { deps: { serviceSupervisor?: ServiceSupervisor } }).deps.serviceSupervisor =

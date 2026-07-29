@@ -9,10 +9,10 @@ import { VersionPickerPopover } from './VersionPickerPopover.js';
 
 export function ReplaceVersionPopover({ projectId, assetId, currentVersionId, onPick, children }: {
   projectId: number;
-  assetId: number;
+  assetId: string;
   /** The frame's version — highlighted so the user sees what it points at now. */
-  currentVersionId: number;
-  onPick: (versionId: number) => void;
+  currentVersionId: string;
+  onPick: (versionId: string) => void;
   /** Trigger element (the frame cell's replace icon button). */
   children: React.ReactNode;
 }) {

@@ -12,11 +12,12 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { ChatUsage, ContentBlock, ToolUseBlock } from '@mcp/code-agent/core/messages.js';
+import { asSessionId, type SessionId } from '@mcp/session-storage';
 import { persistTurnTelemetry } from '../persist-turn.js';
 import { decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine.js';
 
 interface RecordedRow {
-  session_id: number | null;
+  session_id: SessionId;
   auto_continues: number;
   tool_count: number;
   tools_called: string[];
@@ -34,15 +35,17 @@ interface RecordedRow {
 
 function makeMockStore() {
   const rows: RecordedRow[] = [];
-  let nextId = 100;
   const store = {
-    recordTurnTelemetry(input: RecordedRow): number {
+    async recordTurnTelemetry(input: RecordedRow): Promise<string> {
       rows.push(input);
-      return nextId++;
+      return '10000000-0000-5000-8000-000000000001';
     },
   };
   return { store, rows };
 }
+
+const SESSION_ID = asSessionId('20000000-0000-4000-8000-000000000001');
+const RUN_ID = '11111111-1111-4111-8111-111111111111';
 
 function toolUse(name: string, input: Record<string, unknown> = {}): ToolUseBlock {
   return { type: 'tool_use', id: `tu-${name}`, name, input };
@@ -63,8 +66,8 @@ describe('persistTurnTelemetry — pure function', () => {
   it('returns null and writes nothing when store is undefined', () => {
     const r = persistTurnTelemetry({
       store: undefined,
-      sessionId: 1,
-      runId: 'run-1',
+      sessionId: SESSION_ID,
+      runId: RUN_ID,
       isSubagent: false,
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001',
@@ -79,12 +82,12 @@ describe('persistTurnTelemetry — pure function', () => {
     expect(r).toBeNull();
   });
 
-  it('inserts a row and returns the new id', () => {
+  it('writes a metric and returns its UUID', async () => {
     const { store, rows } = makeMockStore();
     const id = persistTurnTelemetry({
       store: store as never,
-      sessionId: 42,
-      runId: 'run-x',
+      sessionId: SESSION_ID,
+      runId: RUN_ID,
       isSubagent: false,
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001',
@@ -99,9 +102,9 @@ describe('persistTurnTelemetry — pure function', () => {
       systemPromptChars: 333,
       toolsDefChars: 4444,
     });
-    expect(id).toBe(100);
+    await expect(id).resolves.toBe('10000000-0000-5000-8000-000000000001');
     expect(rows).toHaveLength(1);
-    expect(rows[0].session_id).toBe(42);
+    expect(rows[0].session_id).toBe(SESSION_ID);
     expect(rows[0].auto_continues).toBe(15);
     expect(rows[0].tool_count).toBe(1);
     expect(rows[0].tools_called).toEqual(['grep_code']);
@@ -114,7 +117,7 @@ describe('persistTurnTelemetry — pure function', () => {
     const { store, rows } = makeMockStore();
     persistTurnTelemetry({
       store: store as never,
-      sessionId: 1, runId: 'r', isSubagent: false,
+      sessionId: SESSION_ID, runId: RUN_ID, isSubagent: false,
       provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
       turn: 1, usage: baseUsage,
       toolUseBlocks: [toolUse('grep_code'), toolUse('mcp__read_file')],
@@ -129,7 +132,7 @@ describe('persistTurnTelemetry — pure function', () => {
     const { store, rows } = makeMockStore();
     persistTurnTelemetry({
       store: store as never,
-      sessionId: 1, runId: 'r', isSubagent: false,
+      sessionId: SESSION_ID, runId: RUN_ID, isSubagent: false,
       provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
       turn: 1, usage: baseUsage,
       toolUseBlocks: [], toolResultBlocks: [],
@@ -143,7 +146,7 @@ describe('persistTurnTelemetry — pure function', () => {
     const { store, rows } = makeMockStore();
     persistTurnTelemetry({
       store: store as never,
-      sessionId: 1, runId: 'r', isSubagent: false,
+      sessionId: SESSION_ID, runId: RUN_ID, isSubagent: false,
       provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
       turn: 1, usage: baseUsage,
       toolUseBlocks: [
@@ -166,7 +169,7 @@ describe('persistTurnTelemetry — pure function', () => {
     const { store, rows } = makeMockStore();
     persistTurnTelemetry({
       store: store as never,
-      sessionId: 1, runId: 'r', isSubagent: false,
+      sessionId: SESSION_ID, runId: RUN_ID, isSubagent: false,
       provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
       turn: 1, usage: baseUsage,
       toolUseBlocks: [toolUse('read_file', { path: 'a.ts' })],
@@ -177,13 +180,15 @@ describe('persistTurnTelemetry — pure function', () => {
     expect(rows[0].paginate_count).toBe(0);
   });
 
-  it('survives a store throw and returns null', () => {
+  it('survives a store rejection and returns null', async () => {
     const store = {
-      recordTurnTelemetry: vi.fn(() => { throw new Error('db boom'); }),
+      recordTurnTelemetry: vi.fn(async () => {
+        throw new Error('filesystem boom');
+      }),
     };
     const r = persistTurnTelemetry({
       store: store as never,
-      sessionId: 1, runId: 'r', isSubagent: false,
+      sessionId: SESSION_ID, runId: RUN_ID, isSubagent: false,
       provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
       turn: 1, usage: baseUsage,
       toolUseBlocks: [],
@@ -191,7 +196,7 @@ describe('persistTurnTelemetry — pure function', () => {
       historyChars: 0,
       compactionTriggered: false, summarizerRan: false,
     });
-    expect(r).toBeNull();
+    await expect(r).resolves.toBeNull();
     expect(store.recordTurnTelemetry).toHaveBeenCalledOnce();
   });
 
@@ -199,7 +204,7 @@ describe('persistTurnTelemetry — pure function', () => {
     const { store, rows } = makeMockStore();
     persistTurnTelemetry({
       store: store as never,
-      sessionId: 1, runId: 'r', isSubagent: false,
+      sessionId: SESSION_ID, runId: RUN_ID, isSubagent: false,
       provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
       turn: 1, usage: baseUsage,
       toolUseBlocks: [],
@@ -226,7 +231,7 @@ describe('persistTurnTelemetry — Agent Decision telemetry merge (telemetry-fir
   const telemetry = decisionTelemetryForTask('implement the new endpoint handler');
 
   const baseArgs = {
-    sessionId: 1, runId: 'r', isSubagent: false,
+    sessionId: SESSION_ID, runId: RUN_ID, isSubagent: false,
     provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
     turn: 1, usage: baseUsage,
     toolResultBlocks: [] as ContentBlock[],

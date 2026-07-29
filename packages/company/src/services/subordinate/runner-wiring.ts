@@ -9,15 +9,11 @@
  *     called from `runCoder({ onRunnerReady })` so an `ask_user` /
  *     `submit_plan` on turn 1 isn't silently dropped.
  *
- * `readFinalAssistantText` opens the agent's coder session store and
- * returns the most recent assistant text block. Best-effort: silent
- * failure returns `null` — the completion path stays usable even when
- * the store is unreachable.
+ * Final-text reads live in `services/finalText.ts`; this module only owns
+ * runner interception wiring.
  */
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { RunCoderHandle } from '@mcp/code-agent/index.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
 import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
 import type { IMetaBusWirer } from '@mcp/company/services/ports.js';
 
@@ -29,7 +25,7 @@ export interface SubordinateWireDeps {
 /** Wire HitL + meta-bus listeners on a fully-formed handle. */
 export function wireSubordinateInterceptions(
   handle: RunCoderHandle,
-  agentRunId: number,
+  agentRunId: string,
   role: string,
   deps: SubordinateWireDeps,
 ): void {
@@ -46,45 +42,10 @@ export function wireSubordinateInterceptions(
  */
 export function wireSubordinateInterceptionsForRunner(
   runner: CoderRunner,
-  agentRunId: number,
+  agentRunId: string,
   role: string,
   deps: SubordinateWireDeps,
 ): void {
   const synthetic = { runner } as unknown as RunCoderHandle;
   wireSubordinateInterceptions(synthetic, agentRunId, role, deps);
-}
-
-/**
- * Read the last assistant text block from the agent's session.
- *
- * Opens a fresh `SessionStore` (each call is its own connection) and
- * tails the last 3 messages so most "completion message" lookups stay
- * cheap. Returns `null` when the store is unreachable, the tail is
- * empty, or no assistant message has any text blocks.
- */
-export function readFinalAssistantText(sessionId: number): string | null {
-  try {
-    const config = loadConfig();
-    const store = new SessionStore(config.dbPath);
-    try {
-      const loaded = store.loadSessionMessagesTail(sessionId, 3);
-      if (!loaded) return null;
-      for (let i = loaded.messages.length - 1; i >= 0; i--) {
-        const msg = loaded.messages[i];
-        if (msg.role !== 'assistant') continue;
-        const text = msg.content
-          .filter((b): b is { type: 'text'; text: string } =>
-            (b as { type?: string }).type === 'text')
-          .map((b) => b.text)
-          .join('\n')
-          .trim();
-        if (text) return text;
-      }
-      return null;
-    } finally {
-      store.close();
-    }
-  } catch {
-    return null;
-  }
 }

@@ -7,30 +7,38 @@
  * `path` argument so the master can use either form interchangeably.
  *
  * Path format: `/root/master/<role>-<agentRunId>`. The role segment is
- * informational — only the trailing numeric id is consumed. The match is
+ * informational — only the trailing UUID is consumed. The match is
  * deliberately loose on the role to tolerate roles with hyphens (e.g.
- * `qa-frontend`); we anchor on the LAST `-<digits>$` segment.
+ * `qa-frontend`); it anchors on the canonical UUID at the end.
  */
+import {
+  asAgentRunId,
+  type AgentRunId,
+} from '@mcp/session-storage';
 
 export type ResolvedAgentTarget =
-  | { ok: true; agentRunId: number }
+  | { ok: true; agentRunId: AgentRunId }
   | { ok: false; detail: string };
 
 /**
  * Resolve `agent_run_id` from the tool args, accepting either the explicit
- * number or a `path` like `/root/master/<role>-<id>`. Returns a structured
+ * UUID or a `path` like `/root/master/<role>-<uuid>`. Returns a structured
  * result so callers can include the failure reason in the tool result.
  */
 export function resolveAgentRunId(args: Record<string, unknown>): ResolvedAgentTarget {
   const explicit = args.agent_run_id;
-  if (typeof explicit === 'number' && Number.isFinite(explicit)) {
-    return { ok: true, agentRunId: explicit };
+  if (typeof explicit === 'string') {
+    try {
+      return { ok: true, agentRunId: asAgentRunId(explicit) };
+    } catch {
+      // Fall through to the path form or the structured validation error.
+    }
   }
   const path = typeof args.path === 'string' ? args.path.trim() : '';
   if (!path) {
     return {
       ok: false,
-      detail: 'pass either `agent_run_id` (number) or `path` (e.g. "/root/master/qa-7"). Use list_agents to discover paths.',
+      detail: 'pass either `agent_run_id` (UUID) or `path` (e.g. "/root/master/qa-<uuid>"). Use list_agents to discover paths.',
     };
   }
   const parsed = parseAgentPath(path);
@@ -49,7 +57,7 @@ export function resolveAgentRunId(args: Record<string, unknown>): ResolvedAgentT
  * those don't carry a numeric id — callers that want to address those
  * targets should use `parseAgentPathTarget` instead.
  */
-export function parseAgentPath(path: string): number | null {
+export function parseAgentPath(path: string): AgentRunId | null {
   const t = parseAgentPathTarget(path);
   return t && t.kind === 'subordinate' ? t.agentRunId : null;
 }
@@ -63,13 +71,17 @@ export function parseAgentPath(path: string): number | null {
  */
 export type AgentPathTarget =
   | { kind: 'master'; agentRunId: null }
-  | { kind: 'subordinate'; agentRunId: number };
+  | { kind: 'subordinate'; agentRunId: AgentRunId };
 
 export function parseAgentPathTarget(path: string): AgentPathTarget | null {
   if (path === '/root') return null;
   if (path === '/root/master') return { kind: 'master', agentRunId: null };
-  const m = path.match(/^\/root\/master\/.+-(\d+)$/);
+  const m = path.match(
+    /^\/root\/master\/.+-([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+  );
   if (!m) return null;
-  const id = Number(m[1]);
-  return Number.isFinite(id) ? { kind: 'subordinate', agentRunId: id } : null;
+  return {
+    kind: 'subordinate',
+    agentRunId: asAgentRunId(m[1]),
+  };
 }

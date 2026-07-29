@@ -29,7 +29,7 @@ export interface UseSessionServicesResult {
   error: string | null;
 }
 
-export function useSessionServices(sessionId: number): UseSessionServicesResult {
+export function useSessionServices(sessionId: string): UseSessionServicesResult {
   const [services, setServices] = useState<SessionService[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

@@ -20,9 +20,9 @@ export function AssetMetaCard({
   onDelete,
 }: {
   asset: SpriteAsset;
-  onPatch: (assetId: number, patch: Partial<SpriteAsset>) => Promise<void>;
+  onPatch: (assetId: string, patch: Partial<SpriteAsset>) => Promise<void>;
   /** Absent → the danger-delete affordance is hidden. */
-  onDelete?: (assetId: number) => void | Promise<void>;
+  onDelete?: (assetId: string) => void | Promise<void>;
 }) {
   const { t } = useTranslation('spriteStudio');
   const [name, setName] = useState(asset.name);

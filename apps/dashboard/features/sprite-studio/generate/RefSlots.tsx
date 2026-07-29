@@ -12,7 +12,7 @@ import { versionThumbUrl } from '../api.js';
 import { readAssetDragData } from '../library/asset-drag.js';
 
 export type GenRef =
-  | { kind: 'version'; versionId: number; label: string }
+  | { kind: 'version'; versionId: string; label: string }
   | { kind: 'upload'; base64: string; mediaType: string; label: string; dataUrl: string };
 
 export const MAX_REFS = 3;

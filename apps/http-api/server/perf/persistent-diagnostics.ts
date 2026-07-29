@@ -59,15 +59,41 @@ const ASYNC_PARSE_YIELD_LINES = 250;
 
 export interface PersistedFreezeEvent {
   at: number;
-  source: 'handler' | 'background' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
+  source:
+    | 'handler'
+    | 'background'
+    | 'event-loop'
+    | 'renderer'
+    | 'starved'
+    | 'offloop'
+    | 'gc'
+    | 'sync'
+    | 'unattributed';
   channel?: string;
   durationMs: number;
   detail?: string;
   count?: number;
   wallLateMs?: number;
   windowMs?: number;
-  activeMs?: number;
-  busyFraction?: number;
+  /** `null` where the runtime cannot report loop utilization (Electron main). */
+  activeMs?: number | null;
+  busyFraction?: number | null;
+  /** Measured synchronous main-thread ms in the window. */
+  busyMs?: number;
+  /** V8 GC pause ms overlapping the window. */
+  gcMs?: number;
+  topSyncLabel?: string;
+  eluAvailable?: boolean;
+  coverage?: 'observed' | 'silent';
+  /** Main-process RSS at detection, and the delta vs the last healthy tick. */
+  rssMB?: number;
+  rssDeltaMB?: number;
+  /**
+   * `offloop` only. Rows sharing a `hangId` describe ONE ongoing stall and must
+   * be collapsed with `max(durationMs)` — summing over-counts roughly 2×.
+   */
+  hangId?: string;
+  reportSeq?: number;
   suspects?: Array<{ channel: string; startedAt: number; kind?: 'handler' | 'background' }>;
   detectedBy?: 'worker-thread';
 }

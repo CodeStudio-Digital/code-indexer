@@ -1,17 +1,13 @@
 import { resolve as resolvePath, join as joinPath, relative as relativePath, isAbsolute as isAbsolutePath } from 'node:path';
 import { existsSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
 import { CodeIndexDB } from '@mcp/store/db.js';
-import { SemanticStore } from '@mcp/store/semantic-store.js';
-import { createDurableSemanticMutationSink } from '@mcp/services/semantic-mutation-sink.js';
-import { getDbWriter, isDbWriterEnabled, type DbWriter } from '@mcp/indexer/workers/dbWriter/client.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
-import { coderToolOutputsBaseDir } from '@mcp/shared/utils/data-paths.js';
+import { loadConfig, mcpDataDir } from '@mcp/shared/utils/config.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { FsTurnTelemetryRepository } from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
 import { createPolicyShadowPort } from '@mcp/code-agent/core/policy-shadow-adapter.js';
 import { hasStructuredToolTruncation } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 import {
@@ -28,17 +24,21 @@ import { PermissionGate, normalizeToolPermissionMode } from '@mcp/code-agent/cor
 import { shouldEnableEphemeralSubagents } from '@mcp/code-agent/core/ephemeral-subagent-capability.js';
 import { loadAgentsMd } from '@mcp/code-agent/core/agents-md.js';
 import { formatIdeContext } from '@mcp/code-agent/core/ide-context.js';
-import { buildConfigLock, diffConfigLock, getConfigLock, setConfigLock } from '@mcp/code-agent/sessions/store/session-config.js';
+import {
+  buildConfigLock,
+  diffConfigLock,
+  normalizeConfigLock,
+} from '@mcp/code-agent/sessions/session-config.js';
 import {
   detectTurnUltraKeyword,
   resolveSessionExecutionPolicy,
   type SessionExecutionPolicy,
 } from '@mcp/code-agent/sessions/execution-mode.js';
-import { recordSessionEvent } from '@mcp/code-agent/sessions/store/events-recorder.js';
-import type {
-  PersistedGoalMutation,
-  PersistedGoalSnapshot,
-} from '@mcp/code-agent/sessions/store/goal-mutations.js';
+import {
+  auditGoalTurnEvidence,
+  type PersistedGoalMutation,
+  type PersistedGoalSnapshot,
+} from '@mcp/code-agent/sessions/goal-mutations.js';
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import {
   persistChapterCheckpoint,
@@ -62,7 +62,10 @@ import { buildVerifyEvidence } from '@mcp/code-agent/core/review-evidence.js';
 import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
-import { canonicalizeExternalRoot } from '@mcp/code-agent/tools/paths.js';
+import {
+  canonicalizeExternalRoot,
+  resolveWorkspacePath,
+} from '@mcp/code-agent/tools/paths.js';
 import { applyPatchTool } from '@mcp/code-agent/tools/apply-patch.js';
 import { shellTools } from '@mcp/code-agent/tools/shell.js';
 import { gitToolsForProject } from '@mcp/code-agent/tools/git.js';
@@ -72,8 +75,6 @@ import {
   SnapshotRecorder,
   SnapshotRecordingFilesystemPort,
 } from '@mcp/code-agent/ports/index.js';
-import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
-import { SessionFileReviewStore } from '@mcp/store/session-file-review-store.js';
 import { SessionSnapshotService } from '@mcp/services/services/session-snapshots.js';
 import { filterReviewableDiffs } from '@mcp/services/services/snapshot-review-ignore.js';
 import { SandboxFilesystemAdapter } from '@mcp/services/sandbox/adapters/sandbox-filesystem-adapter.js';
@@ -168,7 +169,6 @@ import { AGENTS, isAgentId, type AgentId } from '@mcp/code-agent/agents/index.js
 import { decisionGuidanceForTask, decisionTelemetryForTask } from '@mcp/code-agent/agents/decision-engine.js';
 import { classifyIntent } from '@mcp/code-agent/agents/task-intent.js';
 import { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
-import { ToolOutputStore } from '@mcp/code-agent/overlay/tool-output-store.js';
 import { toolOutputTools } from '@mcp/code-agent/tools/tool-output.js';
 import { diagnosticsTools } from '@mcp/code-agent/tools/diagnostics.js';
 import { lspTools } from '@mcp/code-agent/tools/lsp.js';
@@ -218,11 +218,17 @@ import {
   buildSkillsPromptSection,
 } from '@mcp/code-agent/skills/prompt-injector.js';
 import { matchSkills, type SkillMatchContext } from '@mcp/code-agent/skills/skill-matcher.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import {
+  BundleToolOutputStore,
+  FsPolicyShadowRepository,
+  FsSessionStore,
+  requireSessionProjectAuthority,
+  type FsCoderSession,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { PipelineProviderResolver } from '@mcp/services/pipelines/index.js';
-import type { CoderExecutionMode, CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
 import { attachmentsToBlocks, type AgentMessage, type ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 
@@ -285,17 +291,24 @@ function loadIncrementalIndexer(): Promise<
  * firehose) froze the backend during multi-agent runs.
  *
  * Now every `runCoder` in a process SHARES one `CodeIndexDB` and one
- * `SessionStore` built from `db.raw()` (`ownsHandle=false`, so it is the SAME
- * single connection — mirrors how `server/deps.ts` shares one handle across ~20
- * stores). Keyed by `dbPath` and guarded against a second path, like
- * `getDbWriter`. Process-owned and intentionally NOT closed per-run: a
+ * filesystem `FsSessionStore`. SQLite remains open only for the essential
+ * project/provider/index catalogs; session writes never share that handle.
+ * Keyed by `dbPath` and guarded against a second path. Process-owned and
+ * intentionally NOT closed per-run: a
  * process-`exit` hook plus the explicit `closeSharedCentral()` (called from the
  * company-worker stop handler) close them once on teardown.
  */
-let sharedCentral: { dbPath: string; db: CodeIndexDB; store: SessionStore } | null = null;
+let sharedCentral: {
+  dbPath: string;
+  db: CodeIndexDB;
+  store: FsSessionStore;
+} | null = null;
 let sharedCentralExitHookInstalled = false;
 
-function getSharedCentral(dbPath: string): { db: CodeIndexDB; store: SessionStore } {
+function getSharedCentral(dbPath: string, writerOwnerId?: string): {
+  db: CodeIndexDB;
+  store: FsSessionStore;
+} {
   if (sharedCentral && sharedCentral.dbPath !== dbPath) {
     throw new Error(
       `runCoder central DB already opened against ${sharedCentral.dbPath}; cannot reuse for ${dbPath}`,
@@ -303,21 +316,37 @@ function getSharedCentral(dbPath: string): { db: CodeIndexDB; store: SessionStor
   }
   if (!sharedCentral) {
     const db = new CodeIndexDB(dbPath);
-    // Same single connection for sessions — NOT a 2nd writer on the file.
-    // Investigation inserts originate here in both the in-process runner and
-    // company/coder workers. Publish their pre-write fence directly to the
-    // central semantic control plane; the HTTP coordinator polls external jobs
-    // when this process has no in-memory wake-up port.
-    const semanticStore = new SemanticStore(db.raw());
-    const investigationMutationSink = createDurableSemanticMutationSink(
-      semanticStore,
-      {
-        owner: `coder:${process.pid}:${randomUUID()}`,
-        enabled: () =>
-          semanticStore.getProfile('memory')?.embedding_target.kind !== 'disabled',
+    const projectRootResolver = {
+      resolveProjectRoot: (projectId: number) => {
+        const project = db.getProject(projectId);
+        return project && !project.is_synthetic
+          ? project.root_path
+          : undefined;
       },
-    );
-    const store = new SessionStore(db.raw(), investigationMutationSink);
+      listProjectRoots: () =>
+        db
+          .listProjectsForGlobalPicker()
+          .filter((project) => !project.is_synthetic)
+          .map((project) => ({
+            project_id: project.id,
+            root_path: project.root_path,
+          })),
+    };
+    const store = FsSessionStore.fromRoots({
+      dataDir: mcpDataDir(),
+      projectRootResolver,
+      ...(writerOwnerId ? { writerOwnerId } : {}),
+      projectInfoResolver: (projectId) => {
+        const project = db.getProject(projectId);
+        return project && !project.is_synthetic
+          ? {
+              project_id: project.id,
+              name: project.name,
+              root_path: project.root_path,
+            }
+          : null;
+      },
+    });
     sharedCentral = { dbPath, db, store };
     if (!sharedCentralExitHookInstalled) {
       sharedCentralExitHookInstalled = true;
@@ -331,24 +360,37 @@ function getSharedCentral(dbPath: string): { db: CodeIndexDB; store: SessionStor
 }
 
 /**
+ * Process-owned filesystem session authority used by Company and other
+ * in-process orchestrators that must create/configure a bundle before
+ * `runCoder` starts. This accessor never constructs the legacy SQLite session
+ * store and returns the exact same instance consumed by every runner.
+ */
+export function getSharedSessionStore(
+  dbPath: string,
+  writerOwnerId?: string,
+): FsSessionStore {
+  return getSharedCentral(dbPath, writerOwnerId).store;
+}
+
+/**
  * Close the shared central handles. Idempotent. Called on process exit and
  * explicitly from the company-worker stop handler for a graceful flush.
  */
-export function closeSharedCentral(): void {
+export async function closeSharedCentral(): Promise<void> {
   if (!sharedCentral) return;
   const held = sharedCentral;
   sharedCentral = null;
-  try { held.store.close(); } catch { /* no-op: store shares the db handle */ }
+  try { await held.store.close(); } catch { /* best-effort lease release */ }
   try { held.db.close(); } catch { /* best-effort */ }
 }
 
 type RunCoderExecutionSession = Pick<
-  CoderSession,
+  FsCoderSession,
   'id' | 'execution_mode_override' | 'reasoning_effort_override'
 >;
 
 type RunCoderExecutionStore = Pick<
-  SessionStore,
+  FsSessionStore,
   'setSessionExecutionMode' | 'setSessionReasoningEffort'
 >;
 
@@ -366,11 +408,11 @@ export interface RunCoderExecutionResolution {
  *
  * Exported for focused contract tests; callers should normally use runCoder.
  */
-export function resolveAndPersistRunCoderExecutionPolicy(
+export async function resolveAndPersistRunCoderExecutionPolicy(
   store: RunCoderExecutionStore,
   session: RunCoderExecutionSession,
   request: Pick<RunCoderOptions, 'executionMode' | 'reasoningEffort'>,
-): RunCoderExecutionResolution {
+): Promise<RunCoderExecutionResolution> {
   const explicitMode = request.executionMode;
   const hasRequestedEffort = request.reasoningEffort != null;
   const requestedEffort = request.reasoningEffort?.trim() || undefined;
@@ -392,14 +434,14 @@ export function resolveAndPersistRunCoderExecutionPolicy(
     || storedLegacyUltra
     || session.execution_mode_override !== sessionExecutionMode
   ) {
-    store.setSessionExecutionMode(session.id, sessionExecutionMode);
+    await store.setSessionExecutionMode(session.id, sessionExecutionMode);
   }
 
   // Repair legacy rows without ever sending the sentinel through the generic
   // reasoning-effort setter. Native values remain untouched and can become
   // active again if a later run explicitly returns to Standard mode.
   if (storedLegacyUltra) {
-    store.setSessionReasoningEffort(session.id, null);
+    await store.setSessionReasoningEffort(session.id, null);
   }
 
   const selectedNativeEffort = hasRequestedEffort
@@ -430,18 +472,17 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Shared per-process central handles — see getSharedCentral. One connection
   // for the whole worker instead of one per master/subordinate run.
   const { db, store } = getSharedCentral(config.dbPath);
-  const dbWriter: DbWriter | null = isDbWriterEnabled() ? getDbWriter(config.dbPath) : null;
 
   // Resolve or create the session. `agent` is persisted on the session row so
   // resume paths (/continue, reattach) honour the user's preset even when the
   // request body doesn't re-send it.
-  let session: CoderSession;
+  let session: FsCoderSession;
   if ('id' in opts.session) {
-    const found = store.getSession(opts.session.id);
+    const found = await store.getSession(opts.session.id);
     if (!found) throw new Error(`Session ${opts.session.id} not found`);
     session = found;
   } else {
-    session = store.createSession({
+    session = await store.createSession({
       project_id: opts.session.create.project_id,
       title: opts.session.create.title,
       provider: opts.session.create.provider,
@@ -450,7 +491,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     });
   }
 
-  const executionResolution = resolveAndPersistRunCoderExecutionPolicy(
+  const executionResolution = await resolveAndPersistRunCoderExecutionPolicy(
     store,
     session,
     opts,
@@ -485,7 +526,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const effectiveAgentId: AgentId | null = opts.agent ?? storedAgent;
   const requestedSelectionId = opts.agentSelectionId ?? opts.agent;
   if (requestedSelectionId && requestedSelectionId !== session.agent) {
-    store.setSessionAgent(session.id, requestedSelectionId);
+    await store.setSessionAgent(session.id, requestedSelectionId);
     session = { ...session, agent: requestedSelectionId };
   }
 
@@ -509,17 +550,52 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
-  const project = db.getProject(session.project_id);
-  if (!project) throw new Error(`Project ${session.project_id} not found`);
-  const unionProjectLinks = project.is_synthetic ? db.listUnionProjectIds(project.id) : [];
+  const projectAuthority = requireSessionProjectAuthority(
+    session,
+    (projectId) => {
+      const current = db.getProject(projectId);
+      return current && !current.is_synthetic
+        ? {
+            project_id: current.id,
+            name: current.name,
+            root_path: current.root_path,
+          }
+        : null;
+    },
+  );
+  const project = db.getProject(projectAuthority.primary.project_id);
+  if (!project || project.is_synthetic || project.root_path.trim().length === 0) {
+    throw new Error(
+      `Real project ${projectAuthority.primary.project_id} not found`,
+    );
+  }
+  if (
+    session.worktree_path
+    && session.project_id !== projectAuthority.primary.project_id
+  ) {
+    // A worktree is derived from the project that owned the session when it
+    // was created. If a global session fell over to another current link,
+    // that persisted path cannot carry the removed project's authority with
+    // it. Clear it before any cwd/tool setup (and before optional new-worktree
+    // creation for the replacement primary).
+    await store.setSessionWorktree(session.id, null);
+    session = { ...session, worktree_path: null };
+  }
+  const unionProjectLinks = session.is_global
+    ? projectAuthority.projects.map((linked) => ({
+        project_id: linked.project_id,
+        name: linked.name,
+        root_path: linked.root_path,
+        is_primary: linked.is_primary,
+      }))
+    : [];
   const unionWorkspaceProjects = assignWorkspaceSlugs(unionProjectLinks);
 
-  // Memory READ scope. A GLOBAL session's project is a SYNTHETIC union (mig 155)
-  // whose own memory is empty/ephemeral; read the memory of every REAL
-  // constituent (primary first) so the agent sees both projects' learnings.
+  // Memory READ scope. A global session reads every linked real project
+  // (primary first) so the agent sees each project's learnings.
   // For an ordinary project this resolves to `[the project]`, so every memory
   // consumer below stays single-iteration and byte-equivalent to before.
-  const allReadProjects: ReadProject[] = project.is_synthetic
+  const allReadProjects: ReadProject[] = session.is_global
     ? (() => {
         return unionProjectLinks.length
           ? unionProjectLinks.map((l) => ({ id: l.project_id, name: l.name }))
@@ -531,20 +607,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // `undefined` — exactly as a single disabled project did before.
   const memoryReadProjects = allReadProjects.filter((p) => db.getProjectMemoryEnabled(p.id));
   const anyMemoryEnabled = memoryReadProjects.length > 0;
-  // Durable WRITES land on the PRIMARY real constituent (the host adapter
-  // redirects the synthetic id); gate the compaction harvest on THAT project's
-  // toggle so a disabled primary is never written to via a global session. For
-  // an ordinary project this is just `project.id`.
-  const memoryWriteProjectId = db.resolveMemoryWriteProject(project.id).id;
+  // Durable writes land on the primary real project. Gate compaction harvest
+  // on that project's toggle so a disabled primary is never written through a
+  // global session.
+  const memoryWriteProjectId = project.id;
 
-  // Global (multi-project) session — v2 VIRTUAL UNION model: the session runs
-  // over a SYNTHETIC project whose `root_path` is a directory of junctions to
-  // every linked project (built by the http-api). So the normal single-project
-  // path ALREADY spans every project — the runner needs no per-project bridges
-  // and no multi-root resolver. Kept empty so the Phase-2 bridge loop and the
-  // Phase-3 `roots`/`selectRoot` stay completely INERT for normal, company AND
-  // global sessions alike.
-  const linkedSecondaryProjects: { id: number; name: string; rootPath: string }[] = [];
+  // Global sessions run from the primary real root and carry explicit
+  // secondary roots. No synthetic project or junction directory participates.
+  const linkedSecondaryProjects: {
+    id: number;
+    name: string;
+    rootPath: string;
+  }[] = unionWorkspaceProjects
+    .filter((linked) => linked.project_id !== project.id)
+    .map((linked) => ({
+      id: linked.project_id,
+      name: linked.name,
+      rootPath: linked.root_path,
+    }));
 
   // Deterministic project→slug shared by every prefixed-tool path AND the
   // multi-root fs resolver. The tool array is a prompt-cache prefix, so this
@@ -567,7 +647,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // For google-oauth sessions, ensure a persistent CloudCode session ID exists.
   let cloudCodeSessionId: string | undefined;
   if (session.provider === 'google-oauth') {
-    cloudCodeSessionId = store.getOrCreateCloudCodeSessionId(session.id);
+    cloudCodeSessionId = await store.getOrCreateCloudCodeSessionId(session.id);
   }
 
   // Provider — async path so Copilot tokens get refreshed before the run.
@@ -581,11 +661,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // serve fresh disk data without re-indexing.
   const overlay = new SessionOverlay(resolvePath(project.root_path));
   // Side-file store for truncated tool outputs — enables `get_tool_output`.
-  const toolOutputStore = new ToolOutputStore(
-    resolvePath(project.root_path),
-    session.id,
-    project.is_synthetic ? { externalBaseDir: coderToolOutputsBaseDir() } : undefined,
-  );
+  const toolOutputStore = new BundleToolOutputStore(store, session.id);
 
   // Tool registry: native tools + bridged MCP tools
   const registry = new ToolRegistry();
@@ -622,10 +698,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
   registry.registerAll(fsTools);
   registry.registerAll(shellTools);
-  // A synthetic union root is not itself a Git repository. Keep the existing
-  // Git tool contracts untouched for ordinary sessions and omit them here;
-  // the global-workspace briefing directs scoped run_command(cwd:<slug>).
-  registry.registerAll(gitToolsForProject(!!project.is_synthetic));
+  // The primary root is a real repository, so ordinary Git tools remain valid.
+  // Linked repositories are addressed through scoped shell cwd values.
+  registry.registerAll(gitToolsForProject());
   // apply_patch is registered for ALL providers. For ChatGPT/Codex with
   // `apply_patch_tool_type === 'freeform'`, the chatgpt provider rewrites
   // the wire shape to `type: 'custom'` (raw patch text, no JSON escaping).
@@ -807,7 +882,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         await projBridge.connect();
         const slug = projectSlug(proj.name);
         const projOverlay = new SessionOverlay(resolvePath(proj.rootPath));
-        const mcpTools = await projBridge.listTools({ projectName: proj.name, overlay: projOverlay });
+        const mcpTools = await projBridge.listTools({
+          projectName: proj.name,
+          projectRoot: proj.rootPath,
+          overlay: projOverlay,
+        });
         // Rename: mcp__read_file → mcp__{slug}__read_file
         const prefixed = mcpTools.map((t) => ({
           ...t,
@@ -826,7 +905,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Regular session / subordinate: single bridge
     try {
       await bridge.connect();
-      const mcpTools = await bridge.listTools({ projectName: project.name, overlay });
+      const mcpTools = await bridge.listTools({
+        projectName: project.name,
+        projectRoot: project.root_path,
+        overlay,
+      });
       registry.registerAll(mcpTools);
       // Resource discovery/read tools — companion to the bridged tools.
       // Cheap to expose: handlers no-op when the server publishes nothing.
@@ -851,7 +934,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // Reuse the same overlay the write path uses for this root, so a write
       // and a subsequent MCP read in this project see consistent fresh content.
       const projOverlay = secondaryOverlays.get(proj.id) ?? new SessionOverlay(resolvePath(proj.rootPath));
-      const mcpTools = await projBridge.listTools({ projectName: proj.name, overlay: projOverlay });
+      const mcpTools = await projBridge.listTools({
+        projectName: proj.name,
+        projectRoot: proj.rootPath,
+        overlay: projOverlay,
+      });
       const prefixed = mcpTools.map((t) => ({
         ...t,
         name: `mcp__${slug}__${t.name.replace(/^mcp__/, '')}`,
@@ -996,7 +1083,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   } catch {
     /* table may not exist yet — no-op */
   }
-  const sessionDisabledTools = store.getSessionDisabledTools(session.id);
+  const sessionDisabledTools = await store.getSessionDisabledTools(session.id);
 
   // Subagent deps — built AFTER MCP tools so it captures the full tool list
   // for filtering. Disabled via CODER_DISABLE_SUBAGENTS=1. Also DISABLED for
@@ -1115,7 +1202,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       // a project-root resolver (same db/store already in scope here).
       registerCompanyTools(
         buildMasterTools(orchestrator, {
-          dbHandle: store.getDb(),
+          settingsDbHandle: db.raw(),
+          sessionStore: store,
           getProjectRoot: (projectId: number) => db.getProject(projectId)?.root_path ?? null,
         }),
       );
@@ -1155,7 +1243,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     registry.register(buildCollectAgentsTool(subagentDeps));
     // P1 (ultra-agent parity): read-only audit of a finished subagent's
     // retained transcript — the observability half of spawn_agent.
-    registry.register(buildReadAgentTranscriptTool());
+    registry.register(buildReadAgentTranscriptTool(store));
   }
 
   // workflow — Ultra's standing declarative DAG orchestrator (P0 of the
@@ -1209,11 +1297,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // agents also run without an interactive session owner, so keep grants scoped
   // to ordinary local coder sessions.
   const allowExternalFilesystemRoots = !sandboxBinding && !opts.companyContext;
-  const externalRoots: Array<{ id: number; rootPath: string; access: 'read' | 'write' }> = !allowExternalFilesystemRoots
+  const externalRoots: Array<{
+    id: string;
+    seq: number;
+    rootPath: string;
+    access: 'read' | 'write';
+  }> = !allowExternalFilesystemRoots
     ? []
-    : store.listSessionFilesystemRoots(session.id)
+    : (await store.listSessionFilesystemRoots(session.id))
         .filter((root) => existsSync(root.root_path))
-        .map((root) => ({ id: root.id, rootPath: root.root_path, access: root.access }));
+        .map((root) => ({
+          id: root.id,
+          seq: root.seq,
+          rootPath: root.root_path,
+          access: root.access,
+        }));
   // Snapshot rows already key files by project_id. Negative ids form a
   // collision-free namespace for session filesystem-root ids without
   // pretending those folders are indexed projects.
@@ -1221,7 +1319,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     ...secondaryRoots.map((root) => ({ projectId: root.projectId, rootPath: root.rootPath })),
     ...externalRoots
       .filter((root) => root.access === 'write')
-      .map((root) => ({ projectId: -root.id, rootPath: root.rootPath })),
+      .map((root) => ({ projectId: -root.seq, rootPath: root.rootPath })),
   ];
   const authorizeFilesystemRoot = !allowExternalFilesystemRoots
     ? undefined
@@ -1235,19 +1333,35 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         });
         if (insideProject) throw new Error('directory is already inside an authorized project root');
 
-        const persisted = store.listSessionFilesystemRoots(session.id);
+        const persisted = await store.listSessionFilesystemRoots(session.id);
         const exact = persisted.find((root) => root.root_path.toLowerCase() === canonical.path.toLowerCase());
         if (!exact && persisted.length >= 16) throw new Error('session filesystem root limit reached (16)');
-        const row = store.upsertSessionFilesystemRoot(session.id, canonical.path, access);
+        const row = await store.upsertSessionFilesystemRoot(
+          session.id,
+          canonical.path,
+          access,
+        );
         const active = externalRoots.find((root) => root.id === row.id);
         if (active) {
+          active.seq = row.seq;
           active.rootPath = row.root_path;
           active.access = row.access;
         } else {
-          externalRoots.push({ id: row.id, rootPath: row.root_path, access: row.access });
+          externalRoots.push({
+            id: row.id,
+            seq: row.seq,
+            rootPath: row.root_path,
+            access: row.access,
+          });
         }
-        if (row.access === 'write' && !snapshotRoots.some((root) => root.projectId === -row.id)) {
-          snapshotRoots.push({ projectId: -row.id, rootPath: row.root_path });
+        if (
+          row.access === 'write' &&
+          !snapshotRoots.some((root) => root.projectId === -row.seq)
+        ) {
+          snapshotRoots.push({
+            projectId: -row.seq,
+            rootPath: row.root_path,
+          });
         }
         return { rootPath: row.root_path, access: row.access };
       };
@@ -1272,12 +1386,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // ToolContext anyway, but here this runner is its own session and may
   // also be a parent. We always record; UI scopes by `session_kind` +
   // `session_id` from this exact `runCoder` call.
-  const snapshotStore = new SessionFileSnapshotStore(store.getDb());
-  // Always record under the actual coder_sessions.id of the runner — even
-  // inside company orchestration. Company-mode UI aggregates snapshots
-  // across master + subordinate coder sessions by joining
-  // `company_agent_runs.coder_session_id`, so per-project file paths
-  // stay namespaced and unambiguous.
+  const snapshotStore = store;
+  // Always record under the runner's actual coder bundle — even inside Company
+  // orchestration. The Company UI follows agent-run entity links to aggregate
+  // master and subordinate snapshots without a cross-session SQL join.
   let runnerRef: import('@mcp/code-agent/core/runner.js').CoderRunner | null = null;
   const recorder = new SnapshotRecorder({
     sessionKind: 'coder',
@@ -1301,7 +1413,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // tier); the CODER_SELF_REVIEW toggle only governs the proactive reminder.
   registry.register(
     buildSelfReviewTool({
-      dbHandle: store.getDb(),
+      settingsDbHandle: db.raw(),
+      sessionStore: store,
       sessionId: session.id,
       projectRoot: workspace.rootPath,
       secondaryRoots: snapshotRoots,
@@ -1323,7 +1436,28 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try { return registry.get(name)?.repeatable === true; } catch { return false; }
     },
   });
-  type DurableGoalState = NonNullable<ReturnType<SessionStore['getSessionGoal']>>;
+  type DurableGoalState = NonNullable<
+    Awaited<ReturnType<NonNullable<ToolContext['getGoalState']>>>
+  >;
+  const fsGoalToRuntime = (
+    goal: Awaited<ReturnType<FsSessionStore['getSessionGoal']>>,
+  ): DurableGoalState | null =>
+    goal
+      ? {
+          text: goal.text,
+          status: goal.status,
+          budgetTokens: goal.budget_tokens,
+          completionNote: goal.completion_note,
+          createdAt: goal.created_at,
+          updatedAt: goal.updated_at,
+        }
+      : null;
+  let persistedGoalCache = fsGoalToRuntime(
+    await store.getSessionGoal(session.id),
+  );
+  let tasksStateCache = await store.getTasksState(session.id);
+  let sessionStateDataCache = await store.getSessionStateData(session.id);
+  let activePlanCache = sessionStateDataCache.activePlan;
   const toPersistedGoalSnapshot = (goal: DurableGoalState): PersistedGoalSnapshot => ({
     text: goal.text,
     status: goal.status,
@@ -1333,21 +1467,28 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     updated_at: goal.updatedAt,
   });
   // Every create/update is staged until the assistant/tool-result turn is
-  // persisted. The store applies the ordered mutations with their successful
-  // tool rows in one SQLite transaction. This also makes the canonical pivot
-  // batch (supersede old + create replacement) one crash-safe state change.
+  // persisted. The per-session writer applies the ordered mutations after
+  // their successful tool results are committed to the filesystem journal.
   const stagedGoalMutations = new Map<
     string,
     { goal: DurableGoalState; mutation: PersistedGoalMutation }
   >();
+  // Successful goal tool calls that deliberately staged nothing (idempotent
+  // create against an in_progress goal, update to the status already stored).
+  // They carry no durable state change, so the pairing invariant below must
+  // not read them as a dropped mutation. Pruned with the turn that carries
+  // them — nothing here needs to outlive the flush.
+  const goalNoopToolUseIds = new Set<string>();
   let flushChain: Promise<void> = Promise.resolve();
   let criticalGoalPersistenceError: Error | null = null;
+  let criticalTranscriptPersistenceError: Error | null = null;
   const latestStagedGoal = (): DurableGoalState | null => {
     let latest: DurableGoalState | null = null;
     for (const staged of stagedGoalMutations.values()) latest = staged.goal;
     return latest;
   };
   const onGoalDurablyPersisted = (goal: DurableGoalState): void => {
+    persistedGoalCache = goal;
     if (autoCapture.onGoalUpserted(goal)) {
       runnerRef?.requestMilestoneCompaction('milestone:goal-completed');
     }
@@ -1359,7 +1500,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         { required: false },
       );
       if (clearedCache !== session.preflight_seed_json) {
-        store.setSessionPreflightSeed(session.id, clearedCache);
+        void store
+          .setSessionPreflightSeed(session.id, clearedCache)
+          .catch(() => undefined);
         session = { ...session, preflight_seed_json: clearedCache };
       }
     } catch {
@@ -1371,10 +1514,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const toolContext: ToolContext = {
     cwd: effectiveCwd,
     projectName: workspace.displayName,
-    globalWorkspace: project.is_synthetic
+    globalWorkspace: session.is_global
       ? {
-          syntheticProjectName: project.name,
-          rootPath: workspace.rootPath,
+          sessionTitle: session.title,
+          primaryRootPath: workspace.rootPath,
           projects: unionWorkspaceProjects.map((p) => ({
             projectId: p.project_id,
             name: p.name,
@@ -1410,14 +1553,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           return workspace.rootPath;
         });
         const diffs = [];
-        for (const baselineId of snapshotStore.listActiveBaselineIds('coder', session.id)) {
+        for (const baselineId of await snapshotStore.listActiveBaselineIds('coder', session.id)) {
           const diff = await service.getDiff(baselineId, { context: 3 });
           if (diff) diffs.push(diff);
         }
         return filterReviewableDiffs(diffs);
       },
       getBeforeContent: async (baselineId) => {
-        const row = snapshotStore.getBaselineById(baselineId);
+        const row = await snapshotStore.getBaselineById(baselineId);
         if (!row || row.session_kind !== 'coder' || row.session_id !== session.id) return null;
         // content_before is NULL for oversized/binary baselines even when the
         // file existed — report "unavailable" (null), never a fake empty file.
@@ -1431,20 +1574,29 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     signal: opts.signal,
     // Persistence hooks for submit_plan — let the dashboard list plans
     // long after the live tool_use scrolled out of view.
-    recordPlan: (toolUseId, planText) => {
+    recordPlan: async (toolUseId, planText) => {
       try {
-        store.recordPlan({ session_id: session.id, tool_use_id: toolUseId, plan_text: planText });
+        await store.recordPlan({
+          session_id: session.id,
+          tool_use_id: toolUseId,
+          plan_text: planText,
+        });
+        activePlanCache = { text: planText, status: 'pending' };
       } catch (e) {
         console.warn(`[coder] recordPlan failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    resolvePlan: (toolUseId, status, feedback) => {
+    resolvePlan: async (toolUseId, status, feedback) => {
       try {
-        store.resolvePlan(toolUseId, status, feedback);
+        await store.resolvePlan(session.id, toolUseId, status, feedback);
+        const latestPlan = (await store.listPlans(session.id))[0] ?? null;
+        activePlanCache = latestPlan
+          ? { text: latestPlan.plan_text, status: latestPlan.status }
+          : null;
         if (status === 'approved') {
           const captured = autoCapture.onPlanResolved(
             status,
-            store.listPlans(session.id)[0]?.plan_text ?? null,
+            latestPlan?.plan_text ?? null,
             feedback,
           );
           if (captured) runnerRef?.requestMilestoneCompaction('milestone:plan-approved');
@@ -1453,9 +1605,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         console.warn(`[coder] resolvePlan failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    setSessionAgent: (agent) => {
+    setSessionAgent: async (agent) => {
       try {
-        store.setSessionAgent(session.id, agent);
+        await store.setSessionAgent(session.id, agent);
       } catch (e) {
         console.warn(`[coder] setSessionAgent failed: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -1484,24 +1636,30 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         console.warn(`[coder] setSessionAgent live-apply failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    // Tasks persistence — see migration 008 + SessionStore.recordTasks/etc.
-    recordTasks: (toolUseId, state) => {
+    // Tasks persistence — one independently-written task board per session.
+    recordTasks: async (toolUseId, state) => {
       try {
-        store.recordTasks({ session_id: session.id, tool_use_id: toolUseId, state });
+        const row = await store.recordTasks({
+          session_id: session.id,
+          tool_use_id: toolUseId,
+          state,
+        });
+        tasksStateCache = row.state;
       } catch (e) {
         console.warn(`[coder] recordTasks failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    resolveTasks: (verdict) => {
+    resolveTasks: async (verdict) => {
       try {
-        store.resolveTasks(session.id, verdict);
+        tasksStateCache = await store.resolveTasks(session.id, verdict);
       } catch (e) {
         console.warn(`[coder] resolveTasks failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
-    updateTaskStatus: (taskId, patch) => {
+    updateTaskStatus: async (taskId, patch) => {
       try {
-        const row = store.updateTaskStatus(session.id, taskId, patch);
+        const row = await store.updateTaskStatus(session.id, taskId, patch);
+        tasksStateCache = row;
         if (autoCapture.onTaskStatus(taskId, patch as Parameters<typeof autoCapture.onTaskStatus>[1])) {
           runnerRef?.requestMilestoneCompaction('milestone:task-closed');
         }
@@ -1511,14 +1669,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         return null;
       }
     },
-    clearTasksState: () => {
+    clearTasksState: async () => {
       try {
-        const cleared = store.clearTasksState(session.id);
-        // Also clear the legacy todos_json shadow. Otherwise archive_task_list
-        // (which DELETEs the coder_tasks_state row) leaves a stale non-empty
-        // todos_json, and the resume migration (which fires when no task-state
-        // row exists) would re-fold the intentionally-cleared checklist.
-        store.setSessionTodos(session.id, null);
+        const cleared = await store.clearTasksState(session.id);
+        // Also clear the compact todos projection. Otherwise archive_task_list
+        // would leave stale checklist state that resume could rehydrate.
+        await store.setSessionTodos(session.id, null);
+        if (cleared) tasksStateCache = null;
         return cleared;
       } catch (e) {
         console.warn(`[coder] clearTasksState failed: ${e instanceof Error ? e.message : String(e)}`);
@@ -1528,12 +1685,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     getGoalState: () => {
       const staged = latestStagedGoal();
       if (staged) return staged;
-      try {
-        return store.getSessionGoal(session.id);
-      } catch (e) {
-        console.warn(`[coder] getSessionGoal failed: ${e instanceof Error ? e.message : String(e)}`);
-        throw e;
-      }
+      return persistedGoalCache;
     },
     upsertGoalState: async (goal, attribution) => {
       const durableGoal: DurableGoalState = {
@@ -1549,12 +1701,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       }
       let previousGoal = latestStagedGoal();
       if (!previousGoal) {
-        try {
-          previousGoal = store.getSessionGoal(session.id);
-        } catch (e) {
-          console.warn(`[coder] getSessionGoal before mutation failed: ${e instanceof Error ? e.message : String(e)}`);
-          throw e;
-        }
+        previousGoal = persistedGoalCache;
       }
       stagedGoalMutations.set(goalToolUseId, {
         goal: durableGoal,
@@ -1565,34 +1712,36 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           next: toPersistedGoalSnapshot(durableGoal),
         },
       });
+      // A later real mutation supersedes any earlier no-op claim for the same
+      // id (defensive — dispatch never reuses a tool_use id).
+      goalNoopToolUseIds.delete(goalToolUseId);
     },
-    getTasksState: () => {
-      try {
-        return store.getTasksState(session.id);
-      } catch {
-        return null;
-      }
+    noteGoalUnchanged: ({ toolUseId }) => {
+      if (stagedGoalMutations.has(toolUseId)) return;
+      goalNoopToolUseIds.add(toolUseId);
     },
+    getTasksState: () => tasksStateCache,
     // Session Drive sinks (migrations 125/126) — back the read_plan /
     // remember / list_memory / recall_investigations tools. Reads/writes
     // are best-effort; failures degrade to null/empty rather than aborting
     // the tool call.
     sessionDrive: {
-      readActivePlan: () => {
+      readActivePlan: async () => {
         try {
-          const p = store.listPlans(session.id)[0];
+          const p = (await store.listPlans(session.id))[0];
           return p ? { text: p.plan_text, status: p.status } : null;
         } catch {
           return null;
         }
       },
-      remember: (input) => {
-        const row = store.rememberMemory(session.id, input);
+      remember: async (input) => {
+        const row = await store.rememberMemory(session.id, input);
+        sessionStateDataCache = await store.getSessionStateData(session.id);
         return { title: row.title };
       },
-      listMemory: (memOpts) => {
+      listMemory: async (memOpts) => {
         try {
-          return store.listSessionMemory(session.id, memOpts ?? {});
+          return await store.listSessionMemory(session.id, memOpts ?? {});
         } catch {
           return [];
         }
@@ -1606,14 +1755,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           if (semantic) {
             const semanticLimit = limit ?? 8;
             const ids = await semantic.search({ sessionId: session.id, query, limit: semanticLimit });
-            const hits = store.recallInvestigationsByIds(session.id, ids, semanticLimit);
+            const hits = await store.recallInvestigationsByIds(
+              session.id,
+              ids,
+              semanticLimit,
+            );
             if (hits.length > 0) return hits;
           }
         } catch {
           /* fall through to keyword */
         }
         try {
-          return store.recallInvestigations(session.id, query, limit);
+          return await store.recallInvestigations(session.id, query, limit);
         } catch {
           return [];
         }
@@ -1626,11 +1779,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       source: (chapterId, chapterOpts) => store.listConversationChapterSource(session.id, chapterId, chapterOpts),
     },
     // Durable project memory ports (save_note scope 'project' + recall_memory).
-    // Gated on the per-project toggle (any union member for a global session);
-    // absent ports → tools answer clearly. `save` keeps the session's project id
-    // (the synthetic one for a global session) — the host adapter redirects it
-    // to the primary real project so durable facts never land on the throwaway
-    // union. `recall` reads the whole union (interleaved + labeled by project).
+    // Gated on the per-project toggle (any linked member for a global session);
+    // absent ports → tools answer clearly. Writes land on the primary real
+    // project; recall reads all linked projects, interleaved and labeled.
     projectMemory:
       opts.projectMemory && anyMemoryEnabled
         ? {
@@ -1696,7 +1847,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Load existing history FIRST so we can detect fresh vs resumed sessions
   // without a duplicate DB call. The block below (previously here) is now
   // merged into this one.
-  const existingEarly = store.loadSessionWithMessages(session.id);
+  const existingEarly = await store.loadSessionWithMessages(session.id);
   const initialMessagesEarly: AgentMessage[] = existingEarly?.messages ?? [];
   // A durable compaction can leave a session with a summary but zero visible
   // rows (full "summarize & clear") — that's still a resumed session, not fresh.
@@ -1706,7 +1857,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // died before the task could finish. Mark them as 'interrupted' so the model
   // can retry via execute_task.
   if (hasHistory0) {
-    store.recoverStaleTasks(session.id);
+    await store.recoverStaleTasks(session.id);
   }
 
   // Resolve profile here (before buildSystemPrompt) so the prompt can render
@@ -1751,17 +1902,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // seed's profile beats the turn-1 keyword heuristic but loses to any
   // explicit choice (opts.profile / CODER_PROFILE / agentDef).
   const preflightSeed = !hasHistory0 ? opts.preflight : undefined;
-  let persistedGoal: ReturnType<NonNullable<ToolContext['getGoalState']>> = null;
-  if (hasHistory0) {
-    try {
-      persistedGoal = store.getSessionGoal(session.id);
-    } catch {
-      // Goal persistence failures are surfaced by the runtime lifecycle gate.
-      // Runner construction remains available during store recovery; a
-      // versioned pending-intent cache can still conservatively require the
-      // lifecycle when present.
-    }
-  }
+  const persistedGoal = persistedGoalCache;
   const goalLifecycleAuthority = resolveGoalLifecycleAuthority({
     hasHistory: hasHistory0,
     freshTaskKind: preflightSeed?.taskKind,
@@ -1857,10 +1998,18 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const skillStore = new SkillStore(db.raw());
   let resolvedSkills: ResolvedSkill[] = [];
   try {
-    const skillProjectIds = project.is_synthetic && unionProjectLinks.length > 0
+    const skillProjectIds = session.is_global && unionProjectLinks.length > 0
       ? unionProjectLinks.map((linked) => linked.project_id)
-      : [session.project_id];
-    resolvedSkills = resolveActiveWorkspaceSkills(skillStore, session.id, skillProjectIds);
+      : [project.id];
+    resolvedSkills = resolveActiveWorkspaceSkills(
+      skillStore,
+      skillProjectIds,
+      Array.isArray(session.state.tools.active_skills)
+        ? session.state.tools.active_skills.filter(
+            (value): value is string => typeof value === 'string',
+          )
+        : null,
+    );
   } catch (e) {
     console.warn(`[coder] skill resolution failed: ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -1899,7 +2048,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
     if (toolModeSkills.length > 0) {
       registry.register(
-        buildInvokeSkillTool(toolModeSkills, skillTemplateCtx, config.dbPath, session.id, store),
+        buildInvokeSkillTool(toolModeSkills, skillTemplateCtx, session.id, store),
       );
     }
   }
@@ -1908,7 +2057,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // author the FIRST skill in an empty catalog. Captures dbPath + registry for
   // tool-name validation and the trigger eval.
   registry.register(
-    buildCreateSkillTool({ dbPath: config.dbPath, registry, projectId: session.project_id }),
+    buildCreateSkillTool({ dbPath: config.dbPath, registry, projectId: project.id }),
   );
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
@@ -1971,7 +2120,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // diff against the stored lock and surface drift. Advisory only (dev-first) —
   // wrapped so a lock failure can never block a run.
   try {
-    const rawDb = store.getDb();
     const currentLock = buildConfigLock({
       provider: session.provider,
       model: session.model,
@@ -1985,25 +2133,31 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       toolOutputCapLevel: session.tool_output_cap_level,
       nowMs: Date.now(),
     });
-    const storedLock = getConfigLock(rawDb, session.id);
+    const storedLock = normalizeConfigLock(
+      await store.getConfigLock(session.id),
+    );
     if (!storedLock) {
-      setConfigLock(rawDb, session.id, currentLock);
-      recordSessionEvent(rawDb, {
-        session_id: session.id,
-        kind: 'config_captured',
-        to_state: `${session.provider}/${session.model}`,
-        actor: 'system',
-      });
+      await store.setConfigLock(session.id, { ...currentLock });
+      await store.appendSessionEvent(
+        session.id,
+        'config.captured',
+        {
+          to_state: `${session.provider}/${session.model}`,
+          actor: 'system',
+        },
+      );
     } else {
       const drift = diffConfigLock(storedLock, currentLock);
       if (drift.length > 0) {
         console.warn(`[coder] session ${session.id} config drift on resume: ${drift.join('; ')}`);
-        recordSessionEvent(rawDb, {
-          session_id: session.id,
-          kind: 'config_drift',
-          reason: drift.join('; '),
-          actor: 'resume',
-        });
+        await store.appendSessionEvent(
+          session.id,
+          'config.drift',
+          {
+            reason: drift.join('; '),
+            actor: 'resume',
+          },
+        );
       }
     }
   } catch (e) {
@@ -2139,7 +2293,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   } else if (dsConsumer && config.features.designSystemEnabled) {
     // DS consumer block — derives from the pinned published version
     // (immutable rows), so the prefix stays byte-stable across turns.
-    systemPrompt = appendStaticPromptSection(systemPrompt, buildDsConsumerBlock(dsConsumer));
+    systemPrompt = appendStaticPromptSection(
+      systemPrompt,
+      await buildDsConsumerBlock(dsConsumer),
+    );
   }
 
   // Draw.io diagram guidance — appended only when the `diagram` tier will be
@@ -2376,10 +2533,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         .map((raw) => (typeof raw === 'string' ? raw : String(raw)))
         .filter(Boolean);
       if (rawStrs.length === 0) return;
-      // Global session: an edit may target a linked secondary root (the tool's
-      // `project` slug). Resolve the target root + project id ONCE per call so
-      // the refresh re-indexes the RIGHT project, not always the primary.
-      // `secondaryRoots` is empty for normal sessions → always the primary.
+      // The public global-session namespace selects a real root through the
+      // first `<project-slug>/` path segment. Keep the hidden project selector
+      // only for older nested callers that still send it out of schema.
       const reqProj =
         typeof ctx.toolArgs.project === 'string'
           ? ctx.toolArgs.project.trim()
@@ -2390,15 +2546,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         reqProj && reqProj !== workspace.displayName
           ? secondaryRoots.find((r) => r.slug === reqProj || r.name === reqProj)
           : undefined;
-      const idxRoot = target?.rootPath ?? toolContext.cwd;
-      const idxProjectId = target?.projectId ?? project.id;
-      // Normalize to the same shape the scanner stores in `files.path`:
-      // forward slashes, no leading `./`, no trailing slash. Without this,
-      // `db.getFile(projectId, relPath)` misses on Windows (backslashes) or
-      // when the agent passes `./src/foo.ts`, and the tree-sitter refresh
-      // is silently skipped.
       for (const rawStr of rawStrs) {
-        const relPath = rawStr.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+        const namespacedPath = target
+          ? `${target.slug}/${rawStr.replace(/^(?:\.?[\\/])+/, '')}`
+          : rawStr;
+        const resolved = resolveWorkspacePath(namespacedPath, toolContext, 'write');
+        if (!resolved.ok || resolved.external || resolved.projectId == null) continue;
+        // Normalize to the same root-relative shape stored in `files.path`.
+        const relPath = resolved.relativePath
+          .replace(/\\/g, '/')
+          .replace(/^\.\//, '')
+          .replace(/\/+$/, '');
+        if (!relPath || relPath === '.') continue;
+        const idxProjectId = resolved.projectId;
         // Async, non-blocking. `loadIncrementalIndexer` (module-level lazy
         // singleton above) defers the tree-sitter WASM load to the first
         // mutation in this process — sessions that never edit code pay
@@ -2407,7 +2567,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         void (async () => {
           try {
             const indexFileNow = await loadIncrementalIndexer();
-            const abs = resolvePath(idxRoot, relPath);
+            const abs = resolved.abs;
             const content = await (toolContext.ports?.fs ?? defaultLocalFilesystemPort()).readFile(abs);
             await indexFileNow(db, idxProjectId, relPath, content);
           } catch {
@@ -2426,7 +2586,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   };
   let fallbackChain: import('@mcp/code-agent/core/fallback.js').FallbackChain | undefined;
   // App role fallbacks are owned by the Company lifecycle, which records the
-  // effective model and fallback reason on company_agent_runs before retrying.
+  // effective model and fallback reason on the bundle agent-run entity before retrying.
   // Letting the coder-local provider/env chain run here could silently jump to
   // a global mini model without updating that provenance. Generic Company and
   // solo sessions retain their existing fallback chain unchanged.
@@ -2434,7 +2594,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     try {
       const { buildFallbackChain } = await import('@mcp/code-agent/core/fallback.js');
       const providerStore = new ProviderStore(config.dbPath);
-      const sessionFallback = store.getSessionFallback(session.id);
+      const sessionFallback = await store.getSessionFallback(session.id);
       const providerChain = providerStore.getFallbackChain(session.provider);
       providerStore.close();
       const chain = buildFallbackChain(
@@ -2451,17 +2611,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     }
   }
 
-  // ─── A1: independent goal-completion verifier ─────────────────────────
-  // Before update_goal can persist complete, the runner asks this to confirm
-  // the ORIGINAL goal is actually met — the "stop-condition verifier" half of
-  // Claude Code's two-agent split. It spawns a READ-ONLY verifier on a CLEAN
-  // context (never sees this run's transcript) and reads the project/evidence
-  // to confirm. This includes substantive no-diff goals. Cross-model when a
-  // `goal_verification` pipeline binding is set, else it reuses the parent
-  // provider (still clean-context independent). It is baseline for top-level
-  // runs, but the Executing gate only invokes it for an in-progress goal's
-  // update_goal(complete), so trivial conversation is unaffected. Fail-open +
-  // bounded by the BT (ctx.goalVerifyAttempts); company runs remain master-gated.
+  // ─── Independent goal-completion advisory ──────────────────────────────
+  // After update_goal persists complete, the runner schedules this read-only,
+  // clean-context reviewer. Its verdict is session audit data only: it cannot
+  // delay, refuse, or revoke completion. A detached ToolContext omits the
+  // parent run's AbortSignal so a normal clean finish does not cancel review.
   const verificationEvidenceEnabled =
     !opts.companyContext && rolloutEnabled(
       'CODER_FINISH_EVIDENCE_ROLLOUT_PERCENT',
@@ -2476,7 +2630,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     )
       ? async (evidence?: VerificationReadiness): Promise<{ goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null> => {
           try {
-            const state = store.getSessionStateData(session.id);
+            const state = await store.getSessionStateData(session.id);
             // create_goal may be earlier in the same assistant batch. Its
             // mutation is intentionally not durable until the turn commits,
             // but the completion verifier must still evaluate that staged
@@ -2486,8 +2640,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             let verifier: ChatProvider | null = null;
             try {
               const resolver = new PipelineProviderResolver(
-                new PipelineProviderBindingsStore(store.getDb()),
-                new ProviderStore(store.getDb()),
+                new PipelineProviderBindingsStore(db.raw()),
+                new ProviderStore(db.raw()),
               );
               const bound = await resolver.resolveOrNull('goal_verification', 'reviewer', {
                 sessionId: session.id,
@@ -2496,11 +2650,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             } catch {
               /* fall back to the parent provider */
             }
+            const verificationToolContext = { ...toolContext };
+            delete verificationToolContext.signal;
             const result = await runVerifyCompletionSubagent(
               {
                 provider: verifier ?? provider,
                 tools: registry.list(),
-                ctx: toolContext,
+                ctx: verificationToolContext,
                 sessionId: session.id,
                 sessionStore: store,
                 agentLoopV2: agentLoopV2EnvFlag,
@@ -2517,7 +2673,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             );
             return resolveUsableGoalCompletionVerdict(result);
           } catch {
-            return null; // fail-open — the verifier must never block the run
+            return null; // inconclusive advisory
           }
         }
       : undefined;
@@ -2553,9 +2709,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   }
 
   // Phase Profiles (Camada 2) was REMOVED — sessions run on a single
-  // (provider, model) for their entire lifetime. The DB column
-  // `coder_sessions.phase_profile_id` is left untouched for any future
-  // re-enable; the runner ignores it.
+  // (provider, model) for their entire lifetime. The runner ignores any
+  // deprecated phase-profile metadata imported into an old bundle.
 
   // Agent Loop v2 — ON by default for new sessions. When enabled, the runner
   // injects a live <active-context> block per turn, adds a static "Agent
@@ -2569,11 +2724,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // baselines) + a review store (auto-review runs) so the Executing node only
   // nudges when there are UNREVIEWED changes — instead of every turn that has
   // any pending snapshot (forever, since `self_review` never closes them).
-  const reviewStore = new SessionFileReviewStore(store.getDb());
-  // SQLite `datetime('now')` is UTC `YYYY-MM-DD HH:MM:SS` → ms-epoch.
-  const sqliteToMs = (s: string | null): number | null => {
+  const reviewStore = store;
+  const persistedTimeToMs = (s: string | null): number | null => {
     if (!s) return null;
-    const ms = Date.parse(`${s.replace(' ', 'T')}Z`);
+    const ms = Date.parse(s);
     return Number.isNaN(ms) ? null : ms;
   };
 
@@ -2592,8 +2746,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     : {};
   try {
     const resolver = new PipelineProviderResolver(
-      new PipelineProviderBindingsStore(store.getDb()),
-      new ProviderStore(store.getDb()),
+      new PipelineProviderBindingsStore(db.raw()),
+      new ProviderStore(db.raw()),
     );
     const bound = await resolver.resolveOrNull('code-agent', 'compaction', {
       sessionId: session.id,
@@ -2636,7 +2790,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     ? (opts.hookBus ?? createRuntimeHookBus())
     : null;
   const policyShadowComposition = createPolicyShadowPort({
-    db: db.raw(),
+    persistence: new FsPolicyShadowRepository(store),
     registry,
     sessionContext: {
       getLegacyContext: () => ({
@@ -2655,7 +2809,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           : null,
       }),
       background: false,
-      sessionId: `session:coder:${session.id}`,
+      sessionId: session.id,
       // HTTP/main passes the opaque control-plane identity before the runner
       // id mirror exists; keep root policy decisions correlated to AgentRun.
       agentRunId: opts.controlPlaneParentAgentRunId,
@@ -2680,6 +2834,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // commit before another provider/tool turn may begin.
     awaitTurnPersistence: async () => {
       await flushChain;
+      if (criticalTranscriptPersistenceError) {
+        throw criticalTranscriptPersistenceError;
+      }
       if (criticalGoalPersistenceError) throw criticalGoalPersistenceError;
     },
     systemPrompt,
@@ -2692,21 +2849,17 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     ...(ultraExecutionEnabled
       ? { executionUltra: (turnUltraTriggered ? 'turn' : 'session') as 'turn' | 'session' }
       : {}),
-    // Perf W1 — per-turn telemetry INSERT goes through the dbWriter worker
-    // (same per-session FIFO as persistAssistantTurn) instead of a second
-    // synchronous commit on the shared-central handle in the coder thread.
-    // flushPendingTurn awaits `runner.lastTurnTelemetryIdPromise` before
-    // stamping tool_calls, so the FK is preserved.
-    ...(dbWriter
-      ? { turnTelemetryAsync: (input: Parameters<typeof store.recordTurnTelemetry>[0]) => dbWriter.recordTurnTelemetry(input) }
-      : {}),
+    // Metrics are immutable per-turn files in the same session bundle. The
+    // filesystem writer serializes them with transcript commits; no SQLite
+    // writer or cross-session lock participates.
+    turnTelemetryStore: new FsTurnTelemetryRepository(store),
     skillStore,
     // self_review reminder signal — true when this session has active
     // (un-kept/un-reverted) snapshots worth validating. Drives the
     // CODER_SELF_REVIEW system-reminder nudge in the Executing node.
-    hasReviewableChanges: () => {
+    hasReviewableChanges: async () => {
       try {
-        return snapshotStore.listActiveBaselineIds('coder', session.id).length > 0;
+        return (await snapshotStore.listActiveBaselineIds('coder', session.id)).length > 0;
       } catch {
         return false;
       }
@@ -2715,19 +2868,19 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // auto-review marker) so the nudge fires only for UNREVIEWED changes and
     // hard-stops after a cap. Best-effort: any read error → null (node falls
     // back to `hasReviewableChanges`).
-    collectSelfReviewSignals: () => {
+    collectSelfReviewSignals: async () => {
       try {
-        const actives = snapshotStore.listBaselines('coder', session.id);
+        const actives = await snapshotStore.listBaselines('coder', session.id);
         const editMs = actives
-          .map((b) => sqliteToMs(b.last_edited_at))
+          .map((b) => persistedTimeToMs(b.last_edited_at))
           .filter((n): n is number => n != null);
         const lastEditAt = editMs.length ? Math.max(...editMs) : null;
         const pendingFingerprint = actives.length ? `${actives.length}:${lastEditAt ?? 0}` : '';
-        const autoCompleted = reviewStore
-          .listRuns('coder', session.id)
+        const autoCompleted = (await reviewStore
+          .listRuns('coder', session.id))
           .filter((r) => r.source === 'auto' && r.status === 'completed');
         const reviewMs = autoCompleted
-          .map((r) => sqliteToMs(r.completed_at))
+          .map((r) => persistedTimeToMs(r.completed_at))
           .filter((n): n is number => n != null);
         const lastReviewAt = reviewMs.length ? Math.max(...reviewMs) : null;
         return { pendingFingerprint, lastEditAt, lastReviewAt, totalAutoReviews: autoCompleted.length };
@@ -2776,7 +2929,16 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       ? undefined
       : () => {
           try {
-            return store.getSessionStateData(session.id);
+            const goal = latestStagedGoal() ?? persistedGoalCache;
+            return {
+              ...sessionStateDataCache,
+              goal: goal ? { text: goal.text, status: goal.status } : null,
+              activePlan: activePlanCache,
+              todos: (tasksStateCache?.tasks ?? []).map((task) => ({
+                status: task.status,
+                label: task.title,
+              })),
+            };
           } catch {
             return null;
           }
@@ -2808,11 +2970,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // full bodies/source messages stay behind recall_conversation.
     getConversationChapterIndex:
       process.env.CODER_CONVERSATION_CHAPTERS !== '0'
-        ? () => {
+        ? async () => {
             try {
-              const page = store.listConversationChapters(session.id, { limit: 10 });
+              const [page, total] = await Promise.all([
+                store.listConversationChapters(session.id, { limit: 10 }),
+                store.countConversationChapters(session.id),
+              ]);
               return {
-                total: store.countConversationChapters(session.id),
+                total,
                 entries: page.items.map((chapter) => ({
                   id: chapter.id,
                   ordinal: chapter.ordinal,
@@ -2829,8 +2994,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       process.env.CODER_CONVERSATION_CHAPTERS !== '0'
         ? async (taskText) => {
             try {
-              return store
-                .searchConversationChapters(session.id, taskText, { limit: 2 })
+              return (
+                await store.searchConversationChapters(
+                  session.id,
+                  taskText,
+                  { limit: 2 },
+                )
+              )
                 .items.slice(0, 2)
                 .map((chapter) => ({
                   id: `conversation-chapter:${chapter.id}`,
@@ -2916,7 +3086,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     createProvider: createProviderForFallback,
     verificationEvidenceEnabled,
     collectVerifyEvidence: verificationEvidenceEnabled
-      ? () => buildVerifyEvidence(store.getDb(), session.id)
+      ? () => buildVerifyEvidence(store, session.id)
       : undefined,
     verifyGoalCompletion,
     hookRegistry: hookRegistry.hasHandlers ? hookRegistry : undefined,
@@ -3016,12 +3186,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     });
   }
 
-  // Post-merge migration: the lightweight checklist now lives in the unified
-  // task store (coder_tasks_state, gate:'track') — one row per session. On
-  // resume, if a session has a legacy `todos_json` but no task state yet, fold
-  // it into a track-gate state so the sidebar comes back. If a task state
-  // already exists it is the source of truth — leave it alone.
-  if (session.todos_json && !store.getTasksState(session.id)) {
+  // A migrated legacy bundle may still carry the old todos shadow in
+  // session.json. Fold it once into the filesystem task board when no board
+  // exists; the board is then the sole source of truth.
+  if (session.todos_json && !tasksStateCache) {
     try {
       const parsed = JSON.parse(session.todos_json) as Array<Partial<TodoItem>>;
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -3031,11 +3199,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           activeForm: typeof t.activeForm === 'string' ? t.activeForm : '',
           status: t.status === 'in_progress' || t.status === 'completed' ? t.status : 'pending',
         }));
-        store.recordTasks({
+        const row = await store.recordTasks({
           session_id: session.id,
           tool_use_id: `track_migrate_${session.id}`,
           state: buildTrackState(hydrated),
         });
+        tasksStateCache = row.state;
       }
     } catch (e) {
       console.warn(`[coder] failed to migrate todos_json: ${e instanceof Error ? e.message : String(e)}`);
@@ -3044,11 +3213,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // Persist todos on every `todos_updated` event and re-emit nothing else.
   runner.on('todos_updated', ({ todos }) => {
-    try {
-      store.setSessionTodos(session.id, JSON.stringify(todos));
-    } catch (e) {
-      console.warn(`[coder] setSessionTodos failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    void store
+      .setSessionTodos(session.id, JSON.stringify(todos))
+      .catch((e) => {
+        console.warn(`[coder] setSessionTodos failed: ${e instanceof Error ? e.message : String(e)}`);
+      });
   });
 
   // Session-start worktree: when the caller passes `opts.worktree` AND the
@@ -3115,10 +3284,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       opts.selectedSkillIds && opts.selectedSkillIds.length > 0
         ? { selectedSkillIds: opts.selectedSkillIds }
         : undefined;
-    const roundMessageId = store.appendMessage(session.id, {
-      role: 'user',
-      content: userBlocks,
-      ...(pickExtras ?? {}),
+    const roundMessageId = await store.appendMessage({
+      session_id: session.id,
+      message: {
+        role: 'user',
+        content: userBlocks,
+        ...(pickExtras ?? {}),
+      },
     });
     runner.pushUserContent(userBlocks, { ...(pickExtras ?? {}), roundMessageId });
   } else {
@@ -3135,7 +3307,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     const latestPersistedUser = [...(existingEarly?.message_rows ?? [])]
       .reverse()
       .find((row) => row.role === 'user' && !row.is_meta);
-    runner.setRoundMessageId(latestPersistedUser?.id ?? null);
+    runner.setRoundMessageId(latestPersistedUser?.seq ?? null);
     for (let i = runner.messages.length - 1, seen = 0; i >= 0 && seen < 6; i--) {
       const m = runner.messages[i];
       if (m.role !== 'tool') continue;
@@ -3155,8 +3327,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Persist assistant messages and tool results as the runner emits them.
   // We need to map tool_call_results back to the message they belong to,
   // Per-turn buffer: accumulate assistant message + all its tool results, then
-  // flush to the DB in a single transaction at turn boundary. Prevents orphaned
-  // tool rows if the process crashes mid-turn.
+  // flush to the per-session journal as one turn commit. Artifacts are committed
+  // first, so a crash cannot leave a confirmed reference to a missing payload.
   const pendingToolCalls = new Map<string, { name: string; input: Record<string, unknown> }>();
 
   interface PendingTurn {
@@ -3186,7 +3358,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
        * rows that arrive without it (legacy/subagent paths).
        */
       refusal_kind: string | null;
-      turn_telemetry_id: number | null;
+      turn_telemetry_id: string | null;
       /** Set on nested (code_exec script) rows only — links to the parent block. */
       parent_tool_use_id?: string | null;
       reduction_kind?: string | null;
@@ -3216,6 +3388,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
      * the paired tool message (no matching tool_use block exists for them).
      */
     nestedToolCalls: PendingTurn['toolCalls'];
+    /** Stable idempotency identity for this assistant message within the run. */
+    operationId: string;
     subagentUsage: {
       input_tokens: number;
       output_tokens: number;
@@ -3233,6 +3407,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     checkpoint?: { promise: Promise<void>; messageId: number | null };
   }
   let pendingTurn: PendingTurn | null = null;
+  let assistantMessageOrdinal = 0;
 
   const flushPendingTurn = (): Promise<void> => {
     // Detach the buffer synchronously. EventEmitter callers intentionally do
@@ -3251,35 +3426,27 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           && tc.tool_name === staged.mutation.tool_name,
       ),
     );
-    const stagedGoalMutationsForTurn = stagedGoalMutationsReferencedByTurn.filter(
-      (staged) => durableCalls.some(
-        (tc) =>
-          tc.tool_use_id === staged.mutation.tool_use_id
-          && tc.tool_name === staged.mutation.tool_name
-          && !tc.is_error,
-      ),
+    const {
+      successfulGoalToolUseIds,
+      missingGoalMutationIds,
+      failedStagedGoalMutationIds,
+      mutationsToApply: goalMutations,
+    } = auditGoalTurnEvidence(
+      durableCalls,
+      stagedGoalMutationsReferencedByTurn.map((staged) => staged.mutation),
+      goalNoopToolUseIds,
     );
-    const goalMutations = stagedGoalMutationsForTurn.map((staged) => staged.mutation);
-    const successfulGoalToolUseIds = durableCalls
-      .filter(
-        (tc) =>
-          (tc.tool_name === 'create_goal' || tc.tool_name === 'update_goal')
-          && !tc.is_error,
-      )
-      .map((tc) => tc.tool_use_id);
-    const stagedGoalToolUseIds = new Set(
+    const appliedGoalToolUseIds = new Set(
       goalMutations.map((mutation) => mutation.tool_use_id),
     );
-    const missingGoalMutationIds = successfulGoalToolUseIds.filter(
-      (toolUseId) => !stagedGoalToolUseIds.has(toolUseId),
+    const stagedGoalMutationsForTurn = stagedGoalMutationsReferencedByTurn.filter(
+      (staged) => appliedGoalToolUseIds.has(staged.mutation.tool_use_id),
     );
-    const successfulGoalToolUseIdSet = new Set(successfulGoalToolUseIds);
-    const failedStagedGoalMutationIds = stagedGoalMutationsReferencedByTurn
-      .map((staged) => staged.mutation.tool_use_id)
-      .filter((toolUseId) => !successfulGoalToolUseIdSet.has(toolUseId));
-    // Captured synchronously so a later turn's telemetry can't cross-stamp
-    // this one. With the async writer (dbWriter) the id may still be in
-    // flight — the promise is awaited inside `persist` below.
+    // The no-op claims are turn-scoped evidence, not durable state: drop the
+    // ones this turn carries so the set cannot grow across a long run.
+    for (const tc of durableCalls) goalNoopToolUseIds.delete(tc.tool_use_id);
+    // Captured synchronously so a later turn's telemetry cannot cross-stamp
+    // this one. The bundle metric promise is awaited inside `persist`.
     const telemetryId = runner.lastTurnTelemetryId;
     const telemetryIdPromise = runner.lastTurnTelemetryIdPromise;
     const persist = async (): Promise<void> => {
@@ -3314,10 +3481,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     if (turn.checkpoint) {
       try { await turn.checkpoint.promise; } catch { /* fall back to fresh insert */ }
     }
-    // By now persistTurnTelemetry has run for this turn (runner emits
-    // it before turn_start), so lastTurnTelemetryId points at the row we
-    // want to JOIN against — or, on the dbWriter path, its promise settles
-    // with the id. Stamp every tool call with it.
+    // By now persistTurnTelemetry has run for this turn (runner emits it before
+    // turn_start), so its immutable metric identity can be stamped on each
+    // tool-call metadata record.
     const resolvedTelemetryId = telemetryIdPromise != null
       ? await telemetryIdPromise
       : telemetryId;
@@ -3329,6 +3495,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       || turn.subagentUsage.output_tokens > 0;
     const payload = {
       session_id: session.id,
+      operation_id: `${turn.operationId}:commit`,
       message: turn.message,
       usage: turn.usage,
       tool_calls: turn.toolCalls,
@@ -3337,25 +3504,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       goal_mutations: goalMutations.length > 0 ? goalMutations : undefined,
       // Reuse the checkpointed assistant row (if the write succeeded) so the
       // tool rows + paired tool message attach to it rather than a duplicate.
-      existing_message_id: turn.checkpoint?.messageId ?? undefined,
+      existing_message_seq: turn.checkpoint?.messageId ?? undefined,
     };
     try {
-      if (dbWriter) {
-        try {
-          await dbWriter.persistAssistantTurn(payload);
-        } catch (workerErr) {
-          // Incident 2026-07-20: a dbWriter worker that fails to spawn made
-          // EVERY turn vanish from the DB. A broken worker must degrade to
-          // the synchronous store write, never to data loss.
-          console.error(
-            `[coder] dbWriter persist failed for session ${session.id} — falling back to sync write:`,
-            workerErr,
-          );
-          store.persistAssistantTurn(payload);
-        }
-      } else {
-        store.persistAssistantTurn(payload);
-      }
+      await toolOutputStore.drain();
+      await store.persistAssistantTurn(payload);
       for (const staged of stagedGoalMutationsForTurn) {
         stagedGoalMutations.delete(staged.mutation.tool_use_id);
         onGoalDurablyPersisted(staged.goal);
@@ -3366,18 +3519,21 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         });
       }
     } catch (err) {
-      // Non-fatal: the agent loop continues. The bus log is the authoritative
-      // transcript and can be reconstructed if persistence fails for one turn.
-      console.error(`[coder] persistAssistantTurn failed for session ${session.id}:`, err);
+      // The filesystem journal is authoritative; the SSE bus is volatile and
+      // cannot reconstruct a turn after Electron exits. Fail closed so the
+      // persistence barrier stops the next provider/tool turn instead of
+      // showing content that will disappear on restart.
+      const failure = err instanceof Error ? err : new Error(String(err));
+      criticalTranscriptPersistenceError ??= failure;
+      console.error(`[coder] persistAssistantTurn failed for session ${session.id}:`, failure);
       if (successfulGoalToolUseIds.length > 0) {
-        const failure = err instanceof Error ? err : new Error(String(err));
         criticalGoalPersistenceError ??= failure;
         runner.emit('goal_mutations_persistence_failed', {
           toolUseIds: successfulGoalToolUseIds,
           message: failure.message,
         });
-        throw failure;
       }
+      throw failure;
     }
     };
     // Preserve assistant/tool row order and let a compaction checkpoint await
@@ -3424,30 +3580,23 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     cp.promise = (async () => {
       const payload = {
         session_id: session.id,
+        operation_id: `${turn.operationId}:checkpoint`,
         message: turn.message,
         usage: null,
         tool_calls: [],
       };
       try {
-        if (dbWriter) {
-          try {
-            cp.messageId = await dbWriter.persistAssistantTurn(payload);
-          } catch (workerErr) {
-            // Same degradation contract as flushPendingTurn: a broken worker
-            // falls back to the sync write instead of losing the checkpoint.
-            console.error(
-              `[coder] dbWriter checkpoint failed for session ${session.id} — falling back to sync write:`,
-              workerErr,
-            );
-            cp.messageId = store.persistAssistantTurn(payload);
-          }
-        } else {
-          cp.messageId = store.persistAssistantTurn(payload);
-        }
+        await toolOutputStore.drain();
+        cp.messageId = await store.persistAssistantTurn(payload);
       } catch (err) {
-        // Non-fatal: drop the checkpoint so the end-of-turn flush inserts fresh.
+        // A parked interaction has no following turn_start barrier. Mark the
+        // durability failure critical and abort the volatile wait so shutdown
+        // cannot silently discard the pending assistant/tool_use message.
         turn.checkpoint = undefined;
-        console.error(`[coder] checkpointPendingTurn failed for session ${session.id}:`, err);
+        const failure = err instanceof Error ? err : new Error(String(err));
+        criticalTranscriptPersistenceError ??= failure;
+        console.error(`[coder] checkpointPendingTurn failed for session ${session.id}:`, failure);
+        try { runner.abort(); } catch { /* best-effort terminalization */ }
       }
     })();
   };
@@ -3464,6 +3613,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     flushPendingTurn();
     pendingTurn = {
       message,
+      operationId: `assistant:${runner.runId}:message:${++assistantMessageOrdinal}`,
       usage: usage ?? null,
       toolCalls: [],
       nestedToolCalls: [],
@@ -3620,10 +3770,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // `tool_call_finalized` event still fires for the live dashboard badge.
 
   // Persist the buffered assistant turn at each turn boundary.
-  // `persistAssistantTurn` writes the assistant message, the tool_calls audit
-  // rows, AND the paired 'tool' role message in a single transaction (see
-  // store/messages.ts), so there is no separate tool-message flush to keep in
-  // sync. The previous approach scanned `runner.messages` from an integer
+  // `persistAssistantTurn` commits the assistant message, tool-call metadata,
+  // outputs and paired tool message as one filesystem turn, so there is no
+  // separate tool-message flush to keep in sync. The previous approach scanned
+  // `runner.messages` from an integer
   // cursor, which raced compaction: the Compacting node reassigns
   // `ctx.messages` to a new, shorter array, leaving the cursor past its end so
   // the scan silently stopped persisting tool messages for the rest of the run
@@ -3640,8 +3790,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 
   // One-call durable compaction. CompactingNode hands us the exact V3 object
   // it already injected in memory; after flushing the pending assistant/tool
-  // pair we align that summarized head with the visible DB prefix and append
-  // the chapter + boundary atomically. There is no history_compacted-triggered
+  // pair we align that summarized head with the visible bundle prefix and
+  // append the chapter checkpoint. There is no history_compacted-triggered
   // second summarization anymore.
   const commitDurableCheckpoint = async (
     checkpoint: CompactionCheckpoint,
@@ -3652,7 +3802,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     try {
       return await serializeSessionCompaction(session.id, async () => {
         await flushPendingTurn();
-        const committed = persistChapterCheckpoint({
+        const committed = await persistChapterCheckpoint({
           store,
           sessionId: session.id,
           summary: checkpoint.summary,
@@ -3669,7 +3819,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         if (!accepted) {
           return {
             status: committed.status === 'noop' ? 'noop' : 'failed',
-            boundaryId: committed.boundary_id,
+            boundaryId: committed.boundary_seq,
             reason: committed.status === 'noop' ? committed.reason : 'checkpoint rejected',
           };
         }
@@ -3684,14 +3834,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             projectName: project.name,
             sessionId: session.id,
             summary: summaryV3ToV2(checkpoint.summary),
-            boundaryId: committed.boundary_id,
+            boundaryId: committed.boundary_seq,
             trigger: 'compaction',
           });
         }
         return {
           status: committed.status === 'compatibility' ? 'compatibility' : 'committed',
           chapterId: 'chapter' in committed ? committed.chapter?.id ?? null : null,
-          boundaryId: committed.boundary_id,
+          boundaryId: committed.boundary_seq,
         };
       });
     } catch (error) {
@@ -3708,7 +3858,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       const chars = checkpoint.headMessages.reduce((total, message) => {
         try { return total + JSON.stringify(message.content).length; } catch { return total; }
       }, 0);
-      const attemptId = store.startCompactionAttempt({
+      const attemptId = await store.startCompactionAttempt({
         session_id: session.id,
         run_id: runner.runId,
         turn: runner.turn,
@@ -3719,7 +3869,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         history_chars_before: chars,
       });
       const retried = await commit(checkpoint);
-      store.finishCompactionAttempt(attemptId, {
+      await store.finishCompactionAttempt(session.id, attemptId, {
         status: retried.status === 'committed' || retried.status === 'compatibility'
           ? 'summarized'
           : retried.status === 'disabled'
@@ -3729,7 +3879,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         summarizer_ran: false,
         history_chars_after: chars,
         chapter_id: retried.chapterId ?? null,
-        boundary_id: retried.boundaryId ?? null,
+        boundary_seq: retried.boundaryId ?? null,
         error_message: retried.reason ?? null,
       });
       return retried;
@@ -3813,6 +3963,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     .run()
     .then(async (res) => {
       await flushPendingTurn();
+      if (criticalTranscriptPersistenceError) {
+        throw criticalTranscriptPersistenceError;
+      }
       if (criticalGoalPersistenceError) throw criticalGoalPersistenceError;
       if (stagedGoalMutations.size > 0) {
         throw new Error(
@@ -3844,7 +3997,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         terminalError = persistError;
       }
       try {
-        store.updateSessionStatus(session.id, 'error');
+        await store.updateSessionStatus(session.id, 'error');
       } catch (statusError) {
         console.error(
           `[coder] failed to mark session ${session.id} as error:`,
@@ -3856,10 +4009,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       throw terminalError;
     })
     .finally(async () => {
-      // Drain any pending async writes for THIS session before closing the
-      // local DB handles. The writer is a process-wide singleton with its
-      // own connection — it is not closed here, only on process shutdown.
-      if (dbWriter) await dbWriter.drainSession(session.id);
+      await toolOutputStore.drain();
       await mcpServerManager.closeAll();
       await bridge.close();
       for (const b of extraBridges) await b.close();
@@ -3869,7 +4019,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       if (stickyToolset && runner.pinnedTools.size > 0) {
         const earnedPins = [...runner.pinnedTools].filter((name) => !configuredInitialPins.has(name));
         if (earnedPins.length > 0) {
-          try { store.mergeSessionToolsetState(session.id, { addPins: earnedPins }); } catch { /* best-effort */ }
+          try {
+            await store.mergeSessionToolsetState(session.id, {
+              addPins: earnedPins,
+            });
+          } catch { /* best-effort */ }
         }
       }
       // Phase 2: `store`, `db` and `skillStore` all share ONE process-wide
@@ -3893,8 +4047,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
 // Helpers moved to './index/helpers.ts': extractFilePathsFromText, defaultModelFor
 
 // Re-export key types for consumers
-export { SessionStore } from '@mcp/code-agent/sessions/store.js';
-export type { CoderExecutionMode, CoderSession } from '@mcp/code-agent/sessions/types.js';
+export {
+  FsSessionStore,
+  FsSessionStore as SessionStore,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
+export type {
+  FsCoderSession as CoderSession,
+} from '@mcp/code-agent/sessions/fs-store/index.js';
+export type { CoderExecutionMode } from '@mcp/code-agent/sessions/types.js';
 export type { CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 /**
  * Backwards-compatible alias used by HTTP admin routes. Derived dynamically

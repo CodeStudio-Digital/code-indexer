@@ -41,6 +41,14 @@ describe('editor theme catalog', () => {
       }
     });
 
+    // Annotations are declarations, not comments — if a theme paints them the
+    // same colour, the grammar work that separates them is invisible.
+    it(`${theme.id}: annotations don't read as comments`, () => {
+      const colors = new Map(theme.data!.rules.map((r) => [r.token, r.foreground]));
+      expect(colors.get('annotation')).toBeTruthy();
+      expect(colors.get('annotation')).not.toBe(colors.get('comment'));
+    });
+
     it(`${theme.id}: colors the suggest icons + popup chrome`, () => {
       const colors = theme.data!.colors;
       const HEX = /^#[0-9a-fA-F]{6}$/;

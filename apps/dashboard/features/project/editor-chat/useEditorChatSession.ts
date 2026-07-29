@@ -64,12 +64,12 @@ import {
 
 type AgentId = AgentPreset;
 
-type PendingAutoTitleSessions = Set<number> & {
+type PendingAutoTitleSessions = Set<string> & {
   creationInFlight?: boolean;
 };
 
 interface EditorChatSessionOptions {
-  initialSessionId?: number;
+  initialSessionId?: string;
   initialAgent?: AgentId;
   agentLock?: AgentId;
   includeEditorContext?: boolean;
@@ -109,7 +109,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   const { data: groups, refetch: refetchGroups } = useApi<CoderSessionGroup[]>(
     `/coder/groups?project_id=${projectId}`,
   );
-  const [selectedId, setSelectedId] = useState<number | null>(() => initialSessionId ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialSessionId ?? null);
   const [creating, setCreating] = useState(false);
 
   const [provider, setProvider] = useState(initialProvider ?? 'zai');
@@ -316,7 +316,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   useEffect(() => {
     const onAgentChanged = (e: Event): void => {
-      const detail = (e as CustomEvent).detail as { sessionId?: number; agent?: string };
+      const detail = (e as CustomEvent).detail as { sessionId?: string; agent?: string };
       if (!detail || detail.sessionId !== selectedId || !isValidAgentId(detail.agent)) return;
       setAgent(detail.agent);
       syncSelectedSessionAgent(detail.agent);
@@ -423,7 +423,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const createSession = useCallback(async (
     config: Partial<SessionLaunchConfig> & { useLastModel?: boolean } = {},
-  ): Promise<number | null> => {
+  ): Promise<string | null> => {
     if (pendingAutoTitle.current.creationInFlight) return null;
     pendingAutoTitle.current.creationInFlight = true;
     setCreating(true);
@@ -484,27 +484,27 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     }
   }, [projectId, newSessionTitle, provider, model, getModelsForProvider, agentLock, agent, reasoningEffort, settings.executionMode, settings.adoptExecutionMode, thinking, maxTurns, temperature, updateSessions, refetchSessions]);
 
-  const archiveSession = useCallback(async (id: number, archived = true) => {
+  const archiveSession = useCallback(async (id: string, archived = true) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
     if (selectedId === id) setSelectedId(null);
     refetchSessions();
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   }, [selectedId, refetchSessions]);
 
-  const deleteSession = useCallback(async (id: number) => {
+  const deleteSession = useCallback(async (id: string) => {
     await apiDelete(`/coder/sessions/${id}`);
     if (selectedId === id) setSelectedId(null);
     refetchSessions();
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   }, [selectedId, refetchSessions]);
 
-  const favoriteSession = useCallback(async (id: number, favorite: boolean) => {
+  const favoriteSession = useCallback(async (id: string, favorite: boolean) => {
     await apiPatch(`/coder/sessions/${id}/favorite`, { favorite });
     refetchSessions();
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   }, [refetchSessions]);
 
-  const renameSession = useCallback(async (id: number, title: string) => {
+  const renameSession = useCallback(async (id: string, title: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
     await apiPatch(`/coder/sessions/${id}/title`, { title: trimmed });
@@ -512,7 +512,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
   }, [refetchSessions]);
 
-  const duplicateSession = useCallback(async (id: number) => {
+  const duplicateSession = useCallback(async (id: string) => {
     const res = await apiPost<{ session: CoderSession }>(`/coder/sessions/${id}/duplicate`, {});
     refetchSessions();
     setSelectedId(res.session.id);
@@ -520,7 +520,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     return res.session.id;
   }, [refetchSessions]);
 
-  const moveSessionToGroup = useCallback(async (id: number, groupId: number | null) => {
+  const moveSessionToGroup = useCallback(async (id: string, groupId: number | null) => {
     await apiPatch(`/coder/sessions/${id}/group`, { group_id: groupId });
     refetchSessions();
     window.dispatchEvent(new CustomEvent('coder:sessions-changed'));

@@ -16,6 +16,7 @@ import {
   ErrRequestTimeout,
   type MessageBridge,
 } from '../../../../packages/orchestrator-host/src/index.js';
+import { asSessionId } from '@mcp/session-storage';
 
 /** Fake bridge: `request` dispatches straight into registered handlers. */
 function makeFakeBridge() {
@@ -34,6 +35,9 @@ function makeFakeBridge() {
 }
 
 const MEMORY_ITEM = { id: '7', title: 'gotcha', content: 'workers drop module globals', importance: 0.8 };
+const SESSION_ID = asSessionId('00000000-0000-4000-8000-000000000012');
+const INVESTIGATION_ID = '00000000-0000-4000-8000-000000000009';
+const OTHER_INVESTIGATION_ID = '00000000-0000-4000-8000-000000000004';
 
 describe('worker memory bridge (shims ↔ handlers)', () => {
   it('reconciles a timed-out mutating RPC by operation id without replaying the save', async () => {
@@ -146,7 +150,10 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     const retrieve = vi.fn().mockResolvedValue([MEMORY_ITEM]);
     const extractAndPersist = vi.fn().mockResolvedValue(undefined);
     const memoryQuerySynthesizer = vi.fn().mockResolvedValue('oauth refresh flow');
-    const investigationSearch = vi.fn().mockResolvedValue([9, 4]);
+    const investigationSearch = vi.fn().mockResolvedValue([
+      INVESTIGATION_ID,
+      OTHER_INVESTIGATION_ID,
+    ]);
     const investigationWake = vi.fn();
     const deps: WorkerMemoryDeps = {
       memoryRetriever: { retrieve } as unknown as WorkerMemoryDeps['memoryRetriever'],
@@ -175,11 +182,23 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
 
     await expect(shims.runEndMemory.isConfigured()).resolves.toBe(true);
 
-    const searchInput = { sessionId: 12, query: 'vector routing', limit: 8 };
-    await expect(shims.investigationSemantic.search(searchInput)).resolves.toEqual([9, 4]);
+    const searchInput = {
+      sessionId: SESSION_ID,
+      query: 'vector routing',
+      limit: 8,
+    };
+    await expect(shims.investigationSemantic.search(searchInput)).resolves.toEqual([
+      INVESTIGATION_ID,
+      OTHER_INVESTIGATION_ID,
+    ]);
     expect(investigationSearch).toHaveBeenCalledWith(searchInput);
     const record = {
-      id: 9, project_id: 1, session_id: 12, topic: 't', summary: 's', body: '',
+      id: INVESTIGATION_ID,
+      project_id: 1,
+      session_id: SESSION_ID,
+      topic: 't',
+      summary: 's',
+      body: '',
       source_label: null, agent_type: null, tokens: 0, created_at: '2026-07-15 10:00:00',
     };
     shims.investigationSemantic.wakeUpsert(record);
@@ -195,7 +214,7 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     await expect(shims.memoryQuerySynthesizer([{ role: 'user', text: 'continue' }])).resolves.toBeNull();
     await expect(shims.runEndMemory.extractAndPersist(1, 'proj', {})).resolves.toBeUndefined();
     await expect(shims.runEndMemory.isConfigured()).resolves.toBe(false);
-    await expect(shims.investigationSemantic.search({ sessionId: 1, query: 'q', limit: 8 }))
+    await expect(shims.investigationSemantic.search({ sessionId: SESSION_ID, query: 'q', limit: 8 }))
       .resolves.toEqual([]);
   });
 
@@ -207,7 +226,7 @@ describe('worker memory bridge (shims ↔ handlers)', () => {
     await expect(shims.memoryQuerySynthesizer([{ role: 'user', text: 'continue' }])).resolves.toBeNull();
     await expect(shims.runEndMemory.extractAndPersist(1, 'proj', {})).resolves.toBeUndefined();
     await expect(shims.runEndMemory.isConfigured()).resolves.toBe(false);
-    await expect(shims.investigationSemantic.search({ sessionId: 1, query: 'q', limit: 8 }))
+    await expect(shims.investigationSemantic.search({ sessionId: SESSION_ID, query: 'q', limit: 8 }))
       .resolves.toEqual([]);
   });
 

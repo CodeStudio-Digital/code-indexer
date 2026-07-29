@@ -4,7 +4,7 @@
  *
  * Everything here is side-effect free and easily unit-testable. The two
  * executors plug their own driver-specific resolvers (QA verdict from
- * `qa_test_runs`, kanban tag, etc.) when the branch mode requires data
+ * QA-run bundle entities, Kanban tags, etc.) when the branch mode requires data
  * outside the agent's own output. The kernel never imports company
  * services or store classes — keeping it portable.
  *

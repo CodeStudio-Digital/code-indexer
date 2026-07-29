@@ -16,6 +16,10 @@
     "!**/*.map"
   ],
   "asar": true,
+  "electronFuses": {
+    "enableEmbeddedAsarIntegrityValidation": true,
+    "onlyLoadAppFromAsar": true
+  },
   "asarUnpack": [
     "node_modules/better-sqlite3/**/*",
     "node_modules/node-pty/**/*",
@@ -38,6 +42,11 @@
     {
       "from": "dist/bundled-plugins",
       "to": "bundled-plugins"
+    },
+    {
+      "from": "dist/native-agent-runtime",
+      "to": "native-agent-runtime",
+      "filter": ["**/*"]
     },
     {
       "from": "node_modules/typescript/lib",

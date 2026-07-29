@@ -6,6 +6,8 @@ vi.mock('@mcp/docs-agent/bridges/docs-bridge.js', () => ({
 
 import { CompanyOrchestrator } from '../orchestrator.js';
 
+const COMPANY_SESSION_ID = 'c0000000-0000-4000-8000-000000000007';
+
 function fakeOrchestrator(overrides: {
   start?: () => Promise<unknown>;
   resumeExisting?: () => Promise<unknown>;
@@ -13,15 +15,15 @@ function fakeOrchestrator(overrides: {
   isAlive?: boolean;
 }) {
   return {
-    companySessionId: 7,
+    companySessionId: COMPANY_SESSION_ID,
     ctx: {
-      companyStore: {
-        getCompanySession: () => ({
-          id: 7,
+      companyFiles: {
+        getSession: () => ({
+          id: COMPANY_SESSION_ID,
           config_json: '{}',
           runtime_kind: 'company',
         }),
-        listAgentRuns: () => overrides.persistedMaster ? [{ role: 'master' }] : [],
+        listAgentRunsSync: () => overrides.persistedMaster ? [{ role: 'master' }] : [],
       },
     },
     master: {

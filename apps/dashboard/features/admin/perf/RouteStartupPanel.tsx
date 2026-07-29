@@ -54,7 +54,9 @@ export function RouteStartupPanel() {
 
   const handleReset = () => {
     resetRouteStartupMetrics();
-    const match = window.location.pathname.match(/^\/projects\/(\d+)/);
+    // Hash-routed app (createHashRouter): the route lives after the `#`, so the
+    // raw pathname is just the index.html path and never matches.
+    const match = window.location.hash.replace(/^#/, '').match(/^\/projects\/(\d+)/);
     if (match) {
       startProjectRoute(Number(match[1]), { source: 'manual-reset' });
     }

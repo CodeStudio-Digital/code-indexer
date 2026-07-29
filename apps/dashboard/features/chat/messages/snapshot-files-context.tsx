@@ -7,14 +7,15 @@
  * ping re-renders only the file/summary blocks that read the map, never the
  * consumers that only need the (stable) actions.
  */
-import React, { createContext, useContext } from 'react';
+import React, { createContext, useContext, useMemo } from 'react';
+import { matchSnapshotPath, type SnapshotPathMatch } from './snapshot-path-match.js';
 import type { SessionScope, SnapshotFileSummary } from '../../snapshots/types.js';
 
 export interface SnapshotActions {
   scope: SessionScope;
-  sessionId: number;
+  sessionId: string;
   /** Open the full Session Snapshots panel, optionally preselecting a file. */
-  openSnapshots: (baselineId?: number) => void;
+  openSnapshots: (baselineId?: string) => void;
   /** Re-fetch the snapshot list after a user action (keep/revert) that the
    *  agent-driven `snapshotTick` won't cover. */
   refresh: () => void;
@@ -51,8 +52,14 @@ export function useSnapshotFiles(): Map<string, SnapshotFileSummary> {
   return useContext(FilesContext);
 }
 
-export function useSnapshotFile(path: string): SnapshotFileSummary | undefined {
-  return useContext(FilesContext).get(path);
+/**
+ * Resolve a tool-call path against the session's snapshot map. Returns the
+ * *reason* alongside the file so a row that found nothing can explain itself
+ * instead of showing a bare `–` (see `matchSnapshotPath`).
+ */
+export function useSnapshotFileMatch(path: string): SnapshotPathMatch<SnapshotFileSummary> {
+  const files = useContext(FilesContext);
+  return useMemo(() => matchSnapshotPath(files, path), [files, path]);
 }
 
 /** A/M/D badge kind — mirrors `SnapshotFileList.statusKind`. */

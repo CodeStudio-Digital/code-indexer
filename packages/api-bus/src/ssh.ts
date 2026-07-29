@@ -129,7 +129,20 @@ export interface SshApi {
   sftpList(input: { spec: SshConnectSpec; path: string }, ctx: ApiContext): Promise<SftpEntry[]>;
   sftpMkdir(input: { spec: SshConnectSpec; path: string }, ctx: ApiContext): Promise<void>;
   sftpRename(input: { spec: SshConnectSpec; from: string; to: string }, ctx: ApiContext): Promise<void>;
+  /** Delete a file, or a directory AND its contents (SFTP has no recursive rmdir). */
   sftpRemove(input: { spec: SshConnectSpec; path: string; isDir: boolean }, ctx: ApiContext): Promise<void>;
+  /** Change permission bits (`mode` = low 12 bits, e.g. 0o755). */
+  sftpChmod(
+    input: { spec: SshConnectSpec; path: string; mode: number; recursive?: boolean },
+    ctx: ApiContext,
+  ): Promise<void>;
+  /** Change owner/group. Usually needs root remotely — a refusal surfaces as-is. */
+  sftpChown(
+    input: { spec: SshConnectSpec; path: string; uid: number; gid: number; recursive?: boolean },
+    ctx: ApiContext,
+  ): Promise<void>;
+  /** uid/gid → name maps for this host (cached; empty when unresolvable). */
+  sftpIdNames(input: { spec: SshConnectSpec }, ctx: ApiContext): Promise<SftpIdNames>;
   /** Close the cached SFTP session for a host (releases its hold on the connection). */
   sftpClose(input: { hostId: string }, ctx: ApiContext): Promise<void>;
   /** Download a remote file to a local path; streams transfer progress. `transferId` keys `sftpCancel`. */
@@ -232,6 +245,22 @@ export interface SftpEntry {
   mtime: number;
   /** Unix permission bits. */
   mode: number;
+  /** Owner user id. SFTP reports NUMBERS only — names come from `sftpIdNames`. */
+  uid: number;
+  /** Owner group id. */
+  gid: number;
+}
+
+/**
+ * Numeric uid/gid → account name, read from the server's passwd/group databases.
+ *
+ * The SFTP protocol only ever carries numbers, so "www-data" cannot come from a
+ * directory listing. Resolved once per host over `getent` (falling back to
+ * /etc/passwd) and cached — a listing must not cost one lookup per row.
+ */
+export interface SftpIdNames {
+  users: Record<string, string>;
+  groups: Record<string, string>;
 }
 
 export type SftpProgress =

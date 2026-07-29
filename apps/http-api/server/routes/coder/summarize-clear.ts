@@ -6,7 +6,7 @@
  * (`summarizeSpanV3`), driven by the optional code-agent/compaction binding
  * (or the session provider), then atomically appends a chapter + boundary:
  * the summary is stored on the session and prepended on load, while the old
- * rows drop out of the default view (still in the DB, reopenable via "view
+ * rows drop out of the default view (still in the bundle, reopenable via "view
  * earlier history"). Same mechanism the automatic durable compaction uses.
  *
  * Notes / investigations / project memory live in separate tables and are
@@ -22,7 +22,7 @@ import {
 import { harvestCompactionMemory } from '@mcp/code-agent/core/runner/compaction/memory-harvest.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
-import { parseIdParam, notFound } from '../_helpers.js';
+import { parseSessionIdParam, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
 import { resolveCompactionProviders, summarizeReliably } from './compaction-summary.js';
 
@@ -42,8 +42,8 @@ export function mountCoderSummarizeClearRoute(
   const { activeRuns } = runtime;
 
   app.post('/api/coder/sessions/:id/summarize-and-clear', async (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
 
     // Serialize against the run setup path (which also takes this lock) so a
@@ -58,7 +58,7 @@ export function mountCoderSummarizeClearRoute(
       }
 
       // Boundary-aware load: only the currently-visible transcript.
-      const data = sessionStore.loadSessionWithMessages(id);
+      const data = await sessionStore.loadSessionWithMessages(id);
       if (!data) return notFound(c);
       if (data.messages.length < MIN_MESSAGES_TO_SUMMARIZE) {
         return c.json(
@@ -90,7 +90,7 @@ export function mountCoderSummarizeClearRoute(
       let summaryModel: string | null = null;
       let summaryErrors: string[] = [];
       const historyChars = data.message_rows.reduce((total, row) => total + row.content_json.length, 0);
-      const attemptId = sessionStore.startCompactionAttempt({
+      const attemptId = await sessionStore.startCompactionAttempt({
         session_id: id,
         run_id: `manual:${id}:${Date.now()}`,
         turn: 0,
@@ -105,7 +105,7 @@ export function mountCoderSummarizeClearRoute(
       try {
         let liveState = null;
         try {
-          const state = sessionStore.getSessionStateData(id);
+          const state = await sessionStore.getSessionStateData(id);
           liveState = state ? {
             goal: state.goal,
             activePlan: state.activePlan,
@@ -128,7 +128,7 @@ export function mountCoderSummarizeClearRoute(
         summaryModel = summarized.model;
         summaryErrors = summarized.errors;
       } catch (e) {
-        sessionStore.finishCompactionAttempt(attemptId, {
+        await sessionStore.finishCompactionAttempt(id, attemptId, {
           status: 'noop',
           strategy: 'none',
           summarizer_ran: true,
@@ -142,7 +142,7 @@ export function mountCoderSummarizeClearRoute(
       }
       // Never clear without a summary — a failed/empty summarization is a no-op.
       if (!summary) {
-        sessionStore.finishCompactionAttempt(attemptId, {
+        await sessionStore.finishCompactionAttempt(id, attemptId, {
           status: 'noop',
           strategy: 'none',
           summarizer_ran: true,
@@ -156,33 +156,50 @@ export function mountCoderSummarizeClearRoute(
       }
 
       // Full clear: hide the whole visible transcript, store the summary as the
-      // prepended head. boundary = current MAX(id) → no verbatim tail remains.
+      // prepended head. boundary = current MAX(seq) → no verbatim tail remains.
       const firstRow = data.message_rows[0]!;
       const lastRow = data.message_rows[data.message_rows.length - 1]!;
-      const boundaryId = lastRow.id;
-      let result: ReturnType<typeof sessionStore.setCompactionBoundary>
-        | ReturnType<typeof sessionStore.commitConversationChapter>;
+      const boundarySeq = lastRow.seq;
+      let result:
+        | Awaited<
+            ReturnType<typeof sessionStore.setCompactionBoundary>
+          >
+        | Awaited<
+            ReturnType<typeof sessionStore.commitConversationChapter>
+          >;
       try {
-        result = process.env.CODER_CONVERSATION_CHAPTERS === '0'
-          ? sessionStore.setCompactionBoundary(id, renderResumeV3(summary), boundaryId, 'manual')
-          : sessionStore.commitConversationChapter({
-            sessionId: id,
-            expectedBoundaryId: data.session.summary_boundary_id ?? 0,
-            startMessageId: firstRow.id,
-            endMessageId: boundaryId,
-            source: 'manual',
-            trigger: 'manual_clear',
-            title: summary.chapter.title || 'Manual conversation summary',
-            chapterJson: JSON.stringify(summary.chapter),
-            chapterText: renderChapterV3(summary),
-            resumeJson: JSON.stringify(summary.resume),
-            resumeText: renderResumeV3(summary),
-            version: summary.version,
-            metricsJson: summary.metrics ? JSON.stringify(summary.metrics) : null,
-            });
+        result = await (
+          process.env.CODER_CONVERSATION_CHAPTERS === '0'
+            ? sessionStore.setCompactionBoundary(
+                id,
+                renderResumeV3(summary),
+                boundarySeq,
+                'manual',
+              )
+            : sessionStore.commitConversationChapter({
+                sessionId: id,
+                expectedBoundarySeq:
+                  data.session.summary_boundary_id ?? 0,
+                startMessageSeq: firstRow.seq,
+                endMessageSeq: boundarySeq,
+                source: 'manual',
+                trigger: 'manual_clear',
+                title:
+                  summary.chapter.title ||
+                  'Manual conversation summary',
+                chapterJson: JSON.stringify(summary.chapter),
+                chapterText: renderChapterV3(summary),
+                resumeJson: JSON.stringify(summary.resume),
+                resumeText: renderResumeV3(summary),
+                version: summary.version,
+                metricsJson: summary.metrics
+                  ? JSON.stringify(summary.metrics)
+                  : null,
+              })
+        );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        sessionStore.finishCompactionAttempt(attemptId, {
+        await sessionStore.finishCompactionAttempt(id, attemptId, {
           status: 'checkpoint_failed',
           strategy: 'summarizer',
           summarizer_ran: true,
@@ -195,14 +212,14 @@ export function mountCoderSummarizeClearRoute(
       }
       if ('status' in result && result.status === 'noop') {
         const reason = 'reason' in result ? String(result.reason) : 'boundary_changed';
-        sessionStore.finishCompactionAttempt(attemptId, {
+        await sessionStore.finishCompactionAttempt(id, attemptId, {
           status: 'checkpoint_failed',
           strategy: 'summarizer',
           summarizer_ran: true,
           summary_provider: summaryProvider,
           summary_model: summaryModel,
           history_chars_after: historyChars,
-          boundary_id: result.boundary_id,
+          boundary_seq: result.boundary_seq,
           error_message: reason,
         });
         return c.json(
@@ -215,18 +232,22 @@ export function mountCoderSummarizeClearRoute(
       // JUST paid for (same pipeline as the automatic compaction harvest).
       // Fire-and-forget: a failed harvest never affects the clear.
       if (session.project_id != null) {
+        const projectId = session.project_id;
         void harvestCompactionMemory({
           runEndMemory: deps.runEndMemory,
           store: sessionStore,
           // Gate on the WRITE target: a global session redirects the write to the
           // primary real project (deps.runEndMemory), so a disabled primary must
           // not be written to. Identity for ordinary projects.
-          getMemoryEnabled: () => deps.db.getProjectMemoryEnabled(deps.db.resolveMemoryWriteProject(session.project_id).id),
-          projectId: session.project_id,
-          projectName: deps.db.getProject(session.project_id)?.name ?? '',
+          getMemoryEnabled: () =>
+            deps.db.getProjectMemoryEnabled(
+              deps.db.resolveMemoryWriteProject(projectId).id,
+            ),
+          projectId,
+          projectName: deps.db.getProject(projectId)?.name ?? '',
           sessionId: id,
           summary: summaryV3ToV2(summary),
-          boundaryId,
+          boundaryId: boundarySeq,
           trigger: 'manual_clear',
         });
       }
@@ -235,7 +256,10 @@ export function mountCoderSummarizeClearRoute(
       // fresh, boundary-aware runner that loads only the summary onward.
       activeRuns.delete(id);
 
-      sessionStore.finishCompactionAttempt(attemptId, {
+      const committedChapter = (
+        result as { chapter?: { id: string } }
+      ).chapter;
+      await sessionStore.finishCompactionAttempt(id, attemptId, {
         status: 'summarized',
         strategy: 'summarizer',
         summarizer_ran: true,
@@ -243,16 +267,14 @@ export function mountCoderSummarizeClearRoute(
         summary_model: summaryModel,
         history_chars_after: renderResumeV3(summary).length,
         pruned_messages: data.message_rows.length,
-        chapter_id: 'chapter' in result && result.chapter
-          ? (result.chapter as { id: number }).id
-          : null,
-        boundary_id: result.boundary_id,
+        chapter_id: committedChapter?.id ?? null,
+        boundary_seq: result.boundary_seq,
         error_message: summaryErrors.join(' | ') || null,
       });
 
       return c.json({
         ok: true,
-        boundary_id: result.boundary_id,
+        boundary_id: result.boundary_seq,
         pruned_count: result.pruned_count,
         ...('chapter' in result ? { chapter: result.chapter } : {}),
       });

@@ -49,10 +49,10 @@ interface BoardPanelProps {
    * cancelled entries as part of the permanent history.
    */
   masterPrompts?: MasterPrompt[];
-  onAnswerQuestion?: (promptId: number, answer: string) => void;
-  onRespondPlan?: (promptId: number, approved: boolean, feedback?: string) => void;
+  onAnswerQuestion?: (promptId: string, answer: string) => void;
+  onRespondPlan?: (promptId: string, approved: boolean, feedback?: string) => void;
   /** Identifies which company session this board belongs to — shown in the header so the user can never confuse boards across sessions. */
-  sessionId?: number;
+  sessionId?: string;
   sessionName?: string;
 }
 
@@ -61,10 +61,9 @@ type FeedItem =
   | { type: 'prompt'; key: string; at: number; prompt: MasterPrompt };
 
 /**
- * Board entries and master prompts come from different sources but share the
- * same SQLite `datetime('now')` shape (naive UTC string, no zone) for both the
- * `company_board` and `company_master_prompts` rows. `parseDbDate` handles the
- * UTC normalization so ordering and display stay in the local timezone.
+ * Board entries and master prompts are independent bundle files with ISO
+ * timestamps. `parseDbDate` keeps display compatible with the shared date
+ * formatting path.
  */
 function parseAt(s: string): number {
   return parseDbDate(s)?.getTime() ?? 0;
@@ -74,7 +73,7 @@ function formatBoardTime(createdAt: string): string {
   return formatDateTime(createdAt);
 }
 
-function buildBoardMarkdown(items: FeedItem[], sessionName?: string, sessionId?: number): string {
+function buildBoardMarkdown(items: FeedItem[], sessionName?: string, sessionId?: string): string {
   const heading = sessionName
     ? `# ${sessionName}${sessionId !== undefined ? ` (#${sessionId})` : ''}`
     : '# Board';
@@ -130,7 +129,7 @@ export const BoardPanel = memo(function BoardPanel({
   const { t } = useTranslation('agents');
   const bottomRef = useRef<HTMLDivElement>(null);
   const [copiedMarkdown, setCopiedMarkdown] = useState(false);
-  const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
 
   const items: FeedItem[] = [
     ...messages.map<FeedItem>((m) => ({
@@ -141,9 +140,14 @@ export const BoardPanel = memo(function BoardPanel({
     })),
   ].sort((a, b) => {
     if (a.at !== b.at) return a.at - b.at;
-    // Tie-break: messages before prompts so a synthesised "human answered"
-    // decision posted in the same second appears after the prompt card.
-    return a.type === 'message' ? -1 : 1;
+    if (a.type === 'message' && b.type === 'message') {
+      return a.message.seq - b.message.seq || a.message.id.localeCompare(b.message.id);
+    }
+    if (a.type === 'prompt' && b.type === 'prompt') {
+      return a.prompt.id.localeCompare(b.prompt.id);
+    }
+    // A prompt precedes a human answer posted at the same timestamp.
+    return a.type === 'prompt' ? -1 : 1;
   });
 
   useEffect(() => {

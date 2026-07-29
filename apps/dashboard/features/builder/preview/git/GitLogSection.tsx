@@ -3,7 +3,7 @@ import { Loader2 } from 'lucide-react';
 import { workspaceApi, type GitLogEntry } from '../api.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   /** Bump to force a refetch (e.g. after a commit). */
   version?: number;

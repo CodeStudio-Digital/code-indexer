@@ -71,7 +71,7 @@ export interface SupervisorPanelProps {
    * scoped to whatever session they're already viewing. Omitting
    * shows ALL active sessions (used by the global `/telemetry` tab).
    */
-  sessionId?: number;
+  sessionId?: string;
   /**
    * Chrome to render around the panel body:
    *   - 'rail'      : full-height, compact — for the CompanySessionView
@@ -208,7 +208,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
     void loadStatus();
   }
 
-  async function handleReleaseQuarantine(sessionId: number, role: string): Promise<void> {
+  async function handleReleaseQuarantine(sessionId: string, role: string): Promise<void> {
     setActionMsg(null);
     try {
       const r = await releaseRoleQuarantine(sessionId, role);
@@ -223,7 +223,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
     }
   }
 
-  async function handleReleaseReadOnly(sessionId: number): Promise<void> {
+  async function handleReleaseReadOnly(sessionId: string): Promise<void> {
     setActionMsg(null);
     try {
       const r = await releaseReadOnlyMode(sessionId);
@@ -373,7 +373,7 @@ export function SupervisorPanel({ sessionId, variant = 'rail' }: SupervisorPanel
                   <IncidentRowView
                     key={`db-${row.id}`}
                     kind={row.incidentKind}
-                    sessionId={row.companySessionId ?? 0}
+                    sessionId={row.companySessionId ?? 'unknown'}
                     agentRunId={row.agentRunId}
                     detail={row.detail}
                     detectedAtMs={row.detectedAtMs}
@@ -474,10 +474,10 @@ function EmptyIncidentsHint({ dashboard }: { dashboard?: boolean }): JSX.Element
 }
 
 interface SessionStatusCardProps {
-  sessionId: number;
+  sessionId: string;
   status: import('./supervisor-api.js').SupervisorStatus | null;
-  onReleaseQuarantine: (sessionId: number, role: string) => Promise<void>;
-  onReleaseReadOnly: (sessionId: number) => Promise<void>;
+  onReleaseQuarantine: (sessionId: string, role: string) => Promise<void>;
+  onReleaseReadOnly: (sessionId: string) => Promise<void>;
 }
 
 function SessionStatusCard({
@@ -587,8 +587,8 @@ function SessionStatusCard({
 
 interface IncidentRowProps {
   kind: string;
-  sessionId: number;
-  agentRunId: number | null;
+  sessionId: string;
+  agentRunId: string | null;
   detail: string;
   detectedAtMs: number;
   live?: boolean;

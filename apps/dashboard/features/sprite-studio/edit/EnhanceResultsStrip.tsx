@@ -37,12 +37,12 @@ export function EnhanceResultsStrip({
   onClose,
 }: {
   projectId: number;
-  assetId: number;
-  jobId: number;
+  assetId: string;
+  jobId: string;
   /** Live job feed owned by the mounting component (one SSE per owner). */
   jobs: UseSpriteJobs;
   /** Fires with the NEW version id after a candidate is applied. */
-  onApplied?: (versionId: number) => void;
+  onApplied?: (versionId: string) => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation('spriteStudio');

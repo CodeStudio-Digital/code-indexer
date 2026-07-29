@@ -27,12 +27,13 @@ import type { AgentChatWorkbenchSlots } from '../chat/types.js';
 import type { ApiClientWorkbenchSlots } from '../api-client/workbench-slots.js';
 import { DatabaseToolWindow } from '../db-client/DatabaseToolWindow.js';
 import { API_RIGHT_TOOL } from './tabs-config.js';
+import { usePortalHost } from '../../hooks/usePortalHost.js';
 
 interface ProjectWorkbenchProps {
   projectId: number;
   projectName: string;
   projectRoot?: string | null;
-  initialSessionId?: number;
+  initialSessionId?: string;
   activeFilePath: string | null;
   onOpenFile: (path: string) => void;
   contribWindows: ContribToolWindow[];
@@ -54,15 +55,15 @@ function pluginTab(window: ContribToolWindow): TabDef {
 export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   const { t } = useTranslation('projects');
   const layout = useWorkspaceLayout();
-  const [sessionsHost, setSessionsHost] = useState<HTMLDivElement | null>(null);
-  const [databaseHost, setDatabaseHost] = useState<HTMLDivElement | null>(null);
-  const [gitHost, setGitHost] = useState<HTMLDivElement | null>(null);
-  const [apiLeftHost, setApiLeftHost] = useState<HTMLDivElement | null>(null);
-  const [apiRightHost, setApiRightHost] = useState<HTMLDivElement | null>(null);
+  const [sessionsHostRef, sessionsHost] = usePortalHost<HTMLDivElement>();
+  const [databaseHostRef, databaseHost] = usePortalHost<HTMLDivElement>();
+  const [gitHostRef, gitHost] = usePortalHost<HTMLDivElement>();
+  const [apiLeftHostRef, apiLeftHost] = usePortalHost<HTMLDivElement>();
+  const [apiRightHostRef, apiRightHost] = usePortalHost<HTMLDivElement>();
   const [apiLeftOpen, setApiLeftOpen] = useState(true);
   const [apiRightOpen, setApiRightOpen] = useState(true);
-  const [sessionRightPanelHost, setSessionRightPanelHost] = useState<HTMLDivElement | null>(null);
-  const [sessionRightRailHost, setSessionRightRailHost] = useState<HTMLDivElement | null>(null);
+  const [sessionRightPanelHostRef, sessionRightPanelHost] = usePortalHost<HTMLDivElement>();
+  const [sessionRightRailHostRef, sessionRightRailHost] = usePortalHost<HTMLDivElement>();
   const [sessionState, setSessionState] = useState({ hasSession: !!props.initialSessionId, rightPanelOpen: false });
   const sessionsMode = layout.primarySurface === 'sessions';
   const apiMode = layout.primarySurface === 'api';
@@ -156,10 +157,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
   }, [layout.primarySurface, layout.setActiveLeft, layout.setPrimarySurface]);
   const renderLeft = () => {
     if (sessionsMode) {
-      return <div key="sessions" ref={setSessionsHost} className="h-full min-h-0 overflow-hidden" />;
+      return <div key="sessions" ref={sessionsHostRef} className="h-full min-h-0 overflow-hidden" />;
     }
     if (apiMode) {
-      return <div key="api-navigation" ref={setApiLeftHost} className="h-full min-h-0 overflow-hidden" />;
+      return <div key="api-navigation" ref={apiLeftHostRef} className="h-full min-h-0 overflow-hidden" />;
     }
     if (!editorMode) return null;
     if (layout.activeLeft === 'files') {
@@ -175,10 +176,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
       );
     }
     if (layout.activeLeft === 'git') {
-      return <div key="git" ref={setGitHost} className="h-full min-h-0 overflow-hidden" />;
+      return <div key="git" ref={gitHostRef} className="h-full min-h-0 overflow-hidden" />;
     }
     if (layout.activeLeft === 'databases') {
-      return <div key="databases" ref={setDatabaseHost} className="h-full min-h-0 overflow-hidden" />;
+      return <div key="databases" ref={databaseHostRef} className="h-full min-h-0 overflow-hidden" />;
     }
     if (activeLeftPlugin) {
       return (
@@ -196,10 +197,10 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
 
   const renderRight = () => {
     if (sessionsMode) {
-      return <div key="session-details" ref={setSessionRightPanelHost} className="h-full min-h-0 overflow-hidden" />;
+      return <div key="session-details" ref={sessionRightPanelHostRef} className="h-full min-h-0 overflow-hidden" />;
     }
     if (apiMode) {
-      return <div key="api-inspector" ref={setApiRightHost} className="h-full min-h-0 overflow-hidden" />;
+      return <div key="api-inspector" ref={apiRightHostRef} className="h-full min-h-0 overflow-hidden" />;
     }
     if (!editorMode) return null;
     if (layout.activeRight === 'chat') {
@@ -347,7 +348,7 @@ export function ProjectWorkbench(props: ProjectWorkbenchProps) {
           </PanelGroup>
         </div>
         {sessionsMode ? (
-          sessionState.hasSession && <div ref={setSessionRightRailHost} className="contents" />
+          sessionState.hasSession && <div ref={sessionRightRailHostRef} className="contents" />
         ) : apiMode ? (
           <ProjectRightRail
             activeTool={apiRightOpen ? API_RIGHT_TOOL.id : null}

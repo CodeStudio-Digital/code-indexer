@@ -1,5 +1,6 @@
 /**
- * CounterfactualLogStore — CRUD over `counterfactual_logs` (migration 084).
+ * CounterfactualLogStore — CRUD over the global rows in
+ * `counterfactual_logs` (migration 084).
  *
  * Two usage patterns:
  *   1. ShadowTrafficSideEffect inserts a row when it runs a variant.
@@ -13,8 +14,6 @@ type DB = InstanceType<typeof DatabaseConstructor>;
 
 export interface CounterfactualLogRow {
   id: number;
-  session_id: number | null;
-  company_session_id: number | null;
   pipeline_name: string;
   shadow_variant: string;
   query_hash: string;
@@ -27,8 +26,6 @@ export interface CounterfactualLogRow {
 }
 
 export interface CounterfactualLogInsert {
-  session_id?: number | null;
-  company_session_id?: number | null;
   pipeline_name: string;
   shadow_variant: string;
   query_hash: string;
@@ -49,16 +46,14 @@ export class CounterfactualLogStore {
     const result = this.db
       .prepare(
         `INSERT INTO counterfactual_logs (
-           session_id, company_session_id, pipeline_name, shadow_variant,
-           query_hash, production_choice_json, shadow_prediction_json
+           pipeline_name, shadow_variant, query_hash,
+           production_choice_json, shadow_prediction_json
          ) VALUES (
-           @session_id, @company_session_id, @pipeline_name, @shadow_variant,
-           @query_hash, @production_choice_json, @shadow_prediction_json
+           @pipeline_name, @shadow_variant, @query_hash,
+           @production_choice_json, @shadow_prediction_json
          )`,
       )
       .run({
-        session_id: row.session_id ?? null,
-        company_session_id: row.company_session_id ?? null,
         pipeline_name: row.pipeline_name,
         shadow_variant: row.shadow_variant,
         query_hash: row.query_hash,

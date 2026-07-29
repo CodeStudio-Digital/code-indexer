@@ -17,14 +17,15 @@ import {
 } from '@mcp/sprite-studio/repo/manifest.js';
 import { resolveInsideSpriteDir, versionFileName } from '@mcp/sprite-studio/repo/paths.js';
 import { decodePng } from '@mcp/sprite-studio/processing/png.js';
-import type { SpriteAssetVersionRow, SpriteVersionSource } from '@mcp/store/sprite-studio/types.js';
+import type { SpriteVersionSource } from '@mcp/store/sprite-studio/types.js';
 import type { ServerDeps } from '../../deps.js';
+import type { SpriteVersionFileRow } from '../../sprite-files.js';
 
 export interface WriteEditedVersionOpts {
   /** Move the asset's current_version_id to the new version (default true). */
   setCurrent?: boolean;
   /** Provenance: the version this one was derived from (e.g. alignment). */
-  parentVersionId?: number | null;
+  parentVersionId?: string | null;
   /** Version provenance kind (default 'edited'; sheet import passes 'imported'). */
   source?: SpriteVersionSource;
   /** Known PNG dimensions — skips the pngjs decode-for-dims on the main
@@ -38,14 +39,14 @@ export interface WriteEditedVersionOpts {
  * every frame pointing at this version updates visually without a new row.
  * Writes file → manifest entry (hash/createdAt) → DB row (dims/hash/source).
  */
-export function overwriteVersion(
+export async function overwriteVersion(
   deps: ServerDeps,
   root: string,
-  asset: { id: number; slug: string },
-  version: { id: number; version: number; file_rel_path: string },
+  asset: { id: string; slug: string },
+  version: { id: string; version: number; file_rel_path: string },
   png: Buffer,
-): SpriteAssetVersionRow {
-  const store = deps.spriteAssetsStore;
+): Promise<SpriteVersionFileRow> {
+  const store = deps.spriteFileStore;
   const { width, height } = decodePng(png);
   const hash = crypto.createHash('sha256').update(png).digest('hex');
   const abs = resolveInsideSpriteDir(root, version.file_rel_path);
@@ -54,7 +55,7 @@ export function overwriteVersion(
     hash,
     createdAt: new Date().toISOString(),
   });
-  const row = store.updateVersionContent(version.id, { width, height, content_hash: hash });
+  const row = await store.updateVersionContent(version.id, { width, height, content_hash: hash });
   if (!row) throw new Error('version_row_missing');
   return row;
 }
@@ -79,36 +80,38 @@ export function purgeVersionFile(
 }
 
 /** Throws Error('no_manifest') when the asset has no repo manifest. */
-export function writeEditedVersion(
+export async function writeEditedVersion(
   deps: ServerDeps,
   root: string,
-  asset: { id: number; slug: string },
+  asset: { id: string; slug: string },
   png: Buffer,
   opts: WriteEditedVersionOpts = {},
-): SpriteAssetVersionRow {
-  const store = deps.spriteAssetsStore;
+): Promise<SpriteVersionFileRow> {
+  const store = deps.spriteFileStore;
   const manifest = readAssetManifest(root, asset.slug);
   if (!manifest) throw new Error('no_manifest');
   const source = opts.source ?? 'edited';
   const { width, height } = opts.dims ?? decodePng(png);
   const hash = crypto.createHash('sha256').update(png).digest('hex');
-  const v = store.nextVersionNumber(asset.id);
+  const v = await store.nextVersionNumber(asset.id);
   const fileName = versionFileName(v);
   const relPath = `assets/${asset.slug}/${fileName}`;
   const abs = resolveInsideSpriteDir(root, relPath);
   fs.mkdirSync(path.dirname(abs), { recursive: true });
   fs.writeFileSync(abs, png);
-  const parentRow = opts.parentVersionId != null ? store.getVersion(opts.parentVersionId) : null;
+  const parentRow = opts.parentVersionId != null
+    ? await store.getVersion(opts.parentVersionId)
+    : null;
   appendVersion(root, asset.slug, {
     v, file: fileName, source, hash,
     ...(parentRow ? { parent: parentRow.version } : {}),
     createdAt: new Date().toISOString(),
   });
-  const row = store.insertVersion({
+  const row = await store.insertVersion({
     asset_id: asset.id, version: v, file_rel_path: relPath, width, height,
     source, content_hash: hash,
     parent_version_id: opts.parentVersionId ?? null,
   });
-  if (opts.setCurrent !== false) store.setCurrentVersion(asset.id, row.id);
+  if (opts.setCurrent !== false) await store.setCurrentVersion(asset.id, row.id);
   return row;
 }

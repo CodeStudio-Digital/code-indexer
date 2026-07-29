@@ -2,7 +2,8 @@ import type { Command } from 'commander';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import { resolve } from 'node:path';
-import { loadConfig } from '@mcp/shared/utils/config.js';
+import { mcpDataDir } from '@mcp/shared/utils/config.js';
+import { asSessionId, type SessionId } from '@mcp/session-storage';
 import { resolveAgentRuntimeEnv } from '@mcp/api-handlers/runtime/runtime-resolve.js';
 import { getDB, promptStdin } from '../helpers.js';
 import { wireAgentToolOutput } from './agent-output.js';
@@ -13,7 +14,11 @@ export function register(program: Command): void {
     .option('-p, --provider <name>', 'Provider instance id or shape (built-in shapes listed via `mcp-code-indexer models`)', 'zai')
     .option('-m, --model <model>', 'Model name (provider-specific)')
     .option('--project <name>', 'Project name (default: resolve from cwd)')
-    .option('--session <id>', 'Continue an existing session id', parseInt)
+    .option(
+      '--session <uuid>',
+      'Continue an existing filesystem session UUID',
+      (value: string) => asSessionId(value),
+    )
     .option('--max-turns <n>', 'Max turns (default 50)', parseInt)
     .option('--plan', 'Plan mode: agent must submit a plan and get user approval before mutating tools')
     .option(
@@ -32,7 +37,7 @@ export function register(program: Command): void {
       '--worktree-branch <branch>',
       'When --worktree is set, check out this branch inside the worktree (default: coder/<name>). Created from HEAD if missing.',
     )
-    .action(async (taskParts: string[], opts: { provider: string; model?: string; project?: string; session?: number; maxTurns?: number; plan?: boolean; agent?: string; profile?: string; worktree?: string | boolean; worktreeBranch?: string }) => {
+    .action(async (taskParts: string[], opts: { provider: string; model?: string; project?: string; session?: SessionId; maxTurns?: number; plan?: boolean; agent?: string; profile?: string; worktree?: string | boolean; worktreeBranch?: string }) => {
       const task = (taskParts ?? []).join(' ').trim();
       if (!task) {
         console.error('Error: provide a task. Example: mcp-code-indexer agent "fix the typo in src/cli.ts"');
@@ -44,15 +49,37 @@ export function register(program: Command): void {
 
       if (opts.session) {
         const { SessionStore } = await import('@mcp/code-agent/index.js');
-        const config = loadConfig();
-        const store = new SessionStore(config.dbPath);
-        const s = store.getSession(opts.session);
-        store.close();
+        const store = SessionStore.fromRoots({
+          dataDir: mcpDataDir(),
+          projectRootResolver: {
+            resolveProjectRoot: (id) => db.getProject(id)?.root_path,
+            listProjectRoots: () =>
+              db.listProjects().map((project) => ({
+                project_id: project.id,
+                root_path: project.root_path,
+              })),
+          },
+          projectInfoResolver: (id) => {
+            const project = db.getProject(id);
+            return project
+              ? {
+                  project_id: project.id,
+                  name: project.name,
+                  root_path: project.root_path,
+                }
+              : null;
+          },
+        });
+        const s = await store.getSession(opts.session);
+        await store.close();
         if (!s) {
           console.error(`Error: session ${opts.session} not found`);
           process.exit(1);
         }
-        projectId = s.project_id;
+        projectId =
+          s.project_id ??
+          s.linked_projects.find((project) => project.is_primary)?.project_id ??
+          s.linked_projects[0]?.project_id;
       } else {
         if (opts.project) {
           const p = db.getProjectByName(opts.project);
@@ -98,7 +125,7 @@ export function register(program: Command): void {
 
       // --worktree takes either a name or a boolean (bare flag → auto-name).
       // Ignored on --session (resumed) runs: the worktree state is already
-      // persisted and the runner rehydrates from `coder_sessions.worktree_path`.
+      // persisted and the runner rehydrates it from the session bundle.
       const worktreeOpt =
         !opts.session && opts.worktree !== undefined
           ? {
@@ -174,8 +201,13 @@ export function register(program: Command): void {
         })();
       });
 
-      console.log(`\n  session #${handle.session.id} (${handle.session.provider}/${handle.session.model})`);
-      console.log(`  project: ${db.getProject(handle.session.project_id)?.name}\n`);
+      console.log(`\n  session ${handle.session.id} (${handle.session.provider}/${handle.session.model})`);
+      const displayProjectId =
+        handle.session.project_id ??
+        handle.session.linked_projects.find((project) => project.is_primary)
+          ?.project_id ??
+        handle.session.linked_projects[0]?.project_id;
+      console.log(`  project: ${displayProjectId == null ? '(global)' : db.getProject(displayProjectId)?.name}\n`);
 
       handle.runner.on('text_delta', (t) => process.stdout.write(t));
       handle.runner.on('tool_call_start', (id, name, input) => {

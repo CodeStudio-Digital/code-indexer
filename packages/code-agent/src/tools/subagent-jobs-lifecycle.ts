@@ -11,6 +11,7 @@
  * tools/.
  */
 import type { SubagentJob, SubagentJobManager, BackgroundAgentSlot } from '@mcp/code-agent/tools/subagent-jobs.js';
+import type { SessionId } from '@mcp/session-storage';
 
 const SUMMARY_CAP = 200;
 
@@ -49,7 +50,7 @@ export type ParkOutcome = 'work' | 'message' | 'aborted' | 'timeout';
 
 export interface ParkDeps {
   manager: SubagentJobManager;
-  sessionId: number;
+  sessionId: SessionId;
   /** Run signal — aborting it ends the park as 'aborted'. */
   signal: AbortSignal;
   /** Safety cap: park never blocks longer than this. */

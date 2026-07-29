@@ -109,7 +109,11 @@ const search = defineTool({
     properties: {
       project_name: { type: 'string' },
       query: { type: 'string' },
-      mode: { type: 'string', enum: ['auto', 'fts', 'vector', 'hybrid'] },
+      mode: {
+        type: 'string',
+        enum: ['auto', 'fts', 'vector', 'hybrid'],
+        description: 'Use auto by default. FTS is for exact identifiers/literals; vector/hybrid are diagnostic overrides for conceptual or cross-language retrieval.',
+      },
       type: { type: 'string', enum: ['files', 'symbols', 'all'] },
       limit: { type: 'number' },
     },
@@ -123,9 +127,22 @@ const search = defineTool({
     const type = (args.type as SearchType) ?? 'all';
     const limit = (args.limit as number) ?? 20;
     const query = args.query as string;
+    const sessionId = typeof args.__mcp_session_id === 'string'
+      ? args.__mcp_session_id
+      : undefined;
+    const companySessionId = typeof args.__mcp_company_session_id === 'string'
+      ? args.__mcp_company_session_id
+      : undefined;
     const remote = requestedMode === 'fts'
       ? null
-      : await semanticSearchClient.searchProject(project.id, query, { mode: requestedMode, type, limit });
+      : await semanticSearchClient.searchProject(project.id, query, {
+          mode: requestedMode,
+          type,
+          limit,
+          consumer: 'agent',
+          sessionId,
+          companySessionId,
+        });
     const searched = remote?.ok && remote.value
       ? remote.value
       : await hybridSearch.searchWithDiag(project.id, project.name, query, {

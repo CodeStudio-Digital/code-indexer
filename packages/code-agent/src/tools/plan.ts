@@ -42,13 +42,13 @@ export function formatPlanResult(approved: boolean, feedback?: string): string {
  * appendSystemReminder — so it lands AFTER the tool_result, preserving the
  * `assistant(tool_use) → tool → user` adjacency strict providers require.
  */
-export function applyPlanApproval(
+export async function applyPlanApproval(
   runner: NonNullable<ToolContext['runner']>,
   ctx: ToolContext,
-): Pick<ToolResult, 'extraUserBlocks'> {
+): Promise<Pick<ToolResult, 'extraUserBlocks'>> {
   runner.approvePlan();
   if (runner.agentId !== 'plan') return {};
-  ctx.setSessionAgent?.('build');
+  await ctx.setSessionAgent?.('build');
   return {
     extraUserBlocks: [
       {
@@ -139,7 +139,7 @@ export const submitPlan: CoderTool = {
     // Persist the plan up-front so the dashboard's "Plans" tab shows it
     // even while still pending. The status is updated below once the
     // user responds.
-    ctx.recordPlan?.(id, plan);
+    await ctx.recordPlan?.(id, plan);
     runner.emit('plan_posted', { type: 'plan', id, plan, kind });
 
     const raw = await runner.waitForUserInput();
@@ -149,7 +149,7 @@ export const submitPlan: CoderTool = {
       aborted?: boolean;
       interrupted?: boolean;
       kind?: 'plan' | 'question' | 'tasks';
-      agentRunId?: number;
+      agentRunId?: string | null;
       role?: string;
     };
     try { parsed = JSON.parse(raw); } catch { parsed = { approved: false, feedback: raw }; }
@@ -160,22 +160,22 @@ export const submitPlan: CoderTool = {
       return err(formatInterruptedResult('submit_plan', parsed));
     }
     if (parsed.aborted) {
-      ctx.resolvePlan?.(id, 'aborted', parsed.feedback);
+      await ctx.resolvePlan?.(id, 'aborted', parsed.feedback);
       return err(`Plan rejected by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} Planning review ended.`);
     }
     if (parsed.approved) {
-      ctx.resolvePlan?.(id, 'approved', parsed.feedback);
+      await ctx.resolvePlan?.(id, 'approved', parsed.feedback);
       // A new approval clears prior revision requests — the model has moved on, and
       // any future plan with the same text would be a legitimately new ask.
       reviseRequested.clear();
       // Auto plan→build after approval: unlock this run, persist `build` for
       // the next runner, and inject a <system-reminder> so the live model
       // switches gears immediately. See applyPlanApproval.
-      const extras = applyPlanApproval(runner, ctx);
+      const extras = await applyPlanApproval(runner, ctx);
       return { content: formatPlanResult(true, parsed.feedback), ...extras };
     }
     reviseRequested.add(hash);
-    ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
+    await ctx.resolvePlan?.(id, 'rejected', parsed.feedback);
     return ok(formatPlanResult(false, parsed.feedback));
   },
 };

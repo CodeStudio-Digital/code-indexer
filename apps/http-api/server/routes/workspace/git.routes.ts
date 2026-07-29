@@ -1,4 +1,4 @@
-import type { Context, Hono } from 'hono';
+import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import { guardWorkspaceRequest } from './guards.js';
 import {
@@ -20,6 +20,7 @@ import { runGeneralAi, GeneralAiNotConfiguredError } from '@mcp/services/ai-gene
 import { extractFirstJson } from '@mcp/services/ai-general/extract-json.js';
 import { publish } from '../../../coder-bus.js';
 import { activeOrchestrators } from '../company/stream.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 /**
  * Publish `git.status_changed` on the session's meta-bus whenever a
@@ -31,14 +32,10 @@ import { activeOrchestrators } from '../company/stream.js';
  * SSE consumer to notify in that case.
  */
 function publishGitStatusChanged(
-  c: Context,
+  sessionId: CompanySessionId,
+  projectId: number,
   changeType: 'commit' | 'stage' | 'reset' | 'discard' | 'init',
 ): void {
-  const sidRaw = c.req.param('sid');
-  const pidRaw = c.req.param('pid');
-  const sessionId = Number(sidRaw);
-  const projectId = Number(pidRaw);
-  if (!Number.isFinite(sessionId) || !Number.isFinite(projectId)) return;
   const orchestrator = activeOrchestrators.get(sessionId);
   if (!orchestrator) return;
   publish(orchestrator.metaBus, 'git.status_changed', {
@@ -57,7 +54,7 @@ function truncateForAi(text: string, limit = MAX_AI_DIFF_CHARS): string {
 
 export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/company/sessions/:sid/projects/:pid/git/status', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     return c.json(await gitStatus(guard.resolved.root));
   });
@@ -67,7 +64,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
     // `path` is optional for git diff (whole-repo diff). When present,
     // validate through the same guard that every other workspace route
     // uses so we can't be tricked into `git diff -- ../outside`.
-    const guard = guardWorkspaceRequest(c, deps, relPath || '.');
+    const guard = await guardWorkspaceRequest(c, deps, relPath || '.');
     if (guard instanceof Response) return guard;
     const staged = c.req.query('staged') === 'true';
     const result = await gitDiff(guard.resolved.root, {
@@ -78,14 +75,14 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:sid/projects/:pid/git/log', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     const limit = parseIntQuery(c, 'limit', 30);
     return c.json({ entries: await gitLog(guard.resolved.root, limit) });
   });
 
   app.get('/api/company/sessions/:sid/projects/:pid/git/push-preview', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     try {
       return c.json(await gitPushPreview(guard.resolved.root));
@@ -95,7 +92,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.get('/api/company/sessions/:sid/projects/:pid/git/commit-detail', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     try {
       return c.json(await gitCommitDetail(guard.resolved.root, c.req.query('sha') ?? ''));
@@ -106,7 +103,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
 
   app.get('/api/company/sessions/:sid/projects/:pid/git/commit-file-diff', async (c) => {
     const filePath = c.req.query('path') ?? '';
-    const guard = guardWorkspaceRequest(c, deps, filePath);
+    const guard = await guardWorkspaceRequest(c, deps, filePath);
     if (guard instanceof Response) return guard;
     try {
       return c.json(await gitCommitFileDiff(guard.resolved.root, c.req.query('sha') ?? '', filePath));
@@ -116,62 +113,62 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/init', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     const result = await gitInit(guard.resolved.root);
     if (!result.ok) return c.json({ error: result.message }, 500);
-    publishGitStatusChanged(c, 'init');
+    publishGitStatusChanged(guard.sessionId, guard.projectId, 'init');
     return c.json({ ok: true, status: await gitStatus(guard.resolved.root) });
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/add', async (c) => {
-    const rootGuard = guardWorkspaceRequest(c, deps, '.');
+    const rootGuard = await guardWorkspaceRequest(c, deps, '.');
     if (rootGuard instanceof Response) return rootGuard;
     const body = await parseJsonBody<{ paths: string[] }>(c);
     const paths = Array.isArray(body.paths) ? body.paths : [];
     for (const p of paths) {
-      const g = guardWorkspaceRequest(c, deps, p);
+      const g = await guardWorkspaceRequest(c, deps, p);
       if (g instanceof Response) return g;
     }
     const result = await gitAdd(rootGuard.resolved.root, paths);
     if (!result.ok) return c.json({ error: result.message }, 500);
-    publishGitStatusChanged(c, 'stage');
+    publishGitStatusChanged(rootGuard.sessionId, rootGuard.projectId, 'stage');
     return c.json({ ok: true, status: await gitStatus(rootGuard.resolved.root) });
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/reset', async (c) => {
-    const rootGuard = guardWorkspaceRequest(c, deps, '.');
+    const rootGuard = await guardWorkspaceRequest(c, deps, '.');
     if (rootGuard instanceof Response) return rootGuard;
     const body = await parseJsonBody<{ paths: string[] }>(c);
     const paths = Array.isArray(body.paths) ? body.paths : [];
     for (const p of paths) {
-      const g = guardWorkspaceRequest(c, deps, p);
+      const g = await guardWorkspaceRequest(c, deps, p);
       if (g instanceof Response) return g;
     }
     const result = await gitReset(rootGuard.resolved.root, paths);
     if (!result.ok) return c.json({ error: result.message }, 500);
-    publishGitStatusChanged(c, 'reset');
+    publishGitStatusChanged(rootGuard.sessionId, rootGuard.projectId, 'reset');
     return c.json({ ok: true, status: await gitStatus(rootGuard.resolved.root) });
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/discard', async (c) => {
-    const rootGuard = guardWorkspaceRequest(c, deps, '.');
+    const rootGuard = await guardWorkspaceRequest(c, deps, '.');
     if (rootGuard instanceof Response) return rootGuard;
     const body = await parseJsonBody<{ paths: string[] }>(c);
     const paths = Array.isArray(body.paths) ? body.paths : [];
     for (const p of paths) {
-      const g = guardWorkspaceRequest(c, deps, p);
+      const g = await guardWorkspaceRequest(c, deps, p);
       if (g instanceof Response) return g;
     }
     const status = await gitStatus(rootGuard.resolved.root);
     const result = await gitDiscard(rootGuard.resolved.root, paths, status);
     if (!result.ok) return c.json({ error: result.message }, 500);
-    publishGitStatusChanged(c, 'discard');
+    publishGitStatusChanged(rootGuard.sessionId, rootGuard.projectId, 'discard');
     return c.json({ ok: true, status: await gitStatus(rootGuard.resolved.root) });
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/push', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     const body = await parseJsonBody<{
       remote?: string;
@@ -193,13 +190,13 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/commit', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     const body = await parseJsonBody<{ message: string }>(c);
     const message = typeof body.message === 'string' ? body.message : '';
     const result = await gitCommit(guard.resolved.root, message);
     if (!result.ok) return c.json({ error: result.message }, 400);
-    publishGitStatusChanged(c, 'commit');
+    publishGitStatusChanged(guard.sessionId, guard.projectId, 'commit');
     return c.json({
       ok: true,
       hash: result.hash,
@@ -208,7 +205,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/suggest-commit-message', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     const { diff } = await gitDiff(guard.resolved.root, { staged: true });
     if (!diff.trim()) {
@@ -236,7 +233,7 @@ export function mountGitRoutes(app: Hono, deps: ServerDeps): void {
   });
 
   app.post('/api/company/sessions/:sid/projects/:pid/git/suggest-staging', async (c) => {
-    const guard = guardWorkspaceRequest(c, deps, '.');
+    const guard = await guardWorkspaceRequest(c, deps, '.');
     if (guard instanceof Response) return guard;
     const status = await gitStatus(guard.resolved.root);
     const changed = status.files.filter((f) => f.index !== '!' && f.worktree !== '!');

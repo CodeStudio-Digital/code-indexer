@@ -46,7 +46,7 @@ export interface CrawlOptions {
    */
   linkExtractorResolver?: PipelineProviderResolver;
   /** Resolution context forwarded to the LLM extractor binding lookup. */
-  resolveContext?: { sessionId?: number; companySessionId?: number; templateId?: number };
+  resolveContext?: { sessionId?: string; companySessionId?: string; templateId?: number };
   /** Fired after each page is fetched (for SSE progress). */
   onPageFetched?: (info: { url: string; ok: boolean; reason?: string; totalFetched: number }) => void;
 }

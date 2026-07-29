@@ -39,7 +39,7 @@ export interface SnapshotReviewFinding {
   /** Absent/undefined means `defect` (pre-kind producers). */
   kind?: SnapshotReviewFindingKind;
   filePath: string;
-  baselineId?: number | null;
+  baselineId?: string | null;
   hunkFingerprint?: string | null;
   oldLine?: number | null;
   newLine?: number | null;
@@ -62,9 +62,9 @@ export interface SnapshotReviewResult {
 
 export interface SnapshotReviewInput {
   sessionKind: 'coder' | 'company';
-  sessionId: number;
+  sessionId: string;
   resolveContext: ResolveContext;
-  diffs: FileDiff[];
+  diffs: FileDiff<string>[];
   /** Optional pre-rendered context block (snapshot-review-context.ts),
    *  prepended before the diffs in the reviewer prompt. Capped defensively. */
   contextText?: string | null;
@@ -122,6 +122,14 @@ function toOptionalNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function toOptionalRecordId(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const id = value.trim().toLowerCase();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)
+    ? id
+    : null;
+}
+
 function toOptionalString(value: unknown, max: number): string | null {
   return typeof value === 'string' && value.trim() ? truncate(value.trim(), max) : null;
 }
@@ -142,11 +150,15 @@ function parseFindings(raw: string): SnapshotReviewFinding[] {
     const filePath = toOptionalString(row.filePath, 1000);
     const body = toOptionalString(row.body, 4000);
     if (!filePath || !body) continue;
+    const baselineId = toOptionalRecordId(row.baselineId);
+    if (row.baselineId != null && baselineId == null) {
+      throw new Error('finding baselineId must be an opaque UUID string or null');
+    }
     findings.push({
       severity: normalizeSeverity(row.severity),
       kind: normalizeKind(row.kind),
       filePath,
-      baselineId: toOptionalNumber(row.baselineId),
+      baselineId,
       hunkFingerprint: toOptionalString(row.hunkFingerprint, 200),
       oldLine: toOptionalNumber(row.oldLine),
       newLine: toOptionalNumber(row.newLine),
@@ -284,8 +296,10 @@ export class SnapshotReviewPipeline {
         candidatesOut,
         sizeBucket: sizeToBucket(candidatesIn),
         errors: error ? 1 : 0,
-        sessionId: input.sessionKind === 'coder' ? input.sessionId : undefined,
-        companySessionId: input.sessionKind === 'company' ? input.sessionId : undefined,
+        sessionId:
+          input.sessionKind === 'coder' ? String(input.sessionId) : undefined,
+        companySessionId:
+          input.sessionKind === 'company' ? String(input.sessionId) : undefined,
         diag: {
           providerId: result.providerId ?? null,
           modelId: result.modelId ?? null,

@@ -5,6 +5,9 @@ import type { ServerDeps } from '../../../deps.js';
 const H = vi.hoisted(() => ({
   getActive: vi.fn(),
   evict: vi.fn(async (): Promise<void> => undefined),
+  getSession: vi.fn(),
+  addLinkedProject: vi.fn(async (_input: unknown): Promise<void> => undefined),
+  removeLinkedProject: vi.fn(async (_projectId: number): Promise<void> => undefined),
   mkdirSync: vi.fn(),
   rm: vi.fn(async (): Promise<void> => undefined),
 }));
@@ -23,13 +26,29 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, rm: H.rm };
 });
+vi.mock('@mcp/company/services/CompanySessionFiles.js', () => ({
+  CompanySessionFiles: class {
+    getSession() { return H.getSession(); }
+    addLinkedProject(input: unknown) { return H.addLinkedProject(input); }
+    removeLinkedProject(projectId: number) {
+      return H.removeLinkedProject(projectId);
+    }
+  },
+}));
 
 const { mountCompanyServicesCreateRoutes } = await import('../services-create.js');
+
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000007';
 
 describe('company service creation worker outcome', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     H.evict.mockResolvedValue(undefined);
+    H.getSession.mockReturnValue({
+      id: COMPANY_SESSION_ID,
+      config_json: '{}',
+      parent_session_id: null,
+    });
   });
 
   it('preserves the project/workdir when provisioning times out after a possible effect', async () => {
@@ -40,7 +59,7 @@ describe('company service creation worker outcome', () => {
 
     const companyStore = {
       getCompanySession: vi.fn(() => ({
-        id: 7,
+        id: COMPANY_SESSION_ID,
         config_json: '{}',
         parent_session_id: null,
       })),
@@ -58,6 +77,7 @@ describe('company service creation worker outcome', () => {
     };
     const deps = {
       companyStore,
+      sessionStore: { ensureCatalog: vi.fn(async () => {}) },
       db,
       projectIndexService: {
         stopWatching: vi.fn(async () => undefined),
@@ -69,7 +89,9 @@ describe('company service creation worker outcome', () => {
     const app = new Hono();
     mountCompanyServicesCreateRoutes(app, deps);
 
-    const response = await app.request('/api/company/sessions/7/services', {
+    const response = await app.request(
+      `/api/company/sessions/${COMPANY_SESSION_ID}/services`,
+      {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -77,7 +99,8 @@ describe('company service creation worker outcome', () => {
         stack: 'react-ts',
         name: 'Web',
       }),
-    });
+      },
+    );
 
     expect(response.status).toBe(500);
     await expect(response.json()).resolves.toMatchObject({
@@ -86,9 +109,13 @@ describe('company service creation worker outcome', () => {
       project_id: 41,
     });
     expect(addSandboxService).toHaveBeenCalledOnce();
-    expect(H.evict).toHaveBeenCalledWith(7);
-    expect(companyStore.addProjectToCompanySession).toHaveBeenCalledWith(7, 41, 'web');
-    expect(companyStore.removeProjectFromCompanySession).not.toHaveBeenCalled();
+    expect(H.evict).toHaveBeenCalledWith(COMPANY_SESSION_ID);
+    expect(H.addLinkedProject).toHaveBeenCalledWith({
+      projectId: 41,
+      rootPath: expect.any(String),
+      label: 'web',
+    });
+    expect(H.removeLinkedProject).not.toHaveBeenCalled();
     expect(db.deleteProject).not.toHaveBeenCalled();
     expect(H.rm).not.toHaveBeenCalled();
   });

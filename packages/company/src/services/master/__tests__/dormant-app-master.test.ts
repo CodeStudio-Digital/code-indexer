@@ -6,13 +6,17 @@ vi.mock('@mcp/docs-agent/bridges/docs-bridge.js', () => ({
 
 import { MasterLifecycle } from '../../MasterLifecycle.js';
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000007';
+const MASTER_SESSION_ID = '00000000-0000-4000-8000-000000000099';
+
 describe('dormant App Master config refresh', () => {
   it('uses cold resume instead of cached resurrection on the next message', async () => {
     const board = { post: vi.fn() };
     const lifecycle = new MasterLifecycle({
       ctx: {
         runtimeKind: 'app_studio',
-        companySessionId: 42,
+        companySessionId: COMPANY_SESSION_ID,
         companyStore: {},
       },
       board,
@@ -22,14 +26,14 @@ describe('dormant App Master config refresh', () => {
     } as never);
     Object.assign(lifecycle as unknown as Record<string, unknown>, {
       _handle: { runner: {} },
-      _agentRunId: 7,
+      _agentRunId: AGENT_RUN_ID,
       _ended: true,
       _runnerExited: true,
       _companyContext: { stale: true },
       _promptBlock: 'stale prompt',
     });
     const resume = vi.spyOn(lifecycle, 'resumeExisting').mockResolvedValue({
-      masterSessionId: 99,
+      masterSessionId: MASTER_SESSION_ID,
       indexStatus: null,
     });
 

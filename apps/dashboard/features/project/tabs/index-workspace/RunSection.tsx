@@ -109,6 +109,21 @@ export function RunSection({
   const activeTarget = semantic.status?.active_generation?.embedding_target;
   const buildingTarget = semantic.status?.building_generation?.embedding_target;
   const resolvedReranker = semantic.status?.resolved_reranker;
+  const searchTelemetry = semantic.status?.search_telemetry;
+  const rerankerLabel = !resolvedReranker || resolvedReranker.status === 'disabled'
+    ? 'Desativado'
+    : [
+        resolvedReranker.status === 'failed'
+          ? 'Falhou'
+          : resolvedReranker.status === 'running'
+            ? 'Executando'
+            : resolvedReranker.status === 'active'
+              ? 'Ativo'
+              : 'Configurado',
+        resolvedReranker.model,
+        resolvedReranker.dtype,
+        resolvedReranker.execution_provider,
+      ].filter(Boolean).join(' · ');
   const coverage = semanticCoveragePercent(code);
   const fatalError = semantic.error
     ?? code?.last_error
@@ -210,11 +225,31 @@ export function RunSection({
                 />
                 <Detail label="Banco físico" value={code?.dbPath ?? code?.active?.dbPath ?? code?.building?.dbPath ?? '—'} mono />
                 <Detail label="Uso em disco" value={bytes(code?.size_bytes)} />
+                {searchTelemetry ? (
+                  <>
+                    <Detail
+                      label={`Buscas (${searchTelemetry.period_days} dias)`}
+                      value={`${searchTelemetry.total_searches} total · ${searchTelemetry.semantic_searches} semânticas`}
+                    />
+                    <Detail
+                      label="Reranker aplicado"
+                      value={`${searchTelemetry.reranker_applied} · ${searchTelemetry.reranker_failed} falha(s)`}
+                    />
+                    <Detail
+                      label="Resultados utilizados"
+                      value={`${searchTelemetry.opened_results} · ${searchTelemetry.semantic_wins} ganho(s) semântico(s)`}
+                    />
+                    <Detail
+                      label="Latência p50 / p95"
+                      value={searchTelemetry.p50_ms == null
+                        ? 'Ainda não medida'
+                        : `${searchTelemetry.p50_ms.toFixed(0)} / ${(searchTelemetry.p95_ms ?? searchTelemetry.p50_ms).toFixed(0)} ms`}
+                    />
+                  </>
+                ) : null}
                 <Detail
-                  label="Reranker resolvido"
-                  value={resolvedReranker
-                    ? [resolvedReranker.model, resolvedReranker.dtype, resolvedReranker.execution_provider].filter(Boolean).join(' · ')
-                    : `Aguardando resolução (${targetLabel(profile?.reranker_target)})`}
+                  label="Reranker"
+                  value={rerankerLabel}
                 />
                 {resolvedReranker?.estimated_memory_bytes ? (
                   <Detail label="Memória estimada" value={bytes(resolvedReranker.estimated_memory_bytes)} />
@@ -224,6 +259,9 @@ export function RunSection({
                 ) : null}
                 {resolvedReranker?.downgrade_reason ? (
                   <p className="rounded-md border border-amber-500/20 bg-amber-500/5 p-2 text-amber-500">{resolvedReranker.downgrade_reason}</p>
+                ) : null}
+                {resolvedReranker?.last_error ? (
+                  <p className="rounded-md border border-destructive/20 bg-destructive/5 p-2 text-destructive">{resolvedReranker.last_error}</p>
                 ) : null}
                 <p className="rounded-md border bg-muted/20 p-2 text-muted-foreground">
                   {semanticDisabled

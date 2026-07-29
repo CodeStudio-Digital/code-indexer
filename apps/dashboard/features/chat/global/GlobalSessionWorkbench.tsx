@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Panel, PanelGroup } from 'react-resizable-panels';
 import {
   WorkbenchResizeHandle,
@@ -7,34 +7,10 @@ import {
 } from '../../../components/workbench/index.js';
 import AgentChat from '../AgentChat.js';
 import type { AgentChatWorkbenchSlots } from '../types.js';
+import { usePortalHost } from '../../../hooks/usePortalHost.js';
 
 interface GlobalSessionWorkbenchProps {
-  initialSessionId?: number;
-}
-
-/**
- * Publish a portal host after refs have been committed.
- *
- * Using a state dispatcher directly as a callback ref makes React schedule an
- * update from commitAttachRef. React 19 can replay that ref while revealing a
- * suspended tree, recursively scheduling the same update until it hits the
- * maximum update depth. An object ref is inert during attachment; the layout
- * effect publishes only a genuinely different host.
- */
-function usePortalHost<T extends HTMLElement>() {
-  const hostRef = useRef<T>(null);
-  const publishedHostRef = useRef<T | null>(null);
-  const [host, setHost] = useState<T | null>(null);
-
-  useLayoutEffect(() => {
-    const nextHost = hostRef.current;
-    if (publishedHostRef.current === nextHost) return;
-
-    publishedHostRef.current = nextHost;
-    setHost(nextHost);
-  });
-
-  return [hostRef, host] as const;
+  initialSessionId?: string;
 }
 
 /**

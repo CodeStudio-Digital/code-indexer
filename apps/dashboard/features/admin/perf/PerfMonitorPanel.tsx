@@ -6,6 +6,9 @@
  *      profile / heap snapshot on demand)
  */
 import { useTranslation } from 'react-i18next';
+import { ListTree } from 'lucide-react';
+import { Button } from '../../../components/ui/button.js';
+import { openDetached } from '../../popout/openDetached.js';
 import { usePerfMonitor } from './usePerfMonitor.js';
 import { ProcessTreeTable } from './ProcessTreeTable.js';
 import { LedgerAndHistory } from './LedgerAndHistory.js';
@@ -58,7 +61,28 @@ export default function PerfMonitorPanel() {
       </div>
 
       <div>
-        <h3 className="text-sm font-medium mb-2">{t('perf.processes.title')}</h3>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-medium">{t('perf.processes.title')}</h3>
+          {/* This table is the memory-attribution view (worker isolates the OS
+              cannot see). The live task manager is a separate window — link to
+              it here, since it has no entry in the admin rail. */}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-[11px]"
+            title={t('processes.openHint')}
+            onClick={() => openDetached(
+              'task-manager',
+              {},
+              // Browser/dev has no Electron window API — a tab is the closest
+              // thing to a companion window there.
+              () => window.open('/popout/task-manager', '_blank', 'noopener'),
+            )}
+          >
+            <ListTree className="mr-1 h-3 w-3" />
+            {t('processes.open')}
+          </Button>
+        </div>
         <ProcessTreeTable sample={sample} />
       </div>
 

@@ -14,6 +14,7 @@ export interface CreateContextInput {
   signal?: AbortSignal;
   /** Request provenance — which surface issued the call. */
   clientInfo?: ClientInfo;
+  telemetryScope?: ApiContext['telemetryScope'];
 }
 
 export function createContext(input: CreateContextInput = {}): ApiContext {
@@ -22,6 +23,7 @@ export function createContext(input: CreateContextInput = {}): ApiContext {
     requestId: input.requestId ?? randomUUID(),
     signal: input.signal ?? new AbortController().signal,
     clientInfo: input.clientInfo,
+    telemetryScope: input.telemetryScope,
   };
 }
 

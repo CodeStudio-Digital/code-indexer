@@ -3,14 +3,14 @@
  *
  * Cross-restart durability for supervisor state. The interface is
  * deliberately thin so:
- *   - Production wires a SQLite impl (`SqliteSupervisionPersistence`).
- *   - Tests use a no-op or in-memory impl without dragging better-sqlite3.
+ *   - Production writes independent files inside the owning session bundle.
+ *   - Tests use a no-op or in-memory implementation.
  *   - The supervisor's hot path (heartbeats) stays IN-MEMORY — only the
  *     periodic tick flushes the batched heartbeat timestamps to disk.
  *
  * **What persists**:
- *   - One row per `agent_run_id` in `agent_supervision`
- *   - One incident row per stuck/quarantine/recovery event
+ *   - One JSON file per agent run.
+ *   - One JSON file per stuck/quarantine/recovery incident.
  *
  * **What does NOT persist** (still in-memory only):
  *   - CircuitBreakers state (sliding windows) — counters are "recent
@@ -27,12 +27,12 @@ import type { AgentSupervisionRecord } from './heartbeat-tracker.js';
 import type { SupervisionState } from './state-machine.js';
 
 /**
- * Serialised form of an incident, written to `agent_supervision_incidents`.
- * Mirrors the `IncidentEmitter` payload + adds resolution columns.
+ * Serialised form of one incident file. Mirrors the `IncidentEmitter`
+ * payload and adds resolution metadata.
  */
 export interface PersistedIncident {
-  agentRunId: number | null;
-  companySessionId: number | null;
+  agentRunId: string | null;
+  companySessionId: string | null;
   incidentKind: string;
   fromState: SupervisionState | null;
   attemptedToState: SupervisionState | null;
@@ -51,7 +51,7 @@ export interface PersistedIncident {
  * passed (typically `detected_at DESC`).
  */
 export interface IncidentQueryRow extends PersistedIncident {
-  id: number;
+  id: string;
   resolvedAtMs: number | null;
 }
 
@@ -69,7 +69,7 @@ export interface SupervisionPersistence {
    * UPSERT one record (matches by agentRunId). Called on register +
    * state transition + counter changes.
    */
-  saveRecord(record: AgentSupervisionRecord): void;
+  saveRecord(record: AgentSupervisionRecord): void | Promise<void>;
 
   /**
    * Batched write of `last_heartbeat_at` for many records at once.
@@ -78,27 +78,30 @@ export interface SupervisionPersistence {
    * are the hot path; we don't write them one-by-one).
    */
   saveHeartbeats(
-    records: ReadonlyArray<{ agentRunId: number; lastHeartbeatAt: number }>,
-  ): void;
+    records: ReadonlyArray<{ agentRunId: string; lastHeartbeatAt: number }>,
+  ): void | Promise<void>;
 
   /** Remove the row. Called on unregister or operator cleanup. */
-  deleteRecord(agentRunId: number): void;
+  deleteRecord(agentRunId: string): void | Promise<void>;
 
   /** Append a new incident row. Fire-and-forget from the supervisor. */
-  saveIncident(incident: PersistedIncident): void;
+  saveIncident(incident: PersistedIncident): void | Promise<void>;
 
   /**
    * Mark an incident resolved (e.g. recovery succeeded after attempt).
    * Optional — supervisor doesn't currently call it; reserved for
    * Phase 3 dashboard / admin tooling.
    */
-  resolveIncident?(incidentId: number, resolvedAtMs: number): void;
+  resolveIncident?(incidentId: string, resolvedAtMs: number): void | Promise<void>;
 
   /**
    * Read recent incidents for one company session. Used by the admin
    * endpoint / dashboard. Phase 2.4 ships the query; UI is Phase 3.
    */
-  listRecentIncidents(sessionId: number, limit: number): IncidentQueryRow[];
+  listRecentIncidents(sessionId: string, limit: number): IncidentQueryRow[];
+
+  /** Wait for all queued atomic file mutations before worker shutdown. */
+  close?(): void | Promise<void>;
 }
 
 /**
@@ -112,16 +115,16 @@ export class NullSupervisionPersistence implements SupervisionPersistence {
   saveRecord(_record: AgentSupervisionRecord): void {
     /* no-op */
   }
-  saveHeartbeats(_records: ReadonlyArray<{ agentRunId: number; lastHeartbeatAt: number }>): void {
+  saveHeartbeats(_records: ReadonlyArray<{ agentRunId: string; lastHeartbeatAt: number }>): void {
     /* no-op */
   }
-  deleteRecord(_agentRunId: number): void {
+  deleteRecord(_agentRunId: string): void {
     /* no-op */
   }
   saveIncident(_incident: PersistedIncident): void {
     /* no-op */
   }
-  listRecentIncidents(_sessionId: number, _limit: number): IncidentQueryRow[] {
+  listRecentIncidents(_sessionId: string, _limit: number): IncidentQueryRow[] {
     return [];
   }
 }

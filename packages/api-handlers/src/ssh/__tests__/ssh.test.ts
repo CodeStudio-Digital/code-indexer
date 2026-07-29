@@ -102,9 +102,11 @@ describe('adaptChannelToIPty', () => {
   });
 });
 
+// ASYNC since the sync form blocked the Electron main process for seconds at
+// RSA-4096 — see the note on generateSshKey.
 describe('generateSshKey', () => {
-  it('generates an ed25519 keypair in OpenSSH format with a correct SHA256 fingerprint', () => {
-    const k = generateSshKey({ type: 'ed25519', comment: 'me@cs' });
+  it('generates an ed25519 keypair in OpenSSH format with a correct SHA256 fingerprint', async () => {
+    const k = await generateSshKey({ type: 'ed25519', comment: 'me@cs' });
     expect(k.keyType).toBe('ssh-ed25519');
     expect(k.publicKey).toMatch(/^ssh-ed25519 AAAA[\w+/]+ me@cs$/);
     expect(k.privateKey).toContain('BEGIN OPENSSH PRIVATE KEY');
@@ -114,21 +116,27 @@ describe('generateSshKey', () => {
     expect(k.fingerprint).toBe(expected);
   });
 
-  it('generates distinct keys each call', () => {
-    expect(generateSshKey({}).publicKey).not.toBe(generateSshKey({}).publicKey);
+  it('generates distinct keys each call', async () => {
+    const [a, b] = await Promise.all([generateSshKey({}), generateSshKey({})]);
+    expect(a.publicKey).not.toBe(b.publicKey);
   });
 
-  it('encrypts the private key when a passphrase is given', () => {
-    const k = generateSshKey({ type: 'ed25519', passphrase: 's3cret' });
+  it('encrypts the private key when a passphrase is given', async () => {
+    const k = await generateSshKey({ type: 'ed25519', passphrase: 's3cret' });
     // An encrypted OpenSSH key names its cipher (not "none") in the header bytes.
     expect(k.privateKey).toContain('BEGIN OPENSSH PRIVATE KEY');
-    expect(k.privateKey).not.toBe(generateSshKey({ type: 'ed25519' }).privateKey);
+    const plain = await generateSshKey({ type: 'ed25519' });
+    expect(k.privateKey).not.toBe(plain.privateKey);
   });
 
-  it('honors an RSA request with a sane minimum bit length', () => {
-    const k = generateSshKey({ type: 'rsa', bits: 1024 }); // below floor → bumped to 4096
+  it('honors an RSA request with a sane minimum bit length', async () => {
+    const k = await generateSshKey({ type: 'rsa', bits: 1024 }); // below floor → bumped to 4096
     expect(k.keyType).toBe('ssh-rsa');
     expect(k.publicKey.startsWith('ssh-rsa ')).toBe(true);
+  }, 60_000);
+
+  it('rejects with a typed error rather than throwing synchronously', async () => {
+    await expect(generateSshKey({ type: 'bogus' as 'rsa' | 'ed25519' })).resolves.toBeDefined();
   });
 });
 

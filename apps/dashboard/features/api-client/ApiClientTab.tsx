@@ -113,17 +113,17 @@ export function ApiClientTab({
     const request = state.requests.find((candidate) => candidate.id === requestId);
     if (!request) return;
     const accepted = await confirm({
-      title: t('request.deleteConfirmTitle', { name: request.name }),
-      description: t('request.deleteConfirmBody'),
-      confirmLabel: t('request.delete'),
+      title: t('row.deleteConfirmTitle', { name: request.name }),
+      description: t('row.deleteConfirmBody'),
+      confirmLabel: t('row.delete'),
       tone: 'destructive',
     });
     if (!accepted) return;
     try {
       await c.removeRequest(requestId);
-      toast.info(t('request.deleted'), { description: t('request.deleteUndoHint') });
+      toast.info(t('row.deleted'), { description: t('row.deleteUndoHint') });
     } catch (error) {
-      toast.error(t('request.deleteFailed'), { description: error instanceof Error ? error.message : String(error) });
+      toast.error(t('row.deleteFailed'), { description: error instanceof Error ? error.message : String(error) });
     }
   }, [c.removeRequest, state.requests, t]);
 
@@ -133,9 +133,9 @@ export function ApiClientTab({
       event.preventDefault();
       void c.undoLastRequestDelete()
         .then((restored) => {
-          if (restored) toast.success(t('request.restored', { name: restored.name }));
+          if (restored) toast.success(t('row.restored', { name: restored.name }));
         })
-        .catch((error) => toast.error(t('request.restoreFailed'), {
+        .catch((error) => toast.error(t('row.restoreFailed'), {
           description: error instanceof Error ? error.message : String(error),
         }));
     };

@@ -83,38 +83,38 @@ export const INITIAL_SANDBOX_STATE: SandboxState = {
 };
 
 export interface SandboxSlice {
-  sandbox: Map<number, SandboxState>;
-  sandboxEnsure: (sessionId: number) => void;
+  sandbox: Map<string, SandboxState>;
+  sandboxEnsure: (sessionId: string) => void;
   sandboxApplyFileChange: (
-    sessionId: number,
+    sessionId: string,
     payload: Omit<SandboxFileChange, 'seq' | 'at'>,
   ) => void;
   /** Bumps `statusSeq`. Consumers refetch `/sandbox` on each tick. */
-  sandboxBumpStatus: (sessionId: number) => void;
+  sandboxBumpStatus: (sessionId: string) => void;
   /** Bumps `servicesSeq`. Consumers refetch `/services` on each tick. */
-  sandboxBumpServices: (sessionId: number) => void;
+  sandboxBumpServices: (sessionId: string) => void;
   /** Appends a `sandbox.service.log_batch` payload to the bounded live buffer. */
   sandboxAppendServiceLogs: (
-    sessionId: number,
+    sessionId: string,
     serviceId: string,
     lines: IncomingServiceLogLine[],
   ) => void;
   /** B8 — records a `sandbox.service.health` verdict for overlay reads. */
   sandboxApplyServiceHealth: (
-    sessionId: number,
+    sessionId: string,
     serviceId: string,
     health: string,
     detail: string | null,
     at: number,
   ) => void;
-  sandboxReset: (sessionId: number) => void;
+  sandboxReset: (sessionId: string) => void;
 }
 
 function withSlot(
-  prev: Map<number, SandboxState>,
-  sessionId: number,
+  prev: Map<string, SandboxState>,
+  sessionId: string,
   patch: (slot: SandboxState) => SandboxState,
-): Map<number, SandboxState> {
+): Map<string, SandboxState> {
   const next = new Map(prev);
   const current = next.get(sessionId) ?? INITIAL_SANDBOX_STATE;
   next.set(sessionId, patch(current));

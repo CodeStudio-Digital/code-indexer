@@ -10,6 +10,7 @@ import { isArchive } from './zip-actions.js';
 import type { FsAdapter, FsItem } from './fs-adapter.js';
 import type { PaneSelectionStore } from './pane-selection.js';
 import type { PaneActions } from './use-pane-actions.js';
+import type { PaneExtraActions } from './use-pane-extra-actions.js';
 
 type TFn = (key: string, opts?: Record<string, unknown>) => string;
 
@@ -19,13 +20,17 @@ interface Args {
   /** Resolve the items a menu action targets (selection, or the fallback row). */
   selectedItems: (fallback?: FsItem) => FsItem[];
   actions: PaneActions;
+  /** Copy/new-file/reveal — see use-pane-extra-actions.ts. */
+  extra: PaneExtraActions;
   onOpenFile?: (item: FsItem) => void;
+  /** Remote-only chmod/chown; absent on the local side (no SFTP verbs there). */
+  onEditPermissions?: (item: FsItem) => void;
   refresh: () => void;
   t: TFn;
 }
 
 export function usePaneMenu(a: Args) {
-  const { adapter, useSel, selectedItems, actions, onOpenFile, refresh, t } = a;
+  const { adapter, useSel, selectedItems, actions, extra, onOpenFile, onEditPermissions, refresh, t } = a;
   const [ctxItem, setCtxItem] = useState<FsItem | null>(null);
   const menuSel = selectedItems(ctxItem ?? undefined);
   const single = menuSel.length === 1 ? menuSel[0] : null;
@@ -37,16 +42,23 @@ export function usePaneMenu(a: Args) {
       onEmpty: ctxItem === null,
       singleArchive: !!single && single.type === 'file' && isArchive(single.name),
       canOpen: adapter.kind === 'remote' && !!single && single.type === 'file',
+      canEditPermissions: adapter.kind === 'remote' && !!single && !!onEditPermissions,
       t,
       actions: {
         transfer: () => actions.doTransfer(menuSel),
         zip: () => void actions.doZip(menuSel),
         extract: () => single && void actions.doExtract(single),
         newFolder: () => void actions.doMkdir(),
+        newFile: () => void extra.newFile(),
         rename: () => single && void actions.doRename(single),
         remove: () => void actions.doRemove(menuSel),
         open: () => single && onOpenFile?.(single),
         refresh,
+        copyName: () => extra.copyName(menuSel),
+        copyPath: () => extra.copyPath(menuSel),
+        copyAbsPath: () => extra.copyAbsPath(menuSel),
+        reveal: () => single && extra.revealInExplorer(single),
+        permissions: () => single && onEditPermissions?.(single),
       },
     }),
   );

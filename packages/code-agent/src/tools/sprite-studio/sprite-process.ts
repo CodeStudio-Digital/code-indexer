@@ -13,7 +13,7 @@ const PARAMETERS: JsonSchema = {
   type: 'object',
   properties: {
     asset_id: {
-      type: 'number',
+      type: 'string',
       description: 'Id of the asset whose current version is the input (from sprite_list_assets).',
     },
     ops: {
@@ -42,7 +42,9 @@ export function spriteProcess(projectId: number): CoderTool {
     handler: async (args) => {
       const host = getGlobalSpriteStudioHost();
       if (!host) return err(NOT_CONFIGURED);
-      const assetId = typeof args.asset_id === 'number' ? args.asset_id : undefined;
+      const assetId = typeof args.asset_id === 'string' && args.asset_id.trim()
+        ? args.asset_id.trim()
+        : undefined;
       const ops = Array.isArray(args.ops) ? (args.ops as unknown[]) : undefined;
       if (assetId === undefined) return err('sprite_process: `asset_id` is required.');
       if (!ops || ops.length === 0) return err('sprite_process: `ops` must be a non-empty array.');

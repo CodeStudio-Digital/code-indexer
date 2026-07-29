@@ -50,13 +50,13 @@ export function mapAutonomyStreamEvent(eventType: string, data: unknown): Autono
   switch (eventType) {
     case 'scheduler_dispatched':
       return make('dispatch', eventType, atMs, {
-        cardId: num(d.cardId),
+        cardId: str(d.cardId),
         role: str(d.role),
-        agentRunId: num(d.agentRunId),
+        agentRunId: str(d.agentRunId),
       });
     case 'scheduler_skipped':
       return make('skip', eventType, atMs, {
-        cardId: num(d.cardId),
+        cardId: str(d.cardId),
         reason: str(d.reason),
       });
     case 'scheduler_sweep':
@@ -66,20 +66,20 @@ export function mapAutonomyStreamEvent(eventType: string, data: unknown): Autono
       });
     case 'plan_auto_approved':
       return make('approval', eventType, atMs, {
-        agentRunId: num(d.agentRunId),
+        agentRunId: str(d.agentRunId),
         role: str(d.role),
       });
     case 'supervisor_incident':
       return make('incident', eventType, atMs, {
         kind: str(d.kind),
-        agentRunId: num(d.agentRunId),
+        agentRunId: str(d.agentRunId),
         role: str(d.role),
         detail: str(d.detail),
       });
     case 'master_nudge':
       return make('nudge', eventType, atMs, {
         kind: str(d.case),
-        agentRunId: num(d.agentRunId),
+        agentRunId: str(d.agentRunId),
         role: str(d.role),
         reason: str(d.reason),
       });

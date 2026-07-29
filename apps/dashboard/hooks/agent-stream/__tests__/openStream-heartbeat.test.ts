@@ -3,6 +3,7 @@ import { openStream, type OpenStreamDeps } from '../openStream.js';
 import { __resetWorkerLogForTests, peekWorkerLog } from '../worker-log-store.js';
 
 const enc = new TextEncoder();
+const SESSION_ID = '33333333-3333-4333-8333-333333333333';
 
 function heartbeatThenDone(): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -53,8 +54,8 @@ describe('openStream transport heartbeat', () => {
     const d = deps();
 
     const pending = openStream(
-      1,
-      { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true },
+      SESSION_ID,
+      { url: `/api/coder/sessions/${SESSION_ID}/attach`, method: 'GET', reattach: true },
       d,
     );
     await vi.runAllTimersAsync();
@@ -70,6 +71,6 @@ describe('openStream transport heartbeat', () => {
       { lastEventAt: Date.parse('2026-07-23T15:00:00.000Z') },
     ]);
     expect(d.lastSeenSeqMap.size).toBe(0);
-    expect(peekWorkerLog(1).some((entry) => entry.event === 'ping')).toBe(false);
+    expect(peekWorkerLog(SESSION_ID).some((entry) => entry.event === 'ping')).toBe(false);
   });
 });

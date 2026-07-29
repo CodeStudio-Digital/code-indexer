@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Check, ChevronRight, Database, Loader2, ShieldQuestion, Wrench, X } from 'lucide-react';
 import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
+import { useNow } from '../../../lib/perf/shared-clock.js';
 import { cn } from '../../../lib/utils.js';
 import { ToolApprovalCard, type ToolApprovalVerdict } from './ToolApprovalCard.js';
 import { DbQueryToolView } from './DbQueryToolView.js';
@@ -11,7 +12,7 @@ import { analyzeSqlForDisplay, parseDbQueryInput } from './db-query-view.js';
 interface ToolCallBlockProps {
   call: ToolCallEvent;
   /** Session id enables lazy loading of a transport-trimmed persisted result. */
-  sessionId?: number;
+  sessionId?: string;
   /**
    * PermissionGate verdict callback. When set AND `call.approvals` is
    * non-empty, the approval card renders pinned below the header (outside
@@ -103,19 +104,15 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
     }
   };
 
-  // Local 1-second tick while the tool is running, so "running Xs" advances
-  // smoothly between the 5s server-side heartbeats. Disabled (and cleaned up)
-  // as soon as the tool finishes — an idle session pays nothing. Intentionally
-  // NOT ticking while awaiting approval: the user's decision time is not the
-  // tool's runtime.
+  // "running Xs" advances between the 5s server-side heartbeats off the
+  // app-wide 1 Hz clock instead of a per-block interval — a turn with a dozen
+  // concurrent tool calls used to mean a dozen timers and a dozen independent
+  // renders per second. Unsubscribed as soon as the tool finishes, so an idle
+  // session pays nothing. Intentionally NOT ticking while awaiting approval:
+  // the user's decision time is not the tool's runtime.
   const isRunning = call.status === 'running';
   const isAwaitingApproval = call.status === 'awaiting_approval';
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    if (!isRunning || !call.startedAt) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [isRunning, call.startedAt]);
+  const now = useNow(isRunning && !!call.startedAt);
 
   const StatusIcon =
     call.status === 'running'
@@ -138,7 +135,7 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
   // before the dashboard upgrade). Only meaningful while running.
   const elapsedSec = isRunning
     ? call.startedAt
-      ? Math.floor((Date.now() - call.startedAt) / 1000)
+      ? Math.floor((now - call.startedAt) / 1000)
       : call.elapsedMs !== undefined
         ? Math.floor(call.elapsedMs / 1000)
         : null

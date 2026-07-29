@@ -27,7 +27,7 @@ import type { AgentInboxMessage } from '@mcp/company-contracts';
 type InboxView = 'queue' | 'activity';
 
 interface InboxPanelProps {
-  companySessionId: number;
+  companySessionId: string;
 }
 
 export function InboxPanel({ companySessionId }: InboxPanelProps) {
@@ -77,13 +77,22 @@ export function InboxPanel({ companySessionId }: InboxPanelProps) {
   }, [connected, refresh]);
 
   const all = useMemo(() => Array.from(slot.messagesById.values()), [slot.messagesById]);
-  const queueMessages = useMemo(() => [...all].sort((a, b) => b.id - a.id), [all]);
-  // ASC by created_at (id tiebreak); newest at the bottom, capped at 200.
+  const queueMessages = useMemo(
+    () =>
+      [...all].sort(
+        (a, b) =>
+          b.seq - a.seq ||
+          b.created_at.localeCompare(a.created_at) ||
+          b.id.localeCompare(a.id),
+      ),
+    [all],
+  );
+  // ASC by created_at (sequence and UUID tiebreaks); newest at the bottom, capped at 200.
   const activityMessages = useMemo(() => {
     const list = [...all].sort((a, b) => {
       const ta = Date.parse(a.created_at) || 0;
       const tb = Date.parse(b.created_at) || 0;
-      return ta !== tb ? ta - tb : a.id - b.id;
+      return ta - tb || a.seq - b.seq || a.id.localeCompare(b.id);
     });
     return list.slice(-200);
   }, [all]);

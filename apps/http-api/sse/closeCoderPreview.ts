@@ -12,8 +12,9 @@
  */
 import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
 import { getGlobalResearchBrowser } from '@mcp/code-agent/tools/browser/index.js';
+import type { CompanySessionId, SessionId } from '@mcp/session-storage';
 
-function invoke(sessionId: number, method: PreviewInvoke['method']): void {
+function invoke(sessionId: SessionId, method: PreviewInvoke['method']): void {
   const svc = getGlobalPreviewDevtools();
   if (!svc) return;
   try {
@@ -33,22 +34,22 @@ function invokeKey(key: string, method: PreviewInvoke['method']): void {
   }
 }
 
-export function closePreviewWindow(sessionId: number): void {
+export function closePreviewWindow(sessionId: SessionId): void {
   invoke(sessionId, 'closeWindow');
   void getGlobalResearchBrowser()?.invoke({ key: `coder-${sessionId}`, method: 'close' }).catch(() => undefined);
 }
 
-export function closePreviewSession(sessionId: number): void {
+export function closePreviewSession(sessionId: SessionId): void {
   invoke(sessionId, 'closeSession');
   void getGlobalResearchBrowser()?.invoke({ key: `coder-${sessionId}`, method: 'close' }).catch(() => undefined);
 }
 
-export function closeCompanyPreviewWindows(sessionId: number): void {
+export function closeCompanyPreviewWindows(sessionId: CompanySessionId): void {
   invokeKey(`company-session-${sessionId}`, 'closeWindowPrefix');
   void getGlobalResearchBrowser()?.invoke({ key: `company-session-${sessionId}`, method: 'closePrefix' }).catch(() => undefined);
 }
 
-export function closeCompanyPreviewSession(sessionId: number): void {
+export function closeCompanyPreviewSession(sessionId: CompanySessionId): void {
   invokeKey(`company-session-${sessionId}`, 'closeSessionPrefix');
   void getGlobalResearchBrowser()?.invoke({ key: `company-session-${sessionId}`, method: 'closePrefix' }).catch(() => undefined);
 }

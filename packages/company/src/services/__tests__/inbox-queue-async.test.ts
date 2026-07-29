@@ -17,16 +17,21 @@ import type {
 } from '@mcp/company-contracts/models/inbox.js';
 import type { IMetaBusPublisher } from '../ports.js';
 
-const COMPANY_SESSION_ID = 100;
+const COMPANY_SESSION_ID = 'c0000000-0000-4000-8000-000000000100';
+const SENDER_RUN_ID = 'a0000000-0000-4000-8000-000000000099';
+const TARGET_RUN_ID = 'a0000000-0000-4000-8000-000000000010';
+const messageId = (n: number): string =>
+  `b0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 function makeMessage(over: Partial<AgentInboxMessage> & Pick<AgentInboxMessage, 'id'>): AgentInboxMessage {
   return {
     id: over.id,
+    seq: over.seq ?? 1,
     company_session_id: COMPANY_SESSION_ID,
-    from_agent_run_id: 99,
+    from_agent_run_id: SENDER_RUN_ID,
     from_role: 'sender',
     to_role: 'qa',
-    to_agent_run_id: 10,
+    to_agent_run_id: TARGET_RUN_ID,
     kind: 'notify',
     body: 'x',
     status: over.status ?? 'pending',
@@ -39,32 +44,30 @@ function makeMessage(over: Partial<AgentInboxMessage> & Pick<AgentInboxMessage, 
 }
 
 interface MockState {
-  messagesById: Map<number, AgentInboxMessage>;
+  messagesById: Map<string, AgentInboxMessage>;
 }
 
-function makeInboxQueue(state: MockState): { queue: InboxQueue; flipStatus: (id: number, status: InboxStatus, answer?: string) => void } {
+function makeInboxQueue(state: MockState): { queue: InboxQueue; flipStatus: (id: string, status: InboxStatus, answer?: string) => void } {
   const attentionListeners: Array<(ev: { kind: string; role: string }) => void> = [];
-  const mockStore = {
-    listAgentRuns() { return []; },
-    getAgentRun() { return null; },
-    listInboxMessages(opts: { companySessionId: number; limit?: number }): AgentInboxMessage[] {
-      // Return all messages — InboxQueue.findMessageByWaitToken does
-      // its own filter by wait_token from this list.
-      if (opts.companySessionId !== COMPANY_SESSION_ID) return [];
+  const companyFiles = {
+    listAgentRunsSync() { return []; },
+    getAgentRunSync() { return null; },
+    listInboxMessagesSync(opts: { limit?: number }): AgentInboxMessage[] {
       const msgs = [...state.messagesById.values()];
       return typeof opts.limit === 'number' ? msgs.slice(0, opts.limit) : msgs;
     },
-    getInboxMessage(id: number): AgentInboxMessage | null {
+    getInboxMessageSync(id: string): AgentInboxMessage | null {
       return state.messagesById.get(id) ?? null;
     },
-    getInboxMessageByWaitToken(companySessionId: number, token: string): AgentInboxMessage | null {
-      if (companySessionId !== COMPANY_SESSION_ID) return null;
+    getInboxMessageByWaitTokenSync(token: string): AgentInboxMessage | null {
       for (const m of state.messagesById.values()) {
         if (m.wait_token === token) return m;
       }
       return null;
     },
-    getCompanySession() { return null; },
+    getSession() {
+      return { id: COMPANY_SESSION_ID, name: 'test' };
+    },
   };
   const publisher = {
     publish() {},
@@ -86,14 +89,14 @@ function makeInboxQueue(state: MockState): { queue: InboxQueue; flipStatus: (id:
   const deps: InboxQueueDeps = {
     ctx: {
       companySessionId: COMPANY_SESSION_ID,
-      companyStore: mockStore as unknown as InboxQueueDeps['ctx']['companyStore'],
+      companyFiles,
     } as unknown as InboxQueueDeps['ctx'],
     subordinates: {} as unknown as InboxQueueDeps['subordinates'],
     attention: attention as unknown as InboxQueueDeps['attention'],
     publisher,
   };
   const queue = new InboxQueue(deps);
-  const flipStatus = (id: number, status: InboxStatus, answer?: string): void => {
+  const flipStatus = (id: string, status: InboxStatus, answer?: string): void => {
     const msg = state.messagesById.get(id);
     if (!msg) return;
     msg.status = status;
@@ -107,24 +110,27 @@ function makeInboxQueue(state: MockState): { queue: InboxQueue; flipStatus: (id:
 
 describe('InboxQueue.waitForAnswer — commit/wake de-race', () => {
   it('resolves immediately when the message was already answered', async () => {
-    const msg = makeMessage({ id: 1, status: 'answered', answer: 'the shape is X', wait_token: 'tok-1' });
-    const { queue } = makeInboxQueue({ messagesById: new Map([[1, msg]]) });
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'answered', answer: 'the shape is X', wait_token: 'tok-1' });
+    const { queue } = makeInboxQueue({ messagesById: new Map([[id, msg]]) });
     // No `flipStatus` / signal fired — the answer pre-exists. Without the
     // de-race, this waiter would park and only reject at the timeout.
     await expect(queue.waitForAnswer('tok-1', 50)).resolves.toBe('the shape is X');
   });
 
   it('resolves an already-expired token from the DB instead of parking', async () => {
-    const msg = makeMessage({ id: 2, status: 'expired', answer: '(no response)', wait_token: 'tok-2' });
-    const { queue } = makeInboxQueue({ messagesById: new Map([[2, msg]]) });
+    const id = messageId(2);
+    const msg = makeMessage({ id, status: 'expired', answer: '(no response)', wait_token: 'tok-2' });
+    const { queue } = makeInboxQueue({ messagesById: new Map([[id, msg]]) });
     await expect(queue.waitForAnswer('tok-2', 50)).resolves.toContain('no response');
   });
 
   it('still parks a waiter when the message is pending (normal path)', async () => {
-    const msg = makeMessage({ id: 3, status: 'pending', wait_token: 'tok-3' });
-    const { queue, flipStatus } = makeInboxQueue({ messagesById: new Map([[3, msg]]) });
+    const id = messageId(3);
+    const msg = makeMessage({ id, status: 'pending', wait_token: 'tok-3' });
+    const { queue, flipStatus } = makeInboxQueue({ messagesById: new Map([[id, msg]]) });
     const p = queue.waitForAnswer('tok-3', 1000);
-    flipStatus(3, 'answered', 'late answer'); // fires the inbox_answered signal
+    flipStatus(id, 'answered', 'late answer'); // fires the inbox_answered signal
     await expect(p).resolves.toBe('late answer');
   });
 });
@@ -132,13 +138,14 @@ describe('InboxQueue.waitForAnswer — commit/wake de-race', () => {
 describe('InboxQueue.getMessageStatus', () => {
   it('returns null for unknown id', () => {
     const { queue } = makeInboxQueue({ messagesById: new Map() });
-    expect(queue.getMessageStatus(999)).toBeNull();
+    expect(queue.getMessageStatus(messageId(999))).toBeNull();
   });
 
   it('returns current snapshot', () => {
-    const msg = makeMessage({ id: 1, status: 'answered', answer: 'done', answered_at: '2026-05-25T11:00:00Z' });
-    const { queue } = makeInboxQueue({ messagesById: new Map([[1, msg]]) });
-    const snap = queue.getMessageStatus(1);
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'answered', answer: 'done', answered_at: '2026-05-25T11:00:00Z' });
+    const { queue } = makeInboxQueue({ messagesById: new Map([[id, msg]]) });
+    const snap = queue.getMessageStatus(id);
     expect(snap).toEqual({
       status: 'answered',
       answer: 'done',
@@ -148,91 +155,98 @@ describe('InboxQueue.getMessageStatus', () => {
   });
 
   it('reflects mutations to the underlying row', () => {
-    const msg = makeMessage({ id: 1, status: 'pending' });
-    const state: MockState = { messagesById: new Map([[1, msg]]) };
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'pending' });
+    const state: MockState = { messagesById: new Map([[id, msg]]) };
     const { queue } = makeInboxQueue(state);
-    expect(queue.getMessageStatus(1)?.status).toBe('pending');
+    expect(queue.getMessageStatus(id)?.status).toBe('pending');
     msg.status = 'delivered';
-    expect(queue.getMessageStatus(1)?.status).toBe('delivered');
+    expect(queue.getMessageStatus(id)?.status).toBe('delivered');
   });
 });
 
 describe('InboxQueue.onMessageAnswered', () => {
   it('fires when status flips to answered (via attention signal)', async () => {
-    const msg = makeMessage({ id: 1, status: 'pending', wait_token: 'tok-1' });
-    const state: MockState = { messagesById: new Map([[1, msg]]) };
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'pending', wait_token: 'tok-1' });
+    const state: MockState = { messagesById: new Map([[id, msg]]) };
     const { queue, flipStatus } = makeInboxQueue(state);
 
-    const events: Array<{ messageId: number; status: string; answer: string | null }> = [];
-    queue.onMessageAnswered(1, (ev) => { events.push(ev); });
+    const events: Array<{ messageId: string; status: string; answer: string | null }> = [];
+    queue.onMessageAnswered(id, (ev) => { events.push(ev); });
     // Initial: pending → no fire yet (setImmediate for terminal-state hasn't fired since pending isn't terminal)
     await new Promise((r) => setImmediate(r));
     expect(events).toHaveLength(0);
 
     // Flip to answered.
-    flipStatus(1, 'answered', 'OK');
+    flipStatus(id, 'answered', 'OK');
     expect(events).toHaveLength(1);
-    expect(events[0].messageId).toBe(1);
+    expect(events[0].messageId).toBe(id);
     expect(events[0].status).toBe('answered');
     expect(events[0].answer).toBe('OK');
   });
 
   it('fires once (one-shot) — subsequent signals are ignored', async () => {
-    const msg = makeMessage({ id: 1, status: 'pending', wait_token: 'tok-1' });
-    const state: MockState = { messagesById: new Map([[1, msg]]) };
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'pending', wait_token: 'tok-1' });
+    const state: MockState = { messagesById: new Map([[id, msg]]) };
     const { queue, flipStatus } = makeInboxQueue(state);
 
     let fireCount = 0;
-    queue.onMessageAnswered(1, () => { fireCount++; });
+    queue.onMessageAnswered(id, () => { fireCount++; });
 
-    flipStatus(1, 'answered', 'A');
-    flipStatus(1, 'answered', 'B'); // shouldn't re-fire
+    flipStatus(id, 'answered', 'A');
+    flipStatus(id, 'answered', 'B'); // shouldn't re-fire
     expect(fireCount).toBe(1);
   });
 
   it('fires immediately (next tick) when message is ALREADY answered', async () => {
-    const msg = makeMessage({ id: 1, status: 'answered', answer: 'past', wait_token: 'tok-1' });
-    const state: MockState = { messagesById: new Map([[1, msg]]) };
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'answered', answer: 'past', wait_token: 'tok-1' });
+    const state: MockState = { messagesById: new Map([[id, msg]]) };
     const { queue } = makeInboxQueue(state);
 
-    const events: Array<{ status: string; answer: string | null }> = [];
-    queue.onMessageAnswered(1, (ev) => { events.push(ev); });
+    const events: Array<{ messageId: string; status: string; answer: string | null }> = [];
+    queue.onMessageAnswered(id, (ev) => { events.push(ev); });
     await new Promise((r) => setImmediate(r));
-    expect(events).toEqual([{ messageId: 1, status: 'answered', answer: 'past' } as { messageId: number; status: string; answer: string | null }]);
+    expect(events).toEqual([{ messageId: id, status: 'answered', answer: 'past' }]);
   });
 
   it('fires for expired status when message starts expired', async () => {
-    const msg = makeMessage({ id: 1, status: 'expired', answer: '(timeout)' });
-    const state: MockState = { messagesById: new Map([[1, msg]]) };
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'expired', answer: '(timeout)' });
+    const state: MockState = { messagesById: new Map([[id, msg]]) };
     const { queue } = makeInboxQueue(state);
 
     const events: Array<{ status: string }> = [];
-    queue.onMessageAnswered(1, (ev) => { events.push(ev); });
+    queue.onMessageAnswered(id, (ev) => { events.push(ev); });
     await new Promise((r) => setImmediate(r));
     expect(events).toEqual([expect.objectContaining({ status: 'expired' })]);
   });
 
   it('unsubscribe prevents future fires', async () => {
-    const msg = makeMessage({ id: 1, status: 'pending', wait_token: 'tok-1' });
-    const state: MockState = { messagesById: new Map([[1, msg]]) };
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'pending', wait_token: 'tok-1' });
+    const state: MockState = { messagesById: new Map([[id, msg]]) };
     const { queue, flipStatus } = makeInboxQueue(state);
 
     let fireCount = 0;
-    const unsubscribe = queue.onMessageAnswered(1, () => { fireCount++; });
+    const unsubscribe = queue.onMessageAnswered(id, () => { fireCount++; });
     unsubscribe();
-    flipStatus(1, 'answered', 'OK');
+    flipStatus(id, 'answered', 'OK');
     expect(fireCount).toBe(0);
   });
 
   it('listener errors are caught — do not propagate to the signal source', async () => {
-    const msg = makeMessage({ id: 1, status: 'pending', wait_token: 'tok-1' });
-    const state: MockState = { messagesById: new Map([[1, msg]]) };
+    const id = messageId(1);
+    const msg = makeMessage({ id, status: 'pending', wait_token: 'tok-1' });
+    const state: MockState = { messagesById: new Map([[id, msg]]) };
     const { queue, flipStatus } = makeInboxQueue(state);
 
-    queue.onMessageAnswered(1, () => {
+    queue.onMessageAnswered(id, () => {
       throw new Error('callback threw');
     });
     // Should not throw at the signal site.
-    expect(() => flipStatus(1, 'answered')).not.toThrow();
+    expect(() => flipStatus(id, 'answered')).not.toThrow();
   });
 });

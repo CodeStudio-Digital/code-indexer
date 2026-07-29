@@ -4,7 +4,7 @@ import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-stor
 
 export interface QaPreviewConfig {
   httpApiPort: number;
-  hasQaPlaywrightSkill: (sessionId: number) => boolean;
+  hasQaPlaywrightSkill: (sessionId: string) => boolean;
 }
 
 /**

@@ -54,9 +54,13 @@ describe('trimProjectSchema (C2)', () => {
   it('drops every central table and leaves a project-only DB that still writes', () => {
     const { db } = buildFullSchema();
     try {
-      // Sanity: the full schema really did create central tables.
-      expect(userTables(db)).toContain('coder_sessions');
-      expect(userTables(db)).toContain('company_sessions');
+      // Sanity: the full schema still contains essential central catalogs, but
+      // migration 263 has already removed every session-scoped table before a
+      // project database reaches the trim pass.
+      expect(userTables(db)).toContain('provider_configs');
+      expect(userTables(db)).toContain('company_templates');
+      expect(userTables(db)).not.toContain('coder_sessions');
+      expect(userTables(db)).not.toContain('company_sessions');
 
       trimProjectSchema(db);
 
@@ -87,6 +91,45 @@ describe('trimProjectSchema (C2)', () => {
       // 6) A project table that had a cross-DB FK is now writable with a dangling
       //    central pointer (FK stripped) — pipeline_executions with a project_id.
       db.prepare(`INSERT INTO pipelines (name, project_id, graph_json) VALUES ('pl', 1, '{}')`).run();
+    } finally {
+      db.close();
+    }
+  });
+
+  /**
+   * The declared drop-list drifted by 18 tables (migrations 240-259) before this
+   * sweep existed. The KEEP set (db-split copy manifest) is the source of truth:
+   * a table outside it can never hold project rows, so an EMPTY one is central by
+   * construction. A non-empty unknown table means something DID write to it — a
+   * missing manifest entry — so it survives instead of being silently deleted.
+   */
+  it('sweeps an unknown EMPTY table but preserves an unknown table with rows', () => {
+    const { db } = buildFullSchema();
+    try {
+      db.exec(`CREATE TABLE future_central_thing (id INTEGER PRIMARY KEY, v TEXT)`);
+      db.exec(`CREATE TABLE unclassified_with_rows (id INTEGER PRIMARY KEY, v TEXT)`);
+      db.prepare(`INSERT INTO unclassified_with_rows (v) VALUES ('keep me')`).run();
+
+      trimProjectSchema(db);
+
+      const after = userTables(db);
+      expect(after).not.toContain('future_central_thing');
+      expect(after).toContain('unclassified_with_rows');
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM unclassified_with_rows`).get()).toEqual({ n: 1 });
+    } finally {
+      db.close();
+    }
+  });
+
+  it('re-arms itself for a central table that appears after the marker was stamped', () => {
+    const { db } = buildFullSchema();
+    try {
+      trimProjectSchema(db); // stamps the current trim_version
+      db.exec(`CREATE TABLE later_central_table (id INTEGER PRIMARY KEY)`);
+
+      trimProjectSchema(db); // marker is current — only the sweep can catch this
+
+      expect(userTables(db)).not.toContain('later_central_table');
     } finally {
       db.close();
     }
@@ -155,7 +198,7 @@ describe('central-table migration on a trimmed project DB (mig 175 regression)',
       expect(userTables(db)).not.toContain('doc_ingest_runs');
       expect(db.prepare(
         `SELECT value FROM project_db_meta WHERE key = 'trim_version'`,
-      ).get()).toEqual({ value: '2' });
+      ).get()).toEqual({ value: '3' });
     } finally {
       db.close();
     }
@@ -179,6 +222,39 @@ describe('central-table migration on a trimmed project DB (mig 175 regression)',
     }
   });
 
+});
+
+/**
+ * The control plane (251-257) and the policy engine landed as central-only tables
+ * AFTER the v2 trim, so they were left behind in every project DB until v3. Now
+ * that they are dropped, their follow-up migrations must obey the same
+ * `tableExists` convention as migration 175 — otherwise a replay against an
+ * already-trimmed DB throws `no such table` and crash-loops the boot.
+ */
+describe('control-plane migrations on a trimmed project DB (252/256/257 guards)', () => {
+  const GONE = ['agent_runs', 'runtime_events', 'policy_decision_comparisons'];
+
+  it('records the pending migrations without recreating central control-plane tables', () => {
+    const { db } = buildFullSchema();
+    try {
+      trimProjectSchema(db);
+      for (const t of GONE) expect(userTables(db)).not.toContain(t);
+
+      // Reproduce an existing project DB opened after 252/256/257 shipped.
+      for (const v of [252, 256, 257]) {
+        db.prepare('DELETE FROM schema_version WHERE version = ?').run(v);
+      }
+
+      expect(() => runMigrations(db)).not.toThrow();
+
+      for (const t of [...GONE, 'control_plane_divergences']) expect(userTables(db)).not.toContain(t);
+      for (const v of [252, 256, 257]) {
+        expect(db.prepare('SELECT version FROM schema_version WHERE version = ?').get(v)).toBeTruthy();
+      }
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe('App Studio migration on a trimmed project DB (mig 218 regression)', () => {

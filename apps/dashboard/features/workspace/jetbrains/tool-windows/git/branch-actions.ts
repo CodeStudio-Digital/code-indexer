@@ -10,7 +10,7 @@ import { apiCall } from '../../../../../lib/api-client.js';
 /**
  * Check out `branch`. Remote refs (`origin/x`) can't be checked out
  * directly — that lands on a detached HEAD — so we materialise a local
- * tracking branch with `-b <local>` instead. Returns the local branch
+ * tracking branch from the selected remote ref instead. Returns the local branch
  * name we ended up on (for the success toast). Throws the git stderr on
  * failure so the caller can surface it.
  */
@@ -22,7 +22,13 @@ export async function checkoutBranch(
 ): Promise<string> {
   if (isRemote) {
     const local = branch.replace(/^[^/]+\//, ''); // strip "origin/"
-    await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: local, create: true });
+    await apiCall('projectGit.branchCheckout', {
+      projectId,
+      repoPath,
+      name: local,
+      create: true,
+      from: branch,
+    });
     return local;
   }
   await apiCall('projectGit.branchCheckout', { projectId, repoPath, name: branch });

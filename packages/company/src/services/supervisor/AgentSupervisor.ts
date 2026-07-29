@@ -15,7 +15,7 @@
  *
  * **Phase 2** will add:
  *   - Recovery action dispatch (resurrectMaster, abortStuckTool, etc.)
- *   - Persistence via the agent_supervision SQLite table
+ *   - Persistence inside the owning filesystem session bundle
  *   - Circuit breakers
  *
  * **Phase 3** will add:
@@ -53,7 +53,7 @@ export interface AgentSupervisorDeps {
    * silently persisting them with `company_session_id = NULL`, which
    * made them permanently unqueryable.
    */
-  companySessionId: number;
+  companySessionId: string;
   companyEventBus: CompanyEventBus;
   completionBus: SubordinateCompletionBus;
   /** Optional sink for incidents — defaults to console.warn. */
@@ -121,7 +121,7 @@ export interface SupervisorStatus {
 }
 
 export class AgentSupervisor {
-  private readonly companySessionId: number;
+  private readonly companySessionId: string;
   private readonly tracker: HeartbeatTracker;
   private readonly observation: ObservationLayer;
   private readonly emitIncidentRaw: IncidentEmitter;
@@ -137,13 +137,13 @@ export class AgentSupervisor {
   private tickCount = 0;
   /** Last tick's stuck-agent ids — used for dedup so the same stuck
    *  doesn't emit an incident every tick. */
-  private alreadyFlaggedThisRun = new Set<number>();
+  private alreadyFlaggedThisRun = new Set<string>();
   /** Tracks read-only mode entries we've already announced so we
    *  don't spam `read_only_mode` incidents on every tick. */
   private readOnlyAnnouncedUntilMs: number | null = null;
   /** Per-agent count of loop-enforcement events (runner injected a
    *  break-the-loop reminder). Drives the abort backstop. */
-  private loopEnforcementCounts = new Map<number, number>();
+  private loopEnforcementCounts = new Map<string, number>();
 
   constructor(deps: AgentSupervisorDeps) {
     this.companySessionId = deps.companySessionId;
@@ -172,7 +172,8 @@ export class AgentSupervisor {
             detail: incident.detail,
             detectedAtMs: incident.detectedAtMs,
           };
-          this.persistence.saveIncident(persisted);
+          const pending = this.persistence.saveIncident(persisted);
+          if (pending) void Promise.resolve(pending).catch(() => undefined);
         } catch {
           /* best-effort */
         }
@@ -282,8 +283,8 @@ export class AgentSupervisor {
    * tracking it. Called by `SubordinateLifecycle.spawn()` in Phase 1.5.
    */
   registerSubordinate(args: {
-    agentRunId: number;
-    companySessionId: number;
+    agentRunId: string;
+    companySessionId: string;
     role: string;
   }): void {
     this.observation.registerSpawn(args);
@@ -293,7 +294,7 @@ export class AgentSupervisor {
    * Register a freshly-booted master so the supervisor starts
    * tracking it. Called by `MasterLifecycle.start()` in Phase 1.5.
    */
-  registerMaster(args: { agentRunId: number; companySessionId: number }): void {
+  registerMaster(args: { agentRunId: string; companySessionId: string }): void {
     this.observation.registerMaster(args);
   }
 
@@ -307,7 +308,7 @@ export class AgentSupervisor {
    * incident when rejected.
    */
   transition(
-    agentRunId: number,
+    agentRunId: string,
     toState: SupervisionState,
     payload?: { toolUseId?: string | null; toolName?: string | null },
   ): boolean {
@@ -326,7 +327,7 @@ export class AgentSupervisor {
   }
 
   /** Bump heartbeat for the agent (any observable activity). */
-  heartbeat(agentRunId: number): boolean {
+  heartbeat(agentRunId: string): boolean {
     return this.tracker.heartbeat(agentRunId);
   }
 
@@ -335,7 +336,7 @@ export class AgentSupervisor {
    * anomaly detection (`wireSupervisorToRunner`) when a tool's baseline
    * is tighter than the default. Pass null to clear.
    */
-  setStateTimeoutOverride(agentRunId: number, ms: number | null): boolean {
+  setStateTimeoutOverride(agentRunId: string, ms: number | null): boolean {
     return this.tracker.setStateTimeoutOverride(agentRunId, ms);
   }
 
@@ -349,7 +350,7 @@ export class AgentSupervisor {
    * crosses {@link LOOP_ENFORCEMENT_ABORT_AFTER}, aborts it — the in-band
    * reminder clearly isn't landing, so we cut the loop off at the orchestrator.
    */
-  recordLoopEnforced(agentRunId: number, toolName: string): void {
+  recordLoopEnforced(agentRunId: string, toolName: string): void {
     const n = (this.loopEnforcementCounts.get(agentRunId) ?? 0) + 1;
     this.loopEnforcementCounts.set(agentRunId, n);
     const record = this.tracker.get(agentRunId);
@@ -460,7 +461,7 @@ export class AgentSupervisor {
     // Cheap when persistence is NullSupervisionPersistence (no-op).
     if (this.persistence) {
       try {
-        this.persistence.saveHeartbeats(this.tracker.heartbeatSnapshot());
+        await this.persistence.saveHeartbeats(this.tracker.heartbeatSnapshot());
       } catch {
         /* best-effort */
       }
@@ -598,7 +599,7 @@ export class AgentSupervisor {
    * fires (so it stops getting picked up by `detectStuck`).
    */
   private recordRecoveryFailure(
-    agentRunId: number,
+    agentRunId: string,
     role: string,
     fromState: SupervisionState,
     nowMs: number,
@@ -671,7 +672,7 @@ export class AgentSupervisor {
    * for one company session, newest first. Returns `[]` when no
    * persistence wired (Phase 2.3 mode).
    */
-  listRecentIncidents(sessionId: number, limit: number = 50): IncidentQueryRow[] {
+  listRecentIncidents(sessionId: string, limit: number = 50): IncidentQueryRow[] {
     if (!this.persistence) return [];
     try {
       return this.persistence.listRecentIncidents(sessionId, limit);

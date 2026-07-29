@@ -8,7 +8,7 @@ import { useViewerPrefs } from './viewer/useViewerPrefs.js';
 import { isMarkdown, langFromPath } from './viewer/language.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   path: string | null;
 }

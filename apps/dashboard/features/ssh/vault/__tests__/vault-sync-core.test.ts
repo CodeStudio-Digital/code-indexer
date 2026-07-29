@@ -88,19 +88,23 @@ describe('vault-sync-core', () => {
 
   describe('portable refs (identity + jump host)', () => {
     const identityMap = { '7': 'ws1:id-a', '8': 'ws1:id-b' };
-    const hostMap = { '10': 'ws1:host-a', '11': 'ws1:host-b' };
+    // The jump half is a RESOLVER now: a bare `jump_host_id` can mean the shared
+    // host 11 or the project host 11, and only the caller knows which.
+    const jumpDocFor = (id: number) => ({ 10: 'ws1:host-a', 11: 'ws1:host-b' })[id];
 
     it('maps local numeric ids to stable clientDocIds on push', () => {
-      expect(hostRefs({ identity_id: 7, jump_host_id: 11 }, identityMap, hostMap)).toEqual({
+      expect(hostRefs({ identity_id: 7, jump_host_id: 11 }, identityMap, jumpDocFor)).toEqual({
         identity_ref: 'ws1:id-a',
         jump_host_ref: 'ws1:host-b',
       });
-      expect(hostRefs({ identity_id: null, jump_host_id: null }, identityMap, hostMap)).toEqual({
+      expect(hostRefs({ identity_id: null, jump_host_id: null }, identityMap, jumpDocFor)).toEqual({
         identity_ref: null,
         jump_host_ref: null,
       });
       // A ref to a row not yet in the map (e.g. an identity that failed to push) → null.
-      expect(hostRefs({ identity_id: 99, jump_host_id: null }, identityMap, hostMap).identity_ref).toBeNull();
+      expect(hostRefs({ identity_id: 99, jump_host_id: null }, identityMap, jumpDocFor).identity_ref).toBeNull();
+      // A jump the resolver can't place → null, never a foreign id.
+      expect(hostRefs({ identity_id: null, jump_host_id: 404 }, identityMap, jumpDocFor).jump_host_ref).toBeNull();
     });
 
     it('resolves clientDocIds back to local ids on apply (DIFFERENT device ids)', () => {

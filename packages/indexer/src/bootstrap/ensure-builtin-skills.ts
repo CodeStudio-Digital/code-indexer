@@ -67,6 +67,14 @@ export interface EnsureBuiltinSkillsResult {
 export function resolveBuiltinSkillsDir(moduleUrl: string): string | null {
   const here = dirname(fileURLToPath(moduleUrl));
   const candidates: string[] = [
+    // Sibling package, layout-agnostic. `here` is `<x>/packages/indexer/src/
+    // bootstrap`, so three levels up is `<x>/packages` in BOTH layouts — the
+    // source tree in dev and `dist/packages` in a built/packaged app. The
+    // workspace-root candidates below only cover the source tree, which the
+    // Electron build never ships (it packages `dist/` only), so without this
+    // the packaged app found no seed files and silently skipped every builtin
+    // skill. The `.md` files reach `dist/` via scripts/copy-prompts.mjs.
+    join(here, '..', '..', '..', 'code-agent', 'src', 'skills', 'builtin'),
     // Legacy built mode: dist/core/bootstrap → dist/core/coder/skills/builtin
     join(here, '..', 'coder', 'skills', 'builtin'),
     // Legacy dev fallback: walk up, dive into src/core/coder/skills/builtin

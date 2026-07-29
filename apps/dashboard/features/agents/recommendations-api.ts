@@ -13,7 +13,7 @@ export interface RoleSignals {
 export interface RoleRecommendation {
   role: string;
   kind: 'spawn' | 'reuse';
-  agentRunId?: number;
+  agentRunId?: string;
   score: number;
   signals: RoleSignals;
 }
@@ -24,7 +24,7 @@ export interface RecommendRoleResponse {
 }
 
 export async function recommendRole(
-  sessionId: number,
+  sessionId: string,
   task: string,
   k = 3,
 ): Promise<RecommendRoleResponse> {
@@ -50,18 +50,18 @@ export interface KanbanPrioritySignals {
 }
 
 export interface KanbanPriorityDiagnostic {
-  id: number;
+  id: string;
   score: number;
   signals: KanbanPrioritySignals;
 }
 
 export interface RecomputeKanbanResponse {
-  ordered: Array<{ id: number; title: string; column: string; tag: string | null }>;
+  ordered: Array<{ id: string; title: string; column: string; tag: string | null }>;
   diagnostics: KanbanPriorityDiagnostic[];
   durationMs: number;
 }
 
-export async function recomputeKanbanPriorities(sessionId: number): Promise<RecomputeKanbanResponse> {
+export async function recomputeKanbanPriorities(sessionId: string): Promise<RecomputeKanbanResponse> {
   const r = await fetch(`/api/company/sessions/${sessionId}/kanban/recompute-priorities`, {
     method: 'POST',
   });
@@ -75,13 +75,13 @@ export async function recomputeKanbanPriorities(sessionId: number): Promise<Reco
 // ─── C3 — proactive kanban ─────────────────────────────────────
 
 export interface KanbanRoleSuggestion {
-  cardId: number;
+  cardId: string;
   role: string;
   score: number;
 }
 
 /** Role suggestions for the top unassigned/unblocked todo+backlog cards. */
-export async function suggestKanbanRoles(sessionId: number): Promise<KanbanRoleSuggestion[]> {
+export async function suggestKanbanRoles(sessionId: string): Promise<KanbanRoleSuggestion[]> {
   const r = await fetch(`/api/company/sessions/${sessionId}/kanban/suggest-roles`, {
     method: 'POST',
   });
@@ -95,7 +95,7 @@ export async function suggestKanbanRoles(sessionId: number): Promise<KanbanRoleS
 
 export interface DispatchKanbanCardResult {
   ok: boolean;
-  agentRunId?: number;
+  agentRunId?: string;
   role?: string;
   reason?: string;
   error?: string;
@@ -103,8 +103,8 @@ export interface DispatchKanbanCardResult {
 
 /** Quick-dispatch one card (explicit role skips the recommender). */
 export async function dispatchKanbanCard(
-  sessionId: number,
-  cardId: number,
+  sessionId: string,
+  cardId: string,
   role?: string,
 ): Promise<DispatchKanbanCardResult> {
   const r = await fetch(

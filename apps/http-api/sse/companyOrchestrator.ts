@@ -14,18 +14,19 @@
 import { getWorkerOrchestratorPool } from './workerPoolSingleton.js';
 import type { CoderRunBus } from '../coder-bus.js';
 import type { WorkerBackedOrchestrator } from './WorkerOrchestratorPool.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 export type { WorkerBackedOrchestrator } from './WorkerOrchestratorPool.js';
 
 /**
  * Lookup an orchestrator for an active session. Returns null when no
  * worker is currently spawned for the id (idle / never started / evicted).
  */
-export function getCompanyOrchestrator(id: number): WorkerBackedOrchestrator | null {
+export function getCompanyOrchestrator(id: CompanySessionId): WorkerBackedOrchestrator | null {
   return getWorkerOrchestratorPool().get(id)?.orchestrator ?? null;
 }
 
 /** True when an active worker exists for this session id. */
-export function hasCompanyOrchestrator(id: number): boolean {
+export function hasCompanyOrchestrator(id: CompanySessionId): boolean {
   return getWorkerOrchestratorPool().has(id);
 }
 
@@ -36,7 +37,7 @@ export function hasCompanyOrchestrator(id: number): boolean {
  * also runs its own TTL sweep, so explicit eviction is mainly for
  * abort / restart flows.
  */
-export function deleteCompanyOrchestrator(id: number): void {
+export function deleteCompanyOrchestrator(id: CompanySessionId): void {
   void getWorkerOrchestratorPool().evict(id);
 }
 
@@ -48,7 +49,7 @@ export function deleteCompanyOrchestrator(id: number): void {
  * able to write them. `deleteCompanyOrchestrator` remains the intentionally
  * fire-and-forget compatibility surface for non-blocking cleanup paths.
  */
-export async function evictCompanyOrchestrator(id: number): Promise<void> {
+export async function evictCompanyOrchestrator(id: CompanySessionId): Promise<void> {
   await getWorkerOrchestratorPool().evict(id);
 }
 
@@ -62,7 +63,7 @@ export async function evictCompanyOrchestrator(id: number): Promise<void> {
  * is unreachable because `startServer` refuses to boot in that state.
  */
 export async function getOrSpawnCompanyOrchestrator(
-  id: number,
+  id: CompanySessionId,
 ): Promise<{ orchestrator: WorkerBackedOrchestrator; bus: CoderRunBus }> {
   return getWorkerOrchestratorPool().getOrSpawn(id);
 }

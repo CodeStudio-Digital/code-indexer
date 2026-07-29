@@ -30,7 +30,11 @@ import { fileURLToPath } from 'node:url';
 import type { Hono } from 'hono';
 import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  parseJsonBody,
+  notFound,
+} from '../_helpers.js';
 import {
   evictCompanyOrchestrator,
   getOrSpawnCompanyOrchestrator,
@@ -77,13 +81,11 @@ async function loadRecoveryBriefing(): Promise<string> {
 }
 
 export function mountReestablishMasterRoute(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db } = deps;
-
   app.post('/api/company/sessions/:id/reestablish-master', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
+    const id = parseCompanySessionIdParam(c);
+    const session = await deps.operationalSessionFiles.getCompanySession(id);
     if (!session) return notFound(c);
-    if (isAppOwnedCompanySession(companyStore, id)) {
+    if (await isAppOwnedCompanySession(deps.sessionStore, id)) {
       return appOwnedControlPlaneConflict(c, 'Master rotation/recovery');
     }
 

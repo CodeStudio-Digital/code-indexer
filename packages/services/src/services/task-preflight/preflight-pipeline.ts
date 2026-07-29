@@ -33,6 +33,7 @@ import {
   preflightCapabilityFingerprint,
   preparePreflightCatalogs,
 } from './preflight-context.js';
+import type { SessionId } from '@mcp/session-storage';
 
 const PIPELINE_NAME = 'code-agent';
 const ROLE = 'preflight';
@@ -60,7 +61,12 @@ export interface TaskPreflightDeps {
   getToolCatalog: () => PreflightToolMeta[];
   getMemoryIndex: (projectId: number) => PreflightMemoryEntry[];
   /** Active skills for the session (id + description + namespace), for task-aware suggestion. */
-  getSkillCatalog?: (sessionId: number, projectId: number, projectRoot?: string) => PreflightSkillMeta[];
+  getSkillCatalog?: (
+    sessionId: SessionId,
+    projectId: number,
+    projectRoot?: string,
+    activeSkillIds?: readonly string[] | null,
+  ) => PreflightSkillMeta[];
   /**
    * Zero-config fallback model (the general default) used when no
    * `code-agent/preflight` binding is configured. A configured binding always
@@ -71,13 +77,15 @@ export interface TaskPreflightDeps {
 }
 
 export interface TaskPreflightInput {
-  sessionId: number;
+  sessionId: SessionId;
   projectId?: number | null;
   userMessage: string;
   /** True for a synthetic union even when it currently has one linked member. */
   isGlobalWorkspace?: boolean;
   /** Real project members of the active workspace (one for normal sessions). */
   workspaceProjects?: PreflightWorkspaceProject[];
+  /** Explicit per-session filesystem projection; null/undefined uses defaults. */
+  activeSkillIds?: readonly string[] | null;
   /** Overrides for tests; defaults come from env (settings panel). */
   timeoutMs?: number;
   maxTools?: number;

@@ -1,15 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { coercePayload } from '@mcp/company/tools/qa/qa-publish-result.js';
 
+const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000042';
+
 describe('coercePayload (qa_publish_result)', () => {
   it('coerces a minimal valid payload', () => {
     const out = coercePayload(
       { suite: 'login', passed: 3, failed: 0 },
       'qa-engineer',
-      42,
+      AGENT_RUN_ID,
     );
     expect(out).toEqual({
-      agent_run_id: 42,
+      agent_run_id: AGENT_RUN_ID,
       agent_role: 'qa-engineer',
       suite: 'login',
       passed: 3,
@@ -33,7 +35,7 @@ describe('coercePayload (qa_publish_result)', () => {
         failing_tests: [{ name: 'wrong password', error: 'expected toast' }],
       },
       'qa',
-      99,
+      AGENT_RUN_ID,
     );
     expect(out.skipped).toBe(1);
     expect(out.duration_ms).toBe(12345);
@@ -43,25 +45,25 @@ describe('coercePayload (qa_publish_result)', () => {
 
   it('rejects non-string suite', () => {
     expect(() =>
-      coercePayload({ suite: 123, passed: 0, failed: 0 } as Record<string, unknown>, 'r', 1),
+      coercePayload({ suite: 123, passed: 0, failed: 0 } as Record<string, unknown>, 'r', AGENT_RUN_ID),
     ).toThrow(/suite must be a non-empty string/);
   });
 
   it('rejects empty suite', () => {
     expect(() =>
-      coercePayload({ suite: '', passed: 0, failed: 0 }, 'r', 1),
+      coercePayload({ suite: '', passed: 0, failed: 0 }, 'r', AGENT_RUN_ID),
     ).toThrow(/suite must be a non-empty string/);
   });
 
   it('rejects negative counts', () => {
     expect(() =>
-      coercePayload({ suite: 's', passed: -1, failed: 0 }, 'r', 1),
+      coercePayload({ suite: 's', passed: -1, failed: 0 }, 'r', AGENT_RUN_ID),
     ).toThrow(/passed must be a non-negative integer/);
   });
 
   it('rejects fractional counts', () => {
     expect(() =>
-      coercePayload({ suite: 's', passed: 1.5, failed: 0 }, 'r', 1),
+      coercePayload({ suite: 's', passed: 1.5, failed: 0 }, 'r', AGENT_RUN_ID),
     ).toThrow(/passed must be a non-negative integer/);
   });
 
@@ -70,7 +72,7 @@ describe('coercePayload (qa_publish_result)', () => {
       coercePayload(
         { suite: 's', passed: 0, failed: 0, trace_urls: 'not-an-array' },
         'r',
-        1,
+        AGENT_RUN_ID,
       ),
     ).toThrow(/trace_urls must be an array/);
   });
@@ -80,7 +82,7 @@ describe('coercePayload (qa_publish_result)', () => {
       coercePayload(
         { suite: 's', passed: 0, failed: 1, failing_tests: [{ name: 'x' }] },
         'r',
-        1,
+        AGENT_RUN_ID,
       ),
     ).toThrow(/failing_tests\[0\].error must be a non-empty string/);
   });

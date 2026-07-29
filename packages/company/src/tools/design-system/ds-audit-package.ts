@@ -60,20 +60,20 @@ function listFsComponents(pkgDir: string): string[] {
 }
 
 /** Disk components missing from the registered (draft ∪ last published) set. */
-function findUnregistered(binding: DsToolBinding, pkgDir: string): string[] | null {
+async function findUnregistered(binding: DsToolBinding, pkgDir: string): Promise<string[] | null> {
   const store = getDesignSystemStore();
   if (!store) return null;
-  const session = binding.resolveDsSession(store);
+  const session = await binding.resolveDsSession(store);
   if (!session) return null;
 
   const registered = new Set<string>();
-  const draft = store.getLatestVersionAny(session.id);
+  const draft = await store.getLatestVersionAny(session.id);
   if (draft && (draft.status === 'draft' || draft.status === 'building')) {
-    for (const c of store.listComponents(draft.id)) registered.add(normalize(c.name));
+    for (const c of await store.listComponents(draft.id)) registered.add(normalize(c.name));
   }
-  const published = store.getLatestPublishedVersion(session.id);
+  const published = await store.getLatestPublishedVersion(session.id);
   if (published) {
-    for (const c of store.listComponents(published.id)) registered.add(normalize(c.name));
+    for (const c of await store.listComponents(published.id)) registered.add(normalize(c.name));
   }
   return listFsComponents(pkgDir).filter((name) => !registered.has(normalize(name)));
 }
@@ -97,7 +97,7 @@ export function dsAuditPackage(binding: DsToolBinding): CoderTool {
       let failed = !result.ok;
 
       if (binding.profile === 'studio') {
-        const unregistered = findUnregistered(binding, resolved.path);
+        const unregistered = await findUnregistered(binding, resolved.path);
         if (unregistered && unregistered.length > 0) {
           failed = true;
           formatted += [
@@ -111,7 +111,7 @@ export function dsAuditPackage(binding: DsToolBinding): CoderTool {
         // Auditoria de DESIGN (tokens-first, fidelidade, galeria, variantes,
         // docs, a11y) — o package-audit acima só cobre o shape do pacote.
         const store = getDesignSystemStore();
-        const session = store ? binding.resolveDsSession(store) : null;
+        const session = store ? await binding.resolveDsSession(store) : null;
         if (store && session) {
           const workspace = resolveHostPath('.', ctx);
           if (workspace.kind !== 'no-bind-mount') {
@@ -119,7 +119,7 @@ export function dsAuditPackage(binding: DsToolBinding): CoderTool {
               workspaceDir: workspace.path,
               stack: session.stack,
               mode: session.mode,
-              recorded: collectRecordedComponents(store, session.id),
+              recorded: await collectRecordedComponents(store, session.id),
               scope: 'stage',
             });
             if (!studio.ok) failed = true;

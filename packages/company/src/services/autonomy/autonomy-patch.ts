@@ -1,6 +1,6 @@
 /**
  * Autonomy layer (C0) — PATCH-side validation + merge for the `autonomy`
- * object inside `company_sessions.config_json`.
+ * object inside the Company bundle's session configuration.
  *
  * PURE module shared by:
  *   - `apps/http-api` PATCH /api/company/sessions/:id/config (validates the

@@ -76,7 +76,7 @@ interface RailComposerBarProps {
   fallbackModel: string | null;
   onFallbackChange: (provider: string | null, model: string | null) => void;
   getModelsForProvider: (providerId: string) => EnrichedProviderModel[];
-  sessionId: number | null;
+  sessionId: string | null;
   selectedPipelineId: number | null;
   setSelectedPipelineId?: (v: number | null) => void;
   thinking?: boolean;

@@ -5,10 +5,11 @@
  * use the current session baseline until that frozen envelope is available.
  */
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { InlineDiff } from '../../snapshots/diff/InlineDiff.js';
-import { useSnapshotActions, useSnapshotFile, statusKind } from './snapshot-files-context.js';
+import { useSnapshotActions, useSnapshotFileMatch, statusKind } from './snapshot-files-context.js';
 import type { EditFileRef, FileEditOp } from './edit-tools.js';
 import type {
   RoundSnapshotFileSummary,
@@ -40,17 +41,26 @@ export function FileChangeRow({
   reviewFindings?: RoundSnapshotReviewFinding[];
   onRoundMutated?: () => void;
 }) {
+  const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   const actions = useSnapshotActions();
   // A completed turn supplies its immutable round snapshot. Individual edit
   // cards do not have that envelope yet, so keep them useful with the live
   // session baseline instead of rendering permanent `--` placeholders.
-  const globalSummary = useSnapshotFile(file.path);
-  const summary = snapshot ?? globalSummary;
+  const match = useSnapshotFileMatch(file.path);
+  const summary = snapshot ?? match.file;
 
   const kind = summary ? statusKind(summary) : opToKind(file.op);
   const baselineId = summary?.baselineId;
   const canExpand = baselineId != null && actions != null;
+  // Without a baseline the row is a dead `–`; say why. `ambiguous` means several
+  // tracked files share this tail, `missing` usually means the write landed
+  // outside the project root, where nothing is snapshotted at all.
+  const placeholderHint = summary
+    ? undefined
+    : t(match.reason === 'ambiguous'
+      ? 'messages.snapshotAmbiguousPath'
+      : 'messages.snapshotUntrackedFile');
 
   return (
     <div className="rounded-md border border-border/60 bg-card/40 overflow-hidden">
@@ -58,6 +68,7 @@ export function FileChangeRow({
         type="button"
         onClick={() => canExpand && setOpen((o) => !o)}
         disabled={!canExpand}
+        title={placeholderHint}
         className={cn(
           'w-full flex items-center gap-2 px-2 py-1.5 text-left text-xs transition-colors',
           canExpand ? 'hover:bg-muted/50 cursor-pointer' : 'cursor-default',

@@ -9,17 +9,18 @@ const subscribeSpy = vi.fn(() => () => undefined);
 vi.mock('@mcp/services/sandbox/index.js', () => ({
   getSandboxManager: () => ({ subscribe: subscribeSpy, provision: provisionSpy, listServicesWithIds: () => [] }),
   resolveDriver: async () => ({}),
-  archivePath: (id: string | number) => `/tmp/${id}.tar`,
 }));
 
 import { SandboxService } from '@mcp/company/services/SandboxService.js';
 
+const COMPANY_SESSION_ID = 'c0000000-0000-4000-8000-000000000042';
+
 function makeService(): SandboxService {
   const ctx = {
-    companySessionId: 42,
+    companySessionId: COMPANY_SESSION_ID,
     projects: [{ project_id: 1 }],
-    companyStore: {
-      getCompanySession: () => ({ config_json: JSON.stringify({ builder: { stack: 'react-ts' } }) }),
+    companyFiles: {
+      getSession: () => ({ config_json: JSON.stringify({ builder: { stack: 'react-ts' } }) }),
     },
     db: { getProject: () => ({ project_id: 1, name: 'proj', root_path: '/work/proj' }) },
   } as never;

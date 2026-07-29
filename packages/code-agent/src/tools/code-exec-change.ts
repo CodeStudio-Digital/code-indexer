@@ -56,10 +56,10 @@ export function buildChangeSandboxApi(
   callTool: CallTool,
   projectName: string,
 ): Record<string, unknown> {
-  let diffsPromise: Promise<FileDiff[]> | null = null;
-  const diffs = (): Promise<FileDiff[]> => (diffsPromise ??= port.getDiffs());
-  const beforeCache = new Map<number, Promise<string | null>>();
-  const before = (baselineId: number): Promise<string | null> => {
+  let diffsPromise: Promise<FileDiff<string>[]> | null = null;
+  const diffs = (): Promise<FileDiff<string>[]> => (diffsPromise ??= port.getDiffs());
+  const beforeCache = new Map<string, Promise<string | null>>();
+  const before = (baselineId: string): Promise<string | null> => {
     let p = beforeCache.get(baselineId);
     if (!p) {
       p = port.getBeforeContent(baselineId);
@@ -67,7 +67,7 @@ export function buildChangeSandboxApi(
     }
     return p;
   };
-  const diffFor = async (path: string): Promise<FileDiff> => {
+  const diffFor = async (path: string): Promise<FileDiff<string>> => {
     const all = await diffs();
     const wanted = normalizePath(path);
     const diff = all.find((d) => normalizePath(d.baseline.filePath) === wanted);

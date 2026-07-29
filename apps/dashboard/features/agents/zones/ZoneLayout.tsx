@@ -29,7 +29,7 @@ import {
 } from './types.js';
 
 interface ZoneLayoutProps {
-  sessionId: number;
+  sessionId: string;
   sessionName: string;
   zone: Zone;
   tab: string;

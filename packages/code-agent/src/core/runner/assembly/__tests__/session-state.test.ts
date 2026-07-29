@@ -120,7 +120,7 @@ describe('renderMemoryIndex', () => {
 describe('renderConversationChapterIndex', () => {
   it('injects at most ten titles and stays inside the total 1200-char gate', () => {
     const entries = Array.from({ length: 20 }, (_, index) => ({
-      id: index + 1,
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
       ordinal: index + 1,
       title: `Chapter ${index + 1} ${'x'.repeat(120)}`,
       source: 'auto',

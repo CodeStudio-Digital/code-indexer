@@ -20,8 +20,8 @@ export interface SpriteStudioState {
   /** Versions of the active asset (loaded by selectAsset). */
   versions: AssetVersion[];
   activeCategory: CategoryGroupId | 'all';
-  activeAssetId: number | null;
-  activeVersionId: number | null;
+  activeAssetId: string | null;
+  activeVersionId: string | null;
   mode: StudioMode;
   query: string;
   loading: boolean;
@@ -101,7 +101,7 @@ export function useSpriteStudio(projectId: number | null) {
   }, [projectId, patch, refreshAssets]);
 
   /** Select an asset and load its version history. */
-  const selectAsset = useCallback(async (assetId: number | null) => {
+  const selectAsset = useCallback(async (assetId: string | null) => {
     if (assetId == null) {
       patch({ activeAssetId: null, activeVersionId: null, versions: [] });
       return;
@@ -122,7 +122,7 @@ export function useSpriteStudio(projectId: number | null) {
     }
   }, [projectId, patch]);
 
-  const selectVersion = useCallback((versionId: number | null) => patch({ activeVersionId: versionId }), [patch]);
+  const selectVersion = useCallback((versionId: string | null) => patch({ activeVersionId: versionId }), [patch]);
 
   const setMode = useCallback((mode: StudioMode) => {
     patch({ mode });
@@ -141,7 +141,7 @@ export function useSpriteStudio(projectId: number | null) {
   }, [projectId, refreshAssets, selectAsset]);
 
   // Patch the single returned row in place (no full-library refetch on blur).
-  const patchAsset = useCallback(async (assetId: number, p: Partial<SpriteAsset>) => {
+  const patchAsset = useCallback(async (assetId: string, p: Partial<SpriteAsset>) => {
     if (projectId == null) return;
     const updated = await api.patchAsset(projectId, assetId, p);
     set((prev) => ({ ...prev, assets: prev.assets.map((a) => (a.id === assetId ? updated : a)) }));

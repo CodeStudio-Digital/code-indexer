@@ -43,7 +43,7 @@ export interface BuildToolsArgs {
   /**
    * Hidden tools the model called by name (dispatch pinned them). Bypass
    * ONLY the tier filter and the model cap — disabled filters, the
-   * tool-filter hook and the goal-gate still apply every turn.
+   * tool-filter hook and atomic goal-tool pairing still apply every turn.
    */
   pinnedTools?: ReadonlySet<string>;
   /**
@@ -140,7 +140,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // Pins: union past the tier filter. Re-pulled from the registry (the
   // tier filter dropped them from `filtered`) with the disabled filters
   // re-applied — a disabled tool can never re-enter via a pin. The hook
-  // and goal-gate below still see (and may re-drop) pinned tools.
+  // and atomic goal-tool pairing below still see (and may re-drop) pins.
   if (args.pinnedTools?.size) {
     const present = new Set(filtered.map((t) => t.name));
     for (const t of args.registry.list()) {
@@ -182,10 +182,8 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // membership is the first segment of the provider prompt-cache prefix;
   // dropping a tool mid-run changes the serialized bytes and invalidates the
   // whole prefix (measured: a full ~50–80k-token re-write on the turn after
-  // the goal is created, every round). The create_goal loop guard
-  // (sessions 656/658) now lives entirely in the handler: `bumpCreateBurst`
-  // hard-refuses bursts, and a redundant call while a goal is in_progress is
-  // rejected (not superseded). See `packages/code-agent/src/tools/goal.ts`.
+  // the goal is created, every round). Redundant create_goal calls are
+  // idempotent and leave the active objective unchanged.
 
   const eligibleBeforeCap = [...filtered];
 

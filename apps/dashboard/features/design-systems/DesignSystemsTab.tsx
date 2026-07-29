@@ -21,9 +21,9 @@ import { DesignSystemSessionView } from './DesignSystemSessionView.js';
 import { DsStudioView } from './studio/DsStudioView.js';
 
 interface Selected {
-  id: number;
+  id: string;
   kind: DsSessionKind;
-  coderSessionId?: number;
+  coderSessionId?: string;
 }
 
 export function DesignSystemsTab() {

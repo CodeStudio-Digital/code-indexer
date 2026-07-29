@@ -40,13 +40,13 @@ interface TasksSummary {
 interface StateSummary {
   goal: GoalSummary | null;
   tasks: TasksSummary | null;
-  /** Persisted todos rehydrated from coder_sessions.todos_json, used as a fallback
+  /** Persisted todos rehydrated from the bundle state projection, used as a fallback
    *  on session mount before any todos_updated SSE event arrives. */
   todos?: TodoItem[];
 }
 
 interface SessionStateSidebarProps {
-  sessionId: number;
+  sessionId: string;
   refreshKey?: number;
   onActiveTaskChange?: (taskId: string | null) => void;
   todos: TodoItem[];

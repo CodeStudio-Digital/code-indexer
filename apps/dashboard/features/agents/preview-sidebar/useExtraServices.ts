@@ -22,7 +22,7 @@ import type { ServiceOption } from '../../builder/preview/api-reference/ApiRefer
  */
 const DISCONNECTED_HEARTBEAT_MS = 5_000;
 
-export function useExtraServices(sessionId: number | null): ServiceOption[] {
+export function useExtraServices(sessionId: string | null): ServiceOption[] {
   const [services, setServices] = useState<ServiceOption[]>([]);
   const [manualSeq, setManualSeq] = useState(0);
 

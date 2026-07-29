@@ -9,7 +9,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildGlobalWorkspace } from '@mcp/code-agent/core/virtual-workspace.js';
 import {
   listDirFiltered,
   listFilesRecursive,
@@ -31,10 +30,9 @@ describe('coder project files over virtual workspace links', () => {
     mkdirSync(join(targetB, 'src'), { recursive: true });
     writeFileSync(join(targetA, 'src', 'keep-a.ts'), 'export const A = 1;');
     writeFileSync(join(targetB, 'src', 'keep-b.ts'), 'export const B = 2;');
-    buildGlobalWorkspace(unionDir, [
-      { name: 'poa-backend', rootPath: targetA },
-      { name: 'poa-intranet-angular', rootPath: targetB },
-    ]);
+    mkdirSync(unionDir);
+    symlinkSync(targetA, join(unionDir, 'poa-backend'), 'junction');
+    symlinkSync(targetB, join(unionDir, 'poa-intranet-angular'), 'junction');
   });
 
   afterEach(() => {

@@ -10,22 +10,25 @@ import {
 beforeEach(() => clearAllSidecarTrackers());
 
 describe('sidecar-down tracker', () => {
+  const runA = '00000000-0000-4000-8000-000000000001';
+  const runB = '00000000-0000-4000-8000-000000000002';
+
   it('counts consecutive failures per run', () => {
-    expect(trackSidecarFailure(1)).toBe(1);
-    expect(trackSidecarFailure(1)).toBe(2);
-    expect(trackSidecarFailure(2)).toBe(1); // independent run
+    expect(trackSidecarFailure(runA)).toBe(1);
+    expect(trackSidecarFailure(runA)).toBe(2);
+    expect(trackSidecarFailure(runB)).toBe(1); // independent run
   });
 
   it('reset zeroes the streak but keeps counting after', () => {
-    trackSidecarFailure(1);
-    resetSidecarTracker(1);
-    expect(trackSidecarFailure(1)).toBe(1);
+    trackSidecarFailure(runA);
+    resetSidecarTracker(runA);
+    expect(trackSidecarFailure(runA)).toBe(1);
   });
 
   it('clear drops the run entirely', () => {
-    trackSidecarFailure(1);
-    clearSidecarTracker(1);
-    expect(trackSidecarFailure(1)).toBe(1);
+    trackSidecarFailure(runA);
+    clearSidecarTracker(runA);
+    expect(trackSidecarFailure(runA)).toBe(1);
   });
 
   it('threshold is 2 (route contract)', () => {

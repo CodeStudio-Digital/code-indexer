@@ -5,62 +5,74 @@
  * projects out of settings_json (anchorVersionId / lastGenJobId).
  */
 import { describe, expect, it } from 'vitest';
-import type { SpriteAnimationRow, SpriteFrameRow } from '@mcp/store/sprite-studio/types.js';
+import type {
+  SpriteAnimationFileRow,
+  SpriteFrameFileRow,
+} from '../../../sprite-files.js';
 import { clampFrames, MAX_FRAMES, pickAnchorVersion, toAnimDto } from '../animation-helpers.js';
 
-type V = { id: number; asset_id: number };
+const id = (n: number): string =>
+  `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+type V = { id: string; asset_id: string };
 const versions: V[] = [
-  { id: 10, asset_id: 1 },
-  { id: 11, asset_id: 1 },
-  { id: 20, asset_id: 2 }, // another asset — must be rejected
+  { id: id(10), asset_id: id(1) },
+  { id: id(11), asset_id: id(1) },
+  { id: id(20), asset_id: id(2) }, // another asset — must be rejected
 ];
-const getVersion = (id: number): V | null => versions.find((v) => v.id === id) ?? null;
+const getVersion = (versionId: string): V | null =>
+  versions.find((version) => version.id === versionId) ?? null;
 
 describe('pickAnchorVersion', () => {
-  it('resolves an explicit anchor belonging to the asset', () => {
-    const r = pickAnchorVersion(getVersion, 1, 10, 11);
+  it('resolves an explicit anchor belonging to the asset', async () => {
+    const r = await pickAnchorVersion(getVersion, id(1), id(10), id(11));
     expect(r).toEqual({ ok: true, version: versions[1], explicit: true });
   });
 
-  it('rejects an anchor from another asset', () => {
-    expect(pickAnchorVersion(getVersion, 1, 10, 20)).toEqual({ ok: false });
+  it('rejects an anchor from another asset', async () => {
+    await expect(pickAnchorVersion(getVersion, id(1), id(10), id(20)))
+      .resolves.toEqual({ ok: false });
   });
 
-  it('rejects unknown ids and non-integer values', () => {
-    expect(pickAnchorVersion(getVersion, 1, 10, 999)).toEqual({ ok: false });
-    expect(pickAnchorVersion(getVersion, 1, 10, '11')).toEqual({ ok: false });
-    expect(pickAnchorVersion(getVersion, 1, 10, 11.5)).toEqual({ ok: false });
+  it('rejects unknown ids and non-string values', async () => {
+    await expect(pickAnchorVersion(getVersion, id(1), id(10), id(999)))
+      .resolves.toEqual({ ok: false });
+    await expect(pickAnchorVersion(getVersion, id(1), id(10), 11))
+      .resolves.toEqual({ ok: false });
   });
 
-  it('falls back to the current version when omitted (implicit, not explicit)', () => {
-    expect(pickAnchorVersion(getVersion, 1, 10, undefined))
-      .toEqual({ ok: true, version: versions[0], explicit: false });
-    expect(pickAnchorVersion(getVersion, 1, 10, null))
-      .toEqual({ ok: true, version: versions[0], explicit: false });
+  it('falls back to the current version when omitted (implicit, not explicit)', async () => {
+    await expect(pickAnchorVersion(getVersion, id(1), id(10), undefined))
+      .resolves.toEqual({ ok: true, version: versions[0], explicit: false });
+    await expect(pickAnchorVersion(getVersion, id(1), id(10), null))
+      .resolves.toEqual({ ok: true, version: versions[0], explicit: false });
   });
 
-  it('yields no version when the asset has no current (unconditioned generation)', () => {
-    expect(pickAnchorVersion(getVersion, 1, null, undefined))
-      .toEqual({ ok: true, version: null, explicit: false });
+  it('yields no version when the asset has no current (unconditioned generation)', async () => {
+    await expect(pickAnchorVersion(getVersion, id(1), null, undefined))
+      .resolves.toEqual({ ok: true, version: null, explicit: false });
   });
 });
 
-function animRow(settings: Record<string, unknown>): SpriteAnimationRow {
+function animRow(settings: Record<string, unknown>): SpriteAnimationFileRow {
   return {
-    id: 5, asset_id: 1, name: 'walk', fps: 8, loop_mode: 'loop', status: 'draft',
+    id: id(5), asset_id: id(1), name: 'walk', fps: 8, loop_mode: 'loop', status: 'draft',
     settings, created_at: '2026-07-01', updated_at: '2026-07-02',
   };
 }
 
-const frame: SpriteFrameRow = {
-  id: 7, animation_id: 5, frame_index: 0, version_id: 10, duration_ms: 125, track: 0,
+const frame: SpriteFrameFileRow = {
+  id: id(7), animation_id: id(5), frame_index: 0, version_id: id(10), duration_ms: 125, track: 0,
 };
 
 describe('toAnimDto provenance fields', () => {
   it('exposes anchorVersionId and lastGenJobId from settings_json', () => {
-    const dto = toAnimDto(animRow({ frameCount: 6, anchorVersionId: 11, lastGenJobId: 42 }), [frame]);
-    expect(dto.anchorVersionId).toBe(11);
-    expect(dto.lastGenJobId).toBe(42);
+    const dto = toAnimDto(animRow({
+      frameCount: 6,
+      anchorVersionId: id(11),
+      lastGenJobId: id(42),
+    }), [frame]);
+    expect(dto.anchorVersionId).toBe(id(11));
+    expect(dto.lastGenJobId).toBe(id(42));
     expect(dto.frameCount).toBe(1); // frames win over the settings target
   });
 

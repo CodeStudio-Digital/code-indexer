@@ -2,7 +2,7 @@
  * v4.4 — Background watchdog for orphan QA test runs.
  *
  * Symptom we're closing the door on: in session 68 the agent created a
- * `qa_test_runs` row, ran the suite, but the streaming reporter never
+ * QA-run entity, ran the suite, but the streaming reporter never
  * POST'd any events back. The row stayed `running` indefinitely until
  * the next server restart's `recoverStaleRuns` swept it. Operator saw
  * a permanent spinner on the dashboard.
@@ -54,15 +54,15 @@ export const QA_WATCHDOG_ERROR_MESSAGE =
  * the number of runs marked errored so callers can log + tests can
  * assert. Exported for unit tests.
  */
-export function runWatchdogTick(
+export async function runWatchdogTick(
   runStore: IQaTestRunStore,
   maxRunAgeMs: number,
-): number {
-  const stale = runStore.findStaleRunningRuns(maxRunAgeMs);
+): Promise<number> {
+  const stale = await runStore.findStaleRunningRuns(maxRunAgeMs);
   let killed = 0;
   for (const run of stale) {
     try {
-      const updated = runStore.completeRun(run.id, {
+      const updated = await runStore.completeRun(run.id, {
         status: 'error',
         passed: run.passed,
         failed: run.failed,
@@ -95,12 +95,12 @@ export function startQaWatchdog(
   const intervalMs = opts.intervalMs ?? DEFAULT_INTERVAL_MS;
   const maxRunAgeMs = opts.maxRunAgeMs ?? DEFAULT_MAX_AGE_MS;
 
-  const tick = (): void => {
+  const tick = async (): Promise<void> => {
     try {
-      const killed = runWatchdogTick(runStore, maxRunAgeMs);
+      const killed = await runWatchdogTick(runStore, maxRunAgeMs);
       if (killed > 0) {
         console.log(
-          `[qa-watchdog] Marked ${killed} orphan qa_test_run(s) errored (no reporter events received in ${Math.round(maxRunAgeMs / 1000)}s).`,
+          `[qa-watchdog] Marked ${killed} orphan QA run(s) errored (no reporter events received in ${Math.round(maxRunAgeMs / 1000)}s).`,
         );
       }
     } catch (e) {
@@ -110,7 +110,9 @@ export function startQaWatchdog(
     }
   };
 
-  const handle = setInterval(tick, intervalMs);
+  const handle = setInterval(() => {
+    void tick();
+  }, intervalMs);
   if (typeof handle.unref === 'function') handle.unref();
   let cancelled = false;
   return () => {

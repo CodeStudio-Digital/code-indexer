@@ -17,6 +17,10 @@ import { setSandboxManagerForTests } from '@mcp/services/sandbox/sandbox-manager
 import type { SandboxManager } from '@mcp/services/sandbox/sandbox-manager.js';
 import { envTools, setEnvToolStore } from '../env-tools.js';
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000007';
+const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000001';
+const ENV_ID = '00000000-0000-4000-8000-000000000101';
+
 const tool = (name: string) => {
   const t = envTools.find((x) => x.name === name);
   if (!t) throw new Error(`tool ${name} not registered`);
@@ -25,7 +29,9 @@ const tool = (name: string) => {
 
 function row(over: Partial<CompanySessionEnvRow>): CompanySessionEnvRow {
   return {
-    session_id: 7,
+    id: ENV_ID,
+    seq: 1,
+    session_id: COMPANY_SESSION_ID,
     key: 'K',
     value: 'v',
     is_secret: 0,
@@ -60,7 +66,11 @@ function installFakeManager(): void {
 const ctx = {
   cwd: '/tmp',
   projectName: 'p',
-  companyContext: { companySessionId: 7, agentRole: 'dev', agentRunId: 1 },
+  companyContext: {
+    companySessionId: COMPANY_SESSION_ID,
+    agentRole: 'dev',
+    agentRunId: AGENT_RUN_ID,
+  },
 } as unknown as ToolContext;
 
 afterEach(() => {
@@ -74,7 +84,7 @@ describe('env_set — service scope param', () => {
     installFakeManager();
     const res = await tool('env_set').handler({ key: 'K', value: 'v' }, ctx);
     expect(res.isError).toBeFalsy();
-    expect(upsert).toHaveBeenCalledWith(7, 'K', 'v', false, {
+    expect(upsert).toHaveBeenCalledWith(COMPANY_SESSION_ID, 'K', 'v', false, {
       source: 'agent',
       serviceScope: undefined,
     });
@@ -89,7 +99,7 @@ describe('env_set — service scope param', () => {
     );
     expect(res.isError).toBeFalsy();
     expect(String(res.content)).toContain('scope: main,api');
-    expect(upsert).toHaveBeenCalledWith(7, 'K', 'v', false, {
+    expect(upsert).toHaveBeenCalledWith(COMPANY_SESSION_ID, 'K', 'v', false, {
       source: 'agent',
       serviceScope: 'main,api',
     });
@@ -101,7 +111,7 @@ describe('env_set — service scope param', () => {
     const res = await tool('env_set').handler({ key: 'K', value: 'v', service: '' }, ctx);
     expect(res.isError).toBeFalsy();
     expect(String(res.content)).toContain('scope: all services');
-    expect(upsert).toHaveBeenCalledWith(7, 'K', 'v', false, {
+    expect(upsert).toHaveBeenCalledWith(COMPANY_SESSION_ID, 'K', 'v', false, {
       source: 'agent',
       serviceScope: null,
     });

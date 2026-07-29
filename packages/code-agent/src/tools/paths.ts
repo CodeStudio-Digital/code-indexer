@@ -42,7 +42,8 @@ export function resolveSafe(relPath: string, cwd: string): string | null {
 }
 
 export interface ExternalFilesystemRoot {
-  id: number;
+  id: string;
+  seq?: number;
   rootPath: string;
   access: 'read' | 'write';
 }
@@ -74,9 +75,137 @@ export type AuthorizedPathResult =
       relativePath: string;
       external: boolean;
       access: 'read' | 'write';
-      rootId?: number;
+      rootId?: string;
     }
   | { ok: false; reason: string };
+
+export interface WorkspaceProjectRoot {
+  projectId: number;
+  name: string;
+  slug: string;
+  rootPath: string;
+  isPrimary: boolean;
+}
+
+export interface WorkspacePathContext {
+  cwd: string;
+  projectName: string;
+  projectId?: number;
+  globalWorkspace?: {
+    projects: ReadonlyArray<WorkspaceProjectRoot>;
+  };
+  externalRoots?: readonly ExternalFilesystemRoot[];
+}
+
+export type WorkspacePathResult =
+  | {
+      ok: true;
+      abs: string;
+      rootPath: string;
+      relativePath: string;
+      external: boolean;
+      access: 'read' | 'write';
+      rootId?: string;
+      projectId?: number;
+      projectName: string;
+      projectSlug?: string;
+      /** Set only when the caller explicitly addressed `<slug>/...`. */
+      workspacePrefix?: string;
+    }
+  | { ok: false; reason: string };
+
+function prefixedWorkspaceProject(
+  inputPath: string,
+  projects: readonly WorkspaceProjectRoot[],
+): { project: WorkspaceProjectRoot; localPath: string } | null {
+  const normalized = inputPath.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+  const slash = normalized.indexOf('/');
+  const prefix = slash >= 0 ? normalized.slice(0, slash) : normalized;
+  const project = projects.find(
+    (candidate) => candidate.slug.toLowerCase() === prefix.toLowerCase(),
+  );
+  if (!project) return null;
+  return {
+    project,
+    localPath: slash >= 0 ? normalized.slice(slash + 1) || '.' : '.',
+  };
+}
+
+function workspaceProjectContainingAbsolutePath(
+  inputPath: string,
+  projects: readonly WorkspaceProjectRoot[],
+): WorkspaceProjectRoot | undefined {
+  return [...projects]
+    .sort((a, b) => b.rootPath.length - a.rootPath.length)
+    .find((project) => resolveSafe(inputPath, project.rootPath) !== null);
+}
+
+/**
+ * Resolve the public path namespace used by native tools.
+ *
+ * Ordinary sessions remain project-relative. A global session additionally
+ * reserves the first segment of a relative path as a project slug:
+ * `<slug>/src/file.ts` resolves directly inside that project's real root.
+ * No junction, synthetic project, or union directory participates.
+ */
+export function resolveWorkspacePath(
+  inputPath: string,
+  ctx: WorkspacePathContext,
+  intent: 'read' | 'write',
+): WorkspacePathResult {
+  const projects = ctx.globalWorkspace?.projects ?? [];
+  const pathApi = pathFor(ctx.cwd);
+
+  if (projects.length > 0 && !pathApi.isAbsolute(inputPath)) {
+    const prefixed = prefixedWorkspaceProject(inputPath, projects);
+    if (prefixed) {
+      const resolved = resolveAuthorizedPath(
+        prefixed.localPath,
+        prefixed.project.rootPath,
+        undefined,
+        intent,
+      );
+      if (!resolved.ok) return resolved;
+      return {
+        ...resolved,
+        projectId: prefixed.project.projectId,
+        projectName: prefixed.project.name,
+        projectSlug: prefixed.project.slug,
+        workspacePrefix: prefixed.project.slug,
+      };
+    }
+  }
+
+  if (projects.length > 0 && pathApi.isAbsolute(inputPath)) {
+    const project = workspaceProjectContainingAbsolutePath(inputPath, projects);
+    if (project) {
+      const resolved = resolveAuthorizedPath(inputPath, project.rootPath, undefined, intent);
+      if (!resolved.ok) return resolved;
+      return {
+        ...resolved,
+        projectId: project.projectId,
+        projectName: project.name,
+        projectSlug: project.slug,
+      };
+    }
+  }
+
+  const resolved = resolveAuthorizedPath(
+    inputPath,
+    ctx.cwd,
+    ctx.externalRoots,
+    intent,
+  );
+  if (!resolved.ok) return resolved;
+  const primary = projects.find((project) => project.isPrimary)
+    ?? projects.find((project) => project.rootPath === ctx.cwd);
+  return {
+    ...resolved,
+    projectId: resolved.external ? undefined : (primary?.projectId ?? ctx.projectId),
+    projectName: resolved.external ? ctx.projectName : (primary?.name ?? ctx.projectName),
+    ...(resolved.external || !primary ? {} : { projectSlug: primary.slug }),
+  };
+}
 
 /**
  * Resolve a native-tool path against the project or an explicitly authorized

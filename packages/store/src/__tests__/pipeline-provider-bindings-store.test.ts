@@ -6,8 +6,8 @@
  * Both methods are wrapped in transactions, so the invariants worth
  * locking in are:
  *
- *   - bulkDelete with no scope wipes everything
- *   - bulkDelete with scope_type='global' leaves template/session rows alone
+ *   - bulkDelete with no scope wipes every reusable binding
+ *   - bulkDelete with scope_type='global' leaves template rows alone
  *   - bulkDelete with scope_type + scope_id narrows further
  *   - bulkApply creates new rows for every target and reuses ids when a
  *     matching binding already exists (upsert semantics)
@@ -59,8 +59,19 @@ function seedMixedScope(s: PipelineProviderBindingsStore): void {
   s.upsert({ pipeline_name: 'quality_policy',   binding_role: 'classifier', provider_id: 'p1', model_id: 'm1', scope_type: 'global' });
   // One template binding.
   s.upsert({ pipeline_name: 'quality_off_topic', binding_role: 'classifier', provider_id: 'p2', model_id: 'm2', scope_type: 'template', scope_id: 7 });
-  // One session binding.
-  s.upsert({ pipeline_name: 'quality_off_topic', binding_role: 'classifier', provider_id: 'p3', model_id: 'm3', scope_type: 'session',  scope_id: 42 });
+}
+
+/** Simulates a pre-cutover row that migration 263 has not cleaned yet. */
+function seedLegacySessionRow(h: Handle): number {
+  h.db.raw().exec(
+    'DROP TRIGGER IF EXISTS session_fs_reject_pipeline_provider_bindings_insert',
+  );
+  const result = h.db.raw().prepare(
+    `INSERT INTO pipeline_provider_bindings
+       (pipeline_name, binding_role, provider_id, model_id, scope_type, scope_id)
+     VALUES ('quality_off_topic', 'classifier', 'p3', 'm3', 'session', 42)`,
+  ).run();
+  return Number(result.lastInsertRowid);
 }
 
 describe('PipelineProviderBindingsStore.bulkDelete', () => {
@@ -68,35 +79,40 @@ describe('PipelineProviderBindingsStore.bulkDelete', () => {
   beforeEach(() => { h = setup(); });
   afterEach(() => teardown(h));
 
-  it('wipes everything when no scope is given', () => {
+  it('wipes every reusable binding but never operates on legacy session rows', () => {
     seedMixedScope(h.store);
-    expect(h.store.list().length).toBe(4);
+    seedLegacySessionRow(h);
+    expect(h.store.list().length).toBe(3);
     const removed = h.store.bulkDelete();
-    expect(removed).toBe(4);
+    expect(removed).toBe(3);
     expect(h.store.list().length).toBe(0);
+    expect(h.db.raw().prepare(
+      `SELECT COUNT(*) AS count FROM pipeline_provider_bindings WHERE scope_type = 'session'`,
+    ).get()).toMatchObject({ count: 1 });
   });
 
   it('wipes only global rows when scope_type=global', () => {
     seedMixedScope(h.store);
+    seedLegacySessionRow(h);
     const removed = h.store.bulkDelete({ scopeType: 'global' });
     expect(removed).toBe(2);
     const remaining = h.store.list();
-    expect(remaining.length).toBe(2);
-    expect(remaining.every((r) => r.scope_type !== 'global')).toBe(true);
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].scope_type).toBe('template');
   });
 
   it('narrows further with scopeId', () => {
     seedMixedScope(h.store);
-    const removed = h.store.bulkDelete({ scopeType: 'session', scopeId: 42 });
+    const removed = h.store.bulkDelete({ scopeType: 'template', scopeId: 7 });
     expect(removed).toBe(1);
-    expect(h.store.list().length).toBe(3);
-    expect(h.store.list({ scopeType: 'session' }).length).toBe(0);
+    expect(h.store.list()).toHaveLength(2);
+    expect(h.store.list({ scopeType: 'template' })).toHaveLength(0);
   });
 
   it('returns 0 when nothing matches', () => {
     seedMixedScope(h.store);
-    expect(h.store.bulkDelete({ scopeType: 'session', scopeId: 999 })).toBe(0);
-    expect(h.store.list().length).toBe(4);
+    expect(h.store.bulkDelete({ scopeType: 'template', scopeId: 999 })).toBe(0);
+    expect(h.store.list()).toHaveLength(3);
   });
 
   it('is transactional — all-or-nothing semantics', () => {
@@ -107,8 +123,7 @@ describe('PipelineProviderBindingsStore.bulkDelete', () => {
     // confirm successive calls don't leave half-state behind.
     h.store.bulkDelete({ scopeType: 'template' });
     h.store.bulkDelete({ scopeType: 'global' });
-    expect(h.store.list().length).toBe(1);
-    expect(h.store.list()[0].scope_type).toBe('session');
+    expect(h.store.list()).toHaveLength(0);
   });
 });
 
@@ -273,15 +288,15 @@ describe('PipelineProviderBindingsStore.bulkApplyProfile', () => {
     expect(rows[0].model_id).toBe('c');
   });
 
-  it('never touches template/session bindings', () => {
+  it('never touches template bindings or exposes legacy session rows', () => {
     h.store.upsert({ pipeline_name: 'quality_policy', binding_role: 'classifier', provider_id: 'p2', model_id: 'm2', scope_type: 'template', scope_id: 7 });
-    h.store.upsert({ pipeline_name: 'quality_policy', binding_role: 'classifier', provider_id: 'p3', model_id: 'm3', scope_type: 'session',  scope_id: 9 });
+    seedLegacySessionRow(h);
     h.store.bulkApplyProfile([
       { pipeline_name: 'quality_policy', binding_role: 'classifier', provider_id: 'cf-1', model_id: 'global-m' },
     ]);
     expect(h.store.list({ scopeType: 'template' }).length).toBe(1);
-    expect(h.store.list({ scopeType: 'session' }).length).toBe(1);
     expect(h.store.list({ scopeType: 'global', pipelineName: 'quality_policy' })[0].model_id).toBe('global-m');
+    expect(h.store.list().map((row) => row.scope_type).sort()).toEqual(['global', 'template']);
   });
 
   it('returns inserted ids in input order', () => {
@@ -321,8 +336,36 @@ describe('PipelineProviderBindingsStore.findAllActiveAtScope (failover chain)', 
     seedMixedScope(h.store);
     const global = h.store.findAllActiveAtScope({ pipelineName: 'quality_off_topic', bindingRole: 'classifier', scopeType: 'global', scopeId: null });
     expect(global.map((b) => b.provider_id)).toEqual(['p1']);
-    const session = h.store.findAllActiveAtScope({ pipelineName: 'quality_off_topic', bindingRole: 'classifier', scopeType: 'session', scopeId: 42 });
-    expect(session.map((b) => b.provider_id)).toEqual(['p3']);
+    const template = h.store.findAllActiveAtScope({ pipelineName: 'quality_off_topic', bindingRole: 'classifier', scopeType: 'template', scopeId: 7 });
+    expect(template.map((b) => b.provider_id)).toEqual(['p2']);
+  });
+});
+
+describe('PipelineProviderBindingsStore filesystem-session cutover', () => {
+  let h: Handle;
+  beforeEach(() => { h = setup(); });
+  afterEach(() => teardown(h));
+
+  it('fails closed when an untyped caller attempts to write session scope', () => {
+    expect(() => h.store.upsert({
+      pipeline_name: 'quality_policy',
+      binding_role: 'classifier',
+      provider_id: 'p3',
+      model_id: 'm3',
+      scope_type: 'session',
+      scope_id: 42,
+    } as never)).toThrow(/global or template/);
+  });
+
+  it('does not read, mutate, or delete a legacy session row', () => {
+    const id = seedLegacySessionRow(h);
+    expect(h.store.get(id)).toBeNull();
+    expect(h.store.list()).toEqual([]);
+    expect(h.store.setEnabled(id, false)).toBe(false);
+    expect(h.store.delete(id)).toBe(false);
+    expect(h.db.raw().prepare(
+      `SELECT enabled FROM pipeline_provider_bindings WHERE id = ?`,
+    ).get(id)).toMatchObject({ enabled: 1 });
   });
 });
 

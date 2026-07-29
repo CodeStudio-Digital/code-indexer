@@ -29,7 +29,7 @@ import { EnvScopeSelector, type EnvServiceOption } from './EnvScopeSelector.js';
 
 interface EnvEditDialogProps {
   row: EnvRow;
-  sessionId: number;
+  sessionId: string;
   /** Session services offered by the scope selector (D1). */
   services?: EnvServiceOption[];
   open: boolean;

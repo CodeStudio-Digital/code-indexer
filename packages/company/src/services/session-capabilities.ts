@@ -44,7 +44,7 @@ export function resolveCompanyServiceWiringPlan(
 /** Resolve the immutable capability envelope from server-owned linkage. */
 export function resolveCompanySessionCapabilities(
   runtimeKind: CompanyRuntimeKind,
-  appStudioSessionId: number | null = null,
+  appStudioSessionId: string | null = null,
 ): CompanySessionCapabilities {
   if (runtimeKind === 'app_studio') {
     const linked = appStudioSessionId != null;

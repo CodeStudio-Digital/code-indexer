@@ -44,11 +44,11 @@ export function FrameInspector({
   onSelectVersion,
 }: {
   projectId: number;
-  versionById: Map<number, AssetVersion>;
+  versionById: Map<string, AssetVersion>;
   generations: GenerationGroup[];
   refresh: () => void;
-  onEditVersion: (versionId: number, frameIndex: number, track: number) => void;
-  onSelectVersion: (versionId: number) => void;
+  onEditVersion: (versionId: string, frameIndex: number, track: number) => void;
+  onSelectVersion: (versionId: string) => void;
 }) {
   const { t } = useTranslation('spriteStudio');
   const selId = useAnimateSession((s) => s.selectedFrameVersionId);
@@ -61,8 +61,8 @@ export function FrameInspector({
   const { busy, deleteVersions, addToTimeline } = useSelectionActions(projectId, refresh);
   const sel = selId != null ? versionById.get(selId) ?? null : null;
   const [resliceTarget, setResliceTarget] = useState<{
-    assetId: number;
-    jobId: number;
+    assetId: string;
+    jobId: string;
     defaultGrid: { cols: number; rows: number };
   } | null>(null);
 
@@ -95,7 +95,7 @@ export function FrameInspector({
     });
   };
 
-  const onThumbClick = (id: number, e: React.MouseEvent) => {
+  const onThumbClick = (id: string, e: React.MouseEvent) => {
     const s = useAnimateSession.getState();
     if (s.selectMode || e.shiftKey || e.metaKey || e.ctrlKey) {
       if (e.shiftKey) s.selectRange(id, orderedIds);

@@ -1,7 +1,7 @@
 /**
  * Upstream model-id → our canonical internal id.
  *
- * Canonical form = the id we store on coder_turn_telemetry.model /
+ * Canonical form = the id we store on filesystem turn metrics /
  * request_api_model, lowercased. Upstream lists use vendor-qualified or
  * generic ids (OpenRouter `anthropic/claude-opus-4`, LiteLLM `gpt-4o`,
  * Cloudflare `@cf/baai/bge-m3`). We map them so a model_prices row keys

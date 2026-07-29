@@ -34,5 +34,11 @@ export const DETACHABLE_SURFACES: Record<string, DetachableSurface> = {
     titleFor: (p) => `Local History — ${basename(p.path ?? '')}`,
     Surface: lazy(() => import('./surfaces/LocalHistorySurface.js')),
   },
+  'task-manager': {
+    kind: 'task-manager',
+    // Fixed title: this surface is global, not scoped to a project or file.
+    titleFor: () => 'CodeStudio — Task Manager',
+    Surface: lazy(() => import('./surfaces/TaskManagerSurface.js')),
+  },
   // futuro: 'project-settings', 'tool-stats', 'file-diff', ...
 };

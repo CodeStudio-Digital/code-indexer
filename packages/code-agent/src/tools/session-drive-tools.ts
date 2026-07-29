@@ -46,7 +46,7 @@ export const readPlanTool: CoderTool = {
   handler: async (_args, ctx): Promise<ToolResult> => {
     const d = drive(ctx);
     if (!d) return err(UNAVAILABLE);
-    const plan = d.readActivePlan();
+    const plan = await d.readActivePlan();
     if (!plan) return ok('No plan has been submitted in this session yet. Call submit_plan when you have one.');
     return ok(`# Active plan (status: ${plan.status})\n\n${plan.text}`);
   },
@@ -141,7 +141,7 @@ export const saveNoteTool: CoderTool = {
     const d = drive(ctx);
     if (!d) return err(UNAVAILABLE);
     try {
-      const saved = d.remember({
+      const saved = await d.remember({
         title,
         body,
         kind,
@@ -176,7 +176,9 @@ export const listNotesTool: CoderTool = {
   handler: async (args, ctx): Promise<ToolResult> => {
     const d = drive(ctx);
     if (!d) return err(UNAVAILABLE);
-    const rows = d.listMemory({ kind: typeof args.kind === 'string' ? args.kind : undefined });
+    const rows = await d.listMemory({
+      kind: typeof args.kind === 'string' ? args.kind : undefined,
+    });
     if (rows.length === 0) return ok('No notes saved yet. Use `save_note` to save one.');
     const body = rows
       .map((m) => `- ${m.pinned ? '📌 ' : ''}[${m.kind}] ${m.title}: ${m.body.replace(/\s*\n\s*/g, ' ')}`)

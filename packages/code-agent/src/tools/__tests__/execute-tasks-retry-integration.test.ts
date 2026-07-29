@@ -6,6 +6,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { newSessionId } from '@mcp/session-storage';
+
+const SESSION_ID = newSessionId();
 
 vi.mock('../implement-subagent.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../implement-subagent.js')>();
@@ -39,12 +43,17 @@ function makeMockStore() {
     listTaskRunItems: vi.fn(),
     getTaskRunWithItems: vi.fn(),
     recoverRunningTaskRuns: vi.fn(),
+    findLastCompletedTaskItem: vi.fn(() => null),
   };
 }
 
 function setup(tasks: CoderTask[]) {
   const store = makeMockStore();
-  const runner = { emit: vi.fn(), sessionId: 99, agentLoopV2: false };
+  const runner = {
+    emit: vi.fn(),
+    sessionId: SESSION_ID,
+    agentLoopV2: false,
+  };
   const state: TasksState = {
     summary: '', tasks, execution_mode: 'all-subagent',
     approved: true, current_task_id: null,
@@ -58,7 +67,7 @@ function setup(tasks: CoderTask[]) {
   const tool = buildExecuteTasksTool({
     provider: {} as never,
     parentTools: [],
-    sessionStore: store as unknown as import('@mcp/code-agent/sessions/store.js').SessionStore,
+    sessionStore: store as unknown as FsSessionStore,
   });
   return { tool, ctx, runner, store };
 }

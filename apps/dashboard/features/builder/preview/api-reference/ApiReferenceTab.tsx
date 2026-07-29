@@ -32,7 +32,7 @@ export interface ServiceOption {
 }
 
 export interface ApiReferenceTabProps {
-  sessionId: number;
+  sessionId: string;
   snapshot: SandboxSnapshot | null;
   extraServices: ServiceOption[];
   fileChangeTick?: number;

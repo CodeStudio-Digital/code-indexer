@@ -20,7 +20,7 @@ export function DiagramPanel({
   sessionId,
   projectId,
 }: {
-  sessionId: number;
+  sessionId: string;
   projectId: number | null;
 }) {
   const { t } = useTranslation(['chat']);
@@ -36,7 +36,7 @@ export function DiagramPanel({
   // The agent's diagram_export tool → ask the live editor to render + persist.
   useEffect(() => {
     function onExportReq(e: Event): void {
-      const d = (e as CustomEvent).detail as { sessionId?: number; format?: string };
+      const d = (e as CustomEvent).detail as { sessionId?: string; format?: string };
       if (d?.sessionId !== sessionId) return;
       frameRef.current?.exportDiagram(d.format === 'png' ? 'png' : 'svg');
     }

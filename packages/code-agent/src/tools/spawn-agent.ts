@@ -386,7 +386,7 @@ async function runSingleEphemeral(
       header: string;
       body: string;
       usage: import('@mcp/code-agent/core/messages.js').ChatUsage;
-    }>(cacheKeyInput, { sessionId: parentSessionId });
+    }>(cacheKeyInput);
     if (hit) {
       console.log(
         `[coder s=${parentSessionId ?? '?'}] spawn_agent: CACHE HIT type=${agent.type} ` +
@@ -410,7 +410,7 @@ async function runSingleEphemeral(
 
   if (deps.sessionStore && parentSessionId != null) {
     try {
-      deps.sessionStore.recordSessionInput({
+      await deps.sessionStore.recordSessionInput({
         session_id: parentSessionId,
         kind: 'subagent_prompt',
         source_label: `subagent:${agent.profile.id}`,
@@ -525,14 +525,18 @@ async function runSingleEphemeral(
   // salvage summary, and caching that would replay the failure to every
   // later identical spawn.
   if (isGlobalSubAgentCacheEnabled() && result.finalText && result.reason === 'completed') {
-    writeGlobalSubAgentResult(cacheKeyInput, { header, body, usage: result.usage }, { sessionId: parentSessionId });
+    writeGlobalSubAgentResult(cacheKeyInput, {
+      header,
+      body,
+      usage: result.usage,
+    });
   }
   // Persist a durable digest into the investigation ledger (non-company).
-  captureInvestigation(deps, ctx, agent, result.finalText ?? '', trail, result.usage.input_tokens + result.usage.output_tokens);
+  await captureInvestigation(deps, ctx, agent, result.finalText ?? '', trail, result.usage.input_tokens + result.usage.output_tokens);
   void extractLastAssistantText; // keep helper referenced for re-exports
 
   // Retain for resume_agent (failed → transcript kept, hint appended).
-  const resumableCount = retainSpawnGroup({
+  const resumableCount = await retainSpawnGroup({
     sessionId: parentSessionId,
     spawnId,
     provider: providerInfo.provider,
@@ -603,7 +607,7 @@ async function runParallelEphemeral(
 
   if (deps.sessionStore && parentSessionId != null) {
     try {
-      deps.sessionStore.recordSessionInput({
+      await deps.sessionStore.recordSessionInput({
         session_id: parentSessionId,
         kind: 'subagent_prompt',
         source_label: `subagent:parallel:${groupId}`,
@@ -694,11 +698,11 @@ async function runParallelEphemeral(
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     const trail = renderCollectedSnapshotForParent(r.collected ?? emptyCollected());
-    captureInvestigation(deps, ctx, agents[i], r.finalText ?? '', trail, r.usage.input_tokens + r.usage.output_tokens);
+    await captureInvestigation(deps, ctx, agents[i], r.finalText ?? '', trail, r.usage.input_tokens + r.usage.output_tokens);
   }
 
   // Retain for resume_agent — spawnId is the groupId so UI rows patch on resume.
-  const resumableCount = retainSpawnGroup({
+  const resumableCount = await retainSpawnGroup({
     sessionId: parentSessionId,
     spawnId: groupId,
     provider: headInfo.provider,
@@ -849,7 +853,7 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
               model: { type: 'string', description: 'Persistent only.' },
               tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Persistent only.' },
               skills: { type: 'array', items: { type: 'string' }, description: 'Persistent only.' },
-              kanban_card_id: { type: 'number', description: 'Persistent only.' },
+              kanban_card_id: { type: 'string', description: 'Persistent only — Kanban card UUID.' },
               wait: { type: 'boolean', description: 'Persistent only.' },
               forward_user_attachments: { type: 'boolean', description: 'Persistent only.' },
             }

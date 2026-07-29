@@ -9,21 +9,28 @@ import type { FileDiff } from '@mcp/services/services/session-snapshots.js';
 
 const BEFORE = 'export function applyPatch(a: string) {\n  return a;\n}\n';
 const AFTER = 'export function applyPatch(a: string, c: number) {\n  return a + c;\n}\n';
+const BASELINE_ID = '00000000-0000-4000-8000-000000000007';
 
-function makeDiff(filePath: string, before: string, after: string, id: number): FileDiff {
+function makeDiff(
+  filePath: string,
+  before: string,
+  after: string,
+  id: string,
+): FileDiff<string> {
   return {
     baseline: { id, filePath, existedBefore: true, oversized: false, status: 'active' },
     hunks: computeHunks(before, after).map((h) => ({ ...h, decision: 'pending' as const })),
     diffDisabled: false,
     currentContent: after,
-  } as FileDiff;
+  };
 }
 
 function api(calls: Array<{ name: string; args: Record<string, unknown> }> = []) {
-  const diff = makeDiff('src/apply.ts', BEFORE, AFTER, 7);
+  const diff = makeDiff('src/apply.ts', BEFORE, AFTER, BASELINE_ID);
   const port = {
     getDiffs: async () => [diff],
-    getBeforeContent: async (baselineId: number) => (baselineId === 7 ? BEFORE : null),
+    getBeforeContent: async (baselineId: string) =>
+      baselineId === BASELINE_ID ? BEFORE : null,
   };
   const callTool = async (name: string, args: Record<string, unknown>) => {
     calls.push({ name, args });
@@ -41,7 +48,11 @@ describe('change sandbox API', () => {
   it('files() returns shape-classified summaries with anchors', async () => {
     const files = (await api().files()) as Array<Record<string, unknown>>;
     expect(files).toHaveLength(1);
-    expect(files[0]).toMatchObject({ path: 'src/apply.ts', baselineId: 7, pendingHunks: 1 });
+    expect(files[0]).toMatchObject({
+      path: 'src/apply.ts',
+      baselineId: BASELINE_ID,
+      pendingHunks: 1,
+    });
     expect(files[0].shapes).toHaveProperty('logic', 1);
   });
 

@@ -1,6 +1,6 @@
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
-/** Shared main-agent/subagent briefing for synthetic global workspaces. */
+/** Shared main-agent/subagent briefing for filesystem-backed global sessions. */
 export function buildGlobalWorkspaceBriefing(
   ctx: Pick<ToolContext, 'globalWorkspace'>,
 ): string {
@@ -14,16 +14,15 @@ export function buildGlobalWorkspaceBriefing(
     : '- (no linked projects reported; stop and report the workspace error)';
 
   return `<workspace-context>
-This is a GLOBAL session over a virtual union workspace.
-- Virtual root: ${gw.rootPath}
-- Linked project folders (directory junctions/symlinks):
+This is a GLOBAL multi-project session.
+- Primary project root: ${gw.primaryRootPath}
+- Linked project roots:
 ${projectLines}
 
-The virtual root is intentionally NOT a Git repository. A Git error at the virtual root does not mean the workspace is empty.
-All file paths must start with a linked project slug, for example: <project-slug>/src/file.ts.
-For shell and Git commands, set cwd to the linked project folder, for example: run_command({cwd:"<project-slug>", command:"git status --short"}).
-Start orientation with native list_directory/glob at the virtual root when the project scope is unclear.
-Do not pass or invent project_name for mcp__* tools; the bridge injects the synthetic workspace project.
-If an MCP result is empty while the workspace has linked folders, retry with native list_directory/glob before concluding that files are absent.
+There is no virtual union directory. Native file tools route a <project-slug>/ prefix to the corresponding real root.
+For shell and Git commands, set cwd to the project slug, for example: run_command({cwd:"<project-slug>", command:"git status --short"}).
+Start orientation with native list_directory/glob when the project scope is unclear; their cross-project results use slug prefixes.
+The primary project's MCP tools keep their ordinary names. Secondary projects use mcp__<project-slug>__* tools.
+If a project root is unavailable, stop and report it; never fall back to another root.
 </workspace-context>`;
 }

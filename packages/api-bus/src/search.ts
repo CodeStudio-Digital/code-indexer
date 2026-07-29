@@ -9,6 +9,15 @@ import type { ApiContext } from './common.js';
 export type SearchMode = 'fts' | 'vector' | 'hybrid' | 'auto';
 /** Mirrors `@mcp/shared/types.SearchType`. */
 export type SearchType = 'files' | 'symbols' | 'all';
+export type SearchConsumer =
+  | 'agent'
+  | 'search_everywhere'
+  | 'monaco'
+  | 'semantic_test'
+  | 'api'
+  | 'cli'
+  | 'benchmark'
+  | 'unknown';
 
 export interface SearchRequestOptions {
   projectId: number;
@@ -20,6 +29,8 @@ export interface SearchRequestOptions {
   supersessionKey?: string;
   /** Diagnostic runs may bypass the normal short-lived semantic query cache. */
   bypassCache?: boolean;
+  /** Calling surface, used only for privacy-safe aggregate telemetry. */
+  consumer?: SearchConsumer;
 }
 
 export interface SearchResult {
@@ -67,6 +78,7 @@ export interface SearchDiagnostics {
   rerankerCandidates?: number;
   rerankerReturned?: number;
   rerankerError?: string;
+  telemetryRequestId?: string;
 }
 
 export interface SymbolHit {
@@ -136,6 +148,16 @@ export interface SearchApi {
     input: Omit<SearchRequestOptions, 'projectId'>,
     ctx: ApiContext,
   ): Promise<SearchResult[]>;
+
+  /** Records that a result from one search was opened/used. */
+  outcome(
+    input: {
+      projectId: number;
+      requestId: string;
+      semanticWin: boolean;
+    },
+    ctx: ApiContext,
+  ): Promise<{ ok: true }>;
 
   /**
    * Search Everywhere — Symbols tab. Thin FTS over symbols (prefix per

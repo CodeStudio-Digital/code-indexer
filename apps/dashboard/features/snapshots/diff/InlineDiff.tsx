@@ -20,7 +20,7 @@ import type {
 
 const NO_COMMENTS: SnapshotReviewComment[] = [];
 const EMPTY_DIFF: SnapshotFileDiff = {
-  baseline: { id: 0, filePath: '', existedBefore: true, oversized: false, status: 'active' },
+  baseline: { id: '', filePath: '', existedBefore: true, oversized: false, status: 'active' },
   hunks: [],
   diffDisabled: false,
   currentContent: null,
@@ -37,10 +37,10 @@ export function InlineDiff({
   refreshKey,
 }: {
   scope: SessionScope;
-  sessionId: number;
-  baselineId: number;
+  sessionId: string;
+  baselineId: string;
   roundMessageId?: number;
-  globalBaselineId?: number;
+  globalBaselineId?: string;
   reviewFindings?: RoundSnapshotReviewFinding[];
   onMutated?: () => void;
   refreshKey?: string | number;

@@ -1,0 +1,213 @@
+name: Rust Agent Runtime CI
+
+on:
+  push:
+    branches: [master, feature/ide-mvp]
+    paths:
+      - 'native/agent-runtime/**'
+      - 'packages/agent-runtime-contracts/**'
+      - 'packages/agent-runtime-host/**'
+      - 'scripts/check-rust-agent-*.ts'
+      - 'scripts/package-rust-agent-runtime.mjs'
+      - 'scripts/benchmark-rust-agent-startup.mjs'
+      - 'scripts/verify-rust-agent-runtime-package.ts'
+      - 'scripts/smoke-rust-agent-runtime-package.ts'
+      - 'scripts/rust-agent-installed-smoke/**'
+      - 'scripts/lib/rust-agent-package-contract.mjs'
+      - 'scripts/build-electron.mjs'
+      - 'scripts/rust-agent-legacy-boundary-baseline.json'
+      - 'apps/electron/electron-builder.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/rust-agent-ci.yml'
+  pull_request:
+    paths:
+      - 'native/agent-runtime/**'
+      - 'packages/agent-runtime-contracts/**'
+      - 'packages/agent-runtime-host/**'
+      - 'scripts/check-rust-agent-*.ts'
+      - 'scripts/package-rust-agent-runtime.mjs'
+      - 'scripts/benchmark-rust-agent-startup.mjs'
+      - 'scripts/verify-rust-agent-runtime-package.ts'
+      - 'scripts/smoke-rust-agent-runtime-package.ts'
+      - 'scripts/rust-agent-installed-smoke/**'
+      - 'scripts/lib/rust-agent-package-contract.mjs'
+      - 'scripts/build-electron.mjs'
+      - 'scripts/rust-agent-legacy-boundary-baseline.json'
+      - 'apps/electron/electron-builder.json'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/rust-agent-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-agent-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.22.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.20.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Protobuf lint and descriptor build
+        run: |
+          pnpm --filter @mcp/agent-runtime-contracts proto:lint
+          pnpm --filter @mcp/agent-runtime-contracts proto:build
+      - name: Protobuf breaking-change gate
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            echo "No comparable base revision; skipping breaking check."
+          elif git ls-tree -r --name-only "$BASE_SHA" \
+            | grep -q '^packages/agent-runtime-contracts/proto/.*\.proto$'; then
+            cd packages/agent-runtime-contracts
+            pnpm exec buf breaking \
+              --against "../../.git#ref=${BASE_SHA},subdir=packages/agent-runtime-contracts"
+          else
+            echo "Initial schema introduction; no prior Protobuf baseline exists."
+          fi
+      - name: Generated bindings are reproducible
+        run: |
+          pnpm --filter @mcp/agent-runtime-contracts proto:generate
+          git diff --exit-code -- \
+            packages/agent-runtime-contracts/src/generated \
+            native/agent-runtime/crates/agent-protocol/src/generated
+      - name: Host and cross-language contract tests
+        run: pnpm agent:host:test
+      - name: Host typecheck
+        run: pnpm --filter @mcp/agent-runtime-host typecheck
+      - name: New-runtime architecture gates
+        run: |
+          pnpm check:agent-loc
+          pnpm check:agent-boundary
+          pnpm check:agent-crates
+
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.22.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.20.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Install pinned Rust toolchain
+        run: >-
+          rustup toolchain install 1.97.1 --profile minimal
+          --component clippy --component rustfmt
+      - name: Format
+        run: cargo +1.97.1 fmt --manifest-path native/agent-runtime/Cargo.toml --all -- --check
+      - name: Clippy
+        run: >-
+          cargo +1.97.1 clippy
+          --manifest-path native/agent-runtime/Cargo.toml
+          --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Test
+        run: >-
+          cargo +1.97.1 test
+          --manifest-path native/agent-runtime/Cargo.toml
+          --workspace --all-targets --locked
+      - name: Windows production bootstrap E2E
+        if: runner.os == 'Windows'
+        working-directory: native/agent-runtime
+        shell: pwsh
+        run: |
+          cargo +1.97.1 build -p agent-runner `
+            --bins --examples --locked
+          cargo +1.97.1 test -p agentd-supervisor --locked `
+            management::driver:: -- `
+            --ignored --test-threads=1
+      - name: Release build
+        run: >-
+          cargo +1.97.1 build
+          --manifest-path native/agent-runtime/Cargo.toml
+          --workspace --release --locked
+      - name: Spawn to AttemptPrepared performance gate
+        run: pnpm agent:rust:perf:spawn
+      - name: Upload performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-agent-performance-${{ runner.os }}-${{ runner.arch }}
+          path: .tmp/rust-agent-performance/*.json
+          if-no-files-found: warn
+      - name: Package and verify native runtime
+        run: |
+          node scripts/package-rust-agent-runtime.mjs --skip-build
+          pnpm exec tsx scripts/verify-rust-agent-runtime-package.ts
+          pnpm exec tsx scripts/smoke-rust-agent-runtime-package.ts
+
+  rust-targets:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust target
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup target add --toolchain 1.97.1 ${{ matrix.target }}
+      - name: Check target
+        run: >-
+          cargo +1.97.1 check
+          --manifest-path native/agent-runtime/Cargo.toml
+          --workspace --all-targets --locked
+          --target ${{ matrix.target }}
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Install pinned audit tools
+        run: |
+          cargo +1.97.1 install cargo-audit --version 0.22.2 --locked
+          cargo +1.97.1 install cargo-deny --version 0.20.2 --locked
+      - name: Locked dependency graph
+        working-directory: native/agent-runtime
+        run: |
+          cargo +1.97.1 metadata --locked --format-version 1 > /dev/null
+          cargo +1.97.1 tree --workspace --locked
+      - name: RustSec audit
+        working-directory: native/agent-runtime
+        run: cargo +1.97.1 audit --file Cargo.lock
+      - name: License, source, bans, and advisory policy
+        working-directory: native/agent-runtime
+        run: cargo +1.97.1 deny check

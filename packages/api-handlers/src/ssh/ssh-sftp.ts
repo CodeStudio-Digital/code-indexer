@@ -19,7 +19,17 @@ function joinPosix(dir: string, name: string): string {
 function toEntry(dir: string, e: FileEntryWithStats): SftpEntry {
   const a = e.attrs;
   const type = a.isDirectory() ? 'dir' : a.isSymbolicLink() ? 'symlink' : a.isFile() ? 'file' : 'other';
-  return { name: e.filename, path: joinPosix(dir, e.filename), type, size: a.size, mtime: a.mtime * 1000, mode: a.mode };
+  return {
+    name: e.filename,
+    path: joinPosix(dir, e.filename),
+    type,
+    size: a.size,
+    mtime: a.mtime * 1000,
+    mode: a.mode,
+    // Numeric only — the protocol carries no names. See sftpIdNames.
+    uid: a.uid,
+    gid: a.gid,
+  };
 }
 
 interface SftpSession {
@@ -34,6 +44,9 @@ export class SftpManager {
   private readonly transfers = new Map<string, () => void>();
   /** Max bytes we'll pull into the editor — larger files belong in a download. */
   private static readonly MAX_EDIT_BYTES = 2 * 1024 * 1024;
+  /** Recursive-delete guards: a runaway walk on a server is not recoverable. */
+  private static readonly MAX_DELETE_DEPTH = 40;
+  private static readonly MAX_DELETE_ENTRIES = 50_000;
 
   constructor(private readonly manager: SshConnectionManager) {}
 
@@ -116,9 +129,108 @@ export class SftpManager {
     await voidOp((cb) => sftp.rename(from, to, cb));
   }
 
+  /** Change permission bits. `mode` is the low 12 bits (e.g. 0o755). */
+  async chmod(spec: SshConnectSpec, path: string, mode: number, recursive = false): Promise<void> {
+    const sftp = await this.get(spec);
+    if (!recursive) {
+      await voidOp((cb) => sftp.chmod(path, mode, cb));
+      return;
+    }
+    await this.walkApply(sftp, path, 0, { count: 0 }, (p) => voidOp((cb) => sftp.chmod(p, mode, cb)));
+  }
+
+  /**
+   * Change owner/group. Almost always requires root on the remote side, so a
+   * permission failure here is expected and surfaced verbatim rather than
+   * dressed up — the user needs to know it's the server refusing, not us.
+   */
+  async chown(spec: SshConnectSpec, path: string, uid: number, gid: number, recursive = false): Promise<void> {
+    const sftp = await this.get(spec);
+    if (!recursive) {
+      await voidOp((cb) => sftp.chown(path, uid, gid, cb));
+      return;
+    }
+    await this.walkApply(sftp, path, 0, { count: 0 }, (p) => voidOp((cb) => sftp.chown(p, uid, gid, cb)));
+  }
+
+  /** Apply `fn` to `path` and, if it is a directory, everything beneath it. */
+  private async walkApply(
+    sftp: SFTPWrapper,
+    path: string,
+    depth: number,
+    budget: { count: number },
+    fn: (p: string) => Promise<void>,
+  ): Promise<void> {
+    if (depth > SftpManager.MAX_DELETE_DEPTH) {
+      throw new ApiError('sftp_walk_too_deep', 400, `refusing to recurse deeper than ${SftpManager.MAX_DELETE_DEPTH} levels`);
+    }
+    await fn(path);
+    const st = await new Promise<Stats | null>((resolve) => {
+      sftp.lstat(path, (err, s) => resolve(err ? null : s));
+    });
+    // Symlinks are not descended: chmod -R through a link would alter files
+    // outside the selected tree.
+    if (!st?.isDirectory() || st.isSymbolicLink()) return;
+    const entries = await new Promise<FileEntryWithStats[]>((resolve, reject) => {
+      sftp.readdir(path, (err, l) => (err ? reject(sftpError(err)) : resolve(l)));
+    });
+    for (const e of entries) {
+      if (e.filename === '.' || e.filename === '..') continue;
+      if (++budget.count > SftpManager.MAX_DELETE_ENTRIES) {
+        throw new ApiError('sftp_walk_too_many', 400, `refusing to touch more than ${SftpManager.MAX_DELETE_ENTRIES} entries at once`);
+      }
+      await this.walkApply(sftp, joinPosix(path, e.filename), depth + 1, budget, fn);
+    }
+  }
+
+  /**
+   * Delete a file, or a directory AND EVERYTHING UNDER IT.
+   *
+   * SFTP has no recursive remove: `rmdir` fails with "failure" on any directory
+   * that still has entries. The old one-shot `rmdir` therefore only ever worked
+   * on empty folders — deleting a real directory just errored.
+   *
+   * So we walk it ourselves, depth-first, unlinking files on the way down and
+   * removing directories on the way back up. Deliberately NOT `rm -rf` over
+   * exec: that needs a shell, and one bad path expansion there is unrecoverable
+   * on someone's server.
+   */
   async remove(spec: SshConnectSpec, path: string, isDir: boolean): Promise<void> {
     const sftp = await this.get(spec);
-    await voidOp((cb) => (isDir ? sftp.rmdir(path, cb) : sftp.unlink(path, cb)));
+    if (!isDir) {
+      await voidOp((cb) => sftp.unlink(path, cb));
+      return;
+    }
+    await this.removeDirRecursive(sftp, path, 0, { count: 0 });
+  }
+
+  private async removeDirRecursive(
+    sftp: SFTPWrapper,
+    dir: string,
+    depth: number,
+    budget: { count: number },
+  ): Promise<void> {
+    if (depth > SftpManager.MAX_DELETE_DEPTH) {
+      throw new ApiError('sftp_delete_too_deep', 400, `refusing to delete deeper than ${SftpManager.MAX_DELETE_DEPTH} levels`);
+    }
+    const entries = await new Promise<FileEntryWithStats[]>((resolve, reject) => {
+      sftp.readdir(dir, (err, l) => (err ? reject(sftpError(err)) : resolve(l)));
+    });
+    for (const e of entries) {
+      if (e.filename === '.' || e.filename === '..') continue;
+      if (++budget.count > SftpManager.MAX_DELETE_ENTRIES) {
+        throw new ApiError('sftp_delete_too_many', 400, `refusing to delete more than ${SftpManager.MAX_DELETE_ENTRIES} entries at once`);
+      }
+      const child = joinPosix(dir, e.filename);
+      // A symlink is unlinked, never followed — following one would delete
+      // whatever it points at, outside the tree the user selected.
+      if (e.attrs.isDirectory() && !e.attrs.isSymbolicLink()) {
+        await this.removeDirRecursive(sftp, child, depth + 1, budget);
+      } else {
+        await voidOp((cb) => sftp.unlink(child, cb));
+      }
+    }
+    await voidOp((cb) => sftp.rmdir(dir, cb));
   }
 
   /**

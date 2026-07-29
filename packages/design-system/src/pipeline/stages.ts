@@ -1,6 +1,6 @@
 /**
  * Máquina de etapas do DS Studio — o estado serializado em
- * `design_system_sessions.pipeline_json` (schema versionado AQUI, v1).
+ * `state.json.extra.design.pipelineJson` do bundle (schema versionado AQUI, v1).
  *
  * 7 etapas fixas: analysis → tokens → primitives → composites → templates →
  * docs → publish. Status por etapa: pending → active → review → approved

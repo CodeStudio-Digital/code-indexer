@@ -26,7 +26,7 @@ const jars = new Map<string, CookieJar>();
 /** Stable per-agent key (mirrors preview's `previewKey`) so company
  *  subordinates sharing one worker don't cross-contaminate cookies. */
 function sessionKey(ctx: ToolContext): string {
-  const cc = ctx.companyContext as { agentRunId?: number; companySessionId?: number } | undefined;
+  const cc = ctx.companyContext as { agentRunId?: string; companySessionId?: string } | undefined;
   if (cc?.agentRunId != null) return `company-agent-${cc.agentRunId}`;
   if (cc?.companySessionId != null) return `company-session-${cc.companySessionId}`;
   return `coder-${ctx.sessionId ?? 'main'}`;

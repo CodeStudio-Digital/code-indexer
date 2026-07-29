@@ -1,23 +1,22 @@
 /**
- * Auto-checkpoint for Builder projects — fire-and-forget at every run end
- * (both the in-process stream path and the worker pool's `bus.end` mirror
- * call into here). When the session's project is a Builder project and
- * the tree is dirty, the run becomes a real git commit + a
- * `builder_checkpoints` row, and (Electron only) an offscreen thumbnail
- * of the dev server is attached best-effort.
- *
- * Never throws and never blocks the caller: every failure is swallowed
- * after a console.warn — checkpoints are augmentation, not a gate.
+ * Auto-checkpoint for Builder projects. The git commit still belongs to the
+ * project, while every session-owned checkpoint record and thumbnail lives in
+ * that session's filesystem bundle.
  */
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { lstat, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { mcpDataDir } from '@mcp/shared/utils/config.js';
 import { trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import {
-  createBuilderCheckpoint,
-  setBuilderCheckpointScreenshot,
-} from '@mcp/store/db/builder-checkpoints.js';
+  type SessionId,
+} from '@mcp/session-storage';
 import { getGlobalPreviewDevtools } from '@mcp/code-agent/tools/preview/index.js';
+import {
+  createBuilderCheckpointFile,
+  setBuilderCheckpointScreenshot,
+  type LocatedBuilderCheckpoint,
+} from '../builder-checkpoint-files.js';
 import type { ServerDeps } from '../server/deps.js';
 
 const GIT_TIMEOUT_MS = 15_000;
@@ -42,62 +41,76 @@ function git(cwd: string, args: string[]): Promise<{ ok: boolean; stdout: string
   });
 }
 
+function fallbackLabel(): string {
+  return `Run ${new Date().toISOString().slice(0, 16)}`;
+}
+
 /** First non-empty line of the latest user prompt — the checkpoint label. */
-function labelFor(deps: Pick<ServerDeps, 'db'>, sessionId: number): string {
+async function labelFor(
+  deps: BuilderCheckpointDeps,
+  sessionId: SessionId,
+): Promise<string> {
   try {
-    const row = deps.db
-      .raw()
-      .prepare(
-        `SELECT content FROM coder_messages
-         WHERE session_id = ? AND role = 'user' ORDER BY id DESC LIMIT 1`,
-      )
-      .get(sessionId) as { content?: string } | undefined;
-    const first = (row?.content ?? '').split('\n').find((l) => l.trim());
-    return (first ?? '').trim().slice(0, 120) || `Run ${new Date().toISOString().slice(0, 16)}`;
+    const content =
+      await deps.sessionStore.getLatestNonMetaUserMessageText(sessionId);
+    const first = (content ?? '').split('\n').find((line) => line.trim());
+    return (first ?? '').trim().slice(0, 120) || fallbackLabel();
   } catch {
-    return `Run ${new Date().toISOString().slice(0, 16)}`;
+    return fallbackLabel();
   }
 }
 
 export interface BuilderCheckpointDeps {
   db: ServerDeps['db'];
+  sessionStore: ServerDeps['sessionStore'];
 }
 
-// Module-global wiring (same pattern as setGlobalPreviewDevtools): the
-// server boot installs deps once; the two run-end chokepoints (worker
-// pool `bus.end` mirror + in-process stream finally) just notify.
+// Module-global wiring (same pattern as setGlobalPreviewDevtools): the server
+// installs the filesystem repository once; run-end chokepoints only notify.
 let globalDeps: BuilderCheckpointDeps | null = null;
 
-export function setBuilderCheckpointDeps(deps: BuilderCheckpointDeps | null): void {
+export function setBuilderCheckpointDeps(
+  deps: BuilderCheckpointDeps | null,
+): void {
   globalDeps = deps;
 }
 
 /** Run-end notification — no-op until deps are wired (tests, early boot). */
-export function notifyBuilderRunEnded(sessionId: number): void {
+export function notifyBuilderRunEnded(sessionId: SessionId): void {
   if (globalDeps) maybeBuilderCheckpoint(globalDeps, sessionId);
 }
 
 /** Run-end hook. Synchronous wrapper — the async work is detached. */
-export function maybeBuilderCheckpoint(deps: BuilderCheckpointDeps, sessionId: number): void {
-  void runCheckpoint(deps, sessionId).catch((e) => {
-    console.warn(`[builder-checkpoint] session ${sessionId}:`, e instanceof Error ? e.message : e);
+export function maybeBuilderCheckpoint(
+  deps: BuilderCheckpointDeps,
+  sessionId: SessionId,
+): void {
+  void runCheckpoint(deps, sessionId).catch((error) => {
+    console.warn(
+      `[builder-checkpoint] session ${sessionId}:`,
+      error instanceof Error ? error.message : error,
+    );
   });
 }
 
-async function runCheckpoint(deps: BuilderCheckpointDeps, sessionId: number): Promise<void> {
-  const session = deps.db
-    .raw()
-    .prepare('SELECT project_id FROM coder_sessions WHERE id = ?')
-    .get(sessionId) as { project_id?: number } | undefined;
+async function runCheckpoint(
+  deps: BuilderCheckpointDeps,
+  sessionId: SessionId,
+): Promise<void> {
+  const session = await deps.sessionStore.getSession(sessionId);
   if (!session?.project_id) return;
+  const entry = deps.sessionStore.catalog.get(sessionId);
+  if (!entry) {
+    throw new Error(`filesystem bundle not found for session ${sessionId}`);
+  }
 
   const project = deps.db.getProject(session.project_id);
   if (!project?.builder_json || !project.root_path) return;
 
   const status = await git(project.root_path, ['status', '--porcelain']);
-  if (!status.ok || !status.stdout.trim()) return; // not a repo / clean tree
+  if (!status.ok || !status.stdout.trim()) return;
 
-  const label = labelFor(deps, sessionId);
+  const label = await labelFor(deps, sessionId);
   const add = await git(project.root_path, ['add', '-A']);
   if (!add.ok) return;
   const commit = await git(project.root_path, ['commit', '-m', `checkpoint: ${label}`]);
@@ -105,29 +118,34 @@ async function runCheckpoint(deps: BuilderCheckpointDeps, sessionId: number): Pr
   const head = await git(project.root_path, ['rev-parse', 'HEAD']);
   if (!head.ok) return;
 
-  // builder_checkpoints is FEATURE-class — write to the project DB when routed
-  // (mirrors the list/restore/diff handlers), else central. The reads above
-  // (coder_sessions/coder_messages) correctly stay central via raw().
-  const row = createBuilderCheckpoint(deps.db.projectScopedDb(project.id), {
-    project_id: project.id,
-    session_id: sessionId,
-    commit_sha: head.stdout.trim(),
-    label,
-    kind: 'auto',
-  });
+  const checkpoint = await createBuilderCheckpointFile(
+    deps.sessionStore,
+    entry,
+    {
+      project_id: project.id,
+      commit_sha: head.stdout.trim(),
+      label,
+      kind: 'auto',
+    },
+  );
 
-  await attachThumbnail(deps, row.id, project.id, project.builder_json);
+  await attachThumbnail(
+    deps,
+    checkpoint,
+    project.id,
+    project.builder_json,
+  );
 }
 
 /** Electron-only, best-effort: dev-server screenshot for the timeline card. */
 export async function attachThumbnail(
   deps: BuilderCheckpointDeps,
-  checkpointId: number,
+  located: LocatedBuilderCheckpoint,
   projectId: number,
   builderJson: string,
 ): Promise<void> {
   const backend = getGlobalPreviewDevtools();
-  if (!backend) return; // headless / browser dashboard → placeholder card
+  if (!backend) return;
   let port: number | null = null;
   try {
     const cfg = JSON.parse(builderJson) as { port?: number };
@@ -136,19 +154,41 @@ export async function attachThumbnail(
     return;
   }
   if (!port) return;
-  const outPath = join(mcpDataDir(), 'builder-thumbs', `p${projectId}-c${checkpointId}.jpg`);
+
+  const capturePath = join(
+    located.entry.location.bundle_path,
+    'checkpoints',
+    `.thumbnail-${located.record.id}-${randomUUID()}.jpg`,
+  );
   try {
-    const res = (await backend.invoke({
+    const result = (await backend.invoke({
       key: `thumb:${projectId}`,
       method: 'thumbnail',
-      args: { url: `http://127.0.0.1:${port}/`, outPath },
+      args: { url: `http://127.0.0.1:${port}/`, outPath: capturePath },
     })) as { ok?: boolean; path?: string };
-    if (res?.ok && res.path) {
-      // Same routed DB as the checkpoint row above — else the screenshot path
-      // lands in central while the row + thumbnail route read the project DB.
-      setBuilderCheckpointScreenshot(deps.db.projectScopedDb(projectId), checkpointId, res.path);
+    if (!result?.ok || result.path !== capturePath) return;
+    const info = await lstat(capturePath);
+    if (!info.isFile() || info.isSymbolicLink()) {
+      throw new Error('preview thumbnail did not produce a safe regular file');
     }
+    const artifacts = await deps.sessionStore.repository.artifactStore(
+      located.entry.location,
+    );
+    const artifact = await artifacts.put({
+      kind: 'snapshot_blob',
+      data: await readFile(capturePath),
+      media_type: 'image/jpeg',
+      logical_name: `builder-checkpoint-${located.record.id}.jpg`,
+    });
+    await setBuilderCheckpointScreenshot(
+      deps.sessionStore,
+      located.entry,
+      located.record.id,
+      artifact,
+    );
   } catch {
-    /* dev server down / capture failed — keep null */
+    // Dev server down / capture failed — checkpoint remains valid without it.
+  } finally {
+    await rm(capturePath, { force: true }).catch(() => undefined);
   }
 }

@@ -16,7 +16,7 @@ import { apiDelete, apiPost, useApi } from '../../../hooks/useApi.js';
 type FilesystemAccess = 'read' | 'write';
 
 interface SessionFilesystemRoot {
-  id: number;
+  id: string;
   root_path: string;
   access: FilesystemAccess;
   kind?: 'directory' | 'file';
@@ -27,7 +27,7 @@ interface RootsResponse {
 }
 
 interface SessionFilesystemRootsControlProps {
-  sessionId: number;
+  sessionId: string;
   streaming: boolean;
 }
 

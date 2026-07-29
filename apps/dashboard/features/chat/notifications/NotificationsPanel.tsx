@@ -18,7 +18,7 @@ import {
 } from './session-notifications-store.js';
 
 interface NotificationsPanelProps {
-  sessionId: number;
+  sessionId: string;
 }
 
 export function NotificationsPanel({ sessionId }: NotificationsPanelProps) {

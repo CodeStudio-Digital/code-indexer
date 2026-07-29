@@ -388,11 +388,9 @@ export class LocalProcessManager {
   private persist(sessionId: string, p: LocalProcess): void {
     const s = store();
     if (!s) return;
-    const numericId = Number(sessionId);
-    if (!Number.isFinite(numericId)) return;
     try {
       s.upsert({
-        session_id: numericId,
+        session_id: sessionId,
         cwd: p.cwd,
         manifest_kind: p.manifestKind,
         program: p.program,
@@ -418,10 +416,8 @@ export class LocalProcessManager {
   ): void {
     const s = store();
     if (!s) return;
-    const numericId = Number(sessionId);
-    if (!Number.isFinite(numericId)) return;
     try {
-      s.patch(numericId, { status, error, last_access_at_ms: Date.now() });
+      s.patch(sessionId, { status, error, last_access_at_ms: Date.now() });
     } catch {
       /* non-fatal */
     }

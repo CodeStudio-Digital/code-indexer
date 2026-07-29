@@ -23,6 +23,13 @@
 import { performance } from 'node:perf_hooks';
 import { currentPersistentPerfRun, recordPersistentFreeze } from './persistent-diagnostics.js';
 import {
+  eluActiveMs,
+  gcMsIn,
+  startGcObserver,
+  stopGcObserver,
+  takeSyncWindow,
+} from './stall-evidence.js';
+import {
   enterOffloopActivity,
   enterOffloopHandler,
   exitOffloopActivity,
@@ -32,10 +39,28 @@ import {
   stopOffloopWatchdog,
 } from './offloop-watchdog.js';
 
+export type FreezeSource =
+  | 'handler'
+  | 'background'
+  | 'event-loop'
+  | 'renderer'
+  | 'starved'
+  | 'offloop'
+  /** A V8 GC pause covered the stall — proven by PerformanceObserver, not guessed. */
+  | 'gc'
+  /** An instrumented synchronous section covered the stall; `channel` names it. */
+  | 'sync'
+  /**
+   * Nothing instrumented ran AND the runtime cannot report loop utilization, so
+   * we genuinely do not know. Distinct from `starved`, which is a positive
+   * claim that the loop was idle and requires trustworthy ELU to make.
+   */
+  | 'unattributed';
+
 export interface FreezeEvent {
   at: number;
-  source: 'handler' | 'background' | 'event-loop' | 'renderer' | 'starved' | 'offloop';
-  /** IPC channel (handler) or script URL (renderer); absent for GC/starved. */
+  source: FreezeSource;
+  /** IPC channel (handler), sync-section label, or script URL (renderer). */
   channel?: string;
   durationMs: number;
   detail?: string;
@@ -43,8 +68,39 @@ export interface FreezeEvent {
   count?: number;
   wallLateMs?: number;
   windowMs?: number;
-  activeMs?: number;
-  busyFraction?: number;
+  /** `null` when the runtime cannot report it — never a misleading 0. */
+  activeMs?: number | null;
+  busyFraction?: number | null;
+  /** Measured synchronous main-thread ms in the window (self-reported). */
+  busyMs?: number;
+  /** V8 GC pause ms overlapping the window. */
+  gcMs?: number;
+  /** Label of the longest instrumented sync section in the window. */
+  topSyncLabel?: string;
+  /** Whether `eventLoopUtilization()` is trustworthy in this runtime. */
+  eluAvailable?: boolean;
+  /** `silent` = no instrumented work ran, so absence of busy time proves nothing. */
+  coverage?: 'observed' | 'silent';
+  /**
+   * Main-process RSS at detection, MB. A `starved` stall means the loop was
+   * IDLE while the clock jumped — the usual cause is the OS trimming/paging a
+   * large working set, so RSS is the first thing to look at. Stamped here so
+   * the correlation is in the journal instead of being reconstructed by hand
+   * against the nearest `sample` row.
+   */
+  rssMB?: number;
+  /** RSS change since the last healthy tick, MB. Positive = grew during the stall. */
+  rssDeltaMB?: number;
+  /**
+   * `offloop` only. Stable id for ONE hang; the worker watchdog re-reports a
+   * still-ongoing stall every `repeatMs` with a growing `durationMs`, so rows
+   * sharing a `hangId` describe the same stall and must be collapsed (take the
+   * max `durationMs`) rather than summed. Aggregating without this over-counts
+   * total freeze time roughly 2x.
+   */
+  hangId?: string;
+  /** 1-based index of this report within its `hangId`. */
+  reportSeq?: number;
 }
 
 /** NaN-safe numeric env: an operator-set garbage value falls back instead of
@@ -82,6 +138,13 @@ function recordFreeze(e: Omit<FreezeEvent, 'at'> & { at?: number }): void {
     windowMs: e.windowMs,
     activeMs: e.activeMs,
     busyFraction: e.busyFraction,
+    busyMs: e.busyMs,
+    gcMs: e.gcMs,
+    topSyncLabel: e.topSyncLabel,
+    eluAvailable: e.eluAvailable,
+    coverage: e.coverage,
+    rssMB: e.rssMB,
+    rssDeltaMB: e.rssDeltaMB,
   };
   // Preserve every detection. The old implementation merged any later
   // `starved` row even when healthy ticks occurred between them, making ×N
@@ -173,21 +236,42 @@ export function noteExit(channel: string, durationMs: number): void {
 // ─── Attribution (pure, unit-tested) ─────────────────────────────────────
 
 interface StallAttribution {
-  source: 'handler' | 'background' | 'event-loop' | 'starved';
+  source: Exclude<FreezeSource, 'renderer' | 'offloop'>;
   channel?: string;
 }
 
+/** What the watchdog measured over one window. See `stall-evidence.ts`. */
+export interface StallEvidence {
+  /** Overshoot beyond the intended watchdog interval. */
+  monoLate: number;
+  /** True inter-tick gap — the window every other figure spans. */
+  windowMs: number;
+  /** Measured synchronous main-thread ms (self-reported by instrumentation). */
+  busyMs: number;
+  /** Longest instrumented sync section in the window. */
+  topSync?: { label: string; ms: number };
+  /** V8 GC pause ms overlapping the window. */
+  gcMs: number;
+  /** `null` when the runtime cannot report it (Electron main) — NOT zero. */
+  eluActiveMs: number | null;
+  /** `silent` = nothing instrumented ran, so `busyMs === 0` proves nothing. */
+  coverage: 'observed' | 'silent';
+}
+
 /**
- * Decide what a detected stall means, given how ACTIVE the main loop was over
- * the watchdog WINDOW (`activeMs` from eventLoopUtilization, `windowMs` the same
- * inter-tick gap the ELU delta spans — numerator and denominator MUST share the
- * window, else pre-stall busy time inflates the ratio against 'starved'). Pure
- * (only reads the module constants) so it's unit-testable.
+ * Decide what a detected stall means. Pure (only reads module constants) so
+ * it's unit-testable.
+ *
+ * The ordering encodes what we can actually PROVE, strongest evidence first:
+ * a GC pause is observed directly; measured sync time names a real blocker;
+ * ELU is consulted only where it works. The critical invariant is the tail —
+ * `starved` asserts the loop was idle, so it requires trustworthy ELU. Without
+ * it the honest answer is `unattributed`. Returning `starved` on `activeMs: 0`
+ * from an ELU that always returns 0 is exactly the bug this replaced: it
+ * labelled 100% of stalls `starved` and made every other branch unreachable.
  */
 export function attributeStall(
-  monoLate: number,
-  activeMs: number,
-  windowMs: number,
+  ev: StallEvidence,
   now: number,
   inFlight: { channel: string; at: number; kind?: 'handler' | 'background' } | undefined,
   lastExit: {
@@ -197,30 +281,61 @@ export function attributeStall(
     kind?: 'handler' | 'background';
   } | null,
 ): StallAttribution {
-  // Loop mostly IDLE across the window → an await window or an OS deschedule
-  // under CPU contention, NOT a main-thread sync block. Don't pin a handler.
-  if (monoLate <= 0 || windowMs <= 0 || activeMs / windowMs < BUSY_FRACTION) return { source: 'starved' };
-  // Genuine main-thread block. Prefer the in-flight handler whose whole
-  // lifetime ≈ this stall (ran sync the whole window); else a heavy handler
-  // that just returned. NEVER the observer (perf panel's own routes).
-  if (inFlight && !isObserverChannel(inFlight.channel) && now - inFlight.at <= monoLate + WATCHDOG_INTERVAL_MS) {
-    return { source: inFlight.kind === 'background' ? 'background' : 'handler', channel: inFlight.channel };
+  const { monoLate, windowMs, busyMs, topSync, gcMs, eluActiveMs: elu } = ev;
+  // Guard: no window to reason about (also prevents divide-by-zero).
+  if (monoLate <= 0 || windowMs <= 0) return { source: 'starved' };
+
+  // 1. A GC pause covering half the stall explains it outright.
+  if (gcMs >= Math.max(50, monoLate * 0.5)) return { source: 'gc' };
+
+  // 2. Instrumented synchronous work covering the window → a real block.
+  if (busyMs / windowMs >= BUSY_FRACTION) {
+    if (topSync && topSync.ms >= monoLate * 0.5 && !isObserverChannel(topSync.label)) {
+      return { source: 'sync', channel: topSync.label };
+    }
+    // Prefer the in-flight handler whose whole lifetime ≈ this stall (ran sync
+    // the whole window); else a heavy handler that just returned. NEVER the
+    // observer (the perf panel's own routes).
+    if (inFlight && !isObserverChannel(inFlight.channel) && now - inFlight.at <= monoLate + WATCHDOG_INTERVAL_MS) {
+      return { source: inFlight.kind === 'background' ? 'background' : 'handler', channel: inFlight.channel };
+    }
+    if (
+      lastExit && !isObserverChannel(lastExit.channel) &&
+      now - lastExit.at <= WATCHDOG_INTERVAL_MS + 100 &&
+      Math.abs(lastExit.durationMs - monoLate) <= monoLate * 0.5
+    ) {
+      return { source: lastExit.kind === 'background' ? 'background' : 'handler', channel: lastExit.channel };
+    }
+    return { source: 'event-loop' };
   }
-  if (
-    lastExit && !isObserverChannel(lastExit.channel) &&
-    now - lastExit.at <= WATCHDOG_INTERVAL_MS + 100 &&
-    Math.abs(lastExit.durationMs - monoLate) <= monoLate * 0.5
-  ) {
-    return { source: lastExit.kind === 'background' ? 'background' : 'handler', channel: lastExit.channel };
+
+  // 3. Where ELU works, fall back to the original utilization test.
+  if (elu !== null) {
+    if (elu / windowMs >= BUSY_FRACTION) return { source: 'event-loop' };
+    // Loop measurably IDLE across the window → an await window or an OS
+    // deschedule under contention. The label is EARNED here.
+    return { source: 'starved' };
   }
-  return { source: 'event-loop' };
+
+  // 4. No GC, no observed sync work, and no trustworthy utilization signal.
+  return { source: 'unattributed' };
 }
 
-function detailFor(source: StallAttribution['source']): string | undefined {
+function detailFor(source: StallAttribution['source'], coverage: 'observed' | 'silent'): string | undefined {
   if (source === 'background') return 'Main loop was busy during a registered background activity';
-  if (source === 'event-loop') return 'GC / sync non-IPC turn (main loop was busy)';
+  if (source === 'event-loop') return 'Sync non-IPC turn (main loop was measurably busy)';
+  if (source === 'gc') return 'V8 garbage collection pause covered the stall (observed directly)';
+  if (source === 'sync') return 'An instrumented synchronous section blocked the main thread';
   if (source === 'starved') {
-    return 'Node/libuv tick delayed while mostly idle — native Electron/Chromium work, OS contention/deschedule, or suspend; no JS handler attributed';
+    return 'Node/libuv tick delayed while the loop was measurably idle — native Electron/Chromium work, OS contention/deschedule, or suspend';
+  }
+  if (source === 'unattributed') {
+    return (
+      'Main-thread JS was not observed running (no instrumented sync work, no GC) and eventLoopUtilization ' +
+      'is unavailable in this runtime, so idleness cannot be asserted. The block is either outside Node ' +
+      '(native Electron/Chromium browser-thread work, a blocking OS call) or in an uninstrumented code path' +
+      (coverage === 'silent' ? ' — nothing instrumented ran at all in this window.' : '.')
+    );
   }
   return undefined;
 }
@@ -231,59 +346,110 @@ let timer: ReturnType<typeof setInterval> | null = null;
 let expectedWall = 0;
 let lastMono = 0;
 let eluPrev: ReturnType<typeof performance.eventLoopUtilization> | undefined;
+/** RSS at the last healthy tick, MB — the baseline for a freeze's `rssDeltaMB`. */
+let lastHealthyRssMB = 0;
+let rssTick = 0;
+
+/** `process.memoryUsage.rss()` is the cheap variant (no full stats object). */
+function currentRssMB(): number {
+  return Math.round((process.memoryUsage.rss() / 1024 / 1024) * 10) / 10;
+}
 
 /** Start the main-loop stall watchdog. Idempotent. */
 export function startFreezeWatchdog(): void {
   if (timer) return;
   const persistedRun = currentPersistentPerfRun();
   if (persistedRun) startOffloopWatchdog(persistedRun.path);
+  startGcObserver();
   expectedWall = Date.now() + WATCHDOG_INTERVAL_MS;
   lastMono = performance.now();
   eluPrev = typeof performance.eventLoopUtilization === 'function' ? performance.eventLoopUtilization() : undefined;
+  lastHealthyRssMB = currentRssMB();
+  rssTick = 0;
   timer = setInterval(() => {
     heartbeatOffloopWatchdog();
     const now = Date.now();
     const mono = performance.now();
     const wallLate = now - expectedWall;
-    const windowMs = mono - lastMono;                 // true inter-tick gap = the ELU window
+    const windowMs = mono - lastMono;                 // true inter-tick gap
     const monoLate = windowMs - WATCHDOG_INTERVAL_MS; // overshoot beyond the intended interval
+    const windowStartMono = lastMono;
     lastMono = mono;
     expectedWall = now + WATCHDOG_INTERVAL_MS;
-    // Active ms over the SAME window the monoLate/windowMs span — so busyFrac
-    // (activeMs/windowMs in attributeStall) is comparable. Fallback (no ELU) =
-    // fully busy = legacy behaviour.
-    let activeMs = windowMs;
-    if (typeof performance.eventLoopUtilization === 'function') {
-      const eluNow = performance.eventLoopUtilization();
-      if (eluPrev) activeMs = performance.eventLoopUtilization(eluNow, eluPrev).active;
-      eluPrev = eluNow;
+    // Self-reported synchronous time over the SAME window monoLate/windowMs
+    // span. Must be drained EVERY tick (healthy ones included) or a stall would
+    // inherit busy time accumulated over the preceding healthy seconds.
+    const sync = takeSyncWindow();
+    const eluNow = typeof performance.eventLoopUtilization === 'function'
+      ? performance.eventLoopUtilization()
+      : undefined;
+    const elu = eluNow ? eluActiveMs(eluPrev, eluNow) : null;
+    eluPrev = eluNow;
+    if (monoLate < FREEZE_THRESHOLD_MS) {
+      // Healthy tick — refresh the RSS baseline, throttled to ~1/s so the
+      // watchdog itself stays cheap at a 250ms interval.
+      if (++rssTick >= 4) {
+        rssTick = 0;
+        lastHealthyRssMB = currentRssMB();
+      }
+      return;
     }
-    if (monoLate < FREEZE_THRESHOLD_MS) return;
     // Wall jumped far beyond the monotonic elapsed → NTP step / wake-from-sleep.
     if (wallLate - monoLate > 5_000) return;
-    const { source, channel } = attributeStall(monoLate, activeMs, windowMs, now, currentInFlight(), lastExit);
-    recordFreeze({
-      at: now,
-      source,
-      channel,
-      durationMs: Math.round(monoLate),
-      detail: detailFor(source),
-      wallLateMs: Math.round(wallLate),
-      windowMs: Math.round(windowMs),
-      activeMs: Math.round(activeMs * 10) / 10,
-      busyFraction: Math.round((activeMs / Math.max(1, windowMs)) * 1000) / 1000,
+    const rssMB = currentRssMB();
+    const baselineRssMB = lastHealthyRssMB;
+    lastHealthyRssMB = rssMB;
+    // GC entries and this timer both drain on the same loop turn with NO
+    // guaranteed order, so a pause that ended inside the window may not have
+    // been delivered yet. One setImmediate lets the observer flush first. The
+    // off-loop worker journal remains the durable backstop if the process dies
+    // in that gap — which is already its documented contract.
+    setImmediate(() => {
+      const ev: StallEvidence = {
+        monoLate,
+        windowMs,
+        busyMs: sync.busyMs,
+        topSync: sync.topSync,
+        gcMs: gcMsIn(windowStartMono, mono),
+        eluActiveMs: elu,
+        coverage: sync.coverage,
+      };
+      const { source, channel } = attributeStall(ev, now, currentInFlight(), lastExit);
+      recordFreeze({
+        at: now,
+        source,
+        channel,
+        durationMs: Math.round(monoLate),
+        detail: detailFor(source, ev.coverage),
+        wallLateMs: Math.round(wallLate),
+        windowMs: Math.round(windowMs),
+        // `null`, not 0, when the runtime cannot report it — a 0 here is what
+        // made every stall look idle and read as `starved`.
+        activeMs: elu === null ? null : Math.round(elu * 10) / 10,
+        busyFraction: elu === null ? null : Math.round((elu / Math.max(1, windowMs)) * 1000) / 1000,
+        busyMs: Math.round(ev.busyMs * 10) / 10,
+        gcMs: Math.round(ev.gcMs * 10) / 10,
+        topSyncLabel: sync.topSync?.label,
+        eluAvailable: elu !== null,
+        coverage: ev.coverage,
+        rssMB,
+        ...(baselineRssMB > 0 ? { rssDeltaMB: Math.round((rssMB - baselineRssMB) * 10) / 10 } : {}),
+      });
     });
   }, WATCHDOG_INTERVAL_MS);
   timer.unref?.();
 }
 
 export function stopFreezeWatchdog(): Promise<void> {
+  stopGcObserver();
   if (timer) {
     clearInterval(timer);
     timer = null;
     expectedWall = 0;
     lastMono = 0;
     eluPrev = undefined;
+    lastHealthyRssMB = 0;
+    rssTick = 0;
   }
   return stopOffloopWatchdog();
 }

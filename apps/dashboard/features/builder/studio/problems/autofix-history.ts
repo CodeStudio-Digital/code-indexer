@@ -1,5 +1,5 @@
 /**
- * Per-session history of fix prompts sent to the agent (auto-fired,
+ * Per-project history of fix prompts sent to the agent (auto-fired,
  * review-accepted, or manual "Fix" clicks). Module-level like the
  * studio-context-store — survives popover unmounts, dies with the page.
  */
@@ -12,23 +12,23 @@ export interface AutoFixHistoryEntry {
 }
 
 const MAX = 20;
-const bySession = new Map<number, AutoFixHistoryEntry[]>();
-const listeners = new Map<number, Set<() => void>>();
+const byProject = new Map<number, AutoFixHistoryEntry[]>();
+const listenersByProject = new Map<number, Set<() => void>>();
 
-export function recordAutoFix(sessionId: number, entry: AutoFixHistoryEntry): void {
-  const list = bySession.get(sessionId) ?? [];
-  bySession.set(sessionId, [...list, entry].slice(-MAX));
-  listeners.get(sessionId)?.forEach((fn) => fn());
+export function recordAutoFix(projectId: number, entry: AutoFixHistoryEntry): void {
+  const list = byProject.get(projectId) ?? [];
+  byProject.set(projectId, [...list, entry].slice(-MAX));
+  listenersByProject.get(projectId)?.forEach((fn) => fn());
 }
 
-export function getAutoFixHistory(sessionId: number): AutoFixHistoryEntry[] {
-  return bySession.get(sessionId) ?? [];
+export function getAutoFixHistory(projectId: number): AutoFixHistoryEntry[] {
+  return byProject.get(projectId) ?? [];
 }
 
-export function subscribeAutoFixHistory(sessionId: number, fn: () => void): () => void {
-  const set = listeners.get(sessionId) ?? new Set();
+export function subscribeAutoFixHistory(projectId: number, fn: () => void): () => void {
+  const set = listenersByProject.get(projectId) ?? new Set();
   set.add(fn);
-  listeners.set(sessionId, set);
+  listenersByProject.set(projectId, set);
   return () => {
     set.delete(fn);
   };

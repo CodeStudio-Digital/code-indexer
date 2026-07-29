@@ -7,7 +7,7 @@ import { ConfirmDiscardDialog } from './ConfirmDiscardDialog.js';
 import { openWorkspacePushDialog } from '../../../git-push/push-dialog-store.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   status: GitStatusResponse;
   onRefresh: () => void | Promise<void>;
@@ -100,7 +100,7 @@ function ChangeGroup({
 }: {
   title: string;
   items: GitStatusResponse['files'];
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   staged: boolean;
   onRefresh: () => void | Promise<void>;

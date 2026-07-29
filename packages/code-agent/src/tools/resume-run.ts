@@ -101,7 +101,11 @@ async function relaunchResumedAgentsOwned(
 ): Promise<ResumeRunOutcome> {
   const sessionId = group.sessionId;
   const toolUseId = ctx.currentToolUseId;
-  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
+  await assertResumeLease(
+    sessionId,
+    group.spawnId,
+    deps.sessionStore,
+  );
   const profiles = targets.map(profileFor);
   const targetIdx = new Set(targets.map((t) => t.agentIndex));
   // Per-target provider resolved from each retained agent's profile (memoized).
@@ -116,7 +120,11 @@ async function relaunchResumedAgentsOwned(
 
   // Provider/profile resolution may perform asynchronous setup. Revalidate
   // immediately before publishing the start boundary.
-  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
+  await assertResumeLease(
+    sessionId,
+    group.spawnId,
+    deps.sessionStore,
+  );
   ctx.runner?.emit('agents_group_start', {
     groupId: group.spawnId,
     toolUseId,
@@ -148,7 +156,11 @@ async function relaunchResumedAgentsOwned(
     reasoningEffort: effortForProfile(deps, profiles[i]),
     signal: controllers[i].signal,
   }));
-  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
+  await assertResumeLease(
+    sessionId,
+    group.spawnId,
+    deps.sessionStore,
+  );
   const { results, totalUsage } = await runParallelAgents(
     {
       provider: deps.provider,
@@ -180,9 +192,13 @@ async function relaunchResumedAgentsOwned(
   );
   // Prevent a stale executor from publishing/committing results after another
   // process acquired the expired resume checkpoint.
-  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
+  await assertResumeLease(
+    sessionId,
+    group.spawnId,
+    deps.sessionStore,
+  );
 
-  const renderables = results.map((r, i) => {
+  const renderables = await Promise.all(results.map(async (r, i) => {
     const state = targets[i];
     const profile = profiles[i];
     const attempt = state.attempt + 1;
@@ -193,7 +209,7 @@ async function relaunchResumedAgentsOwned(
       // could still retry). Completed resumes keep theirs too — replaceAgentState
       // applies the retention policy (readable via read_agent_transcript).
       const nextTranscript = r.transcript ?? state.transcript;
-      const persisted = replaceAgentState(sessionId, group.spawnId, {
+      const persisted = await replaceAgentState(sessionId, group.spawnId, {
         ...state,
         reason: r.reason,
         failureNote: r.reason !== 'completed' ? (r.failureDetail || r.finalText).slice(0, 500) : undefined,
@@ -210,7 +226,7 @@ async function relaunchResumedAgentsOwned(
       }
     }
     if (r.reason === 'completed') {
-      captureInvestigation(
+      await captureInvestigation(
         deps, ctx,
         { task: state.task, label: state.label, type: profile.capability },
         r.finalText ?? '', renderTrail(r.collected), r.usage.input_tokens + r.usage.output_tokens,
@@ -230,7 +246,7 @@ async function relaunchResumedAgentsOwned(
       // (else the model's next resume_agent({agents:[N]}) targets the wrong one).
       displayIndex: state.agentIndex,
     };
-  });
+  }));
 
   const outcomeCounts = countSubagentOutcomes(results);
   const stillFailed = results.filter((r) => r.reason !== 'completed').length;
@@ -246,7 +262,11 @@ async function relaunchResumedAgentsOwned(
   const text = header + body + hint;
   // Final result/event is the resume ACK boundary. A stale executor may have
   // completed physical child calls, but it must not publish or return them.
-  assertResumeLease(sessionId, group.spawnId, deps.sessionStore);
+  await assertResumeLease(
+    sessionId,
+    group.spawnId,
+    deps.sessionStore,
+  );
   ctx.runner?.emit('agents_group_end', {
     groupId: group.spawnId,
     totalUsage,

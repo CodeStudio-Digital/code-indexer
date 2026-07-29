@@ -18,7 +18,7 @@ interface EditorSessionSettingsOptions {
 }
 
 export function useEditorSessionSettings(
-  selectedId: number | null,
+  selectedId: string | null,
   sessionData: SessionData | null,
   options: EditorSessionSettingsOptions,
 ) {

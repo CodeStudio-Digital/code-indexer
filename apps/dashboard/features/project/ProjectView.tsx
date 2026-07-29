@@ -87,7 +87,7 @@ interface ProjectViewProps {
   projectName: string;
   /** When set (via Recent Sessions click in AppShell topbar), pre-selects
    *  the chat tab + the given session inside AgentChat. */
-  initialSessionId?: number;
+  initialSessionId?: string;
 }
 
 export function ProjectView({ projectId, projectName, initialSessionId }: ProjectViewProps) {

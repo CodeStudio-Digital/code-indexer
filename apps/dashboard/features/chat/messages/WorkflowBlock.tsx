@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { AlertCircle, Check, ChevronDown, ChevronRight, Circle, Loader2, Network, MinusCircle } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import type { Usage, WorkflowRunState, WorkflowStepView } from '../../../hooks/useAgentStream.js';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
@@ -16,6 +17,7 @@ interface WorkflowBlockProps {
  * result digests. Mirrors TaskExecutionBlock's visual language.
  */
 export function WorkflowBlock({ run, defaultOpen }: WorkflowBlockProps) {
+  const { t } = useTranslation('chat');
   const [open, setOpen] = useState(defaultOpen ?? run.status === 'running');
   const isRunning = run.status === 'running';
   const completed = run.steps.filter((s) => s.status === 'completed' || s.status === 'partial').length;
@@ -72,23 +74,23 @@ export function WorkflowBlock({ run, defaultOpen }: WorkflowBlockProps) {
         </Badge>
         {failed > 0 && (
           <Badge variant="destructive" className="shrink-0 tabular-nums">
-            {failed} failed
+            {t('workflow.failed', { count: failed })}
           </Badge>
         )}
         {skipped > 0 && (
           <Badge variant="secondary" className="shrink-0 tabular-nums">
-            {skipped} skipped
+            {t('workflow.skipped', { count: skipped })}
           </Badge>
         )}
         {run.resumed && (
-          <Badge variant="secondary" className="shrink-0">resumed</Badge>
+          <Badge variant="secondary" className="shrink-0">{t('workflow.resumed')}</Badge>
         )}
         <Badge className="shrink-0 border-violet-500/40 bg-violet-500/15 text-violet-300" variant="outline">
-          Ultra
+          {t('workflow.ultra')}
         </Badge>
         <span className="ml-auto text-muted-foreground tabular-nums shrink-0">
-          {run.totalWaves} wave{run.totalWaves === 1 ? '' : 's'} · {totalTools} tool{totalTools === 1 ? '' : 's'}
-          {totalTokens > 0 ? ` · ${formatTokens(totalTokens)} tok` : ''}
+          {t('workflow.waveCount', { count: run.totalWaves })} · {t('workflow.toolCount', { count: totalTools })}
+          {totalTokens > 0 ? ` · ${t('workflow.tokens', { tokens: formatTokens(totalTokens) })}` : ''}
         </span>
       </button>
 
@@ -97,7 +99,7 @@ export function WorkflowBlock({ run, defaultOpen }: WorkflowBlockProps) {
           {stepsByWave.map(({ wave, steps }) => (
             <div key={wave} className="border-b last:border-b-0">
               <div className="px-3 py-1.5 text-[10px] uppercase tracking-wider text-muted-foreground bg-muted/20">
-                Wave {wave}
+                {t('workflow.wave', { wave })}
               </div>
               {steps.map((step) => (
                 <WorkflowStepRow key={step.id} step={step} />
@@ -111,6 +113,7 @@ export function WorkflowBlock({ run, defaultOpen }: WorkflowBlockProps) {
 }
 
 function WorkflowStepRow({ step }: { step: WorkflowStepView }) {
+  const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   const hasDetails = !!step.summary || !!step.error;
   const StatusIcon = step.status === 'running'
@@ -161,7 +164,7 @@ function WorkflowStepRow({ step }: { step: WorkflowStepView }) {
           {step.profile}
         </Badge>
         {step.dependsOn.length > 0 && (
-          <span className="text-[10px] text-muted-foreground font-mono shrink-0" title={`depends on ${step.dependsOn.join(', ')}`}>
+          <span className="text-[10px] text-muted-foreground font-mono shrink-0" title={t('workflow.dependsOn', { steps: step.dependsOn.join(', ') })}>
             ← {step.dependsOn.join(', ')}
           </span>
         )}
@@ -171,16 +174,17 @@ function WorkflowStepRow({ step }: { step: WorkflowStepView }) {
             nearBudget ? 'text-warning' : 'text-muted-foreground',
           )}
         >
-          {step.toolCallCount ?? 0}
-          {step.maxToolCalls != null && step.maxToolCalls > 0 ? `/${step.maxToolCalls}` : ''} tool
-          {(step.toolCallCount ?? 0) === 1 ? '' : 's'}
+          {t('workflow.stepTools', {
+            count: step.toolCallCount ?? 0,
+            limit: step.maxToolCalls != null && step.maxToolCalls > 0 ? `/${step.maxToolCalls}` : '',
+          })}
           {usageTokens(step.usage) > 0 ? ` · ${formatTokens(usageTokens(step.usage))}` : ''}
         </span>
       </button>
       {step.status === 'running' && (step.lastToolName || step.phase) && (
         <div className="px-8 pb-2 text-[11px] text-warning flex flex-wrap gap-x-2">
           {step.phase && <span className="font-mono">{step.phase}</span>}
-          {step.lastToolName && <span className="font-mono">last {step.lastToolName}</span>}
+          {step.lastToolName && <span className="font-mono">{t('workflow.lastTool', { tool: step.lastToolName })}</span>}
         </div>
       )}
       {open && hasDetails && (

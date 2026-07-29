@@ -18,6 +18,38 @@ function harness() {
 }
 
 describe('SemanticStore', () => {
+  // GET /api/projects/semantic/status used to pull EVERY job row and filter in
+  // JS — an unbounded SELECT plus a JSON.parse per row, on the main thread.
+  it('filters listJobs by a namespace set in SQL, preserving order', () => {
+    const { db, store } = harness();
+    try {
+      const embedding: EmbeddingTarget = {
+        kind: 'local_http', baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'nomic-embed-text', protocol: 'openai-embeddings',
+      };
+      const generation = store.createGeneration({
+        purpose: 'code', fingerprint: 'fp-ns', embedding_target: embedding,
+        dimension: 768, expected_items: 1,
+      });
+      const mk = (namespace: string, priority: number) =>
+        store.createJob({ generation_id: generation.id, namespace, kind: 'delta', expected_items: 1, priority });
+      const low = mk('code:p1', 1);
+      const high = mk('code:p2', 9);
+      mk('code:p3', 5); // must be excluded
+
+      const got = store.listJobs({ namespaces: ['code:p1', 'code:p2'] });
+      expect(got.map((j) => j.id)).toEqual([high.id, low.id]); // priority DESC, id
+      expect(store.listJobs({ namespaces: [] })).toEqual([]);
+      // Agrees with the unfiltered form for the same subset.
+      expect(got).toEqual(
+        store.listJobs().filter((j) => j.namespace === 'code:p1' || j.namespace === 'code:p2'),
+      );
+    } finally {
+      store.close();
+      db.close();
+    }
+  });
+
   it('temporarily overrides and restores the SQLite busy timeout', () => {
     const { db, store } = harness();
     try {

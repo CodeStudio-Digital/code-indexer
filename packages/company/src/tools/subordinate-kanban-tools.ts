@@ -25,7 +25,7 @@ import { buildUnifiedKanbanTools } from './kanban-tools.js';
 export function buildSubordinateKanbanTools(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
-  agentRunId: number,
+  agentRunId: string,
 ): CoderTool[] {
   return [
     // Unified surface — same tools master uses. Card auto-resolves via
@@ -41,7 +41,7 @@ export function buildSubordinateKanbanTools(
 function kanbanMoveToReview(
   orchestrator: CompanyOrchestrator,
   agentRole: string,
-  agentRunId: number,
+  agentRunId: string,
 ): CoderTool {
   const parameters: JsonSchema = {
     type: 'object',

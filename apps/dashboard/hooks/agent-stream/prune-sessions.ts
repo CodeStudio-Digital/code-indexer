@@ -1,4 +1,4 @@
-import type { SessionState } from './types.js';
+import type { SessionId, SessionState } from './types.js';
 
 /**
  * Upper bound on how many per-session state slots `useAgentStream` keeps
@@ -19,11 +19,11 @@ export const MAX_SESSIONS = 8;
  * recency map for removed ids.
  */
 export function pruneSessions(
-  map: Record<number, SessionState>,
-  activeSid: number | null,
-  touched: Map<number, number>,
-): Record<number, SessionState> {
-  const ids = Object.keys(map).map(Number);
+  map: Record<SessionId, SessionState>,
+  activeSid: SessionId | null,
+  touched: Map<SessionId, number>,
+): Record<SessionId, SessionState> {
+  const ids = Object.keys(map);
   if (ids.length <= MAX_SESSIONS) return map;
   const evictable = ids
     .filter((id) => id !== activeSid && !map[id]?.streaming)
@@ -31,7 +31,7 @@ export function pruneSessions(
   const toRemove = Math.min(ids.length - MAX_SESSIONS, evictable.length);
   if (toRemove <= 0) return map;
   const removeSet = new Set(evictable.slice(0, toRemove));
-  const next: Record<number, SessionState> = {};
+  const next: Record<SessionId, SessionState> = {};
   for (const id of ids) {
     if (removeSet.has(id)) touched.delete(id);
     else next[id] = map[id];

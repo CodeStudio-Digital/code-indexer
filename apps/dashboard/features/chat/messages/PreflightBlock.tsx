@@ -4,21 +4,15 @@
  * before the run starts. Replaces the bare spinner with a labelled indicator +
  * elapsed seconds so a ~10s wait doesn't read as frozen.
  */
-import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Sparkles } from 'lucide-react';
-
-function secsSince(startedAt: number): number {
-  return Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-}
+import { useNow } from '../../../lib/perf/shared-clock.js';
 
 export function PreflightBlock({ startedAt }: { startedAt: number }) {
   const { t } = useTranslation('chat');
-  const [elapsed, setElapsed] = useState(() => secsSince(startedAt));
-  useEffect(() => {
-    const id = setInterval(() => setElapsed(secsSince(startedAt)), 1000);
-    return () => clearInterval(id);
-  }, [startedAt]);
+  // Elapsed comes off the app-wide 1 Hz clock — the preflight indicator no
+  // longer owns a timer of its own.
+  const elapsed = Math.max(0, Math.floor((useNow() - startedAt) / 1000));
   return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
       <Sparkles className="h-3.5 w-3.5 shrink-0 animate-pulse text-amber-500" />

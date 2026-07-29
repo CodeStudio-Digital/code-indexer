@@ -30,6 +30,23 @@ export interface RerankRequestOptions {
   signal?: AbortSignal;
 }
 
+export interface RerankerRuntimeDiagnostics {
+  configured: true;
+  status: 'configured' | 'running' | 'active' | 'failed';
+  requested_model: string;
+  resolved_model: string;
+  execution_provider: string;
+  active: boolean;
+  invocation_count: number;
+  last_candidate_count: number | null;
+  last_returned_count: number | null;
+  last_invocation_at: string | null;
+  last_success_at: string | null;
+  last_error_at: string | null;
+  last_error: string | null;
+  last_latency_ms: number | null;
+}
+
 export interface RerankerService {
   readonly name: string;
   /**

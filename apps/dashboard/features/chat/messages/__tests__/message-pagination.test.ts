@@ -12,25 +12,38 @@ import {
   sessionDataForSelection,
 } from '../session-message-data.js';
 
-function sessionData(sessionId: number, ids: number[]): SessionData {
+const SESSION_A = '11111111-1111-4111-8111-111111111111';
+const SESSION_B = '22222222-2222-4222-8222-222222222222';
+
+function sessionData(sessionId: string, ids: number[]): SessionData {
   return {
     session: { id: sessionId } as SessionData['session'],
     messages: ids.map((id) => ({
       role: 'user' as const,
       content: [{ type: 'text' as const, text: `message-${id}` }],
     })),
-    message_rows: ids.map((id) => ({ id, input_tokens: 0, output_tokens: 0 })),
+    message_rows: ids.map((seq) => ({
+      id: `row-${seq}`,
+      seq,
+      input_tokens: 0,
+      output_tokens: 0,
+    })),
   };
 }
 
-function messagePage(ids: number[], precedingUserMessageId = 0): MessagePage {
+function messagePage(ids: number[], precedingUserSeq = 0): MessagePage {
   return {
     messages: ids.map((id) => ({
       role: 'user' as const,
       content: [{ type: 'text' as const, text: `page-${id}` }],
     })),
-    message_rows: ids.map((id) => ({ id, input_tokens: 0, output_tokens: 0 })),
-    preceding_user_message_id: precedingUserMessageId,
+    message_rows: ids.map((seq) => ({
+      id: `row-${seq}`,
+      seq,
+      input_tokens: 0,
+      output_tokens: 0,
+    })),
+    preceding_user_seq: precedingUserSeq,
   };
 }
 
@@ -53,56 +66,67 @@ describe('conversation scroll pagination', () => {
   });
 
   it('normalizes duplicate cached rows without breaking message-row alignment', () => {
-    const normalized = normalizeSessionMessageData(sessionData(10, [1, 2, 2, 3]));
+    const normalized = normalizeSessionMessageData(
+      sessionData(SESSION_A, [1, 2, 2, 3]),
+    );
 
-    expect(normalized.message_rows.map((row) => row.id)).toEqual([1, 2, 3]);
+    expect(normalized.message_rows.map((row) => row.seq)).toEqual([1, 2, 3]);
     expect(normalized.messages.map((message) => (
       message.content[0]?.type === 'text' ? message.content[0].text : null
     ))).toEqual(['message-1', 'message-2', 'message-3']);
   });
 
   it('does not expose a retained payload under another selected session', () => {
-    expect(sessionDataForSelection(sessionData(10, [1, 2]), 20)).toBeNull();
-    expect(sessionDataForSelection(sessionData(10, [1, 2]), 10)?.session.id).toBe(10);
+    expect(
+      sessionDataForSelection(sessionData(SESSION_A, [1, 2]), SESSION_B),
+    ).toBeNull();
+    expect(
+      sessionDataForSelection(sessionData(SESSION_A, [1, 2]), SESSION_A)
+        ?.session.id,
+    ).toBe(SESSION_A);
   });
 
   it('prepends only unseen rows from an overlapping page', () => {
     const result = mergeEarlierMessagePage(
-      sessionData(10, [3, 4]),
+      sessionData(SESSION_A, [3, 4]),
       messagePage([1, 2, 3], 99),
-      10,
+      SESSION_A,
     );
 
     expect(result.addedRows).toBe(2);
-    expect(result.data.message_rows.map((row) => row.id)).toEqual([1, 2, 3, 4]);
+    expect(result.data.message_rows.map((row) => row.seq)).toEqual([1, 2, 3, 4]);
     expect(result.data.messages.map((message) => (
       message.content[0]?.type === 'text' ? message.content[0].text : null
     ))).toEqual(['page-1', 'page-2', 'message-3', 'message-4']);
-    expect(result.data.preceding_user_message_id).toBe(99);
+    expect(result.data.preceding_user_seq).toBe(99);
   });
 
   it('rejects a late page after the selected session changes', () => {
-    const current = sessionData(20, [8, 9]);
-    const result = mergeEarlierMessagePage(current, messagePage([1, 2]), 10);
+    const current = sessionData(SESSION_B, [8, 9]);
+    const result = mergeEarlierMessagePage(
+      current,
+      messagePage([1, 2]),
+      SESSION_A,
+    );
 
     expect(result.addedRows).toBe(0);
     expect(result.data).toBe(current);
   });
 
   it('fails closed when the API breaks the parallel-array invariant', () => {
-    const current = sessionData(10, [3, 4]);
+    const current = sessionData(SESSION_A, [3, 4]);
     const malformed = messagePage([1, 2]);
     malformed.messages.pop();
-    const result = mergeEarlierMessagePage(current, malformed, 10);
+    const result = mergeEarlierMessagePage(current, malformed, SESSION_A);
 
     expect(result.addedRows).toBe(0);
     expect(result.data).toBe(current);
   });
 
   it('appends an aligned optimistic user row with attachments and skills', () => {
-    const current = { ...sessionData(10, []), total_messages: 0 };
+    const current = { ...sessionData(SESSION_A, []), total_messages: 0 };
     const updated = appendOptimisticUserMessage(current, {
-      sessionId: 10,
+      sessionId: SESSION_A,
       messageId: -101,
       text: 'inspect this',
       attachments: [
@@ -122,7 +146,8 @@ describe('conversation scroll pagination', () => {
       selectedSkillIds: ['unity'],
     }]);
     expect(updated.message_rows).toEqual([{
-      id: -101,
+      id: 'optimistic:101',
+      seq: -101,
       input_tokens: 0,
       output_tokens: 0,
       optimistic: true,
@@ -135,9 +160,9 @@ describe('conversation scroll pagination', () => {
   });
 
   it('rejects an optimistic row for a stale session updater', () => {
-    const current = sessionData(20, []);
+    const current = sessionData(SESSION_B, []);
     const updated = appendOptimisticUserMessage(current, {
-      sessionId: 10,
+      sessionId: SESSION_A,
       messageId: -102,
       text: 'stale',
     });

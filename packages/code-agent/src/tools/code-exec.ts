@@ -144,24 +144,19 @@ class NestedToolConcurrencyGate {
 }
 
 /**
- * Promises returned by an active code_exec toolsProxy. The module-level
- * `unhandledRejection` listener below swallows ONLY rejections whose promise
- * sits in this set — anything outside code_exec keeps Node's default
- * "terminate on unhandled rejection" behavior. Without this guard, a script
- * that writes `files.forEach(f => edit_file({...}))` (fire-and-forget) takes
- * the whole host down: the proxy throw becomes an unhandled rejection that
- * never reached the script's `await`.
+ * Attach a rejection observer directly to every promise created by the
+ * sandbox. The original promise remains rejected for `await`, `attempt()` and
+ * `Promise.all`, while Node no longer reports it as unhandled if evaluation
+ * stops before the script can attach its own consumer (for example, a later
+ * array element references a sandbox-excluded control tool).
+ *
+ * A process-level `unhandledRejection` listener cannot provide this guarantee:
+ * every listener still receives the event, so the worker crash classifier
+ * would terminalize the run even if another listener tried to "swallow" it.
  */
-const ownedToolPromises = new WeakSet<Promise<unknown>>();
-let unhandledHandlerInstalled = false;
-function ensureUnhandledHandler(): void {
-  if (unhandledHandlerInstalled) return;
-  unhandledHandlerInstalled = true;
-  process.on('unhandledRejection', (reason, promise) => {
-    if (!ownedToolPromises.has(promise as Promise<unknown>)) return;
-    const msg = reason instanceof Error ? reason.message : String(reason);
-    console.warn(`[code_exec] swallowed fire-and-forget tool rejection: ${msg}`);
-  });
+function observeCodeExecPromise<T>(promise: Promise<T>): Promise<T> {
+  void promise.catch(() => undefined);
+  return promise;
 }
 /**
  * Raised ceiling for sessions with `unrestricted_tool_output` on. NOT
@@ -428,11 +423,6 @@ export function buildCodeExecTool(
         MAX_OUTPUT_BYTES,
         UNRESTRICTED_MAX_OUTPUT_BYTES,
       );
-
-      // Make sure the host doesn't crash if the model's script fires a
-      // tool call without awaiting it (the proxy throws into a Promise
-      // nobody owns). Idempotent — installs the listener at most once.
-      ensureUnhandledHandler();
 
       // Snapshot the registry once per invocation. Execution stays restricted
       // to safe tools, while read-only schema introspection may inspect all of
@@ -1169,8 +1159,7 @@ export function buildCodeExecTool(
           }
         };
         toolsProxy[t.name] = (rawArgs: unknown): Promise<string> => {
-          const p = impl(rawArgs);
-          ownedToolPromises.add(p);
+          const p = observeCodeExecPromise(impl(rawArgs));
           activeToolPromises.add(p);
           void p.then(
             () => { activeToolPromises.delete(p); },
@@ -1198,6 +1187,25 @@ export function buildCodeExecTool(
       for (const [name, fn] of Object.entries(toolsProxy)) {
         if (RESERVED_GLOBALS.has(name)) continue;
         bareGlobals[name] = fn;
+      }
+      // Registered control/lifecycle tools remain non-callable in code_exec,
+      // but expose a rejection-shaped alias instead of leaving a bare
+      // ReferenceError. This lets Promise.all attach to every earlier sibling
+      // before the batch fails, so no partially evaluated promise is orphaned.
+      // The message intentionally preserves the historical ReferenceError
+      // wording consumed by buildCodeExecFailureHint.
+      const blockedToolGlobals: Record<string, (_args: unknown) => Promise<never>> = {};
+      for (const name of allNames) {
+        if (
+          exposedNameSet.has(name) ||
+          RESERVED_GLOBALS.has(name) ||
+          !/^[A-Za-z_$][\w$]*$/.test(name)
+        ) {
+          continue;
+        }
+        blockedToolGlobals[name] = () => observeCodeExecPromise(
+          Promise.reject(new ReferenceError(`${name} is not defined`)),
+        );
       }
 
       // In-sandbox tool discovery. code_exec is tier-agnostic (it runs the full
@@ -1241,7 +1249,7 @@ export function buildCodeExecTool(
         );
       };
 
-      const attempt = async (operation: unknown): Promise<
+      const attemptImpl = async (operation: unknown): Promise<
         | { ok: true; value: unknown }
         | {
             ok: false;
@@ -1277,10 +1285,14 @@ export function buildCodeExecTool(
           };
         }
       };
+      const attempt = (operation: unknown): ReturnType<typeof attemptImpl> => (
+        observeCodeExecPromise(attemptImpl(operation))
+      );
 
       const sandbox: Context = {
         // Bare aliases first so the explicit fields below win on conflict
         // (e.g. a future tool named `JSON` would not shadow the global).
+        ...blockedToolGlobals,
         ...bareGlobals,
         // Unknown `tools.<name>` access throws a suggestion-bearing error
         // instead of yielding undefined → "is not a function" (telemetry).

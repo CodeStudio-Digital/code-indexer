@@ -310,10 +310,10 @@ export function parsePorcelainV2Status(out: string): {
       files.push({ path: r.slice(2), state: 'ignored', staged: false });
     }
   }
-  return { head: parseHeadBranchInfo(out), files };
+  return { head: parseHeadBranchInfo(records), files };
 }
 
-function parseHeadBranchInfo(out: string): {
+function parseHeadBranchInfo(records: readonly string[]): {
   branch: string | null;
   upstream: string | null;
   ahead: number;
@@ -325,7 +325,18 @@ function parseHeadBranchInfo(out: string): {
   //   # branch.head main
   //   # branch.upstream origin/main
   //   # branch.ab +2 -1
-  const lines = out.split(/[\0\n]/).filter((l) => l.startsWith('# branch.'));
+  //
+  // Reuses the NUL-split the caller already did. It used to re-split the whole
+  // output with `out.split(/[\0\n]/)`, which meant a second full regex pass and
+  // a second multi-million-element array over a status payload capped at 24 MB
+  // — all on the Electron main thread, just to read four leading lines.
+  const lines: string[] = [];
+  for (const r of records) {
+    if (!r.startsWith('#')) continue;
+    for (const line of r.split('\n')) {
+      if (line.startsWith('# branch.')) lines.push(line);
+    }
+  }
   let branch: string | null = null;
   let upstream: string | null = null;
   let ahead = 0;
@@ -844,7 +855,7 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       });
       if (summary.code !== 0) throwGitReadFailure('git_status_summary', summary, 'git status summary failed');
       return {
-        ...parseHeadBranchInfo(summary.stdout),
+        ...parseHeadBranchInfo(summary.stdout.split('\0')),
         repoRoot: cwd,
         notARepo: false,
       };
@@ -1447,11 +1458,33 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return { current: cur, all };
     },
 
-    async branchCheckout({ projectId, name, create, repoPath }) {
+    async branchCheckout({ projectId, name, create, from, repoPath }) {
       const root = await resolveCwd(projectId, repoPath);
-      if (create) await ensureBranchName(root, name);
-      else await ensureCommitRef(root, name);
-      const args = create ? ['checkout', '-b', name] : ['checkout', name];
+      if (create) {
+        await ensureBranchName(root, name);
+        if (from) await ensureCommitRef(root, from);
+      } else {
+        await ensureCommitRef(root, name);
+      }
+
+      let args: string[];
+      if (!create) {
+        args = ['checkout', name];
+      } else if (!from) {
+        args = ['checkout', '-b', name];
+      } else {
+        const local = await runGit(
+          root,
+          ['show-ref', '--verify', '--quiet', `refs/heads/${name}`],
+          { profile: 'read' },
+        );
+        // A remote ref can coexist with an identically named local branch.
+        // Re-selecting the remote entry should switch to that local branch,
+        // not fail forever after the first checkout.
+        args = local.code === 0
+          ? ['checkout', name]
+          : ['checkout', '--track', '-b', name, from];
+      }
       const r = await runGit(root, args);
       if (r.code !== 0) {
         throw new ApiError('git_checkout_failed', 500, r.stderr.trim() || 'git checkout failed');

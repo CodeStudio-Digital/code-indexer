@@ -22,6 +22,10 @@ const legacyServicesFallback = [];
 export default defineConfig({
   resolve: {
     alias: [
+      {
+        find: /^@radix-ui\/react-presence$/,
+        replacement: resolve(repoRoot, 'apps/dashboard/lib/radix-presence-react19.tsx'),
+      },
       ...pkgAliases('@mcp/shared', 'shared'),
       ...pkgAliases('@mcp/store', 'store'),
       ...pkgAliases('@mcp/api-bus', 'api-bus'),
@@ -42,6 +46,8 @@ export default defineConfig({
       ...pkgAliases('@mcp/company', 'company'),
       ...pkgAliases('@mcp/company-contracts', 'company-contracts'),
       ...pkgAliases('@mcp/agent-runtime-contracts', 'agent-runtime-contracts'),
+      ...pkgAliases('@mcp/agent-runtime-host', 'agent-runtime-host'),
+      ...pkgAliases('@mcp/session-storage', 'session-storage'),
       ...pkgAliases('@mcp/candidate-pipeline', 'candidate-pipeline'),
       ...pkgAliases('@mcp/orchestrator-host', 'orchestrator-host'),
       ...pkgAliases('@mcp/plugin-sdk', 'plugin-sdk'),

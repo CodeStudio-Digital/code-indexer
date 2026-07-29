@@ -8,6 +8,10 @@
 
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import {
+  asCompanySessionId,
+  type CompanySessionId,
+} from '@mcp/session-storage';
 import type {
   CompanyRuntimeKind,
   CompanySessionCapabilities,
@@ -15,9 +19,17 @@ import type {
 } from '@mcp/company/types.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
+import type { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 
 export interface SessionContextOpts {
-  companySessionId: number;
+  companySessionId: CompanySessionId | string;
+  companyFiles: CompanySessionFiles;
+  /**
+   * Filesystem authority for project-wide Company entities. Child sessions
+   * keep their board/inbox/agent-run records in `companyFiles`, while Kanban
+   * and the other shared surfaces live in the root bundle.
+   */
+  effectiveCompanyFiles?: CompanySessionFiles;
   companyStore: CompanyStore;
   db: CodeIndexDB;
   metaBus: CoderRunBus;
@@ -28,31 +40,38 @@ export interface SessionContextOpts {
    * (also re-read by `refreshProjects`) — no live link to parent's DB
    * mutations beyond the explicit refresh.
    */
-  parentSessionId?: number | null;
+  parentSessionId?: CompanySessionId | string | null;
   runtimeKind?: CompanyRuntimeKind;
-  appStudioSessionId?: number | null;
+  appStudioSessionId?: string | null;
   capabilities?: CompanySessionCapabilities;
 }
 
 export class SessionContext {
-  readonly companySessionId: number;
+  readonly companySessionId: CompanySessionId;
+  readonly companyFiles: CompanySessionFiles;
+  readonly effectiveCompanyFiles: CompanySessionFiles;
   readonly companyStore: CompanyStore;
   readonly db: CodeIndexDB;
   readonly metaBus: CoderRunBus;
-  readonly parentSessionId: number | null;
+  readonly parentSessionId: CompanySessionId | null;
   readonly runtimeKind: CompanyRuntimeKind;
-  readonly appStudioSessionId: number | null;
+  readonly appStudioSessionId: string | null;
   readonly capabilities: CompanySessionCapabilities;
 
   private _aborted = false;
   private _projects: CompanySessionProject[];
 
   constructor(opts: SessionContextOpts) {
-    this.companySessionId = opts.companySessionId;
+    this.companySessionId = asCompanySessionId(String(opts.companySessionId));
+    this.companyFiles = opts.companyFiles;
+    this.effectiveCompanyFiles =
+      opts.effectiveCompanyFiles ?? opts.companyFiles;
     this.companyStore = opts.companyStore;
     this.db = opts.db;
     this.metaBus = opts.metaBus;
-    this.parentSessionId = opts.parentSessionId ?? null;
+    this.parentSessionId = opts.parentSessionId == null
+      ? null
+      : asCompanySessionId(String(opts.parentSessionId));
     this.capabilities = opts.capabilities ?? resolveCompanySessionCapabilities(
       opts.runtimeKind ?? 'company',
       opts.appStudioSessionId ?? null,
@@ -64,9 +83,12 @@ export class SessionContext {
 
   /** Own projects first; if empty AND child, fall back to parent's. */
   private loadProjects(): CompanySessionProject[] {
-    const own = this.companyStore.listCompanySessionProjects(this.companySessionId);
-    if (own.length > 0 || this.parentSessionId == null) return own;
-    return this.companyStore.listCompanySessionProjects(this.parentSessionId);
+    const session = this.companyFiles.getSession();
+    return session.project_ids.map((projectId) => ({
+      company_session_id: this.companySessionId,
+      project_id: projectId,
+      label: session.project_labels[String(projectId)] ?? null,
+    }));
   }
 
   get projects(): ReadonlyArray<CompanySessionProject> {
@@ -79,14 +101,13 @@ export class SessionContext {
    * design-system, drive (the drive store has its own resolution but
    * uses the same logic). For sub-sessions (`parent_session_id != null`)
    * this returns the parent's id so every tab of the same root reads
-   * and writes to the same project-level rows.
+   * and writes to the same parent-bundle entities.
    *
-   * Per-tab data — `company_board`, `company_agent_runs`,
-   * `company_master_prompts`, `agent_inbox` — keeps using
-   * `companySessionId` directly. Those are isolated by FK on purpose so
-   * each tab's master / subs / board / questions stay independent.
+   * Per-tab data — board, agent runs, master prompts and inbox — keeps using
+   * `companySessionId` directly. Those entities remain in the child bundle so
+   * each tab's master, subordinates, board and questions stay independent.
    */
-  get effectiveSessionId(): number {
+  get effectiveSessionId(): CompanySessionId {
     return this.parentSessionId ?? this.companySessionId;
   }
 

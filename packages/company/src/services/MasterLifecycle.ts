@@ -18,9 +18,6 @@ import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
-import { SkillStore } from '@mcp/store/skill-store.js';
-import { loadConfig } from '@mcp/shared/utils/config.js';
 import { buildMasterCompanyBlock, type MasterPromptContext } from '@mcp/company/system-prompts.js';
 import type { AllowedModel, CompanyContext } from '@mcp/company/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
@@ -175,7 +172,7 @@ export interface MasterLifecycleDeps {
 
 export class MasterLifecycle implements IMasterNotifier {
   private _handle: RunCoderHandle | null = null;
-  private _agentRunId: number | null = null;
+  private _agentRunId: string | null = null;
   private _ended = false;
   /**
    * Set as soon as `handle.done` settles (in `.then`/`.catch`), one microtask
@@ -243,7 +240,7 @@ export class MasterLifecycle implements IMasterNotifier {
   // ─── IMasterNotifier ────────────────────────────────────────────
 
   get handle(): RunCoderHandle | null { return this._handle; }
-  get agentRunId(): number | null { return this._agentRunId; }
+  get agentRunId(): string | null { return this._agentRunId; }
   get isAlive(): boolean { return !this._ended && !!this._handle?.runner; }
   /**
    * True when `resurrect()` fired within the last `ms`. Single coordination
@@ -334,7 +331,7 @@ export class MasterLifecycle implements IMasterNotifier {
    */
   private loadConfigFromDb(): void {
     const ctx = this.deps.ctx;
-    const row = ctx.companyStore.getCompanySession(ctx.companySessionId);
+    const row = ctx.companyFiles.getSession();
     const parsed = parseMasterConfigFromDb(
       row?.config_json ?? null,
       this._roleConfigs,
@@ -387,7 +384,7 @@ export class MasterLifecycle implements IMasterNotifier {
       // inbox / auto-continue paths that previously emitted nothing.
       this.deps.attention.signal({
         kind: 'notify',
-        agentRunId: this._agentRunId ?? 0,
+        agentRunId: this._agentRunId,
         role: 'system',
       });
       return;
@@ -423,7 +420,7 @@ export class MasterLifecycle implements IMasterNotifier {
   async start(opts: MasterStartOpts): Promise<MasterStartResult> {
     let effectiveOpts = opts;
     if (this.deps.ctx.runtimeKind === 'app_studio') {
-      const session = this.deps.ctx.companyStore.getCompanySession(this.deps.ctx.companySessionId);
+      const session = this.deps.ctx.companyFiles.getSession();
       const runtime = resolveEffectiveMasterRuntime({
         configJson: session?.config_json,
         runtimeKind: 'app_studio',
@@ -486,7 +483,7 @@ export class MasterLifecycle implements IMasterNotifier {
   async resumeExisting(opts: MasterResumeOpts): Promise<MasterStartResult> {
     let effectiveOpts = opts;
     if (this.deps.ctx.runtimeKind === 'app_studio') {
-      const session = this.deps.ctx.companyStore.getCompanySession(this.deps.ctx.companySessionId);
+      const session = this.deps.ctx.companyFiles.getSession();
       const runtime = resolveEffectiveMasterRuntime({
         configJson: session?.config_json,
         runtimeKind: 'app_studio',
@@ -691,7 +688,7 @@ export class MasterLifecycle implements IMasterNotifier {
       // an empty listener set.
       this.deps.attention.signal({
         kind: 'user_message',
-        agentRunId: this._agentRunId ?? 0,
+        agentRunId: this._agentRunId,
         role: 'human',
       });
       return { ok: true };
@@ -726,17 +723,10 @@ export class MasterLifecycle implements IMasterNotifier {
       });
       return { ok: true };
     }
-    try {
-      this.deps.ctx.companyStore.updateCompanySessionStatus(
-        this.deps.ctx.companySessionId,
-        'running',
-      );
-      // P15c — fresh user message resurrects the master; clear the
-      // "Recovered after restart" pill so the dashboard hides it.
-      this.deps.ctx.companyStore.clearSessionRecoveryFlag(
-        this.deps.ctx.companySessionId,
-      );
-    } catch { /* ignore */ }
+    void Promise.all([
+      this.deps.ctx.companyFiles.updateSessionStatus('running'),
+      this.deps.ctx.companyFiles.clearRecoveryFlag(),
+    ]).catch(() => undefined);
     void this.resurrect(message, attachments, options.thinking);
     return { ok: true };
   }
@@ -786,7 +776,7 @@ export class MasterLifecycle implements IMasterNotifier {
     };
   }
 
-  private wireAllForRunner(runner: CoderRunner, runId: number): void {
+  private wireAllForRunner(runner: CoderRunner, runId: string): void {
     wireMasterRunnerListeners(runner, runId, {
       wirer: this.deps.wirer,
       humanInLoop: this.deps.humanInLoop,
@@ -818,7 +808,7 @@ export class MasterLifecycle implements IMasterNotifier {
    * ~30min wait no longer trips `STUCK_TOOL`. No-op when the supervisor
    * itself is disabled, so the gate stays a true superset.
    */
-  private maybeWireMasterSupervisor(runner: CoderRunner, runId: number): void {
+  private maybeWireMasterSupervisor(runner: CoderRunner, runId: string): void {
     const cfg = this.deps.autonomy
       ? this.deps.autonomy.get()
       : resolveAutonomy(null, process.env);
@@ -842,7 +832,7 @@ export class MasterLifecycle implements IMasterNotifier {
     else emitter.on?.('done', onDone);
   }
 
-  private attachCompletionHandler(handle: RunCoderHandle, runId: number): void {
+  private attachCompletionHandler(handle: RunCoderHandle, runId: string): void {
     // onRunnerReady wired live events before a full RunCoderHandle existed.
     // Re-wiring is idempotent and attaches the transcriptFlushed terminal
     // boundary without duplicating any stream listeners.
@@ -864,7 +854,7 @@ export class MasterLifecycle implements IMasterNotifier {
   private async continueWithExplicitFallback(errorDetail: string): Promise<boolean> {
     const runId = this._agentRunId;
     if (!runId) return false;
-    const applied = applyExplicitMasterFallback(
+    const applied = await applyExplicitMasterFallback(
       runId,
       this._runtimeSnapshot.fallbackModels,
       errorDetail,

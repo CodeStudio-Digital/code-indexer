@@ -29,13 +29,13 @@
  */
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { resolve as resolvePath, isAbsolute } from 'node:path';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { applyRuntimeEnv, type AgentRuntimeEnv } from '@mcp/code-agent/ports/shell-port.js';
 import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
 import { unsafeProcessCommandRefusal } from '@mcp/code-agent/tools/shell-command-safety.js';
 import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
+import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
 
 // ─── Tunables ──────────────────────────────────────────────────────
 
@@ -285,9 +285,22 @@ function clampMaxChars(raw: unknown): number {
   return Math.min(Math.max(1_000, n), HARD_MAX_OUTPUT_CHARS);
 }
 
-function resolveWorkdir(ctx: ToolContext, raw: unknown): string {
-  if (typeof raw !== 'string' || raw.length === 0) return ctx.cwd;
-  return isAbsolute(raw) ? raw : resolvePath(ctx.cwd, raw);
+function resolveWorkdir(
+  ctx: ToolContext,
+  raw: unknown,
+): { ok: true; cwd: string } | { ok: false; reason: string } {
+  if (typeof raw !== 'string' || raw.length === 0) return { ok: true, cwd: ctx.cwd };
+  const resolved = resolveWorkspacePath(raw, ctx, 'read');
+  if (!resolved.ok) return resolved;
+  if (resolved.external) {
+    return {
+      ok: false,
+      reason:
+        `workdir '${raw}' is an authorized external root, but persistent shell execution ` +
+        'stays scoped to a real project root',
+    };
+  }
+  return { ok: true, cwd: resolved.abs };
 }
 
 function describeResult(
@@ -540,7 +553,7 @@ export const execCommand: CoderTool = {
       },
       workdir: {
         type: 'string',
-        description: 'Working directory. Relative paths resolve against the project root. Default: project root.',
+        description: 'Working directory. Relative paths resolve against the primary project; in a global session use "<project-slug>/subdir".',
       },
       tty: {
         type: 'boolean',
@@ -558,7 +571,9 @@ export const execCommand: CoderTool = {
     const unsafeProcessCommand = unsafeProcessCommandRefusal(cmd);
     if (unsafeProcessCommand) return err(unsafeProcessCommand);
 
-    const cwd = resolveWorkdir(ctx, args.workdir);
+    const workdir = resolveWorkdir(ctx, args.workdir);
+    if (!workdir.ok) return err(`exec_command: ${workdir.reason}`);
+    const cwd = workdir.cwd;
     const mode: 'pipe' | 'pty' = args.tty === true ? 'pty' : 'pipe';
     const yieldMs = clampYield(args.yield_time_ms, DEFAULT_EXEC_YIELD_MS);
     const maxChars = clampMaxChars(args.max_output_tokens);

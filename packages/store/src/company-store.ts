@@ -1,207 +1,223 @@
 /**
- * CompanyStore — CRUD for company templates, sessions, agent runs, board,
- * kanban, archives, pipelines and the agent inbox.
+ * Minimal shared Company catalog.
  *
- * Public API. Bodies live in sub-modules under `./company/` so this file
- * stays under the 250-LOC ceiling. Each domain owns its row interface +
- * mapper + functions; we delegate via thin method stubs.
+ * SQLite is allowed here only for reusable templates and reusable pipeline
+ * definitions. Company/App Studio session state, agent runs, board, inbox,
+ * kanban, archives and pipeline executions are filesystem entities owned by
+ * their session bundle.
  */
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
 import type {
-  CompanyTemplate, CompanyRoleConfig,
-  CompanySession, CompanySessionStatus, CompanySessionProject,
-  CompanyAgentRun, AgentRunStatus,
-  BoardEntry, BoardKind,
-  KanbanCard, KanbanColumn, KanbanTag, KanbanChecklistItem, KanbanComment,
-  KanbanCardAgent, KanbanCardDependency, KanbanCardFull,
-  MasterPrompt, MasterPromptKind, MasterPromptStatus,
-  CompanySessionArchive,
-  Pipeline, PipelineExecution, PipelineExecutionStatus, PipelineNodeExecution,
-  AgentInboxMessage, InboxStatus,
+  CompanyRoleConfig,
+  CompanyTemplate,
+  Pipeline,
+  PipelineExecution,
+  PipelineNodeExecution,
 } from '@mcp/company/types.js';
-
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { isUuid } from '@mcp/session-storage';
 import * as templatesDomain from './company/templates.js';
-import * as sessions from './company/sessions.js';
-import * as sessionProjects from './company/session-projects.js';
-import * as agentRuns from './company/agent-runs.js';
-import * as board from './company/board.js';
-import * as masterPrompts from './company/master-prompts.js';
-import * as kanbanCards from './company/kanban-cards.js';
-import * as kanbanItems from './company/kanban-items.js';
-import * as archives from './company/archives.js';
 import * as pipelines from './company/pipelines.js';
+import * as pipelineDefinitions from './company/pipeline-definitions.js';
 import * as pipelineExecutions from './company/pipeline-executions.js';
 import * as pipelineNodeExecutions from './company/pipeline-node-executions.js';
-import * as inbox from './company/inbox.js';
-import * as boardWatermarks from './company/board-watermarks.js';
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
 type DB = InstanceType<typeof Database>;
 
 export class CompanyStore {
-  private db: DB;
-  /** True only when this store opened the file itself (string ctor). A
-   *  SHARED handle is owned by CodeIndexDB — closing it here would yank the
-   *  connection out from under every sibling store. */
+  private readonly db: DB;
   private readonly ownsHandle: boolean;
+  private readonly sessionStore: FsSessionStore | null;
 
-  constructor(dbPathOrHandle: string | DB) {
+  constructor(
+    dbPathOrHandle: string | DB,
+    sessionStore?: FsSessionStore,
+  ) {
+    this.sessionStore = sessionStore ?? null;
     if (typeof dbPathOrHandle === 'string') {
       this.db = new Database(dbPathOrHandle);
       this.db.pragma('journal_mode = WAL');
       this.db.pragma('foreign_keys = ON');
       this.ownsHandle = true;
     } else {
-      // Shared handle (CodeIndexDB.raw()): pragmas (WAL + foreign_keys=ON)
-      // are already set by the owner. Re-opening the file — what this ctor
-      // used to do unconditionally — created a 3rd writer on the same file
-      // and serialized company reads behind WAL lock contention.
       this.db = dbPathOrHandle;
       this.ownsHandle = false;
     }
   }
 
-  close(): void { if (this.ownsHandle) this.db.close(); }
-
-  // ─── Templates ─────────────────────────────────────────────────
-  createTemplate(name: string, description: string, roles: CompanyRoleConfig[]): CompanyTemplate { return templatesDomain.createTemplate(this.db, name, description, roles); }
-  getTemplate(id: number): CompanyTemplate | null { return templatesDomain.getTemplate(this.db, id); }
-  listTemplates(): CompanyTemplate[] { return templatesDomain.listTemplates(this.db); }
-  updateTemplate(id: number, patch: { name?: string; description?: string; roles?: CompanyRoleConfig[] }): CompanyTemplate | null { return templatesDomain.updateTemplate(this.db, id, patch); }
-  deleteTemplate(id: number): boolean { return templatesDomain.deleteTemplate(this.db, id); }
-
-  // ─── Company Sessions ──────────────────────────────────────────
-  createCompanySession(input: sessions.CreateCompanySessionInput): CompanySession { return sessions.create(this.db, input); }
-  createChildSession(input: { parent_session_id: number; name: string }): CompanySession { return sessions.createChild(this.db, input.parent_session_id, input.name); }
-  listChildSessions(parentSessionId: number): CompanySession[] { return sessions.listChildren(this.db, parentSessionId); }
-  getCompanySession(id: number): CompanySession | null { return sessions.get(this.db, id); }
-  listCompanySessions(opts?: sessions.ListSessionsOptions): CompanySession[] { return sessions.list(this.db, opts); }
-  updateCompanySessionStatus(id: number, status: CompanySessionStatus): void { sessions.updateStatus(this.db, id, status); }
-  renameCompanySession(id: number, name: string): void { sessions.rename(this.db, id, name); }
-  setMasterSessionId(id: number, masterSessionId: number): void { sessions.setMasterSessionId(this.db, id, masterSessionId); }
-  setLastUserMessage(id: number, message: string): void { sessions.setLastUserMessage(this.db, id, message); }
-  deleteCompanySession(id: number): boolean { return sessions.del(this.db, id); }
-  duplicateCompanySession(sourceId: number, newName: string): CompanySession { return sessions.duplicate(this.db, sourceId, newName); }
-  updateCompanySessionConfig(id: number, configJson: string): void { sessions.updateConfig(this.db, id, configJson); }
-  clearSessionRecoveryFlag(companySessionId: number): void { sessions.clearRecoveryFlag(this.db, companySessionId); }
-
-  // ─── Session Projects ──────────────────────────────────────────
-  addProjectToCompanySession(companySessionId: number, projectId: number, label?: string): void { sessionProjects.add(this.db, companySessionId, projectId, label); }
-  removeProjectFromCompanySession(companySessionId: number, projectId: number): void { sessionProjects.remove(this.db, companySessionId, projectId); }
-  pruneOrphanCompanySessionProjects(companySessionId: number): number { return sessionProjects.pruneOrphans(this.db, companySessionId); }
-  listCompanySessionProjects(companySessionId: number): CompanySessionProject[] { return sessionProjects.list(this.db, companySessionId); }
-
-  // ─── Agent Runs ────────────────────────────────────────────────
-  createAgentRun(input: agentRuns.CreateAgentRunInput): CompanyAgentRun { return agentRuns.create(this.db, input); }
-  getOrCreateAgentRun(input: agentRuns.CreateAgentRunInput): { run: CompanyAgentRun; created: boolean } { return agentRuns.getOrCreate(this.db, input); }
-  getAgentRun(id: number): CompanyAgentRun | null { return agentRuns.get(this.db, id); }
-  listAgentRuns(companySessionId: number): CompanyAgentRun[] { return agentRuns.list(this.db, companySessionId); }
-  countActiveSubordinatesGlobal(): number { return agentRuns.countActiveSubordinatesGlobal(this.db); }
-  listArchivedAgentRuns(archiveId: number): CompanyAgentRun[] { return agentRuns.listArchived(this.db, archiveId); }
-  updateAgentRunProvider(id: number, provider: string, model: string, fallbackReason?: string | null): void { agentRuns.updateProvider(this.db, id, provider, model, fallbackReason); }
-  updateAgentRunRuntimeSnapshot(id: number, input: Parameters<typeof agentRuns.updateRuntimeSnapshot>[2]): void { agentRuns.updateRuntimeSnapshot(this.db, id, input); }
-  updateAgentRunStatus(id: number, status: AgentRunStatus, statusMessage?: string): void { agentRuns.updateStatus(this.db, id, status, statusMessage); }
-  deleteAgentRun(id: number): void { agentRuns.remove(this.db, id); }
-  recoverStaleAgentRuns(): { agentRuns: number; companySessions: number } { return agentRuns.recoverStale(this.db); }
-
-  // ─── Board ─────────────────────────────────────────────────────
-  postToBoard(companySessionId: number, authorRole: string, agentRunId: number | null, kind: BoardKind, content: string, mentions?: string[]): BoardEntry { return board.post(this.db, companySessionId, authorRole, agentRunId, kind, content, mentions); }
-  getBoardEntry(id: number): BoardEntry | null { return board.getEntry(this.db, id); }
-  readBoard(companySessionId: number, opts?: { sinceId?: number; limit?: number; kind?: BoardKind }): BoardEntry[] { return board.read(this.db, companySessionId, opts); }
-  readArchivedBoard(archiveId: number): BoardEntry[] { return board.readArchived(this.db, archiveId); }
-
-  /** Aggregated read: session + projects + agent runs + recent board + recent master prompts. */
-  getCompanySessionFull(id: number): {
-    session: CompanySession;
-    projects: CompanySessionProject[];
-    agentRuns: CompanyAgentRun[];
-    recentBoard: BoardEntry[];
-    masterPrompts: MasterPrompt[];
-  } | null {
-    const session = sessions.get(this.db, id);
-    if (!session) return null;
-    return {
-      session,
-      projects: sessionProjects.list(this.db, id),
-      agentRuns: agentRuns.list(this.db, id),
-      recentBoard: board.read(this.db, id, { limit: 50 }),
-      masterPrompts: masterPrompts.list(this.db, id, { limit: 50 }),
-    };
+  close(): void {
+    if (this.ownsHandle) this.db.close();
   }
 
-  // ─── Master Prompts ────────────────────────────────────────────
-  createMasterPrompt(input: masterPrompts.CreateMasterPromptInput): MasterPrompt { return masterPrompts.create(this.db, input); }
-  getMasterPrompt(id: number): MasterPrompt | null { return masterPrompts.get(this.db, id); }
-  listMasterPrompts(companySessionId: number, opts?: { limit?: number; status?: MasterPromptStatus }): MasterPrompt[] { return masterPrompts.list(this.db, companySessionId, opts); }
-  resolveMasterPrompt(id: number, resolution: masterPrompts.ResolveMasterPromptInput): MasterPrompt | null { return masterPrompts.resolve(this.db, id, resolution); }
-  claimMasterPromptDelivery(id: number, companySessionId: number, kind: MasterPromptKind, token: string, payloadHash: string, opts?: { retryOutcomeUnknown?: boolean }): masterPrompts.MasterPromptDeliveryClaim { return masterPrompts.claimDelivery(this.db, id, companySessionId, kind, token, payloadHash, opts); }
-  releaseMasterPromptDelivery(id: number, token: string): boolean { return masterPrompts.releaseDelivery(this.db, id, token); }
-  markMasterPromptDeliveryOutcomeUnknown(id: number, token: string): boolean { return masterPrompts.markDeliveryOutcomeUnknown(this.db, id, token); }
-  completeMasterPromptDelivery(id: number, token: string, resolution: masterPrompts.ResolveMasterPromptInput): MasterPrompt | null { return masterPrompts.completeDelivery(this.db, id, token, resolution); }
-  cancelPendingMasterPrompts(companySessionId: number): MasterPrompt[] { return masterPrompts.cancelPending(this.db, companySessionId); }
-  getPendingMasterPrompt(companySessionId: number, kind?: MasterPromptKind): MasterPrompt | null { return masterPrompts.getPending(this.db, companySessionId, kind); }
+  private operationalSessions(): FsSessionStore {
+    if (!this.sessionStore) {
+      throw new Error(
+        'Filesystem session store is required for session-owned pipeline state',
+      );
+    }
+    return this.sessionStore;
+  }
 
-  // ─── Kanban Cards ──────────────────────────────────────────────
-  createKanbanCard(sessionId: number, input: kanbanCards.CreateCardInput): KanbanCard { return kanbanCards.create(this.db, sessionId, input); }
-  getKanbanCard(cardId: number): KanbanCard | null { return kanbanCards.get(this.db, cardId); }
-  getKanbanCardFull(cardId: number): KanbanCardFull | null { return kanbanCards.getFull(this.db, cardId); }
-  listKanbanCards(sessionId: number, opts?: { column?: KanbanColumn }): KanbanCard[] { return kanbanCards.list(this.db, sessionId, opts); }
-  listArchivedKanbanCards(archiveId: number): KanbanCard[] { return kanbanCards.listArchived(this.db, archiveId); }
-  listKanbanCardsFull(sessionId: number): KanbanCardFull[] { return kanbanCards.listFull(this.db, sessionId); }
-  moveKanbanCard(cardId: number, toColumn: KanbanColumn, toPosition?: number): KanbanCard { return kanbanCards.move(this.db, cardId, toColumn, toPosition); }
-  updateKanbanCard(cardId: number, patch: { title?: string; description?: string; tag?: KanbanTag | null }): KanbanCard | null { return kanbanCards.update(this.db, cardId, patch); }
-  deleteKanbanCard(cardId: number): boolean { return kanbanCards.del(this.db, cardId); }
+  // ─── Reusable Company templates (essential SQLite catalog) ─────
+  createTemplate(
+    name: string,
+    description: string,
+    roles: CompanyRoleConfig[],
+  ): CompanyTemplate {
+    return templatesDomain.createTemplate(this.db, name, description, roles);
+  }
 
-  // ─── Kanban Items (checklist / comments / agents / deps) ───────
-  addChecklistItem(cardId: number, text: string, position?: number): KanbanChecklistItem { return kanbanItems.addChecklistItem(this.db, cardId, text, position); }
-  updateChecklistItem(itemId: number, patch: { text?: string; checked?: boolean; position?: number }): KanbanChecklistItem | null { return kanbanItems.updateChecklistItem(this.db, itemId, patch); }
-  removeChecklistItem(itemId: number): boolean { return kanbanItems.removeChecklistItem(this.db, itemId); }
-  getChecklistItem(itemId: number): KanbanChecklistItem | null { return kanbanItems.getChecklistItem(this.db, itemId); }
-  addKanbanComment(cardId: number, authorRole: string, agentRunId: number | null, content: string): KanbanComment { return kanbanItems.addComment(this.db, cardId, authorRole, agentRunId, content); }
-  listKanbanComments(cardId: number): KanbanComment[] { return kanbanItems.listComments(this.db, cardId); }
-  assignAgentToCard(cardId: number, agentRunId: number, role: string): KanbanCardAgent { return kanbanItems.assignAgent(this.db, cardId, agentRunId, role); }
-  unassignAgentFromCard(cardId: number, agentRunId: number): void { kanbanItems.unassignAgent(this.db, cardId, agentRunId); }
-  findCardByAgentRun(agentRunId: number): KanbanCard | null { return kanbanItems.findCardByAgentRun(this.db, agentRunId); }
-  addCardDependency(cardId: number, dependsOnId: number): KanbanCardDependency { return kanbanItems.addDependency(this.db, cardId, dependsOnId); }
-  removeCardDependency(cardId: number, dependsOnId: number): boolean { return kanbanItems.removeDependency(this.db, cardId, dependsOnId); }
-  getBlockedCards(sessionId: number): KanbanCard[] { return kanbanItems.getBlockedCards(this.db, sessionId); }
+  getTemplate(id: number): CompanyTemplate | null {
+    return templatesDomain.getTemplate(this.db, id);
+  }
 
-  // ─── Session Archives ──────────────────────────────────────────
-  archiveCompanySession(companySessionId: number, opts: archives.ArchiveOptions): CompanySessionArchive { return archives.archive(this.db, companySessionId, opts); }
-  getArchive(id: number): CompanySessionArchive | null { return archives.getArchive(this.db, id); }
-  listArchives(companySessionId: number): CompanySessionArchive[] { return archives.listArchives(this.db, companySessionId); }
-  getLatestQaVerdictForCard(companySessionId: number, cardId: number): 'pass' | 'fail' | null { return archives.getLatestQaVerdictForCard(this.db, companySessionId, cardId); }
+  listTemplates(): CompanyTemplate[] {
+    return templatesDomain.listTemplates(this.db);
+  }
 
-  // ─── Pipelines ─────────────────────────────────────────────────
-  createPipeline(input: pipelines.CreatePipelineInput): Pipeline { return pipelines.create(this.db, input); }
-  getPipeline(id: number): Pipeline | null { return pipelines.get(this.db, id); }
-  listPipelines(opts?: pipelines.ListPipelinesOptions): Pipeline[] { return pipelines.list(this.db, opts); }
-  updatePipeline(id: number, patch: Parameters<typeof pipelines.update>[2], opts?: { expectedVersion?: number }): Pipeline | null { return pipelines.update(this.db, id, patch, opts); }
-  deletePipeline(id: number): boolean { return pipelines.del(this.db, id); }
-  createPipelineExecution(input: pipelineExecutions.CreateExecutionInput): PipelineExecution { return pipelineExecutions.create(this.db, input); }
-  getPipelineExecution(id: number): PipelineExecution | null { return pipelineExecutions.get(this.db, id); }
-  listPipelineExecutions(opts: pipelineExecutions.ListExecutionsOptions): PipelineExecution[] { return pipelineExecutions.list(this.db, opts); }
-  updatePipelineExecution(id: number, patch: Parameters<typeof pipelineExecutions.update>[2]): PipelineExecution | null { return pipelineExecutions.update(this.db, id, patch); }
-  createPipelineNodeExecution(input: pipelineNodeExecutions.CreateNodeExecutionInput): PipelineNodeExecution { return pipelineNodeExecutions.create(this.db, input); }
-  getPipelineNodeExecution(id: number): PipelineNodeExecution | null { return pipelineNodeExecutions.get(this.db, id); }
-  listPipelineNodeExecutions(executionId: number): PipelineNodeExecution[] { return pipelineNodeExecutions.list(this.db, executionId); }
-  updatePipelineNodeExecution(id: number, patch: Parameters<typeof pipelineNodeExecutions.update>[2]): PipelineNodeExecution | null { return pipelineNodeExecutions.update(this.db, id, patch); }
+  updateTemplate(
+    id: number,
+    patch: {
+      name?: string;
+      description?: string;
+      roles?: CompanyRoleConfig[];
+    },
+  ): CompanyTemplate | null {
+    return templatesDomain.updateTemplate(this.db, id, patch);
+  }
 
-  // ─── Inbox ─────────────────────────────────────────────────────
-  createInboxMessage(input: inbox.CreateInboxMessageInput): AgentInboxMessage { return inbox.create(this.db, input); }
-  getInboxMessage(id: number): AgentInboxMessage | null { return inbox.get(this.db, id); }
-  getInboxMessageByWaitToken(companySessionId: number, token: string): AgentInboxMessage | null { return inbox.getByWaitToken(this.db, companySessionId, token); }
-  listInboxMessages(opts: inbox.ListInboxOptions): AgentInboxMessage[] { return inbox.list(this.db, opts); }
-  claimNextInboxForAgent(args: { companySessionId: number; agentRunId: number; role: string }): AgentInboxMessage | null { return inbox.claimNextForAgent(this.db, args); }
-  answerInboxMessage(id: number, answer: string): AgentInboxMessage | null { return inbox.answer(this.db, id, answer); }
-  claimAllPendingMasterMessages(companySessionId: number): AgentInboxMessage[] { return inbox.claimAllPendingMasterMessages(this.db, companySessionId); }
-  listSessionsWithPendingMasterInbox(): number[] { return inbox.listSessionsWithPendingMaster(this.db); }
-  setInboxStatus(id: number, status: InboxStatus, opts?: { answer?: string }): AgentInboxMessage | null { return inbox.setStatus(this.db, id, status, opts); }
+  deleteTemplate(id: number): boolean {
+    return templatesDomain.deleteTemplate(this.db, id);
+  }
 
-  // ─── Board Watermarks ──────────────────────────────────────────
-  setAgentBoardWatermark(companySessionId: number, agentRunId: number, lastSeenBoardId: number): void { boardWatermarks.set(this.db, companySessionId, agentRunId, lastSeenBoardId); }
-  getAgentBoardWatermark(companySessionId: number, agentRunId: number): number { return boardWatermarks.get(this.db, companySessionId, agentRunId); }
-  listUnreadBoardCounts(companySessionId: number): Array<{ agentRunId: number; role: string; unreadCount: number }> { return boardWatermarks.listUnreadCounts(this.db, companySessionId); }
+  // ─── Pipeline definitions ──────────────────────────────────────
+  // Numeric definitions are reusable SQLite catalog rows. UUID definitions
+  // and every execution/node record are bundle-local filesystem entities.
+  async createPipeline(
+    input: pipelines.CreatePipelineInput,
+  ): Promise<Pipeline> {
+    if (input.companySessionId != null) {
+      return pipelineDefinitions.create(this.operationalSessions(), {
+        name: input.name,
+        description: input.description,
+        graph: input.graph,
+        companySessionId: input.companySessionId,
+        templateId: input.templateId,
+      });
+    }
+    return pipelines.create(this.db, input);
+  }
+
+  async getPipeline(id: number | string): Promise<Pipeline | null> {
+    if (typeof id === 'number') return pipelines.get(this.db, id);
+    if (!isUuid(id)) {
+      throw new TypeError('pipeline id must be an integer or UUID');
+    }
+    return pipelineDefinitions.get(this.operationalSessions(), id);
+  }
+
+  async listPipelines(
+    opts?: pipelines.ListPipelinesOptions & {
+      companySessionId?: string | null;
+    },
+  ): Promise<Pipeline[]> {
+    const reusable = pipelines.list(this.db, {
+      projectId: opts?.projectId,
+      templateId: opts?.templateId,
+    });
+    if (typeof opts?.companySessionId !== 'string') return reusable;
+    const sessionOwned = await pipelineDefinitions.list(
+      this.operationalSessions(),
+      {
+        companySessionId: opts.companySessionId,
+        templateId: opts.templateId,
+      },
+    );
+    return [...sessionOwned, ...reusable];
+  }
+
+  async updatePipeline(
+    id: number | string,
+    patch: Parameters<typeof pipelines.update>[2],
+    opts?: { expectedVersion?: number },
+  ): Promise<Pipeline | null> {
+    if (typeof id === 'number') {
+      return pipelines.update(this.db, id, patch, opts);
+    }
+    if (!isUuid(id)) {
+      throw new TypeError('pipeline id must be an integer or UUID');
+    }
+    return pipelineDefinitions.update(
+      this.operationalSessions(),
+      id,
+      patch,
+      opts,
+    );
+  }
+
+  async deletePipeline(id: number | string): Promise<boolean> {
+    if (typeof id === 'number') return pipelines.del(this.db, id);
+    if (!isUuid(id)) {
+      throw new TypeError('pipeline id must be an integer or UUID');
+    }
+    return pipelineDefinitions.del(this.operationalSessions(), id);
+  }
+
+  createPipelineExecution(
+    input: pipelineExecutions.CreateExecutionInput,
+  ): Promise<PipelineExecution> {
+    return pipelineExecutions.create(this.operationalSessions(), input);
+  }
+
+  getPipelineExecution(id: string): Promise<PipelineExecution | null> {
+    return pipelineExecutions.get(this.operationalSessions(), id);
+  }
+
+  listPipelineExecutions(
+    opts: pipelineExecutions.ListExecutionsOptions,
+  ): Promise<PipelineExecution[]> {
+    return pipelineExecutions.list(this.operationalSessions(), opts);
+  }
+
+  updatePipelineExecution(
+    id: string,
+    patch: pipelineExecutions.UpdateExecutionPatch,
+  ): Promise<PipelineExecution | null> {
+    return pipelineExecutions.update(this.operationalSessions(), id, patch);
+  }
+
+  createPipelineNodeExecution(
+    input: pipelineNodeExecutions.CreateNodeExecutionInput,
+  ): Promise<PipelineNodeExecution> {
+    return pipelineNodeExecutions.create(this.operationalSessions(), input);
+  }
+
+  getPipelineNodeExecution(
+    id: string,
+  ): Promise<PipelineNodeExecution | null> {
+    return pipelineNodeExecutions.get(this.operationalSessions(), id);
+  }
+
+  listPipelineNodeExecutions(
+    executionId: string,
+  ): Promise<PipelineNodeExecution[]> {
+    return pipelineNodeExecutions.list(
+      this.operationalSessions(),
+      executionId,
+    );
+  }
+
+  updatePipelineNodeExecution(
+    id: string,
+    patch: pipelineNodeExecutions.UpdateNodeExecutionPatch,
+  ): Promise<PipelineNodeExecution | null> {
+    return pipelineNodeExecutions.update(
+      this.operationalSessions(),
+      id,
+      patch,
+    );
+  }
 }

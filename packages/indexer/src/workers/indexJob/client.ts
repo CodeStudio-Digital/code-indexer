@@ -19,7 +19,10 @@ const resolveSize = (): number => {
   const cores = typeof os.availableParallelism === 'function'
     ? os.availableParallelism()
     : os.cpus().length;
-  return Math.max(2, Math.min(8, cores));
+  // Desktop default: two large-file parsers retained most of the measured
+  // throughput gain while avoiding the multi-hundred-MB RSS jump of 4–8 WASM
+  // isolates. Operators can still size explicitly with MCP_INDEX_WORKERS.
+  return Math.max(1, Math.min(2, cores - 1));
 };
 
 /**

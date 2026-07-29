@@ -3,7 +3,7 @@
  * (if needed) and lazily fetches databases → schemas → tables → columns. Each
  * level fetches its children on first expand and shows a per-node spinner.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
@@ -390,7 +390,9 @@ export function buildConnectionTreeRenderItems({
     if (node.kind === 'schema') {
       items.push({ kind: 'node', key: node.id, node });
       if (expanded.has(node.id)) {
-        const value = schemaFilters[node.id] ?? '';
+        // Annotated: without it TS reports TS7022 (circular inference through
+        // the pushed union member) and silently widens the filter text to `any`.
+        const value: string = schemaFilters[node.id] ?? '';
         schemaContext = { id: node.id, query: normalizeSearchText(value.trim()) };
         items.push({
           kind: 'schema-filter',
@@ -469,6 +471,11 @@ export function ConnectionTree({
   // Per-schema table filter (keyed by the schema node id) — the input that
   // appears right above a schema's tables once it's expanded.
   const [schemaFilters, setSchemaFilters] = useState<Record<string, string>>({});
+  // Filtering walks the whole expanded tree (normalizing every label). Deferring
+  // it keeps typing at 60fps on a schema with thousands of tables: the input
+  // updates immediately, the expensive re-filter lands on the next idle pass.
+  const deferredFilter = useDeferredValue(filter);
+  const deferredSchemaFilters = useDeferredValue(schemaFilters);
 
   useEffect(() => {
     const query = filter.trim();
@@ -515,7 +522,7 @@ export function ConnectionTree({
   }, [db.connections, db.statusById, filter]);
 
   const visibleRows = useMemo(() => {
-    const q = normalizeSearchText(filter.trim());
+    const q = normalizeSearchText(deferredFilter.trim());
     if (!q) return db.treeRows;
     if (catalogRows.length > 0) return catalogRows;
 
@@ -561,16 +568,16 @@ export function ConnectionTree({
     }
 
     return db.treeRows.filter((row) => includeIds.has(row.id));
-  }, [catalogRows, filter, db.treeRows, db.connections]);
+  }, [catalogRows, deferredFilter, db.treeRows, db.connections]);
 
   const renderItems = useMemo(
     () => buildConnectionTreeRenderItems({
       rows: visibleRows,
       connections: db.connections,
       expanded: db.expanded,
-      schemaFilters,
+      schemaFilters: deferredSchemaFilters,
     }),
-    [visibleRows, db.connections, db.expanded, schemaFilters],
+    [visibleRows, db.connections, db.expanded, deferredSchemaFilters],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -609,9 +616,9 @@ export function ConnectionTree({
         {db.connections.length === 0 && !db.loading && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">{t('connections.empty')}</div>
         )}
-        {filter.trim() && visibleRows.length === 0 && db.connections.length > 0 && !catalogSearching && (
+        {deferredFilter.trim() && visibleRows.length === 0 && db.connections.length > 0 && !catalogSearching && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">
-            {t('connections.noSearchResults', { query: filter.trim() })}
+            {t('connections.noSearchResults', { query: deferredFilter.trim() })}
           </div>
         )}
         {renderItems.length > 0 && (
@@ -658,7 +665,13 @@ export function ConnectionTree({
   );
 }
 
-/** Quick table filter rendered just above a schema's tables once it's expanded. */
+/**
+ * Quick table filter rendered just above a schema's tables once it's expanded.
+ *
+ * Holds its own draft: the parent's copy is deferred (it drives a whole-tree
+ * re-filter), and binding the input straight to that made every keystroke wait
+ * for the filtering pass before the character appeared.
+ */
 function SchemaFilterRow({
   value,
   onChange,
@@ -670,14 +683,27 @@ function SchemaFilterRow({
   depth: number;
   placeholder: string;
 }) {
+  const [draft, setDraft] = useState(value);
+  const committed = useRef(value);
+  // Re-sync only when the parent's value moved on its own (row recycled by the
+  // virtualizer), never when it's just catching up to what we already typed.
+  if (value !== committed.current && value !== draft) {
+    committed.current = value;
+    setDraft(value);
+  }
+
   return (
     <div className="flex h-6 items-center" style={{ paddingLeft: 4 + depth * 12 }} onClick={(e) => e.stopPropagation()}>
       <Search className="mr-1 h-3 w-3 shrink-0 text-muted-foreground/50" />
       <input
         className="h-5 w-[80%] rounded border bg-background px-1.5 text-[11px] outline-none"
-        value={value}
+        value={draft}
         placeholder={placeholder}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          committed.current = e.target.value;
+          setDraft(e.target.value);
+          onChange(e.target.value);
+        }}
       />
     </div>
   );

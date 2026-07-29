@@ -9,7 +9,7 @@
 /** Status/progress tick while a job walks its lifecycle. */
 export interface SpriteJobStatusEvent {
   type: 'sprite_job';
-  jobId: number;
+  jobId: string;
   /** SpriteJobStatus value (queued|prompting|generating|postprocess|saving|...). */
   status: string;
   /** Coarse progress 0..100 when computable. */
@@ -25,7 +25,7 @@ export interface SpriteJobStatusEvent {
  */
 export interface SpriteVariantReadyEvent {
   type: 'sprite_variant_ready';
-  jobId: number;
+  jobId: string;
   index: number;
   /** Stable id, `candidate-<index>` (also the scratch file basename). */
   candidateId: string;
@@ -44,15 +44,15 @@ export interface SpriteJobCandidateRef {
  */
 export interface SpriteJobDoneEvent {
   type: 'sprite_job_done';
-  jobId: number;
-  versionId?: number;
+  jobId: string;
+  versionId?: string;
   candidates?: SpriteJobCandidateRef[];
 }
 
 /** Terminal failure (every link failed, processing threw, ...). */
 export interface SpriteJobFailedEvent {
   type: 'sprite_job_failed';
-  jobId: number;
+  jobId: string;
   error: string;
 }
 

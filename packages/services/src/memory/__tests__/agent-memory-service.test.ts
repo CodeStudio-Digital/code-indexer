@@ -46,6 +46,8 @@ describe('AgentMemoryService active-generation queries', () => {
     const db = {
       searchAgentMemoryFts: vi.fn(() => [first, second]),
       getAgentMemoryById: vi.fn((id: number) => id === 1 ? first : second),
+      getAgentMemoriesByIds: vi.fn((ids: readonly number[]) =>
+        ids.map((id) => (id === 1 ? first : second))),
     } as unknown as CodeIndexDB;
     const vectors = {
       search: vi.fn(async () => [
@@ -282,6 +284,8 @@ describe('AgentMemoryService active-generation queries', () => {
       searchAgentMemoryFts: vi.fn(() => []),
       getProject: vi.fn(() => ({ id: 7, name: 'renamed-project' })),
       getAgentMemoryById: vi.fn((id: number) => id === row.id ? row : undefined),
+      getAgentMemoriesByIds: vi.fn((ids: readonly number[]) =>
+        ids.filter((id) => id === row.id).map(() => row)),
     } as unknown as CodeIndexDB;
     const search = vi.fn(async (_vector: number[], options: VectorSearchOptions) => {
       if (options.filter?.project_name) return [];
@@ -338,5 +342,83 @@ describe('AgentMemoryService active-generation queries', () => {
 
     expect(results).toEqual([{ ...row, score: 0 }]);
     expect(search).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Vector-match RANK feeds the RRF score, so the hydrated rows must stay in
+   * match order. Hydration was a per-match point query, which preserved order
+   * for free; batching it does not. A batch returns rows in whatever order the
+   * database picks, and reordering here changes relevance silently — nothing
+   * throws, results just get subtly worse. This pins the contract.
+   */
+  it('ranks by vector match order, not by the order rows are hydrated in', async () => {
+    const rows = new Map([3, 1, 2].map((id) => [id, memoryRow(id)]));
+    const db = {
+      searchAgentMemoryFts: vi.fn(() => []),
+      getAgentMemoryById: vi.fn((id: number) => rows.get(id)),
+      // Deliberately ascending by id — the opposite of the match order below.
+      getAgentMemoriesByIds: vi.fn((ids: readonly number[]) =>
+        [...ids].sort((a, b) => a - b).map((id) => rows.get(id)!)),
+    } as unknown as CodeIndexDB;
+    const vectors = {
+      search: vi.fn(async () => [
+        { id: 'am_3', score: 0.9, metadata: { type: 'agent_memory', scope: 'project', ref_id: '3' } },
+        { id: 'am_1', score: 0.8, metadata: { type: 'agent_memory', scope: 'project', ref_id: '1' } },
+        { id: 'am_2', score: 0.7, metadata: { type: 'agent_memory', scope: 'project', ref_id: '2' } },
+      ]),
+    } as unknown as VectorStore;
+    const service = new AgentMemoryService(db, embedding(), vectors, embedding());
+
+    const results = await service.search('project', 7, 'ordering', 5);
+
+    expect(results.map((r) => r.id)).toEqual([3, 1, 2]);
+    // Strictly descending RRF scores confirm rank, not just id ordering.
+    expect(results[0].score).toBeGreaterThan(results[1].score);
+    expect(results[1].score).toBeGreaterThan(results[2].score);
+  });
+
+  it('drops archived, out-of-scope and type-mismatched rows during hydration', async () => {
+    const keep = memoryRow(1);
+    const archived = { ...memoryRow(2), archived_at: '2026-07-20 10:00:00' } as AgentMemoryRow;
+    const otherScope = { ...memoryRow(3), scope: 'global' } as unknown as AgentMemoryRow;
+    const rows = new Map([[1, keep], [2, archived], [3, otherScope]]);
+    const db = {
+      searchAgentMemoryFts: vi.fn(() => []),
+      getAgentMemoryById: vi.fn((id: number) => rows.get(id)),
+      getAgentMemoriesByIds: vi.fn((ids: readonly number[]) => ids.map((id) => rows.get(id)!)),
+    } as unknown as CodeIndexDB;
+    const vectors = {
+      search: vi.fn(async () => [3, 2, 1].map((id) => ({
+        id: `am_${id}`,
+        score: 0.9,
+        metadata: { type: 'agent_memory', scope: 'project', ref_id: String(id) },
+      }))),
+    } as unknown as VectorStore;
+    const service = new AgentMemoryService(db, embedding(), vectors, embedding());
+
+    const results = await service.search('project', 7, 'filters', 5);
+
+    expect(results.map((r) => r.id)).toEqual([1]);
+  });
+
+  it('ignores duplicate ref_ids from the vector store', async () => {
+    const row = memoryRow(1);
+    const db = {
+      searchAgentMemoryFts: vi.fn(() => []),
+      getAgentMemoryById: vi.fn(() => row),
+      getAgentMemoriesByIds: vi.fn((ids: readonly number[]) => ids.map(() => row)),
+    } as unknown as CodeIndexDB;
+    const vectors = {
+      search: vi.fn(async () => [1, 1, 1].map((id, i) => ({
+        id: `am_${id}_${i}`,
+        score: 0.9,
+        metadata: { type: 'agent_memory', scope: 'project', ref_id: String(id) },
+      }))),
+    } as unknown as VectorStore;
+    const service = new AgentMemoryService(db, embedding(), vectors, embedding());
+
+    const results = await service.search('project', 7, 'dupes', 5);
+
+    expect(results.map((r) => r.id)).toEqual([1]);
   });
 });

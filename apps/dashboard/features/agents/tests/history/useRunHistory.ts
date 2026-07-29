@@ -20,7 +20,7 @@ export interface UseRunHistoryResult {
 }
 
 export function useRunHistory(
-  sessionId: number,
+  sessionId: string,
   opts?: { pollWhenActive?: boolean; serviceId?: string },
 ): UseRunHistoryResult {
   const [runs, setRuns] = useState<QaRun[]>([]);

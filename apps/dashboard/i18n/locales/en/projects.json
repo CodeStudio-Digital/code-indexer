@@ -603,5 +603,21 @@
   "toolbar.gitBranch": "Git branch",
   "toolbar.loadingBranch": "Loading branch",
   "rail.projectTools": "Project tool windows",
-  "rail.contextTools": "Context tool windows"
+  "rail.contextTools": "Context tool windows",
+  "cardsView": "Card grid",
+  "compactView": "Compact list",
+  "switchToCardsView": "Switch to card grid",
+  "switchToCompactView": "Switch to compact list",
+  "contextMenu.open": "Open",
+  "contextMenu.openInNewWindow": "Open in new window",
+  "contextMenu.copyPath": "Copy path",
+  "contextMenu.edit": "Edit",
+  "contextMenu.copied": "Copied",
+  "snapshots.tabs.view": "View",
+  "snapshots.tabs.raw": "Raw",
+  "snapshots.tabs.history": "History",
+  "snapshots.noHistory": "No previous versions.",
+  "snapshots.editSnapshot": "Edit snapshot",
+  "snapshots.formDescription": "Use Markdown — the View tab in the detail pane renders it.",
+  "snapshots.noMatch": "No snapshots match this search."
 }

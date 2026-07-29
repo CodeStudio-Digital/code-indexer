@@ -23,10 +23,13 @@ const clampDim = (v: number): number => Math.max(1, Math.min(16, Math.round(v)))
 const clampPx = (v: unknown): number => (typeof v === 'number' && v > 0 ? Math.floor(v) : 0);
 
 export function mountSpriteSheetRoutes(app: Hono, deps: ServerDeps): void {
-  app.get('/api/sprite-studio/projects/:projectId/jobs/:jobId/sheet', (c) => {
+  app.get('/api/sprite-studio/projects/:projectId/jobs/:jobId/sheet', async (c) => {
     const root = deps.db.getProject(Number(c.req.param('projectId')))?.root_path ?? null;
-    const job = deps.spriteJobsStore.get(Number(c.req.param('jobId')));
-    const asset = job?.asset_id != null ? deps.spriteAssetsStore.get(job.asset_id) : null;
+    const job = await deps.spriteFileStore.getJob(c.req.param('jobId'));
+    const asset =
+      job?.asset_id != null
+        ? await deps.spriteFileStore.getAsset(job.asset_id)
+        : null;
     if (!root || !job || !asset) return c.json({ error: 'not_found' }, 404);
     let png: Buffer;
     try {
@@ -41,17 +44,17 @@ export function mountSpriteSheetRoutes(app: Hono, deps: ServerDeps): void {
 
   app.post('/api/sprite-studio/projects/:projectId/assets/:assetId/reslice-sheet', async (c) => {
     const root = deps.db.getProject(Number(c.req.param('projectId')))?.root_path ?? null;
-    const asset = deps.spriteAssetsStore.get(Number(c.req.param('assetId')));
+    const asset = await deps.spriteFileStore.getAsset(c.req.param('assetId'));
     if (!root || !asset) return c.json({ error: 'not_found' }, 404);
     const body = (await c.req.json().catch(() => null)) as
       | {
-          jobId?: number; cols?: number; rows?: number;
+          jobId?: string; cols?: number; rows?: number;
           offsetX?: number; offsetY?: number; marginX?: number; marginY?: number;
           offsets?: Array<{ dx?: number; dy?: number } | null> | null;
         }
       | null;
     if (!body?.jobId) return c.json({ error: 'invalid_body' }, 400);
-    const job = deps.spriteJobsStore.get(body.jobId);
+    const job = await deps.spriteFileStore.getJob(body.jobId);
     if (!job || job.asset_id !== asset.id) return c.json({ error: 'job_mismatch' }, 400);
 
     let sheet: Buffer;
@@ -100,11 +103,11 @@ export function mountSpriteSheetRoutes(app: Hono, deps: ServerDeps): void {
       return c.json({ error: (e as Error).message }, 400);
     }
     try {
-      const versions = pngs.map((png) =>
+      const versions = await Promise.all(pngs.map((png) =>
         writeEditedVersion(deps, root, asset, png, {
           setCurrent: false, source: 'imported', dims: { width: cellWidth, height: cellHeight },
         }),
-      );
+      ));
       return c.json({
         versions: versions.map((v) => toVersionDto(Number(c.req.param('projectId')), v)),
         versionIds: versions.map((v) => v.id),

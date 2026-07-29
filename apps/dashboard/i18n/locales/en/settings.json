@@ -389,5 +389,7 @@
   "toast.saveFailed": "Save failed",
   "toast.saved": "Saved {{count}} setting(s)",
   "toast.savedApplied": "Changes applied immediately.",
-  "toast.savedRestart": "Some changes require a backend restart to take effect."
+  "toast.savedRestart": "Some changes require a backend restart to take effect.",
+  "item.CODER_MAX_AUTO_CONTINUES.effective": "Effective limit: {{turns}} turns per run.",
+  "item.CODER_MAX_AUTO_CONTINUES.warning": "This is an aggressive value and may increase cost and runtime."
 }

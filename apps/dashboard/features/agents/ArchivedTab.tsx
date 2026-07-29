@@ -6,8 +6,8 @@ import { formatDateTime } from '../../lib/datetime.js';
 import { ArchiveDetailModal } from './ArchiveDetailModal.js';
 
 interface ArchiveSummary {
-  id: number;
-  company_session_id: number;
+  id: string;
+  company_session_id: string;
   archived_at: string;
   reason: string | null;
   included_kanban: boolean;
@@ -21,7 +21,7 @@ interface ArchiveSummary {
 }
 
 interface ArchivedTabProps {
-  companySessionId: number;
+  companySessionId: string;
 }
 
 /**
@@ -35,7 +35,7 @@ export function ArchivedTab({ companySessionId }: ArchivedTabProps) {
   const { data: archives, loading, refetch } = useApi<ArchiveSummary[]>(
     `/company/sessions/${companySessionId}/archives`,
   );
-  const [selectedArchiveId, setSelectedArchiveId] = useState<number | null>(null);
+  const [selectedArchiveId, setSelectedArchiveId] = useState<string | null>(null);
 
   return (
     <div className="h-full overflow-y-auto p-4 space-y-2">

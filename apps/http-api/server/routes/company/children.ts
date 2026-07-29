@@ -1,162 +1,151 @@
 /**
- * Sub-sessions ("front tabs") CRUD.
+ * Filesystem-backed Company sub-session ("front tabs") lifecycle.
  *
- * Migration 067 replaces the per-row `front_id` model with a
- * `parent_session_id` link in `company_sessions`. A sub-session is a
- * full `CompanySession` with its own board / agent_runs / master_prompts
- * / inbox; siblings share the parent's sandbox / projects / kanban /
- * pipelines via runtime fallback.
- *
- * Routes:
- *   GET    /api/company/sessions/:id/children
- *           → { parent: CompanySession, children: CompanySession[] }
- *           Accepts a child's id too — resolves to the root of the tree.
- *   POST   /api/company/sessions/:id/children { name }
- *           → CompanySession; `:id` must be a root session.
- *   PATCH  /api/company/sessions/:id/children/:childId { name }
- *           → CompanySession (updated row).
- *   DELETE /api/company/sessions/:id/children/:childId
- *           → { ok: true }; runs through the existing archive flow so
- *           runtime is torn down and rows get an `archive_id`.
+ * Child identity and parent linkage live in each bundle's `session.json`.
+ * Archiving only changes `state.json`; it never removes or rewrites the
+ * child's conversation and artifacts.
  */
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
-import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  notFound,
+  parseCompanySessionIdParam,
+  parseJsonBody,
+} from '../_helpers.js';
 import {
   evictCompanyOrchestrator,
   getCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
 import { publish as busPublish } from '../../../coder-bus.js';
+import { asSessionId } from '@mcp/session-storage';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 
 interface CreateChildBody { name: string }
 interface RenameChildBody { name: string }
 
 export function mountCompanyChildRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore } = deps;
-
-  app.get('/api/company/sessions/:id/children', (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c, 'session not found');
-
-    // Always resolve from the root: if the caller passed a child id,
-    // we still want to return the parent + all siblings of that tree.
-    const rootId = session.parent_session_id ?? session.id;
-    const root = rootId === session.id ? session : companyStore.getCompanySession(rootId);
+  app.get('/api/company/sessions/:id/children', async (c) => {
+    const id = parseCompanySessionIdParam(c);
+    const requested = await deps.operationalSessionFiles.getCompanySession(id);
+    if (!requested) return notFound(c, 'session not found');
+    const rootId = requested.parent_session_id ?? requested.id;
+    const root = rootId === requested.id
+      ? requested
+      : await deps.operationalSessionFiles.getCompanySession(rootId);
     if (!root) return notFound(c, 'parent session not found');
-    const children = companyStore.listChildSessions(root.id);
+    const all = await deps.operationalSessionFiles.listCompanySessions({
+      includeChildren: true,
+    });
+    const children = all
+      .filter(
+        (session) =>
+          session.parent_session_id === root.id &&
+          session.archived_at == null,
+      )
+      .sort(
+        (left, right) =>
+          Date.parse(left.created_at) - Date.parse(right.created_at) ||
+          left.id.localeCompare(right.id),
+      );
     return c.json({ parent: root, children });
   });
 
   app.post('/api/company/sessions/:id/children', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c, 'session not found');
-    if (session.parent_session_id != null) {
+    const id = parseCompanySessionIdParam(c);
+    const parent = await deps.operationalSessionFiles.getCompanySession(id);
+    if (!parent) return notFound(c, 'session not found');
+    if (parent.parent_session_id != null) {
       return c.json({ error: 'Cannot create sub-sessions of a sub-session' }, 400);
     }
+    if (parent.runtime_kind !== 'company') {
+      return c.json({ error: 'This runtime does not support Company sub-sessions' }, 409);
+    }
     const body = await parseJsonBody<CreateChildBody>(c);
-    const name = (body?.name ?? '').trim();
+    const name = body.name?.trim() ?? '';
     if (!name) return c.json({ error: 'name is required' }, 400);
+    const full = await deps.operationalSessionFiles.getCompanySessionFull(id);
+    if (!full) return notFound(c, 'session not found');
 
-    // Prefer the live orchestrator so the metaBus event is published to
-    // any open SSE consumers; fall back to direct store when dormant.
-    const orch = getCompanyOrchestrator(id);
-    let child: ReturnType<typeof companyStore.createChildSession>;
-    if (orch) {
-      try {
-        child = await orch.createChildSession(name);
-      } catch (error) {
-        if (isMutationOutcomeUnknownError(error)) {
-          await evictCompanyOrchestrator(id);
-          return c.json({
-            error:
-              'Sub-session creation outcome is unknown because its worker ' +
-              'acknowledgement was lost; the mutation was not replayed.',
-            code: 'OUTCOME_UNKNOWN',
-          }, 500);
-        }
-        throw error;
-      }
-    } else {
-      child = companyStore.createChildSession({ parent_session_id: id, name });
+    const child = await deps.operationalSessionFiles.createCompanySession({
+      parent_session_id: id,
+      runtime_kind: 'company',
+      template_id: parent.template_id,
+      name,
+      config_json: parent.config_json,
+      project_ids: full.projects.map((project) => project.project_id),
+      project_labels: Object.fromEntries(
+        full.projects.map((project) => [
+          project.project_id,
+          project.label ?? undefined,
+        ]),
+      ),
+    });
+    const orchestrator = getCompanyOrchestrator(id);
+    if (orchestrator) {
+      busPublish(orchestrator.metaBus, 'subsession_created', { session: child });
     }
     return c.json(child, 201);
   });
 
   app.patch('/api/company/sessions/:id/children/:childId', async (c) => {
-    const id = parseIdParam(c);
-    const childId = Number(c.req.param('childId'));
-    if (!Number.isFinite(childId)) return c.json({ error: 'invalid childId' }, 400);
-
-    const child = companyStore.getCompanySession(childId);
-    if (!child || child.parent_session_id !== id) return notFound(c, 'sub-session not found');
-
-    const body = await parseJsonBody<RenameChildBody>(c);
-    const name = (body?.name ?? '').trim();
-    if (!name) return c.json({ error: 'name is required' }, 400);
-
-    const orch = getCompanyOrchestrator(id);
-    if (orch) {
-      try {
-        await orch.renameChildSession(childId, name);
-      } catch (error) {
-        if (isMutationOutcomeUnknownError(error)) {
-          await evictCompanyOrchestrator(id);
-          return c.json({
-            error:
-              'Sub-session rename outcome is unknown because its worker ' +
-              'acknowledgement was lost.',
-            code: 'OUTCOME_UNKNOWN',
-          }, 500);
-        }
-        throw error;
-      }
-    } else {
-      companyStore.renameCompanySession(childId, name);
+    const id = parseCompanySessionIdParam(c);
+    const childId = parseCompanySessionIdParam(c, 'childId');
+    const child = await deps.operationalSessionFiles.getCompanySession(childId);
+    if (!child || child.parent_session_id !== id) {
+      return notFound(c, 'sub-session not found');
     }
-
-    return c.json(companyStore.getCompanySession(childId));
+    const body = await parseJsonBody<RenameChildBody>(c);
+    const name = body.name?.trim() ?? '';
+    if (!name) return c.json({ error: 'name is required' }, 400);
+    const updated = await deps.operationalSessionFiles.renameCompanySession(
+      childId,
+      name,
+    );
+    const orchestrator = getCompanyOrchestrator(id);
+    if (orchestrator) {
+      busPublish(orchestrator.metaBus, 'subsession_renamed', { session: updated });
+    }
+    return c.json(updated);
   });
 
   app.delete('/api/company/sessions/:id/children/:childId', async (c) => {
-    const id = parseIdParam(c);
-    const childId = Number(c.req.param('childId'));
-    if (!Number.isFinite(childId)) return c.json({ error: 'invalid childId' }, 400);
+    const id = parseCompanySessionIdParam(c);
+    const childId = parseCompanySessionIdParam(c, 'childId');
+    const child = await deps.operationalSessionFiles.getCompanySession(childId);
+    if (!child || child.parent_session_id !== id) {
+      return notFound(c, 'sub-session not found');
+    }
 
-    const child = companyStore.getCompanySession(childId);
-    if (!child || child.parent_session_id !== id) return notFound(c, 'sub-session not found');
-
-    // Tear down the child's orchestrator (if alive). Sub-sessions never
-    // own their own sandbox/kanban — those live on the parent, so
-    // includeKanban/includeSandbox stay false to avoid touching shared
-    // state. Same archive path /sessions/:id/reset uses, scoped to the
-    // child's own rows.
-    const childOrch = getCompanyOrchestrator(childId);
-    if (childOrch) {
+    const childOrchestrator = getCompanyOrchestrator(childId);
+    if (childOrchestrator) {
       try {
-        await childOrch.abortAll({ teardownSandbox: false, finalStatus: 'idle' });
-      } catch (e) {
-        console.warn(`[company/children] abortAll failed for ${childId}:`, e instanceof Error ? e.message : String(e));
+        await childOrchestrator.abortAll({
+          teardownSandbox: false,
+          finalStatus: 'idle',
+        });
+      } catch (error) {
+        console.warn(
+          `[company/children] abortAll failed for ${childId}:`,
+          error instanceof Error ? error.message : String(error),
+        );
       }
       await evictCompanyOrchestrator(childId);
     }
-    try {
-      companyStore.archiveCompanySession(childId, {
-        reason: 'sub-session archived',
-        includeKanban: false,
-        includeSandbox: false,
-      });
-    } catch (e) {
-      return c.json({ error: `Archive failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
-    }
 
-    // Notify the parent's metaBus so dashboard tabs update in real time.
-    const parentOrch = getCompanyOrchestrator(id);
-    if (parentOrch) {
-      busPublish(parentOrch.metaBus, 'subsession_archived', { session_id: childId });
+    const files = new CompanySessionFiles({
+      companySessionId: childId,
+      sessionStore: deps.sessionStore,
+    });
+    await files.setMasterSessionId(null);
+    await files.updateSessionStatus('idle');
+    await deps.sessionStore.setSessionArchived(asSessionId(childId), true);
+
+    const parentOrchestrator = getCompanyOrchestrator(id);
+    if (parentOrchestrator) {
+      busPublish(parentOrchestrator.metaBus, 'subsession_archived', {
+        session_id: childId,
+      });
     }
-    return c.json({ ok: true });
+    return c.json({ ok: true, recoverable: true });
   });
 }

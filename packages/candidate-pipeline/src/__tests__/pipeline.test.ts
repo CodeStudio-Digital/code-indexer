@@ -91,6 +91,54 @@ describe('CandidatePipeline', () => {
     expect(sink.events.filter((e) => e.stage === 'source')).toHaveLength(2);
   });
 
+  it('propagates the query UUID scope into every emitted stage metric', async () => {
+    const source: Source<TestQuery, TestCandidate> = {
+      name: 'scoped-source',
+      enable: () => true,
+      async source() { return [makeCandidate('a', 'A')]; },
+    };
+    const sink = new InMemoryTelemetrySink();
+    const pipeline = new CandidatePipeline<TestQuery, TestCandidate>(
+      { name: 'p_scoped', telemetry: sink },
+      { sources: [source], selector: new IdentitySelector() },
+    );
+    const query = makeQuery();
+    query.resolveContext = {
+      sessionId: '018f0f5e-7b2d-7a45-8c11-0123456789ab',
+      companySessionId: '018f0f5e-7b2d-7a45-8c11-0123456789ac',
+      requestId: 'search-request-1',
+      projectId: 7,
+      consumer: 'agent',
+      queryClass: 'natural_language',
+    };
+
+    await pipeline.execute(query);
+
+    expect(sink.events.length).toBeGreaterThan(0);
+    expect(sink.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          queryId: 'q1',
+          sessionId: query.resolveContext.sessionId,
+          companySessionId: query.resolveContext.companySessionId,
+          requestId: query.resolveContext.requestId,
+          projectId: query.resolveContext.projectId,
+          consumer: query.resolveContext.consumer,
+          queryClass: query.resolveContext.queryClass,
+        }),
+      ]),
+    );
+    expect(sink.events.every((event) => (
+      event.queryId === query.queryId
+      && event.sessionId === query.resolveContext?.sessionId
+      && event.companySessionId === query.resolveContext?.companySessionId
+      && event.requestId === query.resolveContext?.requestId
+      && event.projectId === query.resolveContext?.projectId
+      && event.consumer === query.resolveContext?.consumer
+      && event.queryClass === query.resolveContext?.queryClass
+    ))).toBe(true);
+  });
+
   it('honors enable(query) gates and reports skipped components', async () => {
     const enabled: Source<TestQuery, TestCandidate> = {
       name: 'enabled',

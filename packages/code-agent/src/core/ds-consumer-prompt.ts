@@ -4,7 +4,7 @@
  * index.ts: appended after the agent prompt so the `builder` identity stays
  * intact. Everything here derives from the PINNED published version (rows
  * immutable after publish), so the block is byte-stable across turns —
- * prompt-cache safe. One DB read per runCoder, no per-turn queries.
+ * prompt-cache safe. One bundle read per runCoder, no per-turn queries.
  */
 // Leaf imports on purpose — the design-system barrel (index.js) drags the
 // company orchestrator graph in and closes an import cycle back to
@@ -22,10 +22,10 @@ const COMPONENT_CAP = 60;
 const TOKEN_CAP = 40;
 
 /** `store` is injectable for tests; defaults to the wired module global. */
-export function buildDsConsumerBlock(
+export async function buildDsConsumerBlock(
   consumer: DsConsumerConfig,
   store: ReturnType<typeof getDesignSystemStore> = getDesignSystemStore(),
-): string {
+): Promise<string> {
   let componentSummary =
     '(inventory unavailable — the linked DS session/version was not found in the local registry metadata. ' +
     'The installed package still works; call ds_components to retry, or ask the user to re-link/unlink ' +
@@ -33,16 +33,16 @@ export function buildDsConsumerBlock(
   let tokensSummary = '(unavailable)';
 
   const version = store
-    ? (() => {
-        const session = store.getSession(consumer.sessionId);
+    ? await (async () => {
+        const session = await store.getSession(consumer.sessionId);
         if (!session) return null;
-        const v = store.getVersionBySemver(consumer.sessionId, consumer.semver);
+        const v = await store.getVersionBySemver(consumer.sessionId, consumer.semver);
         return v && v.status === 'published' ? v : null;
       })()
     : null;
 
   if (store && version) {
-    const components = sortComponents(store.listComponents(version.id));
+    const components = sortComponents(await store.listComponents(version.id));
     const shown = components.slice(0, COMPONENT_CAP);
     const lines = shown.map((c) => {
       const props = summarizeProps(c.props_schema_json, 100);

@@ -4,6 +4,19 @@ import {
   SubordinateLifecycle,
 } from '@mcp/company/services/SubordinateLifecycle.js';
 
+vi.mock('@mcp/docs-agent/bridges/docs-bridge.js', () => ({
+  installDocsDeepResearch: vi.fn(),
+}));
+
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const MASTER_RUN_ID = '00000000-0000-4000-8000-000000000010';
+const FRONTEND_RUN_ID = '00000000-0000-4000-8000-000000000020';
+const STOPPED_RUN_ID = '00000000-0000-4000-8000-000000000005';
+const UNKNOWN_RUN_ID = '00000000-0000-4000-8000-000000000099';
+const ABORT_RUN_ID = '00000000-0000-4000-8000-000000000123';
+const MASTER_SESSION_ID = '00000000-0000-4000-8000-000000000201';
+const FRONTEND_SESSION_ID = '00000000-0000-4000-8000-000000000202';
+
 describe('resolveSpawnProjectBinding', () => {
   describe('role with no project binding', () => {
     it('requires an explicit project id', () => {
@@ -98,8 +111,11 @@ function makeLifecycle(): SubordinateLifecycle {
   const getAgentRun = () => null;
   const deps = {
     ctx: {
-      companySessionId: 42,
-      companyStore: { listAgentRuns, getAgentRun },
+      companySessionId: COMPANY_SESSION_ID,
+      companyFiles: {
+        listAgentRunsSync: listAgentRuns,
+        getAgentRunSync: getAgentRun,
+      },
     },
     board: {},
     status: {},
@@ -122,12 +138,12 @@ describe('SubordinateLifecycle — queries', () => {
 
   it('isRunning is false for an unknown agentRunId', () => {
     const lc = makeLifecycle();
-    expect(lc.isRunning(99)).toBe(false);
+    expect(lc.isRunning(UNKNOWN_RUN_ID)).toBe(false);
   });
 
   it('get returns undefined for an unknown agentRunId', () => {
     const lc = makeLifecycle();
-    expect(lc.get(99)).toBeUndefined();
+    expect(lc.get(UNKNOWN_RUN_ID)).toBeUndefined();
   });
 
   it('list returns empty when the agent_runs table has no entries', () => {
@@ -138,30 +154,33 @@ describe('SubordinateLifecycle — queries', () => {
   it('list filters out the master role and projects fields', () => {
     const runs = [
       {
-        id: 10,
+        id: MASTER_RUN_ID,
         role: 'master',
         status: 'running',
         status_message: '',
         project_ids_json: '[1]',
         provider: 'anthropic',
         model: 'claude-sonnet-4-6',
-        coder_session_id: 1,
+        coder_session_id: MASTER_SESSION_ID,
       },
       {
-        id: 20,
+        id: FRONTEND_RUN_ID,
         role: 'frontend',
         status: 'waiting',
         status_message: 'queued',
         project_ids_json: '[2, 3]',
         provider: 'anthropic',
         model: 'claude-haiku-4-5',
-        coder_session_id: 2,
+        coder_session_id: FRONTEND_SESSION_ID,
       },
     ];
     const deps = {
       ctx: {
-        companySessionId: 42,
-        companyStore: { listAgentRuns: () => runs, getAgentRun: () => null },
+        companySessionId: COMPANY_SESSION_ID,
+        companyFiles: {
+          listAgentRunsSync: () => runs,
+          getAgentRunSync: () => null,
+        },
       },
       board: {}, status: {}, kanban: {}, master: {}, humanInLoop: {},
       wirer: {}, idle: {}, orchestratorRef: {}, attention: {},
@@ -170,43 +189,44 @@ describe('SubordinateLifecycle — queries', () => {
     const result = lc.list();
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
-      agentRunId: 20,
+      agentRunId: FRONTEND_RUN_ID,
       role: 'frontend',
       status: 'waiting',
       statusMessage: 'queued',
       projectIds: [2, 3],
       provider: 'anthropic',
       model: 'claude-haiku-4-5',
-      coderSessionId: 2,
+      coderSessionId: FRONTEND_SESSION_ID,
       isAlive: false,
     });
   });
 
   it('statusOf returns null when the agent run does not exist', () => {
     const lc = makeLifecycle();
-    expect(lc.statusOf(99)).toBeNull();
+    expect(lc.statusOf(UNKNOWN_RUN_ID)).toBeNull();
   });
 
   it('statusOf reads through to the company store', () => {
     const deps = {
       ctx: {
-        companySessionId: 42,
-        companyStore: {
-          listAgentRuns: () => [],
-          getAgentRun: (id: number) => (id === 5 ? { status: 'aborted' } : null),
+        companySessionId: COMPANY_SESSION_ID,
+        companyFiles: {
+          listAgentRunsSync: () => [],
+          getAgentRunSync: (id: string) =>
+            id === STOPPED_RUN_ID ? { status: 'aborted' } : null,
         },
       },
       board: {}, status: {}, kanban: {}, master: {}, humanInLoop: {},
       wirer: {}, idle: {}, orchestratorRef: {}, attention: {},
     } as never;
     const lc = new SubordinateLifecycle(deps);
-    expect(lc.statusOf(5)).toBe('aborted');
-    expect(lc.statusOf(99)).toBeNull();
+    expect(lc.statusOf(STOPPED_RUN_ID)).toBe('aborted');
+    expect(lc.statusOf(UNKNOWN_RUN_ID)).toBeNull();
   });
 
   it('abort returns false when no subordinate matches', () => {
     const lc = makeLifecycle();
-    expect(lc.abort(123)).toBe(false);
+    expect(lc.abort(ABORT_RUN_ID)).toBe(false);
   });
 
   it('finalizeAll is a no-op with empty state (but still calls clearAll on humanInLoop + posts a system message)', () => {
@@ -214,8 +234,11 @@ describe('SubordinateLifecycle — queries', () => {
     const post = vi.fn();
     const deps = {
       ctx: {
-        companySessionId: 42,
-        companyStore: { listAgentRuns: () => [], getAgentRun: () => null },
+        companySessionId: COMPANY_SESSION_ID,
+        companyFiles: {
+          listAgentRunsSync: () => [],
+          getAgentRunSync: () => null,
+        },
       },
       board: { post },
       status: {}, kanban: {}, master: {},

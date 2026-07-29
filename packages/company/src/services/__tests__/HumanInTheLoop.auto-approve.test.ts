@@ -11,6 +11,10 @@ import { resolveAutonomy } from '../autonomy/autonomy-config.js';
 
 type PlanHandler = (block: { plan: string; toolUseId?: string }) => void;
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const MASTER_RUN_ID = '00000000-0000-4000-8000-000000000010';
+const FRONTEND_RUN_ID = '00000000-0000-4000-8000-000000000042';
+
 /** Fake per-session autonomy provider over a session `autonomy` object. */
 function fakeAutonomy(autonomy: Record<string, unknown>, env: NodeJS.ProcessEnv = {}) {
   return { get: () => resolveAutonomy(JSON.stringify({ autonomy }), env) };
@@ -30,18 +34,22 @@ function makeHarness(autonomy?: { get: () => ReturnType<typeof resolveAutonomy> 
   const board = { post: vi.fn() } as never;
   const status = { setStatus: vi.fn(), publishStatus: vi.fn() } as never;
   const masterNotify = vi.fn();
-  const master = { notify: masterNotify, handle: null, agentRunId: 1 } as never;
+  const master = {
+    notify: masterNotify,
+    handle: null,
+    agentRunId: MASTER_RUN_ID,
+  } as never;
   const attention = { signal: vi.fn(), on: () => () => {} } as never;
-  const ctx = { companySessionId: 1 } as never;
+  const ctx = { companySessionId: COMPANY_SESSION_ID } as never;
 
   const hitl = new HumanInTheLoop(bus, board, status, master, attention, ctx, autonomy);
-  hitl.wireSubordinatePlan(handle, 42, 'frontend');
+  hitl.wireSubordinatePlan(handle, FRONTEND_RUN_ID, 'frontend');
   return {
     fire: (plan: string) => planHandler?.({ plan }),
     provideUserInput,
     masterNotify,
     busPublish,
-    hasPendingPlan: () => hitl.hasPendingPlan(42),
+    hasPendingPlan: () => hitl.hasPendingPlan(FRONTEND_RUN_ID),
   };
 }
 
@@ -65,7 +73,11 @@ describe('HumanInTheLoop plan auto-approval', () => {
     // C1 — a dedicated visibility event rides the session metaBus.
     expect(h.busPublish).toHaveBeenCalledWith(
       'plan_auto_approved',
-      expect.objectContaining({ agentRunId: 42, role: 'frontend', at: expect.any(Number) }),
+      expect.objectContaining({
+        agentRunId: FRONTEND_RUN_ID,
+        role: 'frontend',
+        at: expect.any(Number),
+      }),
     );
   });
 

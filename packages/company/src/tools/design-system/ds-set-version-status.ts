@@ -37,9 +37,9 @@ export function dsSetVersionStatus(binding: DsToolBinding): CoderTool {
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_set_version_status: DesignSystemStore not wired.');
-        const session = binding.resolveDsSession(store);
+        const session = await binding.resolveDsSession(store);
         if (!session) return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
-        const draft = store.getLatestVersionAny(session.id);
+        const draft = await store.getLatestVersionAny(session.id);
         if (!draft || (draft.status !== 'draft' && draft.status !== 'building')) {
           return err('No active draft version to update.');
         }
@@ -48,7 +48,7 @@ export function dsSetVersionStatus(binding: DsToolBinding): CoderTool {
           return err(`status='${status}' not allowed via this tool. Use ds_publish_version for 'published'.`);
         }
         const error = typeof args.error === 'string' ? args.error : null;
-        const updated = store.updateVersion(draft.id, { status: 'failed', error });
+        const updated = await store.updateVersion(draft.id, { status: 'failed', error });
         return ok(`Marked draft v${updated.semver} as failed${error ? ` — ${error}` : ''}.`);
       } catch (e) {
         return err(`ds_set_version_status failed: ${(e as Error).message}`);

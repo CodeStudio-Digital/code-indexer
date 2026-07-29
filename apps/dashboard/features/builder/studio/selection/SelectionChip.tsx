@@ -19,8 +19,8 @@ import { useWorkspaceStore } from '../../../../state/workspace.js';
  * edits exactly what was pointed at. Every chip is dismissible; a "clear all"
  * appears once more than one is selected.
  */
-export function SelectionChip({ sessionId, projectId }: { sessionId: number; projectId?: number }) {
-  const selections = useSelections(sessionId);
+export function SelectionChip({ projectId }: { projectId: number }) {
+  const selections = useSelections(projectId);
   if (!selections.length) return null;
   return (
     <div className="flex flex-wrap items-center gap-1">
@@ -29,13 +29,13 @@ export function SelectionChip({ sessionId, projectId }: { sessionId: number; pro
           key={selectionKey(sel)}
           selected={sel}
           projectId={projectId}
-          onRemove={() => removeSelected(sessionId, selectionKey(sel))}
+          onRemove={() => removeSelected(projectId, selectionKey(sel))}
         />
       ))}
       {selections.length > 1 && (
         <button
           type="button"
-          onClick={() => setSelected(sessionId, null)}
+          onClick={() => setSelected(projectId, null)}
           className="ml-0.5 px-1 text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
         >
           Limpar tudo
@@ -139,12 +139,12 @@ function parseLoc(loc: string | undefined): { path: string; line: number; column
   return { path: m[1].replace(/\\/g, '/'), line, column: Math.max(1, column) };
 }
 
-/** Subscribe to the module store for this session's current selection list. */
-function useSelections(sessionId: number): SelectedElement[] {
-  const [sels, setSels] = React.useState<SelectedElement[]>(() => getSelections(sessionId));
+/** Subscribe to the module store for this project's current selection list. */
+function useSelections(projectId: number): SelectedElement[] {
+  const [sels, setSels] = React.useState<SelectedElement[]>(() => getSelections(projectId));
   React.useEffect(() => {
-    setSels(getSelections(sessionId));
-    return subscribeSelected(sessionId, () => setSels(getSelections(sessionId)));
-  }, [sessionId]);
+    setSels(getSelections(projectId));
+    return subscribeSelected(projectId, () => setSels(getSelections(projectId)));
+  }, [projectId]);
   return sels;
 }

@@ -17,8 +17,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RuntimeReconciler, type RuntimeReconcilerDeps } from '../RuntimeReconciler.js';
 
-type Run = { id: number; role: string; status: string; updated_at: string | null };
-type Msg = { id: number; created_at: string; status: string; to_role: string };
+type Run = { id: string; role: string; status: string; updated_at: string | null };
+type Msg = { id: string; created_at: string; status: string; to_role: string };
+const runId = (n: number): string =>
+  `a0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const messageId = (n: number): string =>
+  `b0000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 /** Render a wall-clock `ms`-ago timestamp in SQLite `datetime('now')` shape:
  *  "YYYY-MM-DD HH:MM:SS", UTC, NO zone marker. Exercises parseSqliteUtc's
@@ -40,7 +44,7 @@ function makeReconciler(opts: {
   alive: boolean;
   runs: Run[];
   messages?: Msg[];
-  pending?: { plan?: Set<number>; question?: Set<number>; tasks?: Set<number> };
+  pending?: { plan?: Set<string>; question?: Set<string>; tasks?: Set<string> };
 }): { spies: Spies; nudge: () => Promise<void> } {
   const spies: Spies = {
     signal: vi.fn(),
@@ -52,10 +56,10 @@ function makeReconciler(opts: {
   const pending = opts.pending ?? {};
   const deps = {
     ctx: {
-      companySessionId: 1,
-      companyStore: {
-        listAgentRuns: () => opts.runs,
-        listInboxMessages: () => opts.messages ?? [],
+      companySessionId: 'c0000000-0000-4000-8000-000000000001',
+      companyFiles: {
+        listAgentRunsSync: () => opts.runs,
+        listInboxMessagesSync: () => opts.messages ?? [],
       },
     },
     master: {
@@ -76,9 +80,9 @@ function makeReconciler(opts: {
       markEnded() {},
     },
     humanInLoop: {
-      hasPendingPlan: (id: number) => pending.plan?.has(id) ?? false,
-      hasPendingQuestion: (id: number) => pending.question?.has(id) ?? false,
-      hasPendingTasks: (id: number) => pending.tasks?.has(id) ?? false,
+      hasPendingPlan: (id: string) => pending.plan?.has(id) ?? false,
+      hasPendingQuestion: (id: string) => pending.question?.has(id) ?? false,
+      hasPendingTasks: (id: string) => pending.tasks?.has(id) ?? false,
     },
     attention: { signal: spies.signal },
     now: () => opts.now,
@@ -104,13 +108,13 @@ describe('RuntimeReconciler — master re-nudge', () => {
     const { spies, nudge } = makeReconciler({
       now: NOW,
       alive: true,
-      runs: [{ id: 42, role: 'backend', status: 'waiting_plan', updated_at: sqliteAgo(NOW, 31_000) }],
-      pending: { plan: new Set([42]) },
+      runs: [{ id: runId(42), role: 'backend', status: 'waiting_plan', updated_at: sqliteAgo(NOW, 31_000) }],
+      pending: { plan: new Set([runId(42)]) },
     });
     await nudge();
     expect(spies.signal).toHaveBeenCalledTimes(1);
-    expect(spies.signal).toHaveBeenCalledWith({ kind: 'plan', agentRunId: 42, role: 'backend' });
-    expect(spies.interruptWait).toHaveBeenCalledWith({ kind: 'plan', agentRunId: 42, role: 'backend' });
+    expect(spies.signal).toHaveBeenCalledWith({ kind: 'plan', agentRunId: runId(42), role: 'backend' });
+    expect(spies.interruptWait).toHaveBeenCalledWith({ kind: 'plan', agentRunId: runId(42), role: 'backend' });
     // Must NOT re-push the message — it's already in pendingUserMessages.
     expect(spies.notify).not.toHaveBeenCalled();
     expect(spies.published.map((p) => p.topic)).toContain('master_nudge');
@@ -120,8 +124,8 @@ describe('RuntimeReconciler — master re-nudge', () => {
     const { spies, nudge } = makeReconciler({
       now: NOW,
       alive: true,
-      runs: [{ id: 42, role: 'backend', status: 'waiting_question', updated_at: sqliteAgo(NOW, 60_000) }],
-      pending: { question: new Set([42]) },
+      runs: [{ id: runId(42), role: 'backend', status: 'waiting_question', updated_at: sqliteAgo(NOW, 60_000) }],
+      pending: { question: new Set([runId(42)]) },
     });
     await nudge();
     await nudge();
@@ -132,7 +136,7 @@ describe('RuntimeReconciler — master re-nudge', () => {
     const { spies, nudge } = makeReconciler({
       now: NOW,
       alive: true,
-      runs: [{ id: 7, role: 'qa', status: 'waiting_plan', updated_at: sqliteAgo(NOW, 120_000) }],
+      runs: [{ id: runId(7), role: 'qa', status: 'waiting_plan', updated_at: sqliteAgo(NOW, 120_000) }],
       pending: { plan: new Set() }, // resolved already
     });
     await nudge();
@@ -143,8 +147,8 @@ describe('RuntimeReconciler — master re-nudge', () => {
     const { spies, nudge } = makeReconciler({
       now: NOW,
       alive: true,
-      runs: [{ id: 9, role: 'backend', status: 'waiting_tasks', updated_at: sqliteAgo(NOW, 5_000) }],
-      pending: { tasks: new Set([9]) },
+      runs: [{ id: runId(9), role: 'backend', status: 'waiting_tasks', updated_at: sqliteAgo(NOW, 5_000) }],
+      pending: { tasks: new Set([runId(9)]) },
     });
     await nudge();
     expect(spies.signal).not.toHaveBeenCalled();
@@ -155,7 +159,7 @@ describe('RuntimeReconciler — master re-nudge', () => {
       now: NOW,
       alive: true,
       runs: [],
-      messages: [{ id: 5, created_at: sqliteAgo(NOW, 45_000), status: 'pending', to_role: '__master__' }],
+      messages: [{ id: messageId(5), created_at: sqliteAgo(NOW, 45_000), status: 'pending', to_role: '__master__' }],
     });
     await nudge();
     expect(spies.tryDeliverNow).toHaveBeenCalledTimes(1);
@@ -165,8 +169,8 @@ describe('RuntimeReconciler — master re-nudge', () => {
     const { spies, nudge } = makeReconciler({
       now: NOW,
       alive: false,
-      runs: [{ id: 3, role: 'frontend', status: 'waiting_plan', updated_at: sqliteAgo(NOW, 90_000) }],
-      pending: { plan: new Set([3]) },
+      runs: [{ id: runId(3), role: 'frontend', status: 'waiting_plan', updated_at: sqliteAgo(NOW, 90_000) }],
+      pending: { plan: new Set([runId(3)]) },
     });
     await nudge();
     expect(spies.notify).toHaveBeenCalledTimes(1);
@@ -178,8 +182,8 @@ describe('RuntimeReconciler — master re-nudge', () => {
     const { spies, nudge } = makeReconciler({
       now: NOW,
       alive: true,
-      runs: [{ id: 42, role: 'backend', status: 'waiting_plan', updated_at: sqliteAgo(NOW, 120_000) }],
-      pending: { plan: new Set([42]) },
+      runs: [{ id: runId(42), role: 'backend', status: 'waiting_plan', updated_at: sqliteAgo(NOW, 120_000) }],
+      pending: { plan: new Set([runId(42)]) },
     });
     await nudge();
     expect(spies.signal).not.toHaveBeenCalled();

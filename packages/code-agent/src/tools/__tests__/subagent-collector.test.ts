@@ -17,6 +17,8 @@ import {
   renderCollectedSnapshotForParent,
 } from '@mcp/code-agent/tools/subagent-collector.js';
 
+const BOARD_POST_ID = '00000000-0000-4000-8000-000000000042';
+
 describe('subagent-collector renderer', () => {
   it('renders empty string when no entries', () => {
     const c = new SubagentCollector();
@@ -48,8 +50,22 @@ describe('subagent-collector renderer', () => {
     const c = new SubagentCollector();
     c.recordMemo('hello', 'progress');
     c.recordSnapshot('s1', 'pattern', 'short body');
-    c.recordBoardPost('handoff', 'pass to frontend', 42);
+    c.recordBoardPost('handoff', 'pass to frontend', BOARD_POST_ID);
     expect(renderCollectedSnapshotForParent(c.snapshot())).toBe(c.renderForParent());
+  });
+
+  it('normalizes board post UUIDs and rejects legacy numeric ids', () => {
+    const c = new SubagentCollector();
+    c.recordBoardPost('handoff', 'pass to frontend', BOARD_POST_ID.toUpperCase());
+    expect(c.snapshot().boardPosts[0].id).toBe(BOARD_POST_ID);
+
+    expect(() => c.recordBoardPost(
+      'handoff',
+      'legacy post',
+      42 as unknown as string,
+    )).toThrow(/canonical UUID/);
+    expect(() => c.recordBoardPost('handoff', 'malformed post', '42')).toThrow(/canonical UUID/);
+    expect(c.snapshot().boardPosts).toHaveLength(1);
   });
 
   it('drops entries past the per-run caps without throwing', () => {

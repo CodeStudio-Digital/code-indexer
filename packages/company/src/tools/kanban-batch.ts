@@ -43,7 +43,7 @@ function createOne(orchestrator: CompanyOrchestrator, spec: Rec): string {
 }
 
 function moveOne(orchestrator: CompanyOrchestrator, spec: Rec): string {
-  const cardId = spec.card_id as number;
+  const cardId = spec.card_id as string;
   const column = spec.column as KanbanColumn;
   // Dependency constraint: a card cannot advance while blockers are open.
   if (['in_progress', 'review', 'done'].includes(column)) {
@@ -153,7 +153,7 @@ export function kanbanMoveCardTool(orchestrator: CompanyOrchestrator): CoderTool
     parameters: {
       type: 'object',
       properties: {
-        card_id: { type: 'number', description: 'ID of the card to move (single form)' },
+        card_id: { type: 'string', description: 'UUID of the card to move (single form)' },
         column: { type: 'string', enum: KANBAN_COLUMNS, description: 'Target column (single form)' },
         position: { type: 'number', description: 'Position within the column (0-based, optional — appends at end by default)' },
         moves: {
@@ -162,7 +162,7 @@ export function kanbanMoveCardTool(orchestrator: CompanyOrchestrator): CoderTool
           items: {
             type: 'object',
             properties: {
-              card_id: { type: 'number' },
+              card_id: { type: 'string' },
               column: { type: 'string', enum: KANBAN_COLUMNS },
               position: { type: 'number' },
             },
@@ -177,7 +177,7 @@ export function kanbanMoveCardTool(orchestrator: CompanyOrchestrator): CoderTool
       const batch = parseBatch(args, 'moves', 'card_id', 'card_id');
       if (batch.error) return err(batch.error);
       if (batch.entries) return runBatch(batch.entries, (s) => moveOne(orchestrator, s));
-      if (typeof args.card_id !== 'number' || typeof args.column !== 'string') {
+      if (typeof args.card_id !== 'string' || typeof args.column !== 'string') {
         return err('card_id and column are required (single form) — or pass `moves: [...]` for a batch.');
       }
       try {

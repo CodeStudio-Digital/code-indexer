@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
-import type { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { asSessionId } from '@mcp/session-storage';
 import {
   alignedDurablePrefix,
   persistChapterCheckpoint,
@@ -81,7 +82,7 @@ describe('chapter checkpoint alignment', () => {
     expect(recedePrefixToToolPairBoundary(messages, 3)).toBe(3);
   });
 
-  it('persists the receded pair-safe boundary rather than the raw aligned prefix', () => {
+  it('persists the receded pair-safe boundary rather than the raw aligned prefix', async () => {
     const before = message('user', 'before');
     const use: AgentMessage = {
       role: 'assistant',
@@ -91,21 +92,24 @@ describe('chapter checkpoint alignment', () => {
       role: 'tool',
       content: [{ type: 'tool_result', tool_use_id: 'call-1', content: 'body' }],
     };
-    const commitConversationChapter = vi.fn().mockReturnValue({
-      status: 'committed', boundary_id: 10, pruned_count: 1, chapter: { id: 1 },
+    const commitConversationChapter = vi.fn().mockResolvedValue({
+      status: 'committed',
+      boundary_seq: 10,
+      pruned_count: 1,
+      chapter: { id: '11111111-1111-4111-8111-111111111111' },
     });
     const store = {
       loadSessionWithMessages: () => ({
         session: { summary_boundary_id: null },
         messages: [before, use, result],
-        message_rows: [{ id: 10 }, { id: 11 }, { id: 12 }],
+        message_rows: [{ seq: 10 }, { seq: 11 }, { seq: 12 }],
       }),
       commitConversationChapter,
-    } as unknown as SessionStore;
+    } as unknown as FsSessionStore;
 
-    persistChapterCheckpoint({
+    await persistChapterCheckpoint({
       store,
-      sessionId: 1,
+      sessionId: asSessionId('22222222-2222-4222-8222-222222222222'),
       summary: {
         version: 3,
         chapter: {
@@ -120,8 +124,8 @@ describe('chapter checkpoint alignment', () => {
     });
 
     expect(commitConversationChapter).toHaveBeenCalledWith(expect.objectContaining({
-      startMessageId: 10,
-      endMessageId: 10,
+      startMessageSeq: 10,
+      endMessageSeq: 10,
     }));
   });
 
@@ -131,14 +135,17 @@ describe('chapter checkpoint alignment', () => {
     let firstStarted!: () => void;
     const started = new Promise<void>((resolve) => { firstStarted = resolve; });
     const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
-    const first = serializeSessionCompaction(9, async () => {
+    const sessionId = asSessionId(
+      '99999999-9999-4999-8999-999999999999',
+    );
+    const first = serializeSessionCompaction(sessionId, async () => {
       order.push('first:start');
       firstStarted();
       await gate;
       order.push('first:end');
     });
     await started;
-    const second = serializeSessionCompaction(9, async () => {
+    const second = serializeSessionCompaction(sessionId, async () => {
       order.push('second:start');
       order.push('second:end');
     });

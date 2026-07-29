@@ -1,12 +1,22 @@
 /**
- * Shared transfer progress strip at the bottom of the dual-pane manager. Both
- * panes feed the same list (lifted out of the old single-pane SftpBrowser).
- * Cancel ends only that transfer's dedicated channel (via `sftpCancel`).
+ * Shared progress strip at the bottom of the dual-pane manager. Both panes feed
+ * the same list, and zip/unzip jobs reuse it too — so a compression job gets
+ * the same row and the same cancel button as a transfer.
+ *
+ * Cancel routes by direction: a transfer ends its dedicated SFTP channel
+ * (`sftpCancel`), an archive signals its worker thread (`files.archiveCancel`).
  */
 
-import { Download, Upload, X } from 'lucide-react';
+import { Download, FileArchive, PackageOpen, Upload, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { Transfer } from './transfer-controller.js';
+import type { Transfer, TransferDir } from './transfer-controller.js';
+
+const ICONS: Record<TransferDir, typeof Upload> = {
+  up: Upload,
+  down: Download,
+  zip: FileArchive,
+  unzip: PackageOpen,
+};
 
 export function TransferBar({ transfers, onCancel }: { transfers: Transfer[]; onCancel: (id: string) => void }) {
   const { t } = useTranslation('ssh');
@@ -15,9 +25,10 @@ export function TransferBar({ transfers, onCancel }: { transfers: Transfer[]; on
     <div className="shrink-0 border-t max-h-28 overflow-y-auto">
       {transfers.map((tf) => {
         const pct = tf.total > 0 ? Math.min(100, Math.round((tf.transferred / tf.total) * 100)) : 0;
+        const Icon = ICONS[tf.dir] ?? Upload;
         return (
           <div key={tf.id} className="px-3 py-1 text-[11px] flex items-center gap-2">
-            {tf.dir === 'up' ? <Upload className="h-3 w-3 shrink-0" /> : <Download className="h-3 w-3 shrink-0" />}
+            <Icon className="h-3 w-3 shrink-0" />
             <span className="truncate flex-1">{tf.name}</span>
             {tf.cancelled ? (
               <span className="text-muted-foreground shrink-0">{t('sftp.cancelled')}</span>

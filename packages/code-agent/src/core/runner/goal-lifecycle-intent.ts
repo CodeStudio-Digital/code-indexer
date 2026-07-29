@@ -1,11 +1,9 @@
 /**
- * Resolve whether a run must close an explicit goal lifecycle even before the
- * tool ledger contains substantive work.
+ * Classify how the current turn relates to optional durable goal state.
  *
- * Fresh runs trust only the validated task-preflight kind supplied by the
- * host. Resumed runs may rehydrate that one field from the durable preflight
- * cache while the original goal is still absent/in progress. Once the goal is
- * complete, ordinary follow-up conversation returns to ledger-based gating.
+ * This is context and transition authority, not execution authority: it helps
+ * distinguish resume/fresh/pivot semantics and protects supersede from closing
+ * the wrong generation, but never blocks unrelated tools or a clean finish.
  */
 import type { AgentMessage } from '@mcp/provider-sdk';
 

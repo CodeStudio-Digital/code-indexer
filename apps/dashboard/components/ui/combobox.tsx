@@ -38,6 +38,10 @@ export interface ComboboxProps {
   virtualizeThreshold?: number;
 }
 
+export function containPortalledScroll(event: Pick<React.SyntheticEvent, 'stopPropagation'>): void {
+  event.stopPropagation();
+}
+
 /**
  * Searchable single-select combobox. Uses Popover + text filter instead of
  * Radix Select because Select has no built-in search and we don't want to
@@ -227,7 +231,13 @@ export function Combobox({
           id={listboxId}
           ref={setScrollEl}
           role="listbox"
-          className="max-h-64 overflow-y-auto p-1"
+          className="max-h-64 overflow-y-auto overscroll-contain p-1"
+          // Radix Dialog locks wheel/touch events outside its content shard.
+          // This list is rendered in a Popover portal, so the dialog's
+          // document listener otherwise mistakes it for background content
+          // and prevents the browser's native scrolling.
+          onWheel={containPortalledScroll}
+          onTouchMove={containPortalledScroll}
         >
           {filtered.length === 0 ? (
             <div className="px-3 py-6 text-center text-xs text-muted-foreground">

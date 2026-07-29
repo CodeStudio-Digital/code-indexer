@@ -1,5 +1,4 @@
 import type { Hono } from 'hono';
-import { buildGlobalWorkspace } from '@mcp/code-agent/core/virtual-workspace.js';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';
 import { resolveProjectPath } from '../workspace/paths.js';
@@ -10,16 +9,6 @@ export function mountCoderProjectTreeRoutes(app: Hono, deps: ServerDeps): void {
     const projectId = parseIdParam(c, 'pid');
     if (!Number.isFinite(projectId)) {
       return c.json({ error: 'Invalid project id' }, 400);
-    }
-    const project = deps.db.getProject(projectId);
-    if (project?.is_synthetic) {
-      const linked = deps.sessionStore.listUnionProjects(projectId);
-      if (linked.length > 0) {
-        buildGlobalWorkspace(
-          project.root_path,
-          linked.map((p) => ({ name: p.name, rootPath: p.root_path })),
-        );
-      }
     }
     const relPath = c.req.query('path') ?? '.';
     const query = c.req.query('q')?.trim() ?? '';

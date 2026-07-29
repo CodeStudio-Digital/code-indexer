@@ -60,7 +60,7 @@ describe('resolvePricingWithSource — precedence', () => {
   it('falls back to the static table when no DB/env row', () => {
     const r = resolvePricingWithSource('anthropic', 'claude-opus-4-7');
     expect(r.source).toBe('static');
-    expect(r.pricing?.input).toBe(15);
+    expect(r.pricing?.input).toBe(5);
   });
 
   it('unknown model → none + recorded in the missing-price tracker', () => {
@@ -73,10 +73,10 @@ describe('resolvePricingWithSource — precedence', () => {
 
 describe('resolvePricingWithSource — opus-4-8[1m] bug fix', () => {
   it('1M tier resolves to its own static row, not opus-4-7', () => {
-    expect(resolvePricingWithSource(null, 'claude-opus-4-8[1m]').pricing?.input).toBe(30);
+    expect(resolvePricingWithSource(null, 'claude-opus-4-8[1m]').pricing?.input).toBe(10);
   });
   it('non-1M opus-4-8 resolves to the base row', () => {
-    expect(resolvePricingWithSource(null, 'claude-opus-4-8').pricing?.input).toBe(15);
+    expect(resolvePricingWithSource(null, 'claude-opus-4-8').pricing?.input).toBe(5);
   });
 });
 
@@ -88,7 +88,7 @@ describe('estimateCost — math', () => {
       cache_read_input_tokens: 0,
       cache_creation_input_tokens: 0,
     });
-    expect(cost).toBeCloseTo(90, 6); // 15 input + 75 output
+    expect(cost).toBeCloseTo(30, 6); // 5 input + 25 output
   });
 
   it('re-prices the cached fraction at the cheaper cache rate', () => {
@@ -98,8 +98,8 @@ describe('estimateCost — math', () => {
       cache_read_input_tokens: 1_000_000,
       cache_creation_input_tokens: 0,
     });
-    // input billed = max(0, 1M - 1M) = 0; cache read 1M * 1.5 = 1.5
-    expect(cost).toBeCloseTo(1.5, 6);
+    // input billed = max(0, 1M - 1M) = 0; cache read 1M * 0.5 = 0.5
+    expect(cost).toBeCloseTo(0.5, 6);
   });
 
   it('returns 0 for unknown model (never throws)', () => {

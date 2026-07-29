@@ -31,13 +31,13 @@ export interface AvailableProject {
 }
 
 export interface PersistedAgentRun {
-  id: number;
+  id: string;
   role: string;
   status: string;
   provider: string;
   model: string;
   project_ids_json: string;
-  coder_session_id: number;
+  coder_session_id: string;
 }
 
 export function parseConfig(json: string): Record<string, unknown> | null {

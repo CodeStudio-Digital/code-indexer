@@ -1,7 +1,14 @@
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { appendFile, readdir, rename, rm, stat } from 'node:fs/promises';
-import path from 'node:path';
-import type { RuntimeEventEnvelope, RuntimeLogKind } from './runtime-event-log.js';
+import { resolve } from 'node:path';
+import { lstatSync } from 'node:fs';
+import {
+  EntityFileRepository,
+  type JsonValue,
+} from '@mcp/session-storage';
+import type {
+  RuntimeEventEnvelope,
+  RuntimeLogKind,
+  RuntimeSessionId,
+} from './runtime-event-log.js';
 
 export interface PersistableRuntimeEvent {
   event: RuntimeEventEnvelope;
@@ -9,164 +16,161 @@ export interface PersistableRuntimeEvent {
   bytes: number;
 }
 
-const MAX_FILE_BYTES = readPositiveInt('MCP_RUNTIME_LOG_MAX_SESSION_MB', 8, 1) * 1024 * 1024;
-const MAX_TOTAL_BYTES = readPositiveInt('MCP_RUNTIME_LOG_MAX_TOTAL_MB', 256, 16) * 1024 * 1024;
-const RETENTION_MS = readPositiveInt('MCP_RUNTIME_LOG_RETENTION_DAYS', 7, 1) * 24 * 60 * 60_000;
-
-const writeChains = new Map<string, Promise<void>>();
-const ensuredDirs = new Set<string>();
-const fileSizes = new Map<string, number>();
-const activeLogRefs = new Map<string, number>();
-let retentionStarted = false;
-
-export function registerRuntimeEventLog(kind: RuntimeLogKind, sessionId: number): () => void {
-  const key = `${kind}:${sessionId}`;
-  activeLogRefs.set(key, (activeLogRefs.get(key) ?? 0) + 1);
-  if (!retentionStarted) {
-    retentionStarted = true;
-    void pruneRuntimeEventLogs().catch(() => undefined);
-  }
-  return () => {
-    const refs = (activeLogRefs.get(key) ?? 1) - 1;
-    if (refs > 0) activeLogRefs.set(key, refs);
-    else activeLogRefs.delete(key);
-  };
+export interface RuntimeEventLogLocation {
+  /** Absolute path of the already-existing session bundle. */
+  bundlePath: string;
 }
 
-export function persistRuntimeEvent(prepared: PersistableRuntimeEvent): void {
-  const file = logFile(prepared.event.kind, prepared.event.sessionId);
-  const dir = path.dirname(file);
-  if (!ensuredDirs.has(dir)) {
-    mkdirSync(dir, { recursive: true });
-    ensuredDirs.add(dir);
-  }
-
-  const previous = writeChains.get(file) ?? Promise.resolve();
-  const next = previous.then(async () => {
-    let currentBytes = fileSizes.get(file);
-    if (currentBytes == null) {
-      try { currentBytes = (await stat(file)).size; }
-      catch { currentBytes = 0; }
-    }
-
-    if (currentBytes > MAX_FILE_BYTES) {
-      // Legacy unbounded file: do not preserve a multi-hundred-MB rotation.
-      await rm(file, { force: true });
-      await rm(rotatedLogFile(file), { force: true });
-      currentBytes = 0;
-    } else if (currentBytes > 0 && currentBytes + prepared.bytes > MAX_FILE_BYTES) {
-      const rotated = rotatedLogFile(file);
-      await rm(rotated, { force: true });
-      try { await rename(file, rotated); }
-      catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-      }
-      currentBytes = 0;
-    }
-
-    await appendFile(file, prepared.line, 'utf8');
-    fileSizes.set(file, currentBytes + prepared.bytes);
-  }).catch(() => undefined);
-
-  writeChains.set(file, next);
-  void next.finally(() => {
-    if (writeChains.get(file) === next) writeChains.delete(file);
-  });
+interface RuntimeEventData {
+  kind: RuntimeLogKind;
+  session_id: string;
+  envelope: JsonValue;
 }
 
-export function readPersistedRuntimeEvents(
+const repositories = new Map<string, EntityFileRepository<RuntimeEventData>>();
+const pendingWrites = new Set<Promise<void>>();
+const writeFailures = new Map<string, Error>();
+
+function repositoryFor(
+  location: RuntimeEventLogLocation,
+): EntityFileRepository<RuntimeEventData> {
+  const bundlePath = resolve(location.bundlePath);
+  let repository = repositories.get(bundlePath);
+  if (!repository) {
+    repository = new EntityFileRepository<RuntimeEventData>({
+      sessionRoot: bundlePath,
+      // Control-plane runtime events own `events/runtime/*.json`. The SSE
+      // diagnostic stream is isolated one level below so both repositories
+      // keep independent sequence/fencing domains while remaining inside the
+      // canonical session events tree.
+      namespace: 'events/runtime/stream',
+      kind: 'session.runtime_event',
+      immutable: true,
+      journal: false,
+    });
+    repositories.set(bundlePath, repository);
+  }
+  return repository;
+}
+
+function eventAsJson(event: RuntimeEventEnvelope): JsonValue {
+  // `prepareRuntimeEvent` already serialized the envelope. Parse that exact
+  // representation so undefined object properties cannot enter strict JSON.
+  return JSON.parse(JSON.stringify(event)) as JsonValue;
+}
+
+function asRuntimeEvent(value: JsonValue): RuntimeEventEnvelope | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const row = value as Record<string, JsonValue>;
+  if (
+    typeof row.event !== 'string'
+    || typeof row.seq !== 'number'
+    || typeof row.ts !== 'number'
+    || (row.kind !== 'coder' && row.kind !== 'company')
+    || typeof row.sessionId !== 'string'
+  ) {
+    return null;
+  }
+  return row as unknown as RuntimeEventEnvelope;
+}
+
+export function registerRuntimeEventLog(
+  location: RuntimeEventLogLocation,
+): () => void {
+  const bundlePath = resolve(location.bundlePath);
+  const stat = lstatSync(bundlePath);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`Unsafe runtime-event session bundle: ${bundlePath}`);
+  }
+  // The repository validates the complete descendant path on read/write.
+  // There is deliberately no global side-store fallback.
+  repositoryFor(location);
+  return () => undefined;
+}
+
+export function persistRuntimeEvent(
+  prepared: PersistableRuntimeEvent,
+  location: RuntimeEventLogLocation,
+): void {
+  const bundlePath = resolve(location.bundlePath);
+  const write = repositoryFor(location)
+    .create({
+      data: {
+        kind: prepared.event.kind,
+        session_id: String(prepared.event.sessionId),
+        envelope: eventAsJson(prepared.event),
+      },
+    })
+    .then(() => {
+      writeFailures.delete(bundlePath);
+    })
+    .catch((error) => {
+      const failure =
+        error instanceof Error ? error : new Error(String(error));
+      writeFailures.set(bundlePath, failure);
+      console.error(
+        `[runtime-event-log] filesystem write failed for ${bundlePath}: ${failure.message}`,
+      );
+    })
+    .finally(() => {
+      pendingWrites.delete(write);
+    });
+  pendingWrites.add(write);
+}
+
+export async function readPersistedRuntimeEvents(
   kind: RuntimeLogKind,
-  sessionId: number,
-): RuntimeEventEnvelope[] {
-  const events: RuntimeEventEnvelope[] = [];
-  const current = logFile(kind, sessionId);
-  for (const file of [rotatedLogFile(current), current]) {
-    if (!existsSync(file)) continue;
-    try {
-      for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
-        if (!line) continue;
-        try { events.push(JSON.parse(line) as RuntimeEventEnvelope); }
-        catch { /* ignore a partial/corrupt diagnostic row */ }
-      }
-    } catch {
-      // Best-effort diagnostics must never break the session/export route.
-    }
+  sessionId: RuntimeSessionId,
+  location: RuntimeEventLogLocation,
+): Promise<RuntimeEventEnvelope[]> {
+  const bundlePath = resolve(location.bundlePath);
+  const writeFailure = writeFailures.get(bundlePath);
+  if (writeFailure) {
+    throw new Error(
+      `Runtime event persistence failed for session ${sessionId}`,
+      { cause: writeFailure },
+    );
   }
+
+  const repository = repositoryFor(location);
+  const events: RuntimeEventEnvelope[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await repository.list({
+      order: 'asc',
+      limit: 1_000,
+      ...(cursor ? { cursor } : {}),
+    });
+    for (const record of page.items) {
+      if (
+        record.data.kind !== kind
+        || record.data.session_id !== String(sessionId)
+      ) {
+        throw new Error(
+          `Runtime event identity mismatch in bundle ${bundlePath}`,
+        );
+      }
+      const event = asRuntimeEvent(record.data.envelope);
+      if (!event) {
+        throw new Error(
+          `Invalid runtime event record ${record.id} in bundle ${bundlePath}`,
+        );
+      }
+      events.push(event);
+    }
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor);
   return events;
 }
 
-async function pruneRuntimeEventLogs(now = Date.now()): Promise<void> {
-  const root = runtimeLogDir();
-  const candidates: Array<{ file: string; bytes: number; mtimeMs: number }> = [];
-  const activeFiles = new Set<string>();
-  for (const key of activeLogRefs.keys()) {
-    const [kind, rawSessionId] = key.split(':');
-    const file = logFile(kind as RuntimeLogKind, Number(rawSessionId));
-    activeFiles.add(file);
-    activeFiles.add(rotatedLogFile(file));
-  }
-
-  for (const kind of ['coder', 'company'] as const) {
-    const dir = path.join(root, kind);
-    let names: string[];
-    try { names = await readdir(dir); }
-    catch { continue; }
-    for (const name of names) {
-      if (!name.endsWith('.jsonl')) continue;
-      const file = path.join(dir, name);
-      try {
-        const info = await stat(file);
-        if (!activeFiles.has(file) && now - info.mtimeMs > RETENTION_MS) {
-          await rm(file, { force: true });
-          fileSizes.delete(file);
-          continue;
-        }
-        candidates.push({ file, bytes: info.size, mtimeMs: info.mtimeMs });
-      } catch { /* file disappeared during cleanup */ }
-    }
-  }
-
-  let totalBytes = candidates.reduce((sum, candidate) => sum + candidate.bytes, 0);
-  if (totalBytes <= MAX_TOTAL_BYTES) return;
-  candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
-  for (const candidate of candidates) {
-    if (totalBytes <= MAX_TOTAL_BYTES) break;
-    if (activeFiles.has(candidate.file)) continue;
-    await rm(candidate.file, { force: true });
-    fileSizes.delete(candidate.file);
-    totalBytes -= candidate.bytes;
-  }
-}
-
-function logFile(kind: RuntimeLogKind, sessionId: number): string {
-  return path.join(runtimeLogDir(), kind, `${sessionId}.jsonl`);
-}
-
-function rotatedLogFile(file: string): string {
-  return file.replace(/\.jsonl$/i, '.1.jsonl');
-}
-
-function runtimeLogDir(): string {
-  return process.env.MCP_RUNTIME_EVENT_LOG_DIR
-    ? path.resolve(process.env.MCP_RUNTIME_EVENT_LOG_DIR)
-    : path.join(process.cwd(), '.mcp-indexer', 'runtime-event-logs');
-}
-
-function readPositiveInt(name: string, fallback: number, min: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw.trim() === '') return fallback;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= min ? Math.floor(parsed) : fallback;
-}
-
 export async function flushRuntimeEventLogWrites(): Promise<void> {
-  await Promise.all(Array.from(writeChains.values()));
+  while (pendingWrites.size > 0) {
+    await Promise.all([...pendingWrites]);
+  }
 }
 
 export function resetRuntimeEventLogStorage(): void {
-  writeChains.clear();
-  ensuredDirs.clear();
-  fileSizes.clear();
-  activeLogRefs.clear();
-  retentionStarted = false;
+  repositories.clear();
+  pendingWrites.clear();
+  writeFailures.clear();
 }

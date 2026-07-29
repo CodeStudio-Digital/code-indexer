@@ -27,6 +27,8 @@ export interface PaneSelectionState {
   selectRange: (path: string, order: string[]) => void;
   /** Ctrl/Cmd+A: everything in the visible order. */
   selectAll: (order: string[]) => void;
+  /** Move the cursor WITHOUT changing the selection (Ctrl+Arrow). */
+  setLead: (path: string) => void;
   clear: () => void;
   /** Drop `removed` + descendants (`path/…`) from the selection (after delete/refresh). */
   prune: (removed: string[]) => void;
@@ -65,6 +67,10 @@ export function createPaneSelection(): PaneSelectionStore {
 
     selectAll: (order) =>
       set((s) => ({ selected: new Set(order), lead: order[order.length - 1] ?? null, version: s.version + 1 })),
+
+    // Anchor moves with the lead so a following Shift+Arrow ranges from where
+    // the cursor actually is, not from the last click.
+    setLead: (path) => set((s) => ({ lead: path, anchor: path, version: s.version + 1 })),
 
     clear: () =>
       set((s) =>

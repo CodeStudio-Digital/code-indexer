@@ -97,8 +97,8 @@ async function main() {
     void disposeIndexerProcessResources().finally(() => process.exit(0));
   });
   await server.connect(transport);
-  // Stdio close = host went away. Drain worker pools (dbWriter writes,
-  // tree-sitter workers) before exiting so nothing is lost mid-flight.
+  // Stdio close = host went away. Drain tree-sitter workers before exiting;
+  // session bundles flush through their independent per-session writers.
   // (`server.onclose` — the SDK overwrites `transport.onclose` on connect.)
   server.onclose = () => {
     void disposeIndexerProcessResources().finally(() => process.exit(0));

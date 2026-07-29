@@ -44,8 +44,14 @@ const project = {
   root_path: 'D:/apps/ultra-app',
 };
 
+const APP_SESSION_ID = '00000017-0000-4000-8000-000000000000';
+const COMPANY_SESSION_ID = '00000029-0000-4000-8000-000000000000';
+const MASTER_SESSION_ID = '0000001f-0000-4000-8000-000000000000';
+const MASTER_AGENT_RUN_ID = '0000002b-0000-4000-8000-000000000000';
+
 const appSession = {
-  id: 23,
+  id: APP_SESSION_ID,
+  seq: 1,
   project_id: project.id,
   company_session_id: null,
   name: project.name,
@@ -69,7 +75,7 @@ function setup() {
       savePlanRevision: vi.fn(),
     },
     sessionStore: {
-      createSession: vi.fn(() => ({ id: 31 })),
+      createSession: vi.fn(() => ({ id: MASTER_SESSION_ID })),
       setSessionExecutionMode,
       setSessionReasoningEffort,
     },
@@ -104,14 +110,14 @@ beforeEach(() => {
   });
   mocks.createProject.mockReturnValue(project);
   mocks.createTeam.mockReturnValue({
-    app_session: { ...appSession, company_session_id: 41 },
+    app_session: { ...appSession, company_session_id: COMPANY_SESSION_ID },
     team: {
       runtime_kind: 'app_studio',
       state: 'ready',
-      company_session_id: 41,
+      company_session_id: COMPANY_SESSION_ID,
       company_status: 'idle',
-      master_session_id: 31,
-      master_agent_run_id: 43,
+      master_session_id: MASTER_SESSION_ID,
+      master_agent_run_id: MASTER_AGENT_RUN_ID,
     },
   });
 });
@@ -126,8 +132,8 @@ describe('App Studio creation execution settings', () => {
       ctx.emit,
     );
 
-    expect(ctx.setSessionExecutionMode).toHaveBeenCalledWith(31, 'ultra');
-    expect(ctx.setSessionReasoningEffort).toHaveBeenCalledWith(31, 'high');
+    expect(ctx.setSessionExecutionMode).toHaveBeenCalledWith(MASTER_SESSION_ID, 'ultra');
+    expect(ctx.setSessionReasoningEffort).toHaveBeenCalledWith(MASTER_SESSION_ID, 'high');
     expect(ctx.events.at(-1)?.event).toBe('done');
   });
 
@@ -140,9 +146,12 @@ describe('App Studio creation execution settings', () => {
       ctx.emit,
     );
 
-    expect(ctx.setSessionExecutionMode).toHaveBeenCalledWith(31, 'standard');
-    expect(ctx.setSessionReasoningEffort).toHaveBeenCalledWith(31, null);
-    expect(ctx.setSessionReasoningEffort).not.toHaveBeenCalledWith(31, expect.stringMatching(/ultra/i));
+    expect(ctx.setSessionExecutionMode).toHaveBeenCalledWith(MASTER_SESSION_ID, 'standard');
+    expect(ctx.setSessionReasoningEffort).toHaveBeenCalledWith(MASTER_SESSION_ID, null);
+    expect(ctx.setSessionReasoningEffort).not.toHaveBeenCalledWith(
+      MASTER_SESSION_ID,
+      expect.stringMatching(/ultra/i),
+    );
   });
 
   it('normalizes a legacy Ultra pseudo-effort when execution_mode is absent', async () => {
@@ -154,8 +163,8 @@ describe('App Studio creation execution settings', () => {
       ctx.emit,
     );
 
-    expect(ctx.setSessionExecutionMode).toHaveBeenCalledWith(31, 'ultra');
-    expect(ctx.setSessionReasoningEffort).toHaveBeenCalledWith(31, null);
+    expect(ctx.setSessionExecutionMode).toHaveBeenCalledWith(MASTER_SESSION_ID, 'ultra');
+    expect(ctx.setSessionReasoningEffort).toHaveBeenCalledWith(MASTER_SESSION_ID, null);
   });
 
   it('persists explicit Standard and the model-default effort for new clients', async () => {
@@ -163,8 +172,8 @@ describe('App Studio creation execution settings', () => {
 
     await runAppStudioScaffoldStream(ctx.deps, input(), ctx.emit);
 
-    expect(ctx.setSessionExecutionMode).toHaveBeenCalledWith(31, 'standard');
-    expect(ctx.setSessionReasoningEffort).toHaveBeenCalledWith(31, null);
+    expect(ctx.setSessionExecutionMode).toHaveBeenCalledWith(MASTER_SESSION_ID, 'standard');
+    expect(ctx.setSessionReasoningEffort).toHaveBeenCalledWith(MASTER_SESSION_ID, null);
   });
 
   it('rejects an invalid execution mode before scaffolding the workspace', async () => {

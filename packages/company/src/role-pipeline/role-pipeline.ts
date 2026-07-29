@@ -79,7 +79,7 @@ export function createRolePipeline(
 export interface RoleRecommendation {
   role: string;
   kind: 'spawn' | 'reuse';
-  agentRunId?: number;
+  agentRunId?: string;
   score: number;
   signals: RoleCandidate['signals'];
 }

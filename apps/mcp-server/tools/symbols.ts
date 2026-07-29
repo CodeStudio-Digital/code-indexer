@@ -912,6 +912,13 @@ const semantic_neighbors = defineTool({
       mode: 'hybrid',
       type: 'symbols',
       limit: limit + 2,
+      consumer: 'agent',
+      sessionId: typeof args.__mcp_session_id === 'string'
+        ? args.__mcp_session_id
+        : undefined,
+      companySessionId: typeof args.__mcp_company_session_id === 'string'
+        ? args.__mcp_company_session_id
+        : undefined,
     });
     const searched = remote.ok && remote.value
       ? remote.value

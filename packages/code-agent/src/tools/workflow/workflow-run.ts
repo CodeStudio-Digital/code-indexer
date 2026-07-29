@@ -81,9 +81,16 @@ function emitStepUpdate(ctx: ToolContext, record: WorkflowRecord, step: Workflow
   });
 }
 
-function persist(deps: SubagentDeps, ctx: ToolContext, record: WorkflowRecord): void {
+async function persist(
+  deps: SubagentDeps,
+  ctx: ToolContext,
+  record: WorkflowRecord,
+): Promise<void> {
   const sessionId = ctx.runner?.sessionId;
-  if (sessionId != null && !saveWorkflow(sessionId, record, deps.sessionStore)) {
+  if (
+    sessionId != null &&
+    !(await saveWorkflow(sessionId, record, deps.sessionStore))
+  ) {
     throw new Error(`workflow '${record.id}' checkpoint commit was fenced`);
   }
 }
@@ -129,7 +136,11 @@ export async function executeWorkflow(
   try {
     let waveNo = 0;
     if (parentSessionId != null) {
-      assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+      await assertWorkflowRunLease(
+        parentSessionId,
+        record.id,
+        deps.sessionStore,
+      );
     }
 
     for (;;) {
@@ -152,14 +163,18 @@ export async function executeWorkflow(
       const controllers = ready.map(() => new AbortController());
 
       if (parentSessionId != null) {
-        assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+        await assertWorkflowRunLease(
+          parentSessionId,
+          record.id,
+          deps.sessionStore,
+        );
       }
       for (const step of ready) {
         step.status = 'running';
         step.groupId = groupId;
         emitStepUpdate(ctx, record, step);
       }
-      persist(deps, ctx, record);
+      await persist(deps, ctx, record);
 
       const specs: ParallelAgentSpec[] = agents.map((a, i) => ({
         task: taskWithWorkspaceBriefing(a.task, ctx),
@@ -239,7 +254,11 @@ export async function executeWorkflow(
       if (!waveRun) throw new Error(`workflow '${record.id}' wave did not start`);
 
       if (parentSessionId != null) {
-        assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+        await assertWorkflowRunLease(
+          parentSessionId,
+          record.id,
+          deps.sessionStore,
+        );
       }
       const { results, totalUsage } = waveRun;
       addUsage(record.totalUsage, totalUsage);
@@ -259,10 +278,10 @@ export async function executeWorkflow(
         step.usage = result.usage;
         emitStepUpdate(ctx, record, step);
       }
-      persist(deps, ctx, record);
+      await persist(deps, ctx, record);
 
       const outcomeCounts = countSubagentOutcomes(results);
-      const resumableCount = retainSpawnGroup({
+      const resumableCount = await retainSpawnGroup({
         sessionId: parentSessionId,
         spawnId: groupId,
         provider: agentInfos[0]?.provider ?? 'unknown',
@@ -284,11 +303,15 @@ export async function executeWorkflow(
     }
 
     if (parentSessionId != null) {
-      assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
+      await assertWorkflowRunLease(
+        parentSessionId,
+        record.id,
+        deps.sessionStore,
+      );
     }
     skipBlockedSteps(ctx, record);
     if (record.status !== 'aborted') record.status = workflowStatusFromSteps(record);
-    persist(deps, ctx, record);
+    await persist(deps, ctx, record);
     return record;
   } finally {
     stopLeaseKeepalive();

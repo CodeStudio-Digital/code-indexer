@@ -12,7 +12,6 @@ type DB = InstanceType<typeof DatabaseConstructor>;
 
 export interface SubAgentCacheRow {
   id: number;
-  session_id: number | null;
   prompt_hash: string;
   context_digest: string;
   agent_type: string;
@@ -24,7 +23,6 @@ export interface SubAgentCacheRow {
 }
 
 export interface SubAgentCacheInsert {
-  session_id?: number | null;
   prompt_hash: string;
   context_digest: string;
   agent_type: string;
@@ -83,14 +81,13 @@ export class SubAgentResultCacheStore {
     const result = this.db
       .prepare(
         `INSERT INTO sub_agent_result_cache (
-           session_id, prompt_hash, context_digest, agent_type,
+           prompt_hash, context_digest, agent_type,
            result_json, ttl_seconds
          ) VALUES (
-           @session_id, @prompt_hash, @context_digest, @agent_type,
+           @prompt_hash, @context_digest, @agent_type,
            @result_json, @ttl_seconds
          )
          ON CONFLICT(prompt_hash, context_digest, agent_type) DO UPDATE SET
-           session_id   = excluded.session_id,
            result_json  = excluded.result_json,
            ttl_seconds  = excluded.ttl_seconds,
            created_at   = datetime('now'),
@@ -98,7 +95,6 @@ export class SubAgentResultCacheStore {
            hit_count    = 0`,
       )
       .run({
-        session_id: input.session_id ?? null,
         prompt_hash: input.prompt_hash,
         context_digest: input.context_digest,
         agent_type: input.agent_type,
@@ -116,14 +112,6 @@ export class SubAgentResultCacheStore {
           WHERE julianday(?) - julianday(created_at) > (ttl_seconds / 86400.0)`,
       )
       .run(now.toISOString().slice(0, 19).replace('T', ' '));
-    return Number(result.changes);
-  }
-
-  /** Drop all rows for a session — useful when projects change underneath. */
-  invalidateSession(sessionId: number): number {
-    const result = this.db
-      .prepare('DELETE FROM sub_agent_result_cache WHERE session_id = ?')
-      .run(sessionId);
     return Number(result.changes);
   }
 

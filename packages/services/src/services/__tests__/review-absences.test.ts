@@ -10,14 +10,19 @@ import type { FileDiff } from '../session-snapshots.js';
 
 let nextId = 1;
 
-function makeDiff(filePath: string, before: string, after: string): FileDiff {
+function makeDiff(
+  filePath: string,
+  before: string,
+  after: string,
+): FileDiff<string> {
+  const id = `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`;
   return {
     baseline: {
-      id: nextId++,
+      id,
       filePath,
       existedBefore: true,
       oversized: false,
-      status: 'active' as FileDiff['baseline']['status'],
+      status: 'active' as FileDiff<string>['baseline']['status'],
     },
     hunks: computeHunks(before, after).map((h) => ({ ...h, decision: 'pending' as const })),
     diffDisabled: false,

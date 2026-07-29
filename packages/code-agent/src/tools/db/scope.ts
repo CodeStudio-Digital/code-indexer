@@ -28,7 +28,7 @@ export interface ScopeInput<C extends ConnLite = ConnLite> {
   /** Single-session project id (label-only names). */
   projectId?: number | null;
   /** Company session id — when set, names are prefixed with the project slug. */
-  companySessionId?: number | null;
+  companySessionId?: string | null;
   /** Pre-fetched rows, each tagged with its project's display slug (company). */
   connections: ReadonlyArray<{ conn: C; projectSlug?: string | null }>;
 }

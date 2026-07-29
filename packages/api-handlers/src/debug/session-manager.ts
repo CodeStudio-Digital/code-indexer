@@ -152,6 +152,24 @@ export class DebugSessionManager {
     return this.bus.iterable(this.list());
   }
 
+  /**
+   * Pids of debuggees this manager launched (never of attached processes — we
+   * do not own those). Lets the task manager label and kill a runaway debug
+   * target instead of showing it as an anonymous `node.exe`.
+   */
+  listProcessIds(): Array<{ sessionId: string; label: string; pid: number }> {
+    const out: Array<{ sessionId: string; label: string; pid: number }> = [];
+    for (const session of this.sessions.values()) {
+      if (session.request !== 'launch') continue;
+      for (const pid of session.ownedProcessIds) {
+        if (pid > 0) {
+          out.push({ sessionId: session.summary.sessionId, label: session.summary.name, pid });
+        }
+      }
+    }
+    return out;
+  }
+
   async start(projectId: number, projectRoot: string, input: DebugStartInput): Promise<DebugSessionSummary> {
     const sessionId = randomUUID();
     const record: DebugSessionRecord = {

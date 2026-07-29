@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { ResultSchema, ToolSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
@@ -24,6 +25,16 @@ interface ServerConnection {
   config: McpServerConfig;
   state: McpConnectionState;
   error?: string;
+  /** Kept only for stdio servers, so their child pid stays discoverable. */
+  stdio?: StdioClientTransport;
+  /**
+   * The server returned at least one malformed tool definition. Once detected,
+   * bypass the SDK's all-or-nothing list validator for this connection and
+   * validate each tool independently.
+   */
+  lenientToolListing?: boolean;
+  /** Avoid repeating the same malformed-tool warning on every health check. */
+  reportedInvalidToolSignature?: string;
 }
 
 /** Connect timeout per server (ms). */
@@ -52,6 +63,41 @@ function looksLikeNetworkError(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e);
   return /ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND|\b503\b|\b502\b|\b504\b|fetch failed|socket hang up|connection refused|connection reset|server (?:closed|unavailable)|connect ECONN/i
     .test(msg);
+}
+
+type ListedTool = Awaited<ReturnType<Client['listTools']>>['tools'][number];
+
+interface ValidationIssueLike {
+  path?: unknown;
+  message?: unknown;
+}
+
+/**
+ * The MCP SDK validates `tools/list` as one Zod object. One malformed tool
+ * therefore rejects every valid sibling before callers can isolate it.
+ */
+function isToolListValidationError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const issues = (error as { issues?: unknown }).issues;
+  return Array.isArray(issues) && issues.some((issue) => {
+    const path = (issue as ValidationIssueLike | null)?.path;
+    return Array.isArray(path) && path[0] === 'tools';
+  });
+}
+
+function rawToolName(value: unknown, index: number): string {
+  if (value && typeof value === 'object') {
+    const name = (value as { name?: unknown }).name;
+    if (typeof name === 'string' && name.trim()) return name;
+  }
+  return `#${index}`;
+}
+
+function firstValidationMessage(issues: readonly ValidationIssueLike[]): string {
+  for (const issue of issues) {
+    if (typeof issue.message === 'string' && issue.message.trim()) return issue.message;
+  }
+  return 'invalid MCP tool definition';
 }
 
 /**
@@ -200,6 +246,7 @@ export class McpServerManager {
         client,
         config,
         state: 'connected',
+        stdio: transport instanceof StdioClientTransport ? transport : undefined,
       });
       console.log(`[mcp-ext] server "${config.id}" connected (${config.transport})`);
     } catch (e) {
@@ -227,8 +274,8 @@ export class McpServerManager {
       if (conn.state !== 'connected') continue;
 
       try {
-        const res = await conn.client.listTools();
-        const sorted = [...res.tools].sort((a, b) => a.name.localeCompare(b.name));
+        const listed = await this.listToolsFromConnection(serverId, conn);
+        const sorted = [...listed].sort((a, b) => a.name.localeCompare(b.name));
 
         this.toolCountCache.set(serverId, sorted.length);
 
@@ -269,6 +316,59 @@ export class McpServerManager {
     allTools.sort((a, b) => a.name.localeCompare(b.name));
 
     return { tools: allTools, tierMap };
+  }
+
+  /**
+   * Keep the SDK's strict path for conforming servers so its output/task
+   * metadata cache remains populated. If that path proves the server has a
+   * malformed tool definition, fetch the same result through the SDK's loose
+   * base result schema and validate each definition independently.
+   */
+  private async listToolsFromConnection(
+    serverId: string,
+    conn: ServerConnection,
+  ): Promise<ListedTool[]> {
+    if (!conn.lenientToolListing) {
+      try {
+        return (await conn.client.listTools()).tools;
+      } catch (error) {
+        if (!isToolListValidationError(error)) throw error;
+        conn.lenientToolListing = true;
+        console.warn(
+          `[mcp-ext] server "${serverId}" returned a malformed tools/list catalogue; ` +
+            'switching this connection to per-tool validation',
+        );
+      }
+    }
+
+    const raw = await conn.client.request({ method: 'tools/list' }, ResultSchema);
+    if (!Array.isArray(raw.tools)) {
+      throw new Error(`External MCP server "${serverId}" returned tools/list without a tools array`);
+    }
+
+    const valid: ListedTool[] = [];
+    const invalid: string[] = [];
+    for (let index = 0; index < raw.tools.length; index++) {
+      const candidate = raw.tools[index];
+      const parsed = ToolSchema.safeParse(candidate);
+      if (parsed.success) {
+        valid.push(parsed.data);
+        continue;
+      }
+      invalid.push(
+        `${rawToolName(candidate, index)} (${firstValidationMessage(parsed.error.issues)})`,
+      );
+    }
+
+    const signature = invalid.join('|');
+    if (invalid.length > 0 && signature !== conn.reportedInvalidToolSignature) {
+      conn.reportedInvalidToolSignature = signature;
+      console.warn(
+        `[mcp-ext] server "${serverId}" skipped ${invalid.length} invalid tool definition(s): ` +
+          invalid.join(', '),
+      );
+    }
+    return valid;
   }
 
   /**
@@ -404,6 +504,21 @@ export class McpServerManager {
       states.set(id, { state: conn.state, error: conn.error });
     }
     return states;
+  }
+
+  /**
+   * OS pids of stdio-transport servers, for the task manager's process tree.
+   * Remote transports (SSE/HTTP) have no local process and are skipped.
+   */
+  listStdioProcesses(): Array<{ serverId: string; name: string; pid: number }> {
+    const out: Array<{ serverId: string; name: string; pid: number }> = [];
+    for (const [id, conn] of this.connections) {
+      const pid = conn.stdio?.pid;
+      if (typeof pid === 'number' && pid > 0) {
+        out.push({ serverId: id, name: conn.config.name || id, pid });
+      }
+    }
+    return out;
   }
 
   /**

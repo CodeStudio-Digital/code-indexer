@@ -45,7 +45,17 @@ import {
 } from '@mcp/vault-crypto';
 import * as api from '../api.js';
 import type { SshHost, SshIdentity } from '../types.js';
-import { planVaultPush, planVaultApply, hostRefs, resolveRefs, type VaultCacheEntry, type VaultPushRecord } from './vault-sync-core.js';
+import { planVaultPush, planVaultApply, resolveRefs, type VaultCacheEntry, type VaultPushRecord } from './vault-sync-core.js';
+import { hostIdFromKey, hostRefFromKey, migrateHostMapKeys, resolveJumpHostKey } from './host-doc-keys.js';
+import {
+  hostToRecord,
+  recordToHostBody,
+  identityToRecord,
+  recordToIdentityBody,
+  type VaultHostRecord,
+  type VaultIdentityRecord,
+} from './record-mapping.js';
+import { keyFingerprint, resolveShareSelection, type ShareChoice } from './share-selection.js';
 
 const META_DOC = 'vault:meta';
 /** OWASP-2024 floor; the local mint uses 650k. Reject anything weaker the server might serve. */
@@ -99,42 +109,13 @@ interface UnlockedVault {
   sigPrivPkcs8: string;
 }
 
-/** Plaintext host record carried in the vault (secrets decrypted from the keychain). */
-interface VaultHostRecord {
-  label: string;
-  hostname: string;
-  port: number;
-  username: string;
-  auth_method: SshHost['auth_method'];
-  password?: string;
-  privateKey?: string;
-  passphrase?: string;
-  group_name: string | null;
-  tags: string[];
-  agent_forwarding: boolean;
-  /** Shared across all projects — syncs so it stays shared on every device. */
-  is_shared: boolean;
-  /** Portable references (personal feed only): the referenced identity / jump host as clientDocIds. */
-  identity_ref?: string | null;
-  jump_host_ref?: string | null;
-}
-
-/** Plaintext identity record carried in the vault (the private key travels, sealed). */
-interface VaultIdentityRecord {
-  name: string;
-  username: string | null;
-  auth_kind: SshIdentity['auth_kind'];
-  password?: string;
-  privateKey?: string;
-  passphrase?: string;
-  public_key: string | null;
-  key_type: string | null;
-}
-
 interface SyncState {
   workspaceId: string;
-  hostMap: Record<string, string>; // local host id → clientDocId
-  identityMap: Record<string, string>; // local identity id → clientDocId
+  // Keyed by SCOPE-QUALIFIED host key (`shared:3` / `project:3`), never the bare
+  // id — the central and project DBs have independent AUTOINCREMENT sequences
+  // and their ids collide. See host-doc-keys.ts.
+  hostMap: Record<string, string>; // host key → clientDocId
+  identityMap: Record<string, string>; // local identity id → clientDocId (single-scope, safe)
   versions: Record<string, number>; // clientDocId → server version
   cursor: number;
   bodyCache: Record<string, VaultCacheEntry>; // clientDocId → {hash, ciphertext}
@@ -150,6 +131,17 @@ interface SyncState {
   // Last-applied monotonic seq per doc — the rollback/replay high-water mark.
   appliedSeq: Record<string, number>;
   teamAppliedSeq: Record<string, number>;
+}
+
+/** A member who would receive the team key, shown before the user confirms a share. */
+export interface ShareRecipient {
+  accountId: string;
+  /** Short SHA-256 of their encryption key — lets a swapped key be spotted by eye. */
+  fingerprint: string;
+  /** Already TOFU-pinned on this device (i.e. not a first-time recipient). */
+  pinned: boolean;
+  /** Server offered a key different from the pinned one → this member is SKIPPED. */
+  keyChanged: boolean;
 }
 
 export interface VaultSyncSummary {
@@ -169,7 +161,9 @@ function load(projectId: number): SyncState {
       const p = JSON.parse(raw) as Partial<SyncState>;
       return {
         workspaceId: p.workspaceId ?? newId(),
-        hostMap: p.hostMap ?? {},
+        // Re-key any map persisted before host keys were scoped; without this
+        // every existing device would re-push every host as a new document.
+        hostMap: migrateHostMapKeys(p.hostMap ?? {}),
         identityMap: p.identityMap ?? {},
         versions: p.versions ?? {},
         cursor: p.cursor ?? 0,
@@ -196,85 +190,6 @@ function save(projectId: number, s: SyncState): void {
   } catch {
     /* storage full — sync still works this session */
   }
-}
-
-async function hostToRecord(
-  h: SshHost,
-  refs?: { identityMap: Record<string, string>; hostMap: Record<string, string> },
-): Promise<VaultHostRecord> {
-  return {
-    label: h.label,
-    hostname: h.hostname,
-    port: h.port,
-    username: h.username,
-    auth_method: h.auth_method,
-    password: h.enc_password ? await api.decryptSecret(h.enc_password) : undefined,
-    privateKey: h.enc_private_key ? await api.decryptSecret(h.enc_private_key) : undefined,
-    passphrase: h.enc_passphrase ? await api.decryptSecret(h.enc_passphrase) : undefined,
-    group_name: h.group_name,
-    tags: (() => {
-      try {
-        return JSON.parse(h.tags_json || '[]') as string[];
-      } catch {
-        return [];
-      }
-    })(),
-    agent_forwarding: !!h.agent_forwarding,
-    is_shared: !!h.is_shared,
-    // Personal feed carries portable refs; the team feed (no refs) omits them.
-    ...(refs ? hostRefs(h, refs.identityMap, refs.hostMap) : {}),
-  };
-}
-
-/**
- * Vault record → createHost/patchHost body (re-seal secrets with the OS keychain).
- * `ids` (personal feed) sets the resolved local identity_id; jump_host_id is set
- * separately AFTER all hosts exist (a deferred sweep). The team feed passes no
- * `ids`, so it never writes identity/jump links (P2 scope).
- */
-async function recordToHostBody(r: VaultHostRecord, ids?: { identity_id: number | null }): Promise<Record<string, unknown>> {
-  return {
-    label: r.label,
-    hostname: r.hostname,
-    port: r.port,
-    username: r.username,
-    auth_method: r.auth_method,
-    group_name: r.group_name,
-    tags: r.tags,
-    agent_forwarding: r.agent_forwarding,
-    is_shared: r.is_shared,
-    enc_password: r.password ? await api.encryptSecret(r.password) : null,
-    enc_private_key: r.privateKey ? await api.encryptSecret(r.privateKey) : null,
-    enc_passphrase: r.passphrase ? await api.encryptSecret(r.passphrase) : null,
-    ...(ids ? { identity_id: ids.identity_id } : {}),
-  };
-}
-
-async function identityToRecord(i: SshIdentity): Promise<VaultIdentityRecord> {
-  return {
-    name: i.name,
-    username: i.username,
-    auth_kind: i.auth_kind,
-    password: i.enc_password ? await api.decryptSecret(i.enc_password) : undefined,
-    privateKey: i.enc_private_key ? await api.decryptSecret(i.enc_private_key) : undefined,
-    passphrase: i.enc_passphrase ? await api.decryptSecret(i.enc_passphrase) : undefined,
-    public_key: i.public_key,
-    key_type: i.key_type,
-  };
-}
-
-/** Vault identity record → createIdentity/patchIdentity body (re-seal secrets). */
-async function recordToIdentityBody(r: VaultIdentityRecord): Promise<Record<string, unknown>> {
-  return {
-    name: r.name,
-    username: r.username,
-    auth_kind: r.auth_kind,
-    public_key: r.public_key,
-    key_type: r.key_type,
-    enc_password: r.password ? await api.encryptSecret(r.password) : null,
-    enc_private_key: r.privateKey ? await api.encryptSecret(r.privateKey) : null,
-    enc_passphrase: r.passphrase ? await api.encryptSecret(r.passphrase) : null,
-  };
 }
 
 export function useSshVaultSync(projectId: number) {
@@ -541,17 +456,22 @@ export function useSshVaultSync(projectId: number) {
       const now = Date.now();
       const enc = (v: unknown, aad: RecordAad) => encryptJson(vdk.key, v, aad);
       const dec = (e: RecordEnvelope, aad: RecordAad) => decryptJson<VaultHostRecord & VaultIdentityRecord>(vdk.key, e, aad);
+      /** clientDocId → the map key that owns it (identity: numeric; host: scoped). */
+      const localKeyFor = (map: Record<string, string>, cid: string): string | undefined =>
+        Object.entries(map).find(([, v]) => v === cid)?.[0];
       const localFor = (map: Record<string, string>, cid: string): number | undefined => {
-        const hit = Object.entries(map).find(([, v]) => v === cid);
-        return hit ? Number(hit[0]) : undefined;
+        const k = localKeyFor(map, cid);
+        return k != null ? Number(k) : undefined;
       };
 
       // 1) PUSH local identities + hosts (encrypted). Mint clientDocIds FIRST so a
       //    host's identity/jump refs resolve regardless of iteration order.
       const hosts = await api.listHosts(projectId);
       const identities = await api.listIdentities(projectId);
-      const hostDocFor = (id: number): string => {
-        const k = String(id);
+      // Scope-qualified: `listHosts` unions central-shared + project hosts, whose
+      // numeric ids collide across the two DBs. See host-doc-keys.ts.
+      const hostDocFor = (h: SshHost): string => {
+        const k = api.sshHostKey(h);
         if (!hostMap[k]) hostMap[k] = `${cur.workspaceId}:${newId()}`;
         return hostMap[k];
       };
@@ -560,12 +480,17 @@ export function useSshVaultSync(projectId: number) {
         if (!identityMap[k]) identityMap[k] = `${cur.workspaceId}:${newId()}`;
         return identityMap[k];
       };
+      // A bare `jump_host_id` FK → the clientDocId of whichever scoped host it means.
+      const jumpDocFor = (referrer: SshHost) => (jumpId: number): string | undefined => {
+        const k = resolveJumpHostKey(hosts, jumpId, !!referrer.is_shared, api.sshHostKey);
+        return k != null ? hostMap[k] : undefined;
+      };
       for (const i of identities) idDocFor(i.id);
-      for (const h of hosts) hostDocFor(h.id);
+      for (const h of hosts) hostDocFor(h);
 
       const pushRecords: VaultPushRecord[] = [];
       for (const i of identities) pushRecords.push({ clientDocId: idDocFor(i.id), kind: 'ssh_identity', record: await identityToRecord(i) });
-      for (const h of hosts) pushRecords.push({ clientDocId: hostDocFor(h.id), kind: 'ssh_host', record: await hostToRecord(h, { identityMap, hostMap }) });
+      for (const h of hosts) pushRecords.push({ clientDocId: hostDocFor(h), kind: 'ssh_host', record: await hostToRecord(h, { refs: { identityMap, jumpDocFor: jumpDocFor(h) } }) });
 
       const plan = await planVaultPush(pushRecords, cur.workspaceId, vdk.vdkId, enc, (cid) => versions[cid] ?? 0, (cid) => cur.bodyCache[cid], now);
       let conflicts = 0;
@@ -604,25 +529,28 @@ export function useSshVaultSync(projectId: number) {
       }
 
       // Pass B — hosts (identity_id resolved now; jump_host_id deferred to Pass C).
+      // Everything here goes through the SCOPED host key: patching/deleting by a
+      // bare numeric id is what let a shared host and a project host with the same
+      // id cross-wire (and what the routes answer 409 `ambiguous` for).
       const idDocToLocal = (cid: string) => localFor(identityMap, cid);
-      const jumpSweep: { localId: number; ref: string | null }[] = [];
+      const jumpSweep: { hostKey: string; ref: string | null }[] = [];
       for (const a of actions.filter((x) => x.kind === 'ssh_host')) {
-        let localId = localFor(hostMap, a.clientDocId);
+        let hostKey = localKeyFor(hostMap, a.clientDocId);
         if (a.deleted) {
-          if (localId != null) {
-            await api.deleteHost(projectId, localId);
-            delete hostMap[String(localId)];
+          if (hostKey != null) {
+            await api.deleteHost(projectId, hostRefFromKey(hostKey));
+            delete hostMap[hostKey];
           }
         } else if (a.record) {
           const ids = resolveRefs(a.record, idDocToLocal, () => undefined); // jump in Pass C
           const body = await recordToHostBody(a.record, { identity_id: ids.identity_id });
-          if (localId != null) await api.patchHost(projectId, localId, body);
+          if (hostKey != null) await api.patchHost(projectId, hostRefFromKey(hostKey), body);
           else {
             const created = await api.createHost(projectId, body);
-            localId = created.id;
-            hostMap[String(created.id)] = a.clientDocId;
+            hostKey = api.sshHostKey(created);
+            hostMap[hostKey] = a.clientDocId;
           }
-          jumpSweep.push({ localId, ref: a.record.jump_host_ref ?? null });
+          jumpSweep.push({ hostKey, ref: a.record.jump_host_ref ?? null });
           appliedSeq[a.clientDocId] = a.seq; // advance the rollback high-water
         }
         versions[a.clientDocId] = a.version;
@@ -630,9 +558,13 @@ export function useSshVaultSync(projectId: number) {
 
       // Pass C — jump-host sweep: every host now exists, so a ref (incl. to a host
       // created in THIS pull) resolves to a local id; null clears a removed jump.
-      const hostDocToLocal = (cid: string) => localFor(hostMap, cid);
-      for (const { localId, ref } of jumpSweep) {
-        await api.patchHost(projectId, localId, { jump_host_id: ref ? hostDocToLocal(ref) ?? null : null });
+      // `jump_host_id` is a bare FK in the DB, so the scoped key collapses to its id.
+      const hostDocToLocal = (cid: string) => {
+        const k = localKeyFor(hostMap, cid);
+        return k != null ? hostIdFromKey(k) : undefined;
+      };
+      for (const { hostKey, ref } of jumpSweep) {
+        await api.patchHost(projectId, hostRefFromKey(hostKey), { jump_host_id: ref ? hostDocToLocal(ref) ?? null : null });
       }
 
       persist({
@@ -670,12 +602,14 @@ export function useSshVaultSync(projectId: number) {
    * v1: one shared vault per org (`projectWorkspaceId = org:<orgId>`).
    */
   const shareWithOrg = useCallback(
-    async (orgId: string): Promise<void> => {
+    async (orgId: string, selection: ShareChoice[]): Promise<void> => {
       const v = vdkRef.current;
       if (!v) {
         setError('locked');
         return;
       }
+      // An empty selection means "share nothing" — never fall back to "share all".
+      if (selection.length === 0) return;
       setBusy(true);
       setError(null);
       try {
@@ -709,14 +643,22 @@ export function useSshVaultSync(projectId: number) {
         );
         await cloudCall('orgs.vaultGrantsPut', { orgId, projectWorkspaceId: pwid, grants });
 
+        // ONLY what the user ticked. Re-resolved against the live host list so a
+        // stale dialog snapshot can never widen the share into a host the user
+        // never saw; `decryptSecret` runs only where credentials were opted in.
         const hosts = await api.listHosts(projectId);
-        const docIdFor = (id: number): string => {
-          const k = `${orgId}:${id}`;
+        const chosen = resolveShareSelection(hosts, selection);
+        // Scope-qualified for the same reason as the personal feed: `listHosts`
+        // unions two DBs whose numeric ids collide.
+        const docIdFor = (h: SshHost): string => {
+          const k = `${orgId}:${api.sshHostKey(h)}`;
           if (!orgShareMap[k]) orgShareMap[k] = `${pwid}:${newId()}`;
           return orgShareMap[k];
         };
         const records: VaultPushRecord[] = [];
-        for (const h of hosts) records.push({ clientDocId: docIdFor(h.id), kind: 'ssh_host', record: await hostToRecord(h) });
+        for (const { host, includeCredentials } of chosen) {
+          records.push({ clientDocId: docIdFor(host), kind: 'ssh_host', record: await hostToRecord(host, { includeCredentials }) });
+        }
         const plan = await planVaultPush(records, pwid, tvkId, (val, aad) => encryptJson(tvk, val, aad), () => 0, () => undefined, Date.now());
         if (plan.items.length > 0) await cloudCall('orgs.vaultPush', { orgId, documents: plan.items });
 
@@ -730,6 +672,32 @@ export function useSshVaultSync(projectId: number) {
       }
     },
     [projectId, persist],
+  );
+
+  /**
+   * Who would actually receive a share, resolved BEFORE anything leaves.
+   *
+   * `pinned: false` means this member's encryption key is first-seen — the TOFU
+   * pin gets written at share time, so this is the only moment the user can
+   * notice an unexpected recipient. `keyChanged: true` means the server offered
+   * a key that differs from the pinned one; the share silently skips those
+   * members, and the dialog should say so instead of leaving it to a
+   * post-hoc `member_key_changed` error.
+   */
+  const listShareRecipients = useCallback(
+    async (orgId: string): Promise<ShareRecipient[]> => {
+      const { members } = await cloudCall('orgs.vaultMembers', { orgId });
+      const pins = load(projectId).memberEncPins;
+      return Promise.all(
+        members.map(async (m) => ({
+          accountId: m.accountId,
+          fingerprint: await keyFingerprint(m.publicSpki),
+          pinned: pins[m.accountId] === m.publicSpki,
+          keyChanged: !!pins[m.accountId] && pins[m.accountId] !== m.publicSpki,
+        })),
+      );
+    },
+    [projectId],
   );
 
   /** Pull an org's shared hosts (member): verify + unwrap my grant → decrypt → upsert locally. */
@@ -775,18 +743,21 @@ export function useSshVaultSync(projectId: number) {
         const teamAppliedSeq = { ...cur.teamAppliedSeq };
         const actions = await planVaultApply<VaultHostRecord>(pull.documents, pwid, pwid, grant.tvkId, (e, aad) => decryptJson<VaultHostRecord>(tvk, e, aad), (cid) => teamVersions[cid] ?? 0, (cid) => teamAppliedSeq[cid] ?? 0);
         for (const a of actions) {
-          const localId = teamHostMap[a.clientDocId] ? Number(teamHostMap[a.clientDocId]) : undefined;
+          // Value is the SCOPED host key; a legacy bare-numeric entry reads as
+          // `project:<id>`, which is what it was.
+          const stored = teamHostMap[a.clientDocId];
+          const hostKey = stored ? (/^\d+$/.test(stored) ? `project:${stored}` : stored) : undefined;
           if (a.deleted) {
-            if (localId != null) {
-              await api.deleteHost(projectId, localId);
+            if (hostKey != null) {
+              await api.deleteHost(projectId, hostRefFromKey(hostKey));
               delete teamHostMap[a.clientDocId];
             }
           } else if (a.record) {
             const body = await recordToHostBody({ ...a.record, group_name: a.record.group_name ?? `team:${orgId}` });
-            if (localId != null) await api.patchHost(projectId, localId, body);
+            if (hostKey != null) await api.patchHost(projectId, hostRefFromKey(hostKey), body);
             else {
               const created = await api.createHost(projectId, body);
-              teamHostMap[a.clientDocId] = String(created.id);
+              teamHostMap[a.clientDocId] = api.sshHostKey(created);
             }
             teamAppliedSeq[a.clientDocId] = a.seq; // advance the rollback high-water
           }
@@ -803,5 +774,5 @@ export function useSshVaultSync(projectId: number) {
     [projectId, persist],
   );
 
-  return { workspaceId: state.workspaceId, busy, error, last, unlocked, recoveryEnabled, unlock, unlockWithRecovery, enrollRecoveryKey, sync, linkWorkspace, shareWithOrg, pullTeam };
+  return { workspaceId: state.workspaceId, busy, error, last, unlocked, recoveryEnabled, unlock, unlockWithRecovery, enrollRecoveryKey, sync, linkWorkspace, shareWithOrg, listShareRecipients, pullTeam };
 }

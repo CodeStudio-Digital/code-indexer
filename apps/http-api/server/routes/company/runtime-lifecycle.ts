@@ -3,6 +3,7 @@ import {
   evictCompanyOrchestrator,
   getCompanyOrchestrator,
 } from '../../../sse/companyOrchestrator.js';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 export type AbortCompanyRuntimeResult =
   | { ok: true }
@@ -24,7 +25,7 @@ export type AbortCompanyRuntimeResult =
  * from drifting.
  */
 export async function abortCompanyRuntime(
-  companySessionId: number,
+  companySessionId: CompanySessionId,
 ): Promise<AbortCompanyRuntimeResult> {
   const orchestrator = getCompanyOrchestrator(companySessionId);
   if (!orchestrator) return { ok: false, reason: 'not_active' };

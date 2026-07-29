@@ -1,9 +1,10 @@
 /**
- * Rollback-to-message — POST /api/coder/sessions/:id/rollback-to-message.
+ * Rollback-to-sequence — POST /api/coder/sessions/:id/rollback-to-message.
  *
- * Destructive, in-place counterpart to "Fork from here": deletes the target
- * user message AND everything after it, then returns the message's text +
- * attachments so the dashboard can re-seed the composer for editing & re-send.
+ * In-place counterpart to "Fork from here": appends a rollback marker that
+ * projects away the target user message and everything after it, then returns
+ * its text + attachments for editing and re-send. conversation.jsonl remains
+ * append-only.
  *
  * Mirrors the concurrency handling of the manual "summarize & clear" route
  * (the other destructive session mutation): serialize against the run-setup
@@ -14,7 +15,7 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import { parseSessionIdParam, parseJsonBody, parseSeqValue, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
 
 export function mountCoderRollbackRoute(
@@ -26,15 +27,12 @@ export function mountCoderRollbackRoute(
   const { activeRuns } = runtime;
 
   app.post('/api/coder/sessions/:id/rollback-to-message', async (c) => {
-    const id = parseIdParam(c);
-    const session = sessionStore.getSession(id);
+    const id = parseSessionIdParam(c);
+    const session = await sessionStore.getSession(id);
     if (!session) return notFound(c);
 
-    const body = await parseJsonBody<{ message_id?: number }>(c);
-    const messageId = body.message_id;
-    if (typeof messageId !== 'number' || !Number.isFinite(messageId)) {
-      return c.json({ error: 'message_id:number required' }, 400);
-    }
+    const body = await parseJsonBody<{ seq?: number }>(c);
+    const seq = parseSeqValue(body.seq);
 
     return withSessionLock(id, async () => {
       const bus = activeRuns.get(id);
@@ -47,7 +45,7 @@ export function mountCoderRollbackRoute(
 
       let result;
       try {
-        result = sessionStore.rollbackSessionToMessage(id, messageId);
+        result = await sessionStore.rollbackSessionToSeq(id, seq);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return c.json({ error: msg }, 400);

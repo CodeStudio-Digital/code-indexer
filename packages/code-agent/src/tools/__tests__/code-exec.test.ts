@@ -1217,6 +1217,47 @@ describe('code_exec metadata safety and scheduling', () => {
     expect(physicalInvocations).toBe(1);
     expect(unhandled).toEqual([]);
   });
+
+  it('does not leak sibling rejections when an excluded control tool ends a Promise.all batch', async () => {
+    const registry = new ToolRegistry();
+    const invoked: string[] = [];
+    registry.register({
+      ...noopTool('run_command'),
+      mutates: true,
+      parallelSafe: false,
+      handler: async (args) => {
+        const command = String((args as { command?: unknown }).command ?? '');
+        invoked.push(command);
+        await sleep(5);
+        return ok(`${command} completed`);
+      },
+    });
+    registry.register(noopTool('task_list'));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.prependListener('unhandledRejection', onUnhandled);
+    let result;
+    try {
+      result = await buildCodeExecTool(registry).handler({
+        code: `const values = await Promise.all([
+          attempt(tools.run_command({command:'optional-probe'})),
+          tools.run_command({command:'required-read'}),
+          tools.run_command({command:'queued-one'}),
+          task_list({gate:'track', updates:[]})
+        ]);
+        return values;`,
+      }, makeCtx());
+      await sleep(20);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled);
+    }
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('task_list is not defined');
+    expect(result.content).toContain('top-level tool call');
+    expect(invoked).not.toContain('task_list');
+    expect(unhandled).toEqual([]);
+  });
 });
 
 describe('code_exec nested-failure try/catch hint (telemetry: create_file killed the script)', () => {

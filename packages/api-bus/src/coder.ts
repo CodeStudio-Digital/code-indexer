@@ -1,4 +1,20 @@
 import type { ApiContext, AsyncStream } from './common.js';
+import type {
+  Brand,
+  SessionId,
+} from '@mcp/agent-runtime-contracts/ids.js';
+
+export type SessionGroupId = Brand<string, 'SessionGroupId'>;
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function asSessionGroupId(value: string): SessionGroupId {
+  if (!UUID_PATTERN.test(value)) {
+    throw new TypeError('session group id must be a canonical UUID');
+  }
+  return value.toLowerCase() as SessionGroupId;
+}
 
 /**
  * Coder = the single-agent runtime (CoderRunner). Sessions, providers,
@@ -45,8 +61,8 @@ export type ExecutionMode = 'standard' | 'ultra';
 export type CoderProvider = 'anthropic' | 'openai' | 'openrouter' | 'gemini' | 'bedrock' | 'zai' | 'deepseek' | 'kimi-code' | 'claude-code' | 'cloudflare';
 
 export interface CoderSession {
-  id: number;
-  project_id: number;
+  id: SessionId;
+  project_id: number | null;
   title: string;
   provider: string;
   model: string;
@@ -55,7 +71,7 @@ export interface CoderSession {
   status: string;
   total_input_tokens: number;
   total_output_tokens: number;
-  group_id?: number | null;
+  group_id?: SessionGroupId | null;
   is_archived: boolean;
   is_favorite: boolean;
   phase_profile_id?: number | null;
@@ -79,13 +95,13 @@ export interface CreateSessionInput {
 }
 
 export interface SetSessionExecutionModeInput {
-  id: number;
+  id: SessionId;
   mode: ExecutionMode;
 }
 
 /** Compatibility surface for the legacy reasoning-effort endpoint. */
 export interface SetSessionReasoningEffortInput {
-  id: number;
+  id: SessionId;
   effort: string | null;
 }
 
@@ -94,7 +110,7 @@ export interface UpdateSessionInput {
   provider?: CoderProvider;
   model?: string;
   model_mode?: string;
-  group_id?: number | null;
+  group_id?: SessionGroupId | null;
   is_archived?: boolean;
   is_favorite?: boolean;
   phase_profile_id?: number | null;
@@ -128,7 +144,7 @@ export interface IdeContextInput {
 }
 
 export interface SendMessageInput {
-  sessionId: number;
+  sessionId: SessionId;
   content: string;
   attachments?: CoderAttachment[];
   max_turns?: number;
@@ -146,7 +162,7 @@ export interface SendMessageInput {
 }
 
 export interface ContinueSessionInput {
-  sessionId: number;
+  sessionId: SessionId;
   plan_mode?: boolean;
   max_turns?: number;
   agent?: AgentPreset;
@@ -167,14 +183,14 @@ export interface CoderEvent {
 }
 
 export interface SessionStateInfo {
-  sessionId: number;
+  sessionId: SessionId;
   status: string;
   alive: boolean;
   updatedAt: string;
 }
 
 export interface ToolCallStats {
-  sessionId: number;
+  sessionId: SessionId;
   totalCalls: number;
   directCalls: number;
   nestedCalls: number;
@@ -196,7 +212,8 @@ export interface ToolCallStats {
     lastAt: string | null;
   }>;
   recent: Array<{
-    id: number;
+    id: string;
+    seq: number;
     name: string;
     argsPreview: string;
     isError: boolean;
@@ -232,23 +249,23 @@ export interface ToolCallStats {
 export interface CoderSessionsApi {
   list(input: { projectId?: number; archived?: boolean; favorite?: boolean }, ctx: ApiContext): Promise<CoderSession[]>;
   recent(input: { limit?: number }, ctx: ApiContext): Promise<CoderSession[]>;
-  get(input: { id: number; includeMessages?: boolean }, ctx: ApiContext): Promise<{ session: CoderSession; messages?: unknown[] }>;
+  get(input: { id: SessionId; includeMessages?: boolean }, ctx: ApiContext): Promise<{ session: CoderSession; messages?: unknown[] }>;
   create(input: CreateSessionInput, ctx: ApiContext): Promise<CoderSession>;
-  update(input: { id: number } & UpdateSessionInput, ctx: ApiContext): Promise<CoderSession>;
+  update(input: { id: SessionId } & UpdateSessionInput, ctx: ApiContext): Promise<CoderSession>;
   /** Mirrors PATCH /api/coder/sessions/:id/execution-mode. */
   setExecutionMode(input: SetSessionExecutionModeInput, ctx: ApiContext): Promise<CoderSession>;
   /** Mirrors the legacy PATCH /reasoning-effort compatibility route. */
   setReasoningEffort(input: SetSessionReasoningEffortInput, ctx: ApiContext): Promise<CoderSession>;
-  delete(input: { id: number }, ctx: ApiContext): Promise<{ ok: true }>;
+  delete(input: { id: SessionId }, ctx: ApiContext): Promise<{ ok: true }>;
 
   /** Paginated messages (the dashboard chat history). */
-  messages(input: { id: number; cursor?: string; limit?: number }, ctx: ApiContext): Promise<{ items: unknown[]; nextCursor: string | null }>;
+  messages(input: { id: SessionId; cursor?: number; limit?: number }, ctx: ApiContext): Promise<{ items: unknown[]; nextCursor: number | null }>;
 }
 
 export interface CoderProvidersApi {
   list(input: void, ctx: ApiContext): Promise<unknown[]>;
   get(input: { id: string }, ctx: ApiContext): Promise<unknown>;
-  setActive(input: { sessionId: number; provider: CoderProvider; model: string }, ctx: ApiContext): Promise<void>;
+  setActive(input: { sessionId: SessionId; provider: CoderProvider; model: string }, ctx: ApiContext): Promise<void>;
   test(input: { provider: CoderProvider; apiKey: string }, ctx: ApiContext): Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
@@ -267,35 +284,35 @@ export interface CoderStreamApi {
    * Attach to an in-flight run. Replays buffered events from
    * `since` + 1 and forwards live events until run end or disconnect.
    */
-  attach(input: { sessionId: number; since?: number }, ctx: ApiContext): AsyncStream<CoderEvent>;
+  attach(input: { sessionId: SessionId; since?: number }, ctx: ApiContext): AsyncStream<CoderEvent>;
 
-  state(input: { sessionId: number }, ctx: ApiContext): Promise<SessionStateInfo>;
-  toolStats(input: { sessionId: number; recent?: number }, ctx: ApiContext): Promise<ToolCallStats>;
+  state(input: { sessionId: SessionId }, ctx: ApiContext): Promise<SessionStateInfo>;
+  toolStats(input: { sessionId: SessionId; recent?: number }, ctx: ApiContext): Promise<ToolCallStats>;
 }
 
 export interface CoderInteractionApi {
   /** Answer an `ask_user` tool prompt. */
-  answer(input: { sessionId: number; question_id: string; answer: string }, ctx: ApiContext): Promise<{ ok: true; resumed: boolean }>;
+  answer(input: { sessionId: SessionId; question_id: string; answer: string }, ctx: ApiContext): Promise<{ ok: true; resumed: boolean }>;
 
   /** Respond to a `submit_plan` (approve or revise). */
-  planResponse(input: { sessionId: number; plan_id: string; decision: 'approve' | 'revise'; feedback?: string }, ctx: ApiContext): Promise<{ ok: true; resumed: boolean }>;
+  planResponse(input: { sessionId: SessionId; plan_id: string; decision: 'approve' | 'revise'; feedback?: string }, ctx: ApiContext): Promise<{ ok: true; resumed: boolean }>;
 
   /** Respond to `submit_tasks`. */
-  tasksResponse(input: { sessionId: number; tasks_id: string; decision: 'approve' | 'revise'; feedback?: string }, ctx: ApiContext): Promise<{ ok: true; resumed: boolean }>;
+  tasksResponse(input: { sessionId: SessionId; tasks_id: string; decision: 'approve' | 'revise'; feedback?: string }, ctx: ApiContext): Promise<{ ok: true; resumed: boolean }>;
 }
 
 export interface CoderGroupsApi {
-  list(input: { projectId: number }, ctx: ApiContext): Promise<Array<{ id: number; name: string; project_id: number }>>;
-  create(input: { projectId: number; name: string }, ctx: ApiContext): Promise<{ id: number }>;
-  update(input: { id: number; name: string }, ctx: ApiContext): Promise<void>;
-  delete(input: { id: number }, ctx: ApiContext): Promise<void>;
+  list(input: { projectId: number }, ctx: ApiContext): Promise<Array<{ id: SessionGroupId; name: string; project_id: number }>>;
+  create(input: { projectId: number; name: string }, ctx: ApiContext): Promise<{ id: SessionGroupId }>;
+  update(input: { projectId: number; id: SessionGroupId; name: string }, ctx: ApiContext): Promise<void>;
+  delete(input: { projectId: number; id: SessionGroupId }, ctx: ApiContext): Promise<void>;
 }
 
 export interface CoderSkillsApi {
   list(input: void, ctx: ApiContext): Promise<unknown[]>;
   get(input: { id: string }, ctx: ApiContext): Promise<unknown>;
-  activeForSession(input: { sessionId: number }, ctx: ApiContext): Promise<string[]>;
-  setActiveForSession(input: { sessionId: number; skillIds: string[] }, ctx: ApiContext): Promise<void>;
+  activeForSession(input: { sessionId: SessionId }, ctx: ApiContext): Promise<string[]>;
+  setActiveForSession(input: { sessionId: SessionId; skillIds: string[] }, ctx: ApiContext): Promise<void>;
 }
 
 // ─── Aggregated ────────────────────────────────────────

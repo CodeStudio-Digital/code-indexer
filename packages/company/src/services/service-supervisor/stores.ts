@@ -4,28 +4,28 @@
  *
  * Same pattern as `setQaTestRunStore` / `setSandboxServiceEnvStore`:
  * worker_threads don't share module globals, so `company-worker.ts` wires
- * these against ITS OWN better-sqlite3 handle at boot. On the main process
+ * these against its own per-session filesystem repositories at boot. On the main process
  * nothing calls the setter — consumers must tolerate `null` (they no-op),
  * which also guarantees the supervisor's write path only exists where the
  * supervisor actually runs (the worker).
  *
  * Interfaces are structural slices of the real @mcp/store classes
  * (`CompanySandboxServicesHealth`, `CompanyServiceTransitionsStore`) so
- * tests can hand in plain fakes without touching better-sqlite3/ABI.
+ * tests can hand in plain fakes without touching native persistence dependencies.
  */
 
 export interface ServiceHealthStoreLike {
   updateHealth(
-    sessionId: number,
+    sessionId: string,
     serviceId: string,
     input: { health: string; healthDetail?: string | null; lastHealthAtMs?: number },
   ): boolean;
-  bumpRestartCount(sessionId: number, serviceId: string): number | null;
+  bumpRestartCount(sessionId: string, serviceId: string): number | null;
 }
 
 export interface ServiceTransitionsStoreLike {
   record(input: {
-    sessionId: number;
+    sessionId: string;
     serviceId: string;
     kind: 'status' | 'health';
     fromState?: string | null;
@@ -33,14 +33,14 @@ export interface ServiceTransitionsStoreLike {
     reason?: string | null;
     actor: string;
     atMs?: number;
-  }): number;
+  }): string;
 }
 
 /** Structural slice of `CompanyServiceLogsStore` (write + paged read, B4). */
 export interface ServiceLogsStoreLike {
   appendAndTrim(
     rows: Array<{
-      sessionId: number;
+      sessionId: string;
       serviceId: string;
       stream: 'devserver' | 'container' | 'scaffold';
       line: string;
@@ -49,15 +49,15 @@ export interface ServiceLogsStoreLike {
     cap?: number,
   ): void;
   listPage(
-    sessionId: number,
+    sessionId: string,
     opts?: {
       serviceId?: string;
       stream?: 'devserver' | 'container' | 'scaffold';
-      beforeId?: number;
+      beforeSeq?: number;
       limit?: number;
       q?: string;
     },
-  ): Array<{ id: number; serviceId: string; stream: string; line: string; atMs: number }>;
+  ): Array<{ id: string; seq: number; serviceId: string; stream: string; line: string; atMs: number }>;
 }
 
 /**
@@ -67,7 +67,7 @@ export interface ServiceLogsStoreLike {
  * this SQLite row (`listBySession` already excludes `destroyed` rows).
  */
 export interface LocalProjectReadLike {
-  listBySession(sessionId: number): {
+  listBySession(sessionId: string): {
     pid: number | null;
     host_port: number;
     status: string;
@@ -76,7 +76,7 @@ export interface LocalProjectReadLike {
 
 /** Read slice of `CompanySandboxServicesStore` — health columns for tools (B5). */
 export interface ServicesReadStoreLike {
-  listBySessionAll(sessionId: number): Array<{
+  listBySessionAll(sessionId: string): Array<{
     service_id: string;
     health: string;
     health_detail: string | null;

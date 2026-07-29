@@ -29,7 +29,6 @@ import {
   DEFAULT_SANDBOX_LIMITS,
 } from '../sandbox/types.js';
 import type { ChromeServiceStore, ChromeServiceConfig } from '@mcp/store/chrome-service-store.js';
-import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import type { IQaTestRunStore } from '../qa/store/interfaces.js';
 import { getSandboxManager } from '../sandbox/index.js';
@@ -64,7 +63,11 @@ export interface ChromeServiceState {
 
 export interface ChromeServiceDeps {
   store: ChromeServiceStore;
-  companyStore: CompanyStore;
+  listCompanySessions: () => Array<{
+    id: string;
+    status: string;
+    configJson: string;
+  }>;
   envStore: CompanySessionEnvStore;
   /**
    * Operator-configured http-api port. Used by `recoverOnBoot` to
@@ -89,7 +92,7 @@ export interface ChromeServiceDeps {
 
 export class ChromeService {
   private readonly store: ChromeServiceStore;
-  private readonly companyStore: CompanyStore;
+  private readonly listCompanySessions: ChromeServiceDeps['listCompanySessions'];
   private readonly envStore: CompanySessionEnvStore;
   private readonly httpApiPort: number | undefined;
   private readonly qaRunStore: IQaTestRunStore | undefined;
@@ -99,7 +102,7 @@ export class ChromeService {
 
   constructor(deps: ChromeServiceDeps) {
     this.store = deps.store;
-    this.companyStore = deps.companyStore;
+    this.listCompanySessions = deps.listCompanySessions;
     this.envStore = deps.envStore;
     this.httpApiPort = deps.httpApiPort;
     this.qaRunStore = deps.qaRunStore;
@@ -314,7 +317,7 @@ export class ChromeService {
       // B7 — the service just transitioned to `error`; any run that was
       // mid-flight lost its browser. Fail them fast (typed) instead of
       // waiting 10 min for the watchdog.
-      this.failRunningQaRuns(`Chrome Service errored: ${msg}`);
+      await this.failRunningQaRuns(`Chrome Service errored: ${msg}`);
       console.warn(`[chrome-service] enable failed: ${msg}`);
       throw e;
     }
@@ -347,7 +350,7 @@ export class ChromeService {
 
     // B7 — the shared browser is gone; complete every in-flight run with
     // a typed error so the Tests tab shows an actionable state at once.
-    this.failRunningQaRuns('Chrome Service was stopped by the operator.');
+    await this.failRunningQaRuns('Chrome Service was stopped by the operator.');
   }
 
   /**
@@ -357,14 +360,14 @@ export class ChromeService {
    * warning and never blocks the lifecycle transition. No-op when the
    * host didn't wire `qaRunStore` (tests, workers).
    */
-  private failRunningQaRuns(reason: string): void {
+  private async failRunningQaRuns(reason: string): Promise<void> {
     const store = this.qaRunStore;
     if (!store) return;
     try {
-      const running = store.listRunningRuns();
+      const running = await store.listRunningRuns();
       for (const run of running) {
         try {
-          store.completeRun(run.id, {
+          await store.completeRun(run.id, {
             status: 'error',
             passed: run.passed,
             failed: run.failed,
@@ -501,11 +504,11 @@ export class ChromeService {
     const manager = getSandboxManager();
     for (const sessionId of sessions) {
       try {
-        this.envStore.upsert(sessionId, 'PLAYWRIGHT_WS_ENDPOINT', wsEndpoint, false, {
+        await this.envStore.upsert(sessionId, 'PLAYWRIGHT_WS_ENDPOINT', wsEndpoint, false, {
           source: 'auto',
         });
         // Sync only if a live sandbox exists; method is no-op otherwise.
-        await manager.syncEnvsToAllContainers(String(sessionId));
+        await manager.syncEnvsToAllContainers(sessionId);
       } catch (e) {
         console.warn(
           `[chrome-service] backfill ${sessionId} failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -524,7 +527,7 @@ export class ChromeService {
     for (const sessionId of sessions) {
       try {
         this.envStore.delete(sessionId, 'PLAYWRIGHT_WS_ENDPOINT');
-        await manager.syncEnvsToAllContainers(String(sessionId));
+        await manager.syncEnvsToAllContainers(sessionId);
       } catch {
         /* swallow per-session — disable should always proceed */
       }
@@ -532,19 +535,19 @@ export class ChromeService {
   }
 
   /**
-   * Pure-ish: return the numeric ids of company sessions that are
+   * Pure-ish: return the UUIDs of filesystem Company sessions that are
    * "active" (status not in completed/error) AND have at least one
    * role with the `qa-playwright` skill in their config.
    *
-   * Reads via `companyStore.listCompanySessions()` + the pure
+   * Reads via the injected filesystem-session projection + the pure
    * `hasQaPlaywrightSkill(config_json)` helper.
    */
-  private collectEligibleSessions(): number[] {
-    const all = this.companyStore.listCompanySessions();
-    const out: number[] = [];
+  private collectEligibleSessions(): string[] {
+    const all = this.listCompanySessions();
+    const out: string[] = [];
     for (const s of all) {
       if (s.status === 'completed' || s.status === 'error') continue;
-      if (hasQaPlaywrightSkill(s.config_json ?? '')) out.push(s.id);
+      if (hasQaPlaywrightSkill(s.configJson)) out.push(s.id);
     }
     return out;
   }

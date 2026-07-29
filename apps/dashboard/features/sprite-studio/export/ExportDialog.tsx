@@ -24,7 +24,7 @@ export function ExportDialog({
   projectId: number;
   assets: SpriteAsset[];
   activeAsset: SpriteAsset | null;
-  activeAnimation?: { id: number; name: string } | null;
+  activeAnimation?: { id: string; name: string } | null;
 }) {
   const { t } = useTranslation('spriteStudio');
   const [scope, setScope] = useState<Scope>(activeAnimation ? 'animation' : activeAsset ? 'asset' : 'approved');

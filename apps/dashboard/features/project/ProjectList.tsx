@@ -300,7 +300,7 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             size="sm"
             onClick={() => setLayout((m) => (m === 'cards' ? 'compact' : 'cards'))}
             title={layout === 'cards' ? t('projects:compactView', { defaultValue: 'Compact list' }) : t('projects:cardsView', { defaultValue: 'Card grid' })}
-            aria-label={layout === 'cards' ? 'Switch to compact list' : 'Switch to card grid'}
+            aria-label={layout === 'cards' ? t('projects:switchToCompactView') : t('projects:switchToCardsView')}
           >
             {layout === 'cards' ? (
               <LayoutList className="h-4 w-4" />

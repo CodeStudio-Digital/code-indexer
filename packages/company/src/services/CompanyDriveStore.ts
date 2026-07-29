@@ -1,63 +1,54 @@
 /**
- * CompanyDriveStore — shared file drive between agents of a company.
+ * Bundle-local shared drive for one root Company session.
  *
- * Use case: subordinate A wants to deliver a multi-page spec / data dump
- * to the master or to a peer without inflating the inbox/board with the
- * full payload. Instead of copy-pasting the content into a message, the
- * agent calls `write_shared_file({ path: 'specs/auth.md', content: ... })`
- * and references the path in a small message.
- *
- * Scope:
- *   - When a session has a `template_id`, the drive is `tpl:<template_id>`
- *     so the same drive is visible to every session of that company.
- *   - When the session is template-less, the drive is `ses:<session_id>`
- *     (isolated per session).
- *
- * Storage split: metadata in `company_drive_files`; bytes on the host
- * filesystem at `<dataDir>/company-drives/<scopeKey>/<storage_filename>`.
- * `storage_filename` is a UUID, so renaming a logical `path` is a metadata-
- * only operation.
+ * Metadata is one JSON entity per logical file under `company/drive/`.
+ * Payloads are independent files under `company/drive-payloads/`. A payload is
+ * durably committed before its metadata entity, so a crash can leave an
+ * unreferenced payload but never a confirmed reference to missing bytes.
  */
 
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, appendFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
 
-import { ensureDataDir } from '@mcp/shared/utils/config.js';
-import type { CodeIndexDB } from '@mcp/store/db.js';
-import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
+import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import type { IMetaBusPublisher } from '@mcp/company/services/ports.js';
 import { assertRelativePath, DRIVE_WRITE_CAP_BYTES } from '@mcp/company/tools/file-path-core.js';
-
-type DB = ReturnType<SessionContext['db']['raw']>;
+import {
+  CompanySessionFileCollection,
+  type CompanyOperationalSessionStore,
+} from '@mcp/store/company-session-file-collection.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
+import { asSessionId, type CompanySessionId } from '@mcp/session-storage';
 
 export interface CompanyDriveStoreDeps {
-  db: CodeIndexDB;
-  companyStore: CompanyStore;
-  companySessionId: number;
-  /** Override on-disk root (defaults to <dataDir>/company-drives). */
-  rootDir?: string;
-  /**
-   * Optional SSE publisher. When provided, every successful mutation
-   * (write / append / delete) emits `drive.file_added`,
-   * `drive.file_updated`, or `drive.file_deleted` so the dashboard can
-   * keep its view up-to-date without polling.
-   *
-   * Routes that instantiate the drive without an active orchestrator
-   * (session is dormant, no SSE consumers) omit the publisher.
-   */
+  sessionStore: FsSessionStore;
+  companySessionId: CompanySessionId | string;
   publisher?: IMetaBusPublisher;
 }
 
 export interface DriveFileMeta {
-  id: number;
+  id: string;
+  seq: number;
   scopeKey: string;
   path: string;
   sizeBytes: number;
   mime: string;
   ownerRole: string | null;
-  ownerAgentRunId: number | null;
+  ownerAgentRunId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -70,7 +61,7 @@ export interface DriveFileWithContent {
 
 export interface DriveOwnerRef {
   role?: string | null;
-  agentRunId?: number | null;
+  agentRunId?: string | null;
 }
 
 export interface DriveListFilters {
@@ -79,265 +70,384 @@ export interface DriveListFilters {
 }
 
 export interface DriveReadOpts {
-  /** Byte offset into the file. Default 0. */
   offset?: number;
-  /** Max bytes to return. Default 256KB; capped at 4MB. */
   maxBytes?: number;
 }
 
-const MAX_WRITE_BYTES = DRIVE_WRITE_CAP_BYTES; // 4 MB hard cap
-const DEFAULT_READ_BYTES = 256 * 1024; // 256 KB
-const MAX_READ_BYTES = 4 * 1024 * 1024;
-
-interface DriveRow {
-  id: number;
-  scope_key: string;
+interface DriveFileData {
+  [key: string]: unknown;
+  record_type: 'drive-file';
   path: string;
-  storage_filename: string;
+  payload_file: string;
   size_bytes: number;
   mime: string;
   owner_role: string | null;
-  owner_agent_run_id: number | null;
-  created_at: string;
-  updated_at: string;
+  owner_agent_run_id: string | null;
 }
 
-function rowToMeta(row: DriveRow): DriveFileMeta {
-  return {
-    id: row.id,
-    scopeKey: row.scope_key,
-    path: row.path,
-    sizeBytes: row.size_bytes,
-    mime: row.mime,
-    ownerRole: row.owner_role,
-    ownerAgentRunId: row.owner_agent_run_id,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+const MAX_WRITE_BYTES = DRIVE_WRITE_CAP_BYTES;
+const DEFAULT_READ_BYTES = 256 * 1024;
+const MAX_READ_BYTES = 4 * 1024 * 1024;
+
+function validatePath(path: string): void {
+  assertRelativePath(path, { traversal: 'segment' });
 }
 
-/**
- * Shared rules live in `tools/file-path-core.ts`. Drive semantics:
- * segment-level `..` rejection (names like "..foo" stay legal — folder
- * uploads contain weird names) + the default 512-char length cap.
- */
-function validatePath(p: string): void {
-  assertRelativePath(p, { traversal: 'segment' });
+function ensureDirectoryNoLinks(path: string): void {
+  if (!existsSync(path)) mkdirSync(path, { recursive: false, mode: 0o700 });
+  const info = lstatSync(path);
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new Error(`Unsafe Company drive directory: ${path}`);
+  }
+}
+
+function fsyncDirectoryBestEffort(path: string): void {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, 'r');
+    fsyncSync(descriptor);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (
+      code !== 'EISDIR' &&
+      code !== 'EINVAL' &&
+      code !== 'ENOTSUP' &&
+      code !== 'EPERM' &&
+      code !== 'EACCES'
+    ) {
+      throw error;
+    }
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function atomicWrite(path: string, content: Buffer): void {
+  const temporary = join(
+    dirname(path),
+    `.${randomUUID()}.${process.pid}.tmp`,
+  );
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(temporary, 'wx', 0o600);
+    writeFileSync(descriptor, content);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporary, path);
+    fsyncDirectoryBestEffort(dirname(path));
+  } catch (error) {
+    if (descriptor !== undefined) closeSync(descriptor);
+    try {
+      unlinkSync(temporary);
+    } catch {
+      // Best effort: a recovery sweep may collect an unreferenced temp file.
+    }
+    throw error;
+  }
 }
 
 export class CompanyDriveStore {
-  private readonly db: DB;
-  private readonly companyStore: CompanyStore;
-  private readonly companySessionId: number;
-  private readonly rootDir: string;
+  private readonly companySessionId: CompanySessionId;
+  private readonly rootSessionId: CompanySessionId;
+  private readonly files: CompanySessionFileCollection<DriveFileData>;
+  private readonly bundlePath: string;
   private readonly publisher: IMetaBusPublisher | null;
 
   constructor(deps: CompanyDriveStoreDeps) {
-    this.db = deps.db.raw();
-    this.companyStore = deps.companyStore;
-    this.companySessionId = deps.companySessionId;
-    this.rootDir = deps.rootDir ?? join(ensureDataDir(), 'company-drives');
-    this.publisher = deps.publisher ?? null;
-    if (!existsSync(this.rootDir)) {
-      mkdirSync(this.rootDir, { recursive: true });
+    const requestedFiles = new CompanySessionFiles({
+      companySessionId: deps.companySessionId,
+      sessionStore: deps.sessionStore,
+    });
+    const requested = requestedFiles.getSession();
+    this.companySessionId = requested.id;
+    this.rootSessionId = requested.parent_session_id ?? requested.id;
+    const rootEntry = deps.sessionStore.catalog.get(
+      asSessionId(this.rootSessionId),
+    );
+    if (!rootEntry) {
+      throw new Error(`Unknown root Company session ${this.rootSessionId}`);
     }
+    this.bundlePath = resolve(rootEntry.location.bundle_path);
+    this.files = new CompanySessionFileCollection(
+      deps.sessionStore as CompanyOperationalSessionStore,
+      'drive',
+      'company.drive-file',
+    );
+    this.publisher = deps.publisher ?? null;
+    this.payloadDirectory();
   }
 
-  /** Build a drive store from a `SessionContext` (used by the orchestrator). */
   static fromSessionContext(
     ctx: SessionContext,
-    opts: { rootDir?: string; publisher?: IMetaBusPublisher } = {},
+    opts: { publisher?: IMetaBusPublisher } = {},
   ): CompanyDriveStore {
     return new CompanyDriveStore({
-      db: ctx.db,
-      companyStore: ctx.companyStore,
+      sessionStore: ctx.companyFiles.sessionStore,
       companySessionId: ctx.companySessionId,
-      rootDir: opts.rootDir,
       publisher: opts.publisher,
     });
   }
 
-  private emit(event: 'drive.file_added' | 'drive.file_updated' | 'drive.file_deleted', data: unknown): void {
+  resolveScopeKey(): string {
+    return `session:${this.rootSessionId}`;
+  }
+
+  private assertScope(scopeKey: string): void {
+    if (scopeKey !== this.resolveScopeKey()) {
+      throw new Error(
+        `Drive scope ${scopeKey} does not belong to Company session ${this.companySessionId}`,
+      );
+    }
+  }
+
+  private payloadDirectory(): string {
+    ensureDirectoryNoLinks(this.bundlePath);
+    const company = join(this.bundlePath, 'company');
+    const payloads = join(company, 'drive-payloads');
+    ensureDirectoryNoLinks(company);
+    ensureDirectoryNoLinks(payloads);
+    if (
+      resolve(payloads) !== payloads ||
+      payloads.slice(this.bundlePath.length + 1).startsWith(`..${sep}`)
+    ) {
+      throw new Error(`Company drive payload directory escaped bundle: ${payloads}`);
+    }
+    return payloads;
+  }
+
+  private payloadPath(payloadFile: string): string {
+    if (!/^[0-9a-f-]{36}$/i.test(payloadFile)) {
+      throw new Error(`Invalid Company drive payload id: ${payloadFile}`);
+    }
+    return join(this.payloadDirectory(), payloadFile.toLowerCase());
+  }
+
+  private emit(
+    event: 'drive.file_added' | 'drive.file_updated' | 'drive.file_deleted',
+    data: unknown,
+  ): void {
     if (!this.publisher) return;
     try {
       this.publisher.publish(event, data);
-    } catch (e) {
-      // Publishing failures must never break a successful mutation —
-      // the row is already committed by the time we get here.
-      console.error('[CompanyDriveStore] publish failed:', e);
+    } catch (error) {
+      console.error('[CompanyDriveStore] publish failed:', error);
     }
   }
 
-  /**
-   * Resolve the scope key for this session.
-   *   - `tpl:<id>` when the session has a template (shared across every
-   *     session — including all sub-sessions / fronts — of that company
-   *     template).
-   *   - `ses:<rootId>` otherwise. For sub-sessions (migration 067), we
-   *     walk up `parent_session_id` so the parent's drive is shared by
-   *     all its tabs. Without this, every front would get its own
-   *     empty drive and the master couldn't pass documents between
-   *     parallel work streams of the same project.
-   */
-  resolveScopeKey(): string {
-    const session = this.companyStore.getCompanySession(this.companySessionId);
-    if (session && session.template_id != null) {
-      return `tpl:${session.template_id}`;
-    }
-    const rootId = session?.parent_session_id ?? this.companySessionId;
-    return `ses:${rootId}`;
+  private record(path: string) {
+    return (
+      this.files
+        .list(this.rootSessionId)
+        .find(
+          (record) =>
+            record.data.record_type === 'drive-file' &&
+            record.data.path === path,
+        ) ?? null
+    );
   }
 
-  private scopeDir(scopeKey: string): string {
-    const safe = scopeKey.replace(':', '_');
-    const dir = join(this.rootDir, safe);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    return dir;
-  }
-
-  private getRow(scopeKey: string, path: string): DriveRow | null {
-    const row = this.db
-      .prepare('SELECT * FROM company_drive_files WHERE scope_key = ? AND path = ?')
-      .get(scopeKey, path) as DriveRow | undefined;
-    return row ?? null;
-  }
-
-  write(scopeKey: string, path: string, content: string, owner: DriveOwnerRef = {}): DriveFileMeta {
-    validatePath(path);
-    const buf = Buffer.from(content, 'utf8');
-    if (buf.byteLength > MAX_WRITE_BYTES) {
-      throw new Error(`content exceeds ${MAX_WRITE_BYTES} bytes (got ${buf.byteLength})`);
-    }
-    const dir = this.scopeDir(scopeKey);
-    const existing = this.getRow(scopeKey, path);
-    const storageFilename = existing?.storage_filename ?? randomUUID();
-    const fullPath = join(dir, storageFilename);
-    writeFileSync(fullPath, buf);
-
-    if (existing) {
-      this.db
-        .prepare(
-          `UPDATE company_drive_files
-             SET size_bytes = ?, owner_role = ?, owner_agent_run_id = ?,
-                 updated_at = datetime('now')
-           WHERE id = ?`,
-        )
-        .run(buf.byteLength, owner.role ?? null, owner.agentRunId ?? null, existing.id);
-      const meta = rowToMeta(this.getRow(scopeKey, path)!);
-      this.emit('drive.file_updated', { meta });
-      return meta;
-    }
-
-    const info = this.db
-      .prepare(
-        `INSERT INTO company_drive_files
-           (scope_key, path, storage_filename, size_bytes, mime, owner_role, owner_agent_run_id)
-         VALUES (?, ?, ?, ?, 'text/plain', ?, ?)`,
-      )
-      .run(scopeKey, path, storageFilename, buf.byteLength, owner.role ?? null, owner.agentRunId ?? null);
-    const id = Number(info.lastInsertRowid);
-    const row = this.db.prepare('SELECT * FROM company_drive_files WHERE id = ?').get(id) as DriveRow;
-    const meta = rowToMeta(row);
-    this.emit('drive.file_added', { meta });
-    return meta;
-  }
-
-  append(scopeKey: string, path: string, content: string, owner: DriveOwnerRef = {}): DriveFileMeta {
-    validatePath(path);
-    const buf = Buffer.from(content, 'utf8');
-    const dir = this.scopeDir(scopeKey);
-    const existing = this.getRow(scopeKey, path);
-
-    if (!existing) {
-      // Append to a missing file is equivalent to write.
-      return this.write(scopeKey, path, content, owner);
-    }
-
-    const newSize = existing.size_bytes + buf.byteLength;
-    if (newSize > MAX_WRITE_BYTES) {
-      throw new Error(`append would exceed ${MAX_WRITE_BYTES} bytes (got ${newSize})`);
-    }
-    const fullPath = join(dir, existing.storage_filename);
-    appendFileSync(fullPath, buf);
-    this.db
-      .prepare(
-        `UPDATE company_drive_files
-           SET size_bytes = ?, owner_role = COALESCE(?, owner_role),
-               owner_agent_run_id = COALESCE(?, owner_agent_run_id),
-               updated_at = datetime('now')
-         WHERE id = ?`,
-      )
-      .run(newSize, owner.role ?? null, owner.agentRunId ?? null, existing.id);
-    const meta = rowToMeta(this.getRow(scopeKey, path)!);
-    this.emit('drive.file_updated', { meta });
-    return meta;
-  }
-
-  read(scopeKey: string, path: string, opts: DriveReadOpts = {}): DriveFileWithContent {
-    validatePath(path);
-    const row = this.getRow(scopeKey, path);
-    if (!row) throw new Error(`shared file not found: ${path}`);
-    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
-    const requested = opts.maxBytes ?? DEFAULT_READ_BYTES;
-    const maxBytes = Math.max(1, Math.min(MAX_READ_BYTES, Math.floor(requested)));
-
-    const fullPath = join(this.scopeDir(scopeKey), row.storage_filename);
-    const buf = readFileSync(fullPath);
-    const slice = buf.subarray(offset, offset + maxBytes);
-    const truncated = offset + slice.byteLength < buf.byteLength;
+  private meta(record: NonNullable<ReturnType<CompanyDriveStore['record']>>): DriveFileMeta {
     return {
-      meta: rowToMeta(row),
+      id: record.id,
+      seq: record.seq,
+      scopeKey: this.resolveScopeKey(),
+      path: record.data.path,
+      sizeBytes: record.data.size_bytes,
+      mime: record.data.mime,
+      ownerRole: record.data.owner_role,
+      ownerAgentRunId: record.data.owner_agent_run_id,
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+    };
+  }
+
+  write(
+    scopeKey: string,
+    path: string,
+    content: string,
+    owner: DriveOwnerRef = {},
+  ): DriveFileMeta {
+    this.assertScope(scopeKey);
+    validatePath(path);
+    const payload = Buffer.from(content, 'utf8');
+    if (payload.byteLength > MAX_WRITE_BYTES) {
+      throw new Error(
+        `content exceeds ${MAX_WRITE_BYTES} bytes (got ${payload.byteLength})`,
+      );
+    }
+    let created = false;
+    const record = this.files.upsertFirst(
+      this.rootSessionId,
+      (candidate) => candidate.data.path === path,
+      () => {
+        created = true;
+        const payloadFile = randomUUID();
+        atomicWrite(this.payloadPath(payloadFile), payload);
+        return {
+          data: {
+            record_type: 'drive-file',
+            path,
+            payload_file: payloadFile,
+            size_bytes: payload.byteLength,
+            mime: 'text/plain',
+            owner_role: owner.role ?? null,
+            owner_agent_run_id: owner.agentRunId ?? null,
+          },
+        };
+      },
+      (previous) => {
+        atomicWrite(this.payloadPath(previous.data.payload_file), payload);
+        return {
+          ...previous.data,
+          size_bytes: payload.byteLength,
+          owner_role: owner.role ?? null,
+          owner_agent_run_id: owner.agentRunId ?? null,
+        };
+      },
+    );
+    const meta = this.meta(record);
+    this.emit(created ? 'drive.file_added' : 'drive.file_updated', { meta });
+    return meta;
+  }
+
+  append(
+    scopeKey: string,
+    path: string,
+    content: string,
+    owner: DriveOwnerRef = {},
+  ): DriveFileMeta {
+    this.assertScope(scopeKey);
+    validatePath(path);
+    const suffix = Buffer.from(content, 'utf8');
+    let created = false;
+    const record = this.files.upsertFirst(
+      this.rootSessionId,
+      (candidate) => candidate.data.path === path,
+      () => {
+        created = true;
+        if (suffix.byteLength > MAX_WRITE_BYTES) {
+          throw new Error(
+            `content exceeds ${MAX_WRITE_BYTES} bytes (got ${suffix.byteLength})`,
+          );
+        }
+        const payloadFile = randomUUID();
+        atomicWrite(this.payloadPath(payloadFile), suffix);
+        return {
+          data: {
+            record_type: 'drive-file',
+            path,
+            payload_file: payloadFile,
+            size_bytes: suffix.byteLength,
+            mime: 'text/plain',
+            owner_role: owner.role ?? null,
+            owner_agent_run_id: owner.agentRunId ?? null,
+          },
+        };
+      },
+      (previous) => {
+        const payloadPath = this.payloadPath(previous.data.payload_file);
+        const current = readFileSync(payloadPath);
+        const size = current.byteLength + suffix.byteLength;
+        if (size > MAX_WRITE_BYTES) {
+          throw new Error(
+            `append would exceed ${MAX_WRITE_BYTES} bytes (got ${size})`,
+          );
+        }
+        atomicWrite(payloadPath, Buffer.concat([current, suffix]));
+        return {
+          ...previous.data,
+          size_bytes: size,
+          owner_role: owner.role ?? previous.data.owner_role,
+          owner_agent_run_id:
+            owner.agentRunId ?? previous.data.owner_agent_run_id,
+        };
+      },
+    );
+    const meta = this.meta(record);
+    this.emit(created ? 'drive.file_added' : 'drive.file_updated', { meta });
+    return meta;
+  }
+
+  read(
+    scopeKey: string,
+    path: string,
+    opts: DriveReadOpts = {},
+  ): DriveFileWithContent {
+    this.assertScope(scopeKey);
+    validatePath(path);
+    const record = this.record(path);
+    if (!record) throw new Error(`shared file not found: ${path}`);
+    const offset = Math.max(0, Math.floor(opts.offset ?? 0));
+    const maxBytes = Math.max(
+      1,
+      Math.min(
+        MAX_READ_BYTES,
+        Math.floor(opts.maxBytes ?? DEFAULT_READ_BYTES),
+      ),
+    );
+    const payload = readFileSync(this.payloadPath(record.data.payload_file));
+    const slice = payload.subarray(offset, offset + maxBytes);
+    return {
+      meta: this.meta(record),
       content: slice.toString('utf8'),
-      truncated,
+      truncated: offset + slice.byteLength < payload.byteLength,
     };
   }
 
   list(scopeKey: string, filters: DriveListFilters = {}): DriveFileMeta[] {
-    const where: string[] = ['scope_key = ?'];
-    const params: unknown[] = [scopeKey];
-    if (filters.prefix) {
-      where.push('path LIKE ?');
-      params.push(`${filters.prefix}%`);
-    }
-    if (filters.ownerRole) {
-      where.push('owner_role = ?');
-      params.push(filters.ownerRole);
-    }
-    const rows = this.db
-      .prepare(`SELECT * FROM company_drive_files WHERE ${where.join(' AND ')} ORDER BY path ASC`)
-      .all(...params) as DriveRow[];
-    return rows.map(rowToMeta);
+    this.assertScope(scopeKey);
+    return this.files
+      .list(this.rootSessionId)
+      .filter(
+        (record) =>
+          record.data.record_type === 'drive-file' &&
+          (!filters.prefix || record.data.path.startsWith(filters.prefix)) &&
+          (!filters.ownerRole ||
+            record.data.owner_role === filters.ownerRole),
+      )
+      .map((record) => this.meta(record))
+      .sort((left, right) => left.path.localeCompare(right.path));
   }
 
   delete(scopeKey: string, path: string): boolean {
+    this.assertScope(scopeKey);
     validatePath(path);
-    const row = this.getRow(scopeKey, path);
-    if (!row) return false;
-    const fullPath = join(this.scopeDir(scopeKey), row.storage_filename);
-    try {
-      if (existsSync(fullPath)) unlinkSync(fullPath);
-    } catch {
-      // best-effort: still drop the metadata so the row doesn't dangle
+    const record = this.record(path);
+    if (!record) return false;
+    const trashed = this.files.moveToTrash(this.rootSessionId, record.id);
+    if (!trashed) return false;
+
+    const payload = this.payloadPath(record.data.payload_file);
+    if (existsSync(payload)) {
+      const companyTrash = join(this.bundlePath, 'company', 'trash');
+      const payloadTrash = join(companyTrash, 'drive-payloads');
+      ensureDirectoryNoLinks(companyTrash);
+      ensureDirectoryNoLinks(payloadTrash);
+      renameSync(payload, join(payloadTrash, record.data.payload_file));
+      fsyncDirectoryBestEffort(dirname(payload));
+      fsyncDirectoryBestEffort(payloadTrash);
     }
-    const info = this.db
-      .prepare('DELETE FROM company_drive_files WHERE id = ?')
-      .run(row.id);
-    if (info.changes > 0) {
-      this.emit('drive.file_deleted', { scopeKey, path, id: row.id });
-      return true;
-    }
-    return false;
+    this.emit('drive.file_deleted', {
+      scopeKey,
+      path,
+      id: record.id,
+      seq: record.seq,
+    });
+    return true;
   }
 
-  /** Sync metadata `size_bytes` with the on-disk file. Useful for tests. */
   reconcileSize(scopeKey: string, path: string): DriveFileMeta {
-    const row = this.getRow(scopeKey, path);
-    if (!row) throw new Error(`shared file not found: ${path}`);
-    const fullPath = join(this.scopeDir(scopeKey), row.storage_filename);
-    const stats = statSync(fullPath);
-    this.db
-      .prepare('UPDATE company_drive_files SET size_bytes = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .run(stats.size, row.id);
-    return rowToMeta(this.getRow(scopeKey, path)!);
+    this.assertScope(scopeKey);
+    validatePath(path);
+    const record = this.record(path);
+    if (!record) throw new Error(`shared file not found: ${path}`);
+    const size = statSync(this.payloadPath(record.data.payload_file)).size;
+    const updated = this.files.update(
+      this.rootSessionId,
+      record.id,
+      (previous) => ({ ...previous.data, size_bytes: size }),
+    );
+    return this.meta(updated);
   }
 }

@@ -10,6 +10,7 @@ import { openStream, type OpenStreamDeps } from '../openStream.js';
 import { __resetWorkerLogForTests, peekWorkerLog } from '../worker-log-store.js';
 
 const enc = new TextEncoder();
+const SESSION_ID = '11111111-1111-4111-8111-111111111111';
 
 function sseResponse(frames: string[]): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -51,7 +52,11 @@ async function flushMicrotasks(turns = 25): Promise<void> {
   for (let i = 0; i < turns; i++) await Promise.resolve();
 }
 
-const attachOpts = { url: '/api/coder/sessions/1/attach', method: 'GET', reattach: true } as const;
+const attachOpts = {
+  url: `/api/coder/sessions/${SESSION_ID}/attach`,
+  method: 'GET',
+  reattach: true,
+} as const;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -80,21 +85,21 @@ describe('openStream chunked replay pump', () => {
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
 
     const d = deps();
-    const p = openStream(1, attachOpts, d);
+    const p = openStream(SESSION_ID, attachOpts, d);
     await flushMicrotasks();
     // The whole burst is only ENQUEUED on the arrival tick — the cursor
     // advances per event at processing time, so an untouched map proves no
     // synchronous processing happened inside the SSE read loop.
-    expect(d.lastSeenSeqMap.get(1)).toBeUndefined();
+    expect(d.lastSeenSeqMap.get(SESSION_ID)).toBeUndefined();
 
     await vi.runAllTimersAsync();
     await p;
 
     // Strict arrival order, nothing lost, terminal event included.
     const expected = [...Array.from({ length: N }, (_, i) => `e${i}`), 'done'];
-    expect(peekWorkerLog(1).map((e) => e.message)).toEqual(expected);
+    expect(peekWorkerLog(SESSION_ID).map((e) => e.message)).toEqual(expected);
     // Cursor caught up to the terminal frame once the drain finished.
-    expect(d.lastSeenSeqMap.get(1)).toBe(N);
+    expect(d.lastSeenSeqMap.get(SESSION_ID)).toBe(N);
     // The burst really was chunked: multiple 0ms yields, not one giant batch
     // (122 events / EVENT_BATCH_SIZE=50 → at least 2 yields between batches).
     const zeroDelayYields = setTimeoutSpy.mock.calls.filter((c) => c[1] === 0).length;
@@ -111,7 +116,7 @@ describe('openStream chunked replay pump', () => {
       doneFrame(3),
     ];
     vi.stubGlobal('fetch', vi.fn(async () => sseResponse(run1)));
-    const p1 = openStream(1, attachOpts, deps());
+    const p1 = openStream(SESSION_ID, attachOpts, deps());
     await vi.runAllTimersAsync();
     await p1;
 
@@ -128,11 +133,11 @@ describe('openStream chunked replay pump', () => {
       doneFrame(5),
     ];
     vi.stubGlobal('fetch', vi.fn(async () => sseResponse(run2)));
-    const p2 = openStream(1, attachOpts, deps());
+    const p2 = openStream(SESSION_ID, attachOpts, deps());
     await vi.runAllTimersAsync();
     await p2;
 
-    expect(peekWorkerLog(1).map((e) => e.message)).toEqual([
+    expect(peekWorkerLog(SESSION_ID).map((e) => e.message)).toEqual([
       'r1-0', 'r1-1', 'r1-2', 'done', 'r2-new', 'done',
     ]);
   });
@@ -143,7 +148,7 @@ describe('openStream chunked replay pump', () => {
       doneFrame(7),
     ])));
     const d = deps();
-    const p = openStream(1, {
+    const p = openStream(SESSION_ID, {
       ...attachOpts,
       lastEventId: 5,
       lastEventBusId: 'bus-a',
@@ -183,13 +188,13 @@ describe('openStream chunked replay pump', () => {
       new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })));
 
     const d = deps();
-    const p = openStream(1, attachOpts, d);
+    const p = openStream(SESSION_ID, attachOpts, d);
     await flushMicrotasks(); // burst enqueued; drain still parked on its first yield
-    d.abortMap.get(1)!.abort(); // unmount / superseding openStream
+    d.abortMap.get(SESSION_ID)!.abort(); // unmount / superseding openStream
     await vi.runAllTimersAsync();
 
     // Queue dropped wholesale: nothing processed, logged or cursor-advanced.
-    expect(peekWorkerLog(1)).toHaveLength(0);
+    expect(peekWorkerLog(SESSION_ID)).toHaveLength(0);
     expect(d.lastSeenSeqMap.size).toBe(0);
 
     ctl!.close(); // let the transport read loop end so openStream settles

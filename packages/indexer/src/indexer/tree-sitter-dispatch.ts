@@ -13,9 +13,21 @@
 import { TreeSitterExtractor, type TreeSitterResult } from '@mcp/indexer/indexer/tree-sitter/index.js';
 import { getIndexJobPool, isIndexWorkersEnabled } from '@mcp/indexer/workers/indexJob/client.js';
 
+const DEFAULT_POOL_MIN_BYTES = 16 * 1024;
+
 export interface TreeSitterDispatch {
   extract(filePath: string, content: string): Promise<TreeSitterResult>;
   dispose(): void;
+}
+
+/** Small files parse faster locally than they can be cloned into a worker. */
+export function resolveTreeSitterPoolMinBytes(): number {
+  const raw = process.env.MCP_INDEX_POOL_MIN_BYTES;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_POOL_MIN_BYTES;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? Math.trunc(parsed)
+    : DEFAULT_POOL_MIN_BYTES;
 }
 
 /** Sticky per-process fallback — worker spawning is broken for the whole process, not per run. */
@@ -49,16 +61,28 @@ export function buildTreeSitterDispatch(): TreeSitterDispatch {
     return new TreeSitterExtractor();
   }
 
-  // Lazy in-process spare: created only if the pool breaks mid-run, then
-  // reused for the rest of this dispatch object's lifetime.
-  let spare: TreeSitterExtractor | null = null;
+  const poolMinBytes = resolveTreeSitterPoolMinBytes();
+  // One lazy local extractor serves cheap sub-threshold parses and retries
+  // after a pool crash. The surrounding indexer worker already isolates this
+  // synchronous work from Electron main.
+  let local: TreeSitterExtractor | null = null;
+  const extractLocal = (filePath: string, content: string): Promise<TreeSitterResult> => {
+    local ??= new TreeSitterExtractor();
+    return local.extract(filePath, content);
+  };
 
   return {
     async extract(filePath, content) {
+      if (Buffer.byteLength(content, 'utf8') < poolMinBytes) {
+        return extractLocal(filePath, content);
+      }
       if (!poolBroken) {
         try {
           return await getIndexJobPool().extract(filePath, content);
         } catch (err) {
+          // Diagnostic/test mode: prove the nested pool itself works instead
+          // of allowing the normal resilience fallback to mask a boot defect.
+          if (process.env.MCP_INDEX_POOL_STRICT === '1') throw err;
           if (isStickyEnvironmentError(err)) {
             poolBroken = true;
             console.error(
@@ -70,14 +94,13 @@ export function buildTreeSitterDispatch(): TreeSitterDispatch {
           // fall through: retry this file in-process
         }
       }
-      if (!spare) spare = new TreeSitterExtractor();
-      return spare.extract(filePath, content);
+      return extractLocal(filePath, content);
     },
     dispose() {
       // The pool persists across runs (process-level lifecycle); only the
-      // in-process spare belongs to this run.
-      spare?.dispose();
-      spare = null;
+      // in-process extractor belongs to this run.
+      local?.dispose();
+      local = null;
     },
   };
 }

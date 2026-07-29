@@ -19,7 +19,7 @@ interface SkillsResponse {
  * client-side search filter — the catalog is small enough that we filter
  * locally rather than re-hitting the server on every keystroke.
  */
-export function useProjectSkills(sessionId: number | null) {
+export function useProjectSkills(sessionId: string | null) {
   const [skills, setSkills] = useState<SessionSkill[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);

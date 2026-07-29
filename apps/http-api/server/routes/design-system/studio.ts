@@ -9,13 +9,13 @@
  * (pumpScaffoldSSE garante o flush do `done` antes de fechar); o `done`
  * carrega `{ project, ds_session, coder_session_id }`.
  */
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { runDsStudioScaffoldStream, type DsStudioCreateInput } from '@mcp/api-handlers';
-import { designSystemUploadsDir } from '@mcp/shared/utils/data-paths.js';
 import type { ServerDeps } from '../../deps.js';
 import { pumpScaffoldSSE } from '../scaffold-sse-pump.js';
 
@@ -39,6 +39,7 @@ export function mountDesignSystemStudioRoutes(app: Hono, deps: ServerDeps): void
     // inteiro no formData; falha de disco vira 500 simples, não um stream).
     let importZipPath: string | null = null;
     let importZipHash: string | null = null;
+    let uploadTempDir: string | null = null;
     const file = form.get('zip');
     if (file instanceof File && file.size > 0) {
       if (file.size > ZIP_MAX_BYTES) {
@@ -50,10 +51,9 @@ export function mountDesignSystemStudioRoutes(app: Hono, deps: ServerDeps): void
       try {
         const buf = Buffer.from(await file.arrayBuffer());
         importZipHash = createHash('sha256').update(buf).digest('hex');
-        const uploadsDir = designSystemUploadsDir();
-        mkdirSync(uploadsDir, { recursive: true });
-        importZipPath = join(uploadsDir, `${importZipHash.slice(0, 12)}-${randomUUID()}.zip`);
-        writeFileSync(importZipPath, buf);
+        uploadTempDir = mkdtempSync(join(tmpdir(), 'mcp-ds-upload-'));
+        importZipPath = join(uploadTempDir, 'source.zip');
+        writeFileSync(importZipPath, buf, { mode: 0o600 });
       } catch (e) {
         return c.json({ error: `Failed to persist zip: ${(e as Error).message}` }, 500);
       }
@@ -72,7 +72,15 @@ export function mountDesignSystemStudioRoutes(app: Hono, deps: ServerDeps): void
     const signal = c.req.raw.signal;
 
     return streamSSE(c, (stream) =>
-      pumpScaffoldSSE(stream, (emit) => runDsStudioScaffoldStream(deps, input, emit, signal)),
+      pumpScaffoldSSE(stream, async (emit) => {
+        try {
+          await runDsStudioScaffoldStream(deps, input, emit, signal);
+        } finally {
+          if (uploadTempDir) {
+            rmSync(uploadTempDir, { recursive: true, force: true });
+          }
+        }
+      }),
     );
   });
 }

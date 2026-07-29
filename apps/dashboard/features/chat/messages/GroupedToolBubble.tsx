@@ -21,7 +21,7 @@ type AssistantGroup = Extract<VisualGroup, { kind: 'assistant' }>;
 interface GroupedToolBubbleProps {
   group: AssistantGroup;
   toolResultsById: Map<string, ToolResultView>;
-  sessionId?: number;
+  sessionId?: string;
   providerId: string;
   handlers: PromptHandlers;
   tasksState: PersistedTasksState | null | undefined;

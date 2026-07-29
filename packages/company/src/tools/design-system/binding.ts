@@ -19,7 +19,7 @@ export interface DsToolBinding {
   /** Audit/publish behavioural profile. */
   profile: DsToolProfile;
   /** Resolve the DS session for this tool call (null = none bound). */
-  resolveDsSession(store: DesignSystemStore): DesignSystemSession | null;
+  resolveDsSession(store: DesignSystemStore): Promise<DesignSystemSession | null>;
   /** Short label for error messages, e.g. `project_id=12`. */
   describeBinding(): string;
 }

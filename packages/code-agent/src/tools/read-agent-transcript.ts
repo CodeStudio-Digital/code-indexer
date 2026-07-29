@@ -15,9 +15,11 @@ import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 import {
   getGroup,
   listReadableGroups,
+  type ResumeCheckpointStore,
   type ResumableAgentState,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
 import { readSpilledTranscript } from '@mcp/code-agent/tools/subagent-transcript-spill.js';
+import type { SessionId } from '@mcp/session-storage';
 
 const DEFAULT_MAX_CHARS = 15_000;
 const HARD_MAX_CHARS = 60_000;
@@ -40,7 +42,7 @@ function describeInput(input: Record<string, unknown>): string {
 
 /**
  * The renderable transcript for an agent. Resumable agents keep it in RAM;
- * COMPLETED agents have it spilled to a JSONL file (worker RAM stays bounded),
+ * COMPLETED agents have it spilled to a bundle entity (worker RAM stays bounded),
  * so fall back to that file via the retained pointer. Returns [] when neither
  * source has it — the caller then shows the final report instead.
  */
@@ -101,11 +103,14 @@ export function renderAgentTranscript(
   return `${header}\n${body}`;
 }
 
-function renderInventory(sessionId: number): string {
-  const groups = listReadableGroups(sessionId);
+async function renderInventory(
+  sessionId: SessionId,
+  store?: ResumeCheckpointStore,
+): Promise<string> {
+  const groups = await listReadableGroups(sessionId, store);
   if (groups.length === 0) {
     return 'read_agent_transcript: no retained agent transcripts in this session yet ' +
-      '(they are kept in memory for ~45min after each spawn_agent/workflow run).';
+      '(bundle transcripts are retained until the session is deleted).';
   }
   const lines = groups.map((g) => {
     const agents = g.agents
@@ -121,7 +126,7 @@ const READ_AGENT_TRANSCRIPT_DESC =
   'Read the retained step-by-step transcript of a finished subagent (spawn_agent, workflow step, or execute_tasks wave): ' +
   'every tool call with inputs, result sizes/excerpts, and its final report. ' +
   'USE: to audit HOW an agent reached its conclusion, or to debug a failed/partial agent before resume_agent.\n' +
-  'Call without arguments to list which spawn_ids/agents are readable. Transcripts live in memory ~45min. ' +
+  'Call without arguments to list which spawn_ids/agents are readable. Bundle transcripts live until session deletion. ' +
   "DON'T: paste whole transcripts onward — cite the relevant lines.";
 
 const schema: JsonSchema = {
@@ -137,7 +142,9 @@ const schema: JsonSchema = {
   additionalProperties: false,
 } as unknown as JsonSchema;
 
-export function buildReadAgentTranscriptTool(): CoderTool {
+export function buildReadAgentTranscriptTool(
+  store?: ResumeCheckpointStore,
+): CoderTool {
   return {
     name: 'read_agent_transcript',
     description: maybeTerse(READ_AGENT_TRANSCRIPT_DESC),
@@ -149,13 +156,13 @@ export function buildReadAgentTranscriptTool(): CoderTool {
       if (sessionId == null) return err('read_agent_transcript: no active session.');
 
       const spawnId = typeof args.spawn_id === 'string' ? args.spawn_id.trim() : '';
-      if (!spawnId) return ok(renderInventory(sessionId));
+      if (!spawnId) return ok(await renderInventory(sessionId, store));
 
-      const group = getGroup(sessionId, spawnId);
+      const group = await getGroup(sessionId, spawnId, store);
       if (!group) {
         return err(
-          `read_agent_transcript: spawn '${spawnId}' not found — retained state expires ~45min ` +
-          'after the run and does not survive restarts. Call without arguments to list what is readable.',
+          `read_agent_transcript: spawn '${spawnId}' not found or its retained checkpoint expired. ` +
+          'Call without arguments to list what is readable.',
         );
       }
 
@@ -210,12 +217,13 @@ function resolveRetainedAgent(
 }
 
 /** Route-facing helper: locate one retained agent (label or 1-based index). */
-export function findRetainedAgent(
-  sessionId: number,
+export async function findRetainedAgent(
+  sessionId: SessionId,
   spawnId: string,
   agentRef: string | number | undefined,
-): ResumableAgentState | undefined {
-  const group = getGroup(sessionId, spawnId);
+  store?: ResumeCheckpointStore,
+): Promise<ResumableAgentState | undefined> {
+  const group = await getGroup(sessionId, spawnId, store);
   if (!group) return undefined;
   return resolveRetainedAgent(group.agents, agentRef);
 }

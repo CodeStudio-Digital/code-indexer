@@ -18,7 +18,7 @@ interface LiveMessageListProps extends Omit<
   MessageListProps,
   'currentTurn' | 'liveReconciliation' | 'liveTurnDuplicatedInHistory'
 > {
-  sessionId: number;
+  sessionId: string;
   onClearCurrentTurn: () => void;
   onGoalToolCompleted: () => void;
 }
@@ -39,7 +39,7 @@ export function LiveMessageList({
   const reconciliation = useMemo(
     () => buildPersistedLiveReconciliation(
       sessionData?.messages ?? [],
-      sessionData?.preceding_user_message_id,
+      sessionData?.preceding_user_seq,
       (sessionData?.tool_results ?? []).map((result) => result.tool_use_id),
     ),
     [sessionData],

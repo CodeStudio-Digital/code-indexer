@@ -10,6 +10,10 @@ import {
   type HarvestInput,
   type HarvestSessionStore,
 } from '../memory-harvest.js';
+import { asSessionId, type SessionId } from '@mcp/session-storage';
+
+const sessionId = (n: number): SessionId =>
+  asSessionId(`00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`);
 
 function summaryFixture(over: Partial<CompactionSummaryV2> = {}): CompactionSummaryV2 {
   return {
@@ -30,13 +34,18 @@ function storeFixture(over: Partial<HarvestSessionStore> = {}): HarvestSessionSt
   const marks: number[] = [];
   return {
     marks,
-    getCommandTrail: () => [
+    getCommandTrail: async () => [
       { command: 'pnpm test', isError: false },
       { command: 'pnpm bad', isError: true },
     ],
-    didRunSucceed: () => true,
-    listSessionMemory: () => [],
-    setMemoryDistilledBoundary: (_sid: number, messageId: number) => { marks.push(messageId); },
+    didRunSucceed: async () => true,
+    listSessionMemory: async () => [],
+    setMemoryDistilledBoundary: async (
+      _sid: SessionId,
+      messageSeq: number,
+    ) => {
+      marks.push(messageSeq);
+    },
     ...over,
   };
 }
@@ -49,14 +58,14 @@ describe('buildHarvestInput', () => {
       succeeded: true,
       notes: [],
       trigger: 'compaction',
-      sessionId: 9,
+      sessionId: sessionId(9),
     });
     expect(input.primaryRequest).toBe('fix the auth loop');
     expect(input.filesTouched).toEqual(['src/auth.ts']);
     expect(input.errorsAndFixes).toEqual(['401 loop -> refresh mutex']);
     expect(input.toolTrail).toEqual(['pnpm test']); // error commands dropped
     expect(input.trigger).toBe('compaction');
-    expect(input.sessionId).toBe(9);
+    expect(input.sessionId).toBe(sessionId(9));
     expect(input.summary).toContain('primary_request');
   });
 
@@ -67,18 +76,18 @@ describe('buildHarvestInput', () => {
       succeeded: false,
       notes: [],
       trigger: 'idle',
-      sessionId: 1,
+      sessionId: sessionId(1),
     });
     expect(input.toolTrail).toEqual([]);
   });
 
   it('promotes only pinned or durable-kind notes, capped at 10', () => {
     const notes = [
-      { title: 'gotcha A', body: 'b', kind: 'gotcha', pinned: 0 },
-      { title: 'pinned fact', body: 'b', kind: 'fact', pinned: 1 },
-      { title: 'loose fact', body: 'b', kind: 'fact', pinned: 0 }, // dropped
+      { title: 'gotcha A', body: 'b', kind: 'gotcha', pinned: false },
+      { title: 'pinned fact', body: 'b', kind: 'fact', pinned: true },
+      { title: 'loose fact', body: 'b', kind: 'fact', pinned: false }, // dropped
       ...Array.from({ length: 12 }, (_, i) => ({
-        title: `decision ${i}`, body: 'b', kind: 'decision', pinned: 0,
+        title: `decision ${i}`, body: 'b', kind: 'decision', pinned: false,
       })),
     ];
     const input = buildHarvestInput({
@@ -87,7 +96,7 @@ describe('buildHarvestInput', () => {
       succeeded: true,
       notes,
       trigger: 'compaction',
-      sessionId: 1,
+      sessionId: sessionId(1),
     });
     expect(input.sessionNotes).toHaveLength(10);
     expect(input.sessionNotes!.some((n) => n.title === 'loose fact')).toBe(false);
@@ -101,7 +110,7 @@ describe('harvestCompactionMemory', () => {
     getMemoryEnabled: () => true,
     projectId: 1,
     projectName: 'proj',
-    sessionId: 5,
+    sessionId: sessionId(5),
     summary: summaryFixture(),
     boundaryId: 77,
     trigger: 'compaction' as const,

@@ -16,7 +16,7 @@ export interface DocsResearchTelemetry {
 }
 
 export interface DocsResearchResult {
-  sessionId: number;
+  sessionId: string;
   markdown: string;
   chunks_cited: number[];
   confidence: ResearchConfidence | null;
@@ -25,9 +25,9 @@ export interface DocsResearchResult {
 }
 
 export interface DocsResearchSessionRow {
-  id: number;
+  id: string;
   triggered_by: 'user' | 'coder';
-  parent_coder_session_id: number | null;
+  parent_coder_session_id: string | null;
   query: string;
   collections_json: string | null;
   status: ResearchStatus;
@@ -80,7 +80,7 @@ export async function runResearch(input: {
 
 export async function listResearchSessions(opts: {
   status?: ResearchStatus;
-  parentCoderSessionId?: number;
+  parentCoderSessionId?: string;
   limit?: number;
 } = {}): Promise<DocsResearchSessionRow[]> {
   const params = new URLSearchParams();
@@ -94,7 +94,7 @@ export async function listResearchSessions(opts: {
   return json.sessions;
 }
 
-export async function getResearchSession(id: number): Promise<{
+export async function getResearchSession(id: string): Promise<{
   session: DocsResearchSessionRow;
   cited_chunks: Array<{
     id: number;
@@ -107,7 +107,7 @@ export async function getResearchSession(id: number): Promise<{
   return jsonOrThrow(response);
 }
 
-export async function deleteResearchSession(id: number): Promise<void> {
+export async function deleteResearchSession(id: string): Promise<void> {
   const response = await fetch(`/api/docs-agent/sessions/${id}`, { method: 'DELETE' });
   await jsonOrThrow(response);
 }

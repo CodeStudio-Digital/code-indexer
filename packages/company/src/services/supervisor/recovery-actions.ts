@@ -39,8 +39,8 @@ export interface RecoveryContext {
    * runner gets a fresh prompt and exits the stuck wait.
    */
   subordinates?: {
-    resume(agentRunId: number, message?: string): Promise<unknown>;
-    abort(agentRunId: number, reason?: string): Promise<unknown> | unknown;
+    resume(agentRunId: string, message?: string): Promise<unknown>;
+    abort(agentRunId: string, reason?: string): Promise<unknown> | unknown;
     /**
      * Re-establish a subordinate whose runner is dead/wedged but whose DB row
      * still says running/waiting: flips the status off the live state (so the
@@ -48,7 +48,7 @@ export interface RecoveryContext {
      * `reestablishStalledSubordinate` for STUCK_TURN / STUCK_PROVIDER /
      * STUCK_BOOT. Optional — when missing the action is a no-op.
      */
-    reestablish?(agentRunId: number, reason: string): Promise<{ ok: boolean; detail: string }>;
+    reestablish?(agentRunId: string, reason: string): Promise<{ ok: boolean; detail: string }>;
   };
   /**
    * Master lifecycle handle. Used by `resurrectMasterIfOrphaned` to
@@ -72,7 +72,7 @@ export interface RecoveryContext {
    * subordinates.abort().
    */
   runners?: {
-    get(agentRunId: number): RunnerRecoveryHandle | undefined;
+    get(agentRunId: string): RunnerRecoveryHandle | undefined;
   };
 }
 

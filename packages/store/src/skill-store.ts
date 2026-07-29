@@ -1,7 +1,8 @@
 /**
- * SkillStore — persists skill definitions and session-level overrides.
+ * SkillStore — persists reusable skill definitions.
  *
- * Schema is owned by migration 016. Follows the same patterns as McpServerStore.
+ * Session selection and usage telemetry live in filesystem session bundles.
+ * This store deliberately has no session-scoped table or row API.
  */
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
@@ -71,33 +72,6 @@ export interface UpsertSkillInput {
   source_ref?: SkillSourceRef | null;
 }
 
-export type SkillUsageOutcome = 'success' | 'failed' | 'aborted';
-
-export interface SkillUsageInput {
-  session_id: number;
-  skill_id: string;
-  invoked_by: 'user' | 'model' | 'system';
-  input_text?: string;
-  duration_ms?: number;
-  /** Final disposition of the work the skill drove. NULL when unknown. */
-  outcome?: SkillUsageOutcome;
-  /** Free-form error tag (e.g. `props.foreign_vocabulary`, `vocab.leak`). */
-  error_code?: string;
-  /** Agent run that consumed the skill, if any. Lets the dashboard link
-   *  skill failures to specific runs. */
-  agent_run_id?: number;
-}
-
-export interface SkillUsageStats {
-  total_invocations: number;
-  last_used: string | null;
-  /** Fraction of invocations that ended in `outcome='success'`. NULL when
-   *  no row has a recorded outcome (legacy). */
-  success_rate: number | null;
-  /** Top non-null `error_code` values, descending. Capped at 5 entries. */
-  top_error_codes: Array<{ code: string; count: number }>;
-}
-
 export interface SkillListFilter {
   scope?: string;
   enabled?: boolean;
@@ -131,11 +105,6 @@ interface SkillRaw {
   source_ref: string | null;
   created_at: string;
   updated_at: string;
-}
-
-interface SessionConfigRaw {
-  skill_id: string;
-  enabled: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -359,139 +328,6 @@ export class SkillStore {
     this.db
       .prepare("UPDATE skill_definitions SET enabled = ?, updated_at = datetime('now') WHERE id = ?")
       .run(enabled ? 1 : 0, id);
-  }
-
-  // ─── Session config ──────────────────────────────────────────
-
-  getSessionSkillConfig(sessionId: number): Map<string, boolean> {
-    const rows = this.db
-      .prepare('SELECT skill_id, enabled FROM skill_session_config WHERE session_id = ?')
-      .all(sessionId) as SessionConfigRaw[];
-    const map = new Map<string, boolean>();
-    for (const r of rows) map.set(r.skill_id, !!r.enabled);
-    return map;
-  }
-
-  setSessionSkillEnabled(sessionId: number, skillId: string, enabled: boolean): void {
-    this.db
-      .prepare(
-        `INSERT INTO skill_session_config (session_id, skill_id, enabled)
-         VALUES (?, ?, ?)
-         ON CONFLICT (session_id, skill_id) DO UPDATE SET enabled = excluded.enabled`,
-      )
-      .run(sessionId, skillId, enabled ? 1 : 0);
-  }
-
-  bulkSetSessionSkills(sessionId: number, configs: Array<{ skillId: string; enabled: boolean }>): void {
-    const stmt = this.db.prepare(
-      `INSERT INTO skill_session_config (session_id, skill_id, enabled)
-       VALUES (?, ?, ?)
-       ON CONFLICT (session_id, skill_id) DO UPDATE SET enabled = excluded.enabled`,
-    );
-    const tx = this.db.transaction(() => {
-      for (const c of configs) stmt.run(sessionId, c.skillId, c.enabled ? 1 : 0);
-    });
-    tx();
-  }
-
-  // ─── Resolution ──────────────────────────────────────────────
-
-  /**
-   * Resolve the final list of active skills for a session.
-   * Merges global + project-scoped skills, applies session overrides.
-   */
-  resolveActiveSkills(sessionId: number, projectId: number): ResolvedSkill[] {
-    // 1. Fetch all candidate skills (global + project-scoped, enabled)
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM skill_definitions
-         WHERE enabled = 1
-           AND (scope = 'global' OR scope = ?)
-         ORDER BY sort_order, name`,
-      )
-      .all(String(projectId)) as SkillRaw[];
-
-    const candidates = rows.map(hydrate);
-
-    // 2. Apply session-level overrides
-    const overrides = this.getSessionSkillConfig(sessionId);
-    const active: ResolvedSkill[] = [];
-
-    for (const skill of candidates) {
-      const override = overrides.get(skill.id);
-      // Session override takes precedence: if explicitly disabled, skip
-      if (override === false) continue;
-      // If no override, skill is active (it passed the enabled=1 filter)
-      active.push(toResolved(skill));
-    }
-
-    // Also add skills that are globally disabled but explicitly enabled per-session
-    // (edge case: user wants a skill only for this specific session)
-    for (const [skillId, enabled] of overrides) {
-      if (!enabled) continue;
-      if (active.some((s) => s.id === skillId)) continue;
-      const skill = this.getSkill(skillId);
-      if (skill && (skill.scope === 'global' || skill.scope === String(projectId))) {
-        active.push(toResolved(skill));
-      }
-    }
-
-    return active;
-  }
-
-  // ─── Usage logging ───────────────────────────────────────────
-
-  logSkillUsage(input: SkillUsageInput): void {
-    this.db
-      .prepare(
-        `INSERT INTO skill_usage_log (session_id, skill_id, invoked_by, input_text, duration_ms, outcome, error_code, agent_run_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        input.session_id,
-        input.skill_id,
-        input.invoked_by,
-        input.input_text ?? null,
-        input.duration_ms ?? null,
-        input.outcome ?? null,
-        input.error_code ?? null,
-        input.agent_run_id ?? null,
-      );
-  }
-
-  getSkillUsageStats(skillId: string): SkillUsageStats {
-    const totalsRow = this.db
-      .prepare(
-        `SELECT COUNT(*) as total, MAX(created_at) as last_used,
-                SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) as successes,
-                SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END) as known_outcomes
-         FROM skill_usage_log WHERE skill_id = ?`,
-      )
-      .get(skillId) as {
-        total: number;
-        last_used: string | null;
-        successes: number | null;
-        known_outcomes: number | null;
-      };
-    const errorRows = this.db
-      .prepare(
-        `SELECT error_code, COUNT(*) as count
-         FROM skill_usage_log
-         WHERE skill_id = ? AND error_code IS NOT NULL
-         GROUP BY error_code
-         ORDER BY count DESC, error_code ASC
-         LIMIT 5`,
-      )
-      .all(skillId) as Array<{ error_code: string; count: number }>;
-
-    const known = totalsRow.known_outcomes ?? 0;
-    const successes = totalsRow.successes ?? 0;
-    return {
-      total_invocations: totalsRow.total,
-      last_used: totalsRow.last_used,
-      success_rate: known > 0 ? successes / known : null,
-      top_error_codes: errorRows.map((r) => ({ code: r.error_code, count: r.count })),
-    };
   }
 
   // ─── Import / Export ─────────────────────────────────────────

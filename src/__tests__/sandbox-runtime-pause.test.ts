@@ -9,9 +9,11 @@ import { SandboxRegistry } from '@mcp/services/sandbox/manager/state/registry.js
 import type { Sandbox } from '@mcp/services/sandbox/types.js';
 import { FakeSandboxDriver } from './helpers/fake-sandbox-driver.js';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+
 function makeSandbox(overrides: Partial<Sandbox> = {}): Sandbox {
   return {
-    id: '42:test',
+    id: `${SESSION_ID}:test`,
     containerId: 'c1',
     runtime: 'docker',
     stack: 'react-ts',
@@ -60,34 +62,36 @@ function makeDeps(): RuntimePauseDeps & {
 describe('resolveRuntimePauseTarget', () => {
   it('returns the primary when serviceId is undefined', () => {
     const reg = new SandboxRegistry();
-    const sb = makeSandbox({ id: '42' });
-    reg.primary.set('42', sb);
-    expect(resolveRuntimePauseTarget(reg, '42')).toEqual({ sb, serviceId: null });
+    const sb = makeSandbox({ id: SESSION_ID });
+    reg.primary.set(SESSION_ID, sb);
+    expect(resolveRuntimePauseTarget(reg, SESSION_ID)).toEqual({ sb, serviceId: null });
   });
 
   it("returns the primary when serviceId is 'main'", () => {
     const reg = new SandboxRegistry();
-    const sb = makeSandbox({ id: '42' });
-    reg.primary.set('42', sb);
-    expect(resolveRuntimePauseTarget(reg, '42', 'main')).toEqual({ sb, serviceId: null });
+    const sb = makeSandbox({ id: SESSION_ID });
+    reg.primary.set(SESSION_ID, sb);
+    expect(resolveRuntimePauseTarget(reg, SESSION_ID, 'main')).toEqual({ sb, serviceId: null });
   });
 
   it('returns the named service for non-main serviceId', () => {
     const reg = new SandboxRegistry();
-    const sb = makeSandbox({ id: '42:api' });
-    reg.setService('42', 'api', sb);
-    expect(resolveRuntimePauseTarget(reg, '42', 'api')).toEqual({ sb, serviceId: 'api' });
+    const sb = makeSandbox({ id: `${SESSION_ID}:api` });
+    reg.setService(SESSION_ID, 'api', sb);
+    expect(resolveRuntimePauseTarget(reg, SESSION_ID, 'api')).toEqual({ sb, serviceId: 'api' });
   });
 
   it('throws with a descriptive message when no primary is registered', () => {
     const reg = new SandboxRegistry();
-    expect(() => resolveRuntimePauseTarget(reg, '42')).toThrow(/No sandbox for session 42/);
+    expect(() => resolveRuntimePauseTarget(reg, SESSION_ID)).toThrow(
+      new RegExp(`No sandbox for session ${SESSION_ID}`),
+    );
   });
 
   it('throws with a descriptive message when the service is unknown', () => {
     const reg = new SandboxRegistry();
-    expect(() => resolveRuntimePauseTarget(reg, '42', 'ghost')).toThrow(
-      /No service 'ghost' for session 42/,
+    expect(() => resolveRuntimePauseTarget(reg, SESSION_ID, 'ghost')).toThrow(
+      new RegExp(`No service 'ghost' for session ${SESSION_ID}`),
     );
   });
 });
@@ -99,7 +103,7 @@ describe('runtimePauseContainer', () => {
     const driver = new FakeSandboxDriver();
     const sb = makeSandbox({ runtimePaused: true });
     const deps = makeDeps();
-    const out = await runtimePauseContainer('42', null, sb, driver, deps);
+    const out = await runtimePauseContainer(SESSION_ID, null, sb, driver, deps);
     expect(out).toBe(sb);
     expect(driver.calls.pauseContainer).toEqual([]);
     expect(deps.logs).toEqual([]);
@@ -110,7 +114,7 @@ describe('runtimePauseContainer', () => {
     const driver = new FakeSandboxDriver();
     const sb = makeSandbox({ status: 'provisioning' });
     await expect(
-      runtimePauseContainer('42', null, sb, driver, makeDeps()),
+      runtimePauseContainer(SESSION_ID, null, sb, driver, makeDeps()),
     ).rejects.toThrow(/Cannot runtime-pause/);
   });
 
@@ -118,7 +122,7 @@ describe('runtimePauseContainer', () => {
     const driver = new FakeSandboxDriver();
     const sb = makeSandbox({ containerId: '' });
     await expect(
-      runtimePauseContainer('42', null, sb, driver, makeDeps()),
+      runtimePauseContainer(SESSION_ID, null, sb, driver, makeDeps()),
     ).rejects.toThrow(/No container id/);
   });
 
@@ -126,7 +130,7 @@ describe('runtimePauseContainer', () => {
     const driver = new FakeSandboxDriver();
     const sb = makeSandbox({ containerId: 'gone' });
     await expect(
-      runtimePauseContainer('42', null, sb, driver, makeDeps()),
+      runtimePauseContainer(SESSION_ID, null, sb, driver, makeDeps()),
     ).rejects.toThrow(/no longer exists/i);
   });
 
@@ -135,7 +139,7 @@ describe('runtimePauseContainer', () => {
     driver.seedContainer('c1', { running: false, paused: false });
     const sb = makeSandbox({ containerId: 'c1' });
     await expect(
-      runtimePauseContainer('42', null, sb, driver, makeDeps()),
+      runtimePauseContainer(SESSION_ID, null, sb, driver, makeDeps()),
     ).rejects.toThrow(/not running/);
   });
 
@@ -144,7 +148,7 @@ describe('runtimePauseContainer', () => {
     driver.seedContainer('c1', { running: false, paused: true });
     const sb = makeSandbox({ containerId: 'c1' });
     const deps = makeDeps();
-    const out = await runtimePauseContainer('42', null, sb, driver, deps);
+    const out = await runtimePauseContainer(SESSION_ID, null, sb, driver, deps);
     expect(out.runtimePaused).toBe(true);
     expect(driver.calls.pauseContainer).toEqual([]); // already paused; we don't re-call
     expect(deps.persistCalls[0]?.runtimePaused).toBe(true);
@@ -155,12 +159,12 @@ describe('runtimePauseContainer', () => {
     driver.seedContainer('c1', { running: true, paused: false });
     const sb = makeSandbox({ containerId: 'c1' });
     const deps = makeDeps();
-    const out = await runtimePauseContainer('42', 'api', sb, driver, deps);
+    const out = await runtimePauseContainer(SESSION_ID, 'api', sb, driver, deps);
     expect(out.runtimePaused).toBe(true);
     expect(driver.calls.pauseContainer).toEqual(['c1']);
     expect(deps.logs).toEqual([{ level: 'info', text: 'Runtime pause requested.' }]);
     expect(deps.persistCalls).toEqual([
-      { sessionId: '42', serviceId: 'api', runtimePaused: true },
+      { sessionId: SESSION_ID, serviceId: 'api', runtimePaused: true },
     ]);
   });
 
@@ -169,7 +173,7 @@ describe('runtimePauseContainer', () => {
     driver.seedContainer('c1', { running: true });
     const original = Date.now() - 60_000;
     const sb = makeSandbox({ containerId: 'c1', lastAccessAt: original });
-    await runtimePauseContainer('42', null, sb, driver, makeDeps());
+    await runtimePauseContainer(SESSION_ID, null, sb, driver, makeDeps());
     expect(sb.lastAccessAt).toBeGreaterThan(original);
   });
 });
@@ -182,12 +186,12 @@ describe('runtimeUnpauseContainer', () => {
     driver.seedContainer('c1', { running: false, paused: true });
     const sb = makeSandbox({ containerId: 'c1', runtimePaused: true });
     const deps = makeDeps();
-    const out = await runtimeUnpauseContainer('42', 'api', sb, driver, deps);
+    const out = await runtimeUnpauseContainer(SESSION_ID, 'api', sb, driver, deps);
     expect(out.runtimePaused).toBe(false);
     expect(driver.calls.unpauseContainer).toEqual(['c1']);
     expect(deps.logs).toEqual([{ level: 'info', text: 'Runtime unpause requested.' }]);
     expect(deps.persistCalls).toEqual([
-      { sessionId: '42', serviceId: 'api', runtimePaused: false },
+      { sessionId: SESSION_ID, serviceId: 'api', runtimePaused: false },
     ]);
   });
 
@@ -195,7 +199,7 @@ describe('runtimeUnpauseContainer', () => {
     const driver = new FakeSandboxDriver();
     const sb = makeSandbox({ containerId: 'gone' });
     await expect(
-      runtimeUnpauseContainer('42', null, sb, driver, makeDeps()),
+      runtimeUnpauseContainer(SESSION_ID, null, sb, driver, makeDeps()),
     ).rejects.toThrow(/no longer exists/i);
   });
 
@@ -204,7 +208,7 @@ describe('runtimeUnpauseContainer', () => {
     driver.seedContainer('c1', { running: false, paused: false });
     const sb = makeSandbox({ containerId: 'c1', runtimePaused: false });
     await expect(
-      runtimeUnpauseContainer('42', null, sb, driver, makeDeps()),
+      runtimeUnpauseContainer(SESSION_ID, null, sb, driver, makeDeps()),
     ).rejects.toThrow(/not running/);
   });
 
@@ -213,7 +217,7 @@ describe('runtimeUnpauseContainer', () => {
     driver.seedContainer('c1', { running: true, paused: false });
     const sb = makeSandbox({ containerId: 'c1', runtimePaused: true });
     const deps = makeDeps();
-    await runtimeUnpauseContainer('42', null, sb, driver, deps);
+    await runtimeUnpauseContainer(SESSION_ID, null, sb, driver, deps);
     expect(driver.calls.unpauseContainer).toEqual(['c1']);
   });
 
@@ -221,7 +225,7 @@ describe('runtimeUnpauseContainer', () => {
     const driver = new FakeSandboxDriver();
     const sb = makeSandbox({ containerId: '' });
     await expect(
-      runtimeUnpauseContainer('42', null, sb, driver, makeDeps()),
+      runtimeUnpauseContainer(SESSION_ID, null, sb, driver, makeDeps()),
     ).rejects.toThrow(/No container id/);
   });
 
@@ -234,7 +238,7 @@ describe('runtimeUnpauseContainer', () => {
       status: 'ready',
       step: 'queued',
     });
-    const out = await runtimeUnpauseContainer('42', null, sb, driver, makeDeps());
+    const out = await runtimeUnpauseContainer(SESSION_ID, null, sb, driver, makeDeps());
     expect(out.step).toBe('ready');
   });
 });
@@ -254,7 +258,7 @@ describe('runtime-pause module — order of operations contract', () => {
       appendLog: () => undefined,
       persistRuntimePauseState: () => order.push('persist'),
     };
-    await runtimePauseContainer('42', null, sb, driver, deps);
+    await runtimePauseContainer(SESSION_ID, null, sb, driver, deps);
     expect(order).toEqual(['pause:c1', 'persist']);
     pauseSpy.mockRestore();
   });
@@ -271,7 +275,7 @@ describe('runtime-pause module — order of operations contract', () => {
       appendLog: () => undefined,
       persistRuntimePauseState: () => order.push('persist'),
     };
-    await runtimeUnpauseContainer('42', null, sb, driver, deps);
+    await runtimeUnpauseContainer(SESSION_ID, null, sb, driver, deps);
     expect(order).toEqual(['unpause:c1', 'persist']);
     unpauseSpy.mockRestore();
   });

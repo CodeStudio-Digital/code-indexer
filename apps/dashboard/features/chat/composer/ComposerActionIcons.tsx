@@ -31,7 +31,7 @@ interface ComposerActionIconsProps {
   setOutputCapLevel?: (v: OutputCapLevel) => void;
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
   setToolPermissionMode?: (v: 'ask' | 'auto' | 'unrestricted') => void;
-  sessionId?: number | null;
+  sessionId?: string | null;
   selectedPipelineId?: number | null;
   setSelectedPipelineId?: (v: number | null) => void;
   /** Hide the thinking icon (the rail renders its own prominent Think pill). */

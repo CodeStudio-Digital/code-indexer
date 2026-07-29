@@ -179,8 +179,11 @@ export class SandboxManager {
     await this.resolveDriverOnce();
     return provisionAdditionalServiceFn(req, buildProvisionServiceDeps(this.hooks, this.maxSandboxes, this.workdir, this.nodeImage));
   }
-  syncManagedEnvs(sessionId: string): void {
-    syncManagedEnvsFn(sessionId, buildSyncManagedEnvsDeps(this.hooks, getResolvedRuntime()));
+  syncManagedEnvs(sessionId: string): Promise<void> {
+    return syncManagedEnvsFn(
+      sessionId,
+      buildSyncManagedEnvsDeps(this.hooks, getResolvedRuntime()),
+    );
   }
   async syncEnvsToAllContainers(sessionId: string): Promise<void> {
     // D1: each container gets a body rendered for ITS service id, so

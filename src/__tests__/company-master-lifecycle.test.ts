@@ -1,5 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
+
+vi.mock('@mcp/docs-agent/bridges/docs-bridge.js', () => ({
+  installDocsDeepResearch: vi.fn(),
+}));
+
 import { MasterLifecycle } from '@mcp/company/services/MasterLifecycle.js';
+
+const COMPANY_SESSION_ID = 'c0000000-0000-4000-8000-000000000042';
+const BOARD_ENTRY_ONE_ID = 'b0000000-0000-4000-8000-000000000100';
+const BOARD_ENTRY_TWO_ID = 'b0000000-0000-4000-8000-000000000101';
 
 // The MasterLifecycle surface we can exercise without runCoder:
 //   - All read-only getters and state-machine flags before `start()` runs
@@ -17,29 +26,32 @@ import { MasterLifecycle } from '@mcp/company/services/MasterLifecycle.js';
 
 function makeBaseDeps(overrides?: {
   readBoard?: () => unknown[];
-  lastMasterSeenId?: number;
-  advanceMasterWatermark?: (id: number) => void;
+  lastMasterSeenSeq?: number;
+  advanceMasterWatermark?: (seq: number) => void;
   post?: (...args: unknown[]) => void;
   setStatus?: (...args: unknown[]) => void;
   onMasterResurrected?: () => void;
   onMasterEnded?: () => void;
   onUserMessageReceived?: () => void;
-  updateCompanySessionStatus?: (...args: unknown[]) => void;
+  updateSessionStatus?: (...args: unknown[]) => Promise<void>;
   cancelPendingMasterPrompts?: () => void;
 }) {
   return {
     ctx: {
-      companySessionId: 42,
-      companyStore: {
-        readBoard: overrides?.readBoard ?? (() => []),
-        getCompanySession: () => null,
-        updateCompanySessionStatus: overrides?.updateCompanySessionStatus ?? (() => undefined),
+      companySessionId: COMPANY_SESSION_ID,
+      companyFiles: {
+        listBoardEntriesSync: overrides?.readBoard ?? (() => []),
+        listAgentRuns: async () => [],
+        getSession: () => null,
+        updateSessionStatus:
+          overrides?.updateSessionStatus ?? (async () => undefined),
+        clearRecoveryFlag: async () => undefined,
       },
       isAborted: false,
       isBusEnded: false,
     },
     board: {
-      lastMasterSeenId: overrides?.lastMasterSeenId ?? 0,
+      lastMasterSeenSeq: overrides?.lastMasterSeenSeq ?? 0,
       advanceMasterWatermark: overrides?.advanceMasterWatermark ?? (() => undefined),
       post: overrides?.post ?? (() => undefined),
     },
@@ -241,8 +253,20 @@ describe('MasterLifecycle — notify with no master handle', () => {
     const advance = vi.fn();
     const deps = makeBaseDeps({
       readBoard: () => [
-        { id: 100, author_role: 'frontend', kind: 'message', content: 'done' },
-        { id: 101, author_role: 'backend', kind: 'message', content: 'also done' },
+        {
+          id: BOARD_ENTRY_ONE_ID,
+          seq: 100,
+          author_role: 'frontend',
+          kind: 'message',
+          content: 'done',
+        },
+        {
+          id: BOARD_ENTRY_TWO_ID,
+          seq: 101,
+          author_role: 'backend',
+          kind: 'message',
+          content: 'also done',
+        },
       ],
       advanceMasterWatermark: advance,
     });
@@ -264,7 +288,7 @@ describe('MasterLifecycle — notify with no master handle', () => {
     const lc = new MasterLifecycle(
       makeBaseDeps({
         readBoard: () => {
-          throw new Error('DB unreachable');
+          throw new Error('session bundle unavailable');
         },
       }),
     );
@@ -287,11 +311,11 @@ describe('MasterLifecycle — sendUserMessage with no handle (lazy-resurrect pat
     expect(onUserMessageReceived).toHaveBeenCalledOnce();
   });
 
-  it('attempts to flip the session back to running before resurrecting', () => {
-    const updateCompanySessionStatus = vi.fn();
-    const lc = new MasterLifecycle(makeBaseDeps({ updateCompanySessionStatus }));
+  it('leaves the cold-resume path responsible for the persisted status transition', () => {
+    const updateSessionStatus = vi.fn(async () => undefined);
+    const lc = new MasterLifecycle(makeBaseDeps({ updateSessionStatus }));
     lc.sendUserMessage('hello');
-    expect(updateCompanySessionStatus).toHaveBeenCalledWith(42, 'running');
+    expect(updateSessionStatus).not.toHaveBeenCalled();
   });
 
   it('returns { ok: true } from the lazy-resurrect path', () => {

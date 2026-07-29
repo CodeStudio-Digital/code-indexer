@@ -13,6 +13,7 @@ import {
   createOrchestrationLeaseGuard,
   type OrchestrationLeaseGuard,
 } from '../orchestration-lease-guard.js';
+import type { SessionId } from '@mcp/session-storage';
 
 const MAX_WORKFLOWS_PER_SESSION = 12;
 
@@ -27,60 +28,63 @@ function leaseMs(): number {
     : 120_000;
 }
 
-const bySession = new Map<number, Map<string, WorkflowRecord>>();
+const bySession = new Map<SessionId, Map<string, WorkflowRecord>>();
 const inFlight = new Set<string>();
 const leaseTokens = new Map<string, string>();
 const leaseGuards = new Map<string, OrchestrationLeaseGuard>();
-const checkpointEnforced = (): boolean => process.env.CODER_AGENT_RUN_STORE_ENFORCE === '1';
 
 export interface WorkflowCheckpointStore {
   saveOrchestrationCheckpoint(input: {
-    sessionId: number;
+    sessionId: SessionId;
     kind: 'workflow';
     scopeId: string;
     privacyClass: 'session_private_redacted';
     payloadJson: string;
     expiresAt: string;
     leaseToken?: string;
-  }): boolean;
+  }): Promise<boolean>;
   loadOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'workflow',
     scopeId: string,
-  ): { payloadJson: string } | null;
+  ): Promise<{ payload_json: string } | null>;
   listOrchestrationCheckpoints(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'workflow',
     limit?: number,
-  ): Array<{ scopeId: string; payloadJson: string }>;
+  ): Promise<Array<{ scope_id: string; payload_json: string }>>;
   removeOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'workflow',
     scopeId: string,
     leaseToken?: string,
-  ): void;
+  ): Promise<void>;
   tryAcquireOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'workflow',
     scopeId: string,
     leaseMs?: number,
-  ): string | null;
+  ): Promise<string | null>;
   releaseOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'workflow',
     scopeId: string,
     leaseToken: string,
-  ): void;
+  ): Promise<void>;
   renewOrchestrationCheckpoint(
-    sessionId: number,
+    sessionId: SessionId,
     kind: 'workflow',
     scopeId: string,
     leaseToken: string,
     leaseMs?: number,
-  ): boolean;
+  ): Promise<boolean>;
 }
 
-function parseRecord(payloadJson: string, sessionId: number, workflowId?: string): WorkflowRecord | undefined {
+function parseRecord(
+  payloadJson: string,
+  sessionId: SessionId,
+  workflowId?: string,
+): WorkflowRecord | undefined {
   try {
     const record = JSON.parse(payloadJson) as WorkflowRecord;
     if (!record || typeof record !== 'object'
@@ -99,13 +103,16 @@ function parseRecord(payloadJson: string, sessionId: number, workflowId?: string
   }
 }
 
-function persist(store: WorkflowCheckpointStore | undefined, sessionId: number, record: WorkflowRecord): boolean {
+async function persist(
+  store: WorkflowCheckpointStore | undefined,
+  sessionId: SessionId,
+  record: WorkflowRecord,
+): Promise<boolean> {
   if (!store || typeof store.saveOrchestrationCheckpoint !== 'function') return true;
   const leaseToken = leaseTokens.get(`${sessionId}:${record.id}`);
-  if (leaseToken?.startsWith('compat:')) return !checkpointEnforced();
   const sanitized = sanitizeCheckpointValue(record);
   try {
-    return store.saveOrchestrationCheckpoint({
+    return await store.saveOrchestrationCheckpoint({
       sessionId,
       kind: 'workflow',
       scopeId: record.id,
@@ -121,7 +128,7 @@ function persist(store: WorkflowCheckpointStore | undefined, sessionId: number, 
   }
 }
 
-function sweep(sessionId: number): void {
+function sweep(sessionId: SessionId): void {
   const records = bySession.get(sessionId);
   if (!records) return;
   const now = Date.now();
@@ -140,11 +147,11 @@ function sweep(sessionId: number): void {
   if (records.size === 0) bySession.delete(sessionId);
 }
 
-export function saveWorkflow(
-  sessionId: number,
+export async function saveWorkflow(
+  sessionId: SessionId,
   record: WorkflowRecord,
   store?: WorkflowCheckpointStore,
-): boolean {
+): Promise<boolean> {
   let records = bySession.get(sessionId);
   if (!records) {
     records = new Map();
@@ -152,21 +159,29 @@ export function saveWorkflow(
   }
   record.updatedAt = Date.now();
   records.set(record.id, record);
-  const persisted = persist(store, sessionId, record);
+  const persisted = await persist(store, sessionId, record);
   sweep(sessionId);
   return persisted;
 }
 
-export function getWorkflow(
-  sessionId: number,
+export async function getWorkflow(
+  sessionId: SessionId,
   workflowId: string,
   store?: WorkflowCheckpointStore,
-): WorkflowRecord | undefined {
+): Promise<WorkflowRecord | undefined> {
   sweep(sessionId);
   const cached = bySession.get(sessionId)?.get(workflowId);
   if (cached) return cached;
-  const row = store?.loadOrchestrationCheckpoint(sessionId, 'workflow', workflowId);
-  const restored = row ? parseRecord(row.payloadJson, sessionId, workflowId) : undefined;
+  const checkpoint = store
+    ? await store.loadOrchestrationCheckpoint(
+        sessionId,
+        'workflow',
+        workflowId,
+      )
+    : null;
+  const restored = checkpoint
+    ? parseRecord(checkpoint.payload_json, sessionId, workflowId)
+    : undefined;
   if (!restored) return undefined;
   let records = bySession.get(sessionId);
   if (!records) {
@@ -183,33 +198,48 @@ export function getWorkflow(
  * executor must never continue with the object it observed before the CAS,
  * because another process may have committed between that read and acquire.
  */
-export function reloadWorkflowUnderLease(
-  sessionId: number,
+export async function reloadWorkflowUnderLease(
+  sessionId: SessionId,
   workflowId: string,
   store?: WorkflowCheckpointStore,
-): WorkflowRecord | undefined {
-  assertWorkflowRunLease(sessionId, workflowId, store);
+): Promise<WorkflowRecord | undefined> {
+  await assertWorkflowRunLease(sessionId, workflowId, store);
   const cached = bySession.get(sessionId)?.get(workflowId);
   const leaseToken = leaseTokens.get(`${sessionId}:${workflowId}`);
-  const restored = store && !leaseToken?.startsWith('compat:')
-    ? (() => {
-        const row = store.loadOrchestrationCheckpoint(sessionId, 'workflow', workflowId);
-        return row ? parseRecord(row.payloadJson, sessionId, workflowId) : undefined;
-      })()
+  const restored = store
+    ? store
+        .loadOrchestrationCheckpoint(
+          sessionId,
+          'workflow',
+          workflowId,
+        )
+        .then((checkpoint) =>
+          checkpoint
+            ? parseRecord(
+                checkpoint.payload_json,
+                sessionId,
+                workflowId,
+              )
+            : undefined,
+        )
     : cached
       ? parseRecord(JSON.stringify(cached), sessionId, workflowId)
       : undefined;
-  if (!restored) return undefined;
+  const resolved = await restored;
+  if (!resolved) return undefined;
   let records = bySession.get(sessionId);
   if (!records) {
     records = new Map();
     bySession.set(sessionId, records);
   }
-  records.set(workflowId, restored);
-  return restored;
+  records.set(workflowId, resolved);
+  return resolved;
 }
 
-export function listWorkflows(sessionId: number, store?: WorkflowCheckpointStore): WorkflowRecord[] {
+export async function listWorkflows(
+  sessionId: SessionId,
+  store?: WorkflowCheckpointStore,
+): Promise<WorkflowRecord[]> {
   sweep(sessionId);
   if (store) {
     let records = bySession.get(sessionId);
@@ -217,9 +247,17 @@ export function listWorkflows(sessionId: number, store?: WorkflowCheckpointStore
       records = new Map();
       bySession.set(sessionId, records);
     }
-    for (const row of store.listOrchestrationCheckpoints(sessionId, 'workflow', MAX_WORKFLOWS_PER_SESSION)) {
-      if (records.has(row.scopeId)) continue;
-      const restored = parseRecord(row.payloadJson, sessionId, row.scopeId);
+    for (const checkpoint of await store.listOrchestrationCheckpoints(
+      sessionId,
+      'workflow',
+      MAX_WORKFLOWS_PER_SESSION,
+    )) {
+      if (records.has(checkpoint.scope_id)) continue;
+      const restored = parseRecord(
+        checkpoint.payload_json,
+        sessionId,
+        checkpoint.scope_id,
+      );
       if (restored) records.set(restored.id, restored);
     }
   }
@@ -227,34 +265,44 @@ export function listWorkflows(sessionId: number, store?: WorkflowCheckpointStore
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-export function clearWorkflows(sessionId: number, store?: WorkflowCheckpointStore): void {
+export async function clearWorkflows(
+  sessionId: SessionId,
+  store?: WorkflowCheckpointStore,
+): Promise<void> {
   bySession.delete(sessionId);
   if (store) {
-    for (const row of store.listOrchestrationCheckpoints(sessionId, 'workflow', MAX_WORKFLOWS_PER_SESSION)) {
-      store.removeOrchestrationCheckpoint(sessionId, 'workflow', row.scopeId);
+    for (const checkpoint of await store.listOrchestrationCheckpoints(
+      sessionId,
+      'workflow',
+      MAX_WORKFLOWS_PER_SESSION,
+    )) {
+      await store.removeOrchestrationCheckpoint(
+        sessionId,
+        'workflow',
+        checkpoint.scope_id,
+      );
     }
   }
 }
 
 /** Per-workflow in-flight lock — concurrent resume calls can't double-run. */
-export function tryAcquireWorkflowRun(
-  sessionId: number,
+export async function tryAcquireWorkflowRun(
+  sessionId: SessionId,
   workflowId: string,
   store?: WorkflowCheckpointStore,
-): boolean {
+): Promise<boolean> {
   const key = `${sessionId}:${workflowId}`;
   if (inFlight.has(key)) return false;
   const duration = leaseMs();
-  const leaseToken = store?.tryAcquireOrchestrationCheckpoint(
-    sessionId,
-    'workflow',
-    workflowId,
-    duration,
-  );
+  const leaseToken = store
+    ? await store.tryAcquireOrchestrationCheckpoint(
+        sessionId,
+        'workflow',
+        workflowId,
+        duration,
+      )
+    : undefined;
   if (store && !leaseToken) return false;
-  if (leaseToken?.startsWith('compat:') && checkpointEnforced()) {
-    throw new Error(`workflow '${workflowId}' requires migration 259 while AgentRun enforcement is enabled`);
-  }
   inFlight.add(key);
   if (leaseToken) {
     leaseTokens.set(key, leaseToken);
@@ -275,22 +323,22 @@ export function tryAcquireWorkflowRun(
 }
 
 /** Renew/verify the operation token immediately before dispatch or commit. */
-export function assertWorkflowRunLease(
-  sessionId: number,
+export async function assertWorkflowRunLease(
+  sessionId: SessionId,
   workflowId: string,
   store?: WorkflowCheckpointStore,
-): void {
+): Promise<void> {
   if (!store || typeof store.renewOrchestrationCheckpoint !== 'function') return;
   const guard = leaseGuards.get(`${sessionId}:${workflowId}`);
   if (!guard) {
     throw new Error(`workflow '${workflowId}' executor lease was fenced or expired`);
   }
-  guard.assertOwned();
+  await guard.assertOwned();
 }
 
 /** Keep a short lease alive while a wave is inside provider/tool execution. */
 export function startWorkflowRunLeaseKeepalive(
-  sessionId: number,
+  sessionId: SessionId,
   workflowId: string,
   store?: WorkflowCheckpointStore,
   onLost?: (error: Error) => void,
@@ -302,17 +350,17 @@ export function startWorkflowRunLeaseKeepalive(
 }
 
 export function workflowLeaseKeepaliveActiveForTests(
-  sessionId: number,
+  sessionId: SessionId,
   workflowId: string,
 ): boolean {
   return leaseGuards.get(`${sessionId}:${workflowId}`)?.isRunning() ?? false;
 }
 
-export function releaseWorkflowRun(
-  sessionId: number,
+export async function releaseWorkflowRun(
+  sessionId: SessionId,
   workflowId: string,
   store?: WorkflowCheckpointStore,
-): void {
+): Promise<void> {
   const key = `${sessionId}:${workflowId}`;
   inFlight.delete(key);
   leaseGuards.get(key)?.stop();
@@ -320,6 +368,11 @@ export function releaseWorkflowRun(
   const leaseToken = leaseTokens.get(key);
   leaseTokens.delete(key);
   if (store && leaseToken) {
-    store.releaseOrchestrationCheckpoint(sessionId, 'workflow', workflowId, leaseToken);
+    await store.releaseOrchestrationCheckpoint(
+      sessionId,
+      'workflow',
+      workflowId,
+      leaseToken,
+    );
   }
 }

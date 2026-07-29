@@ -19,8 +19,8 @@ import {
   hashControlPlanePayload,
   type ControlPlaneCommandContext,
   type ControlPlaneRunContext,
-  type ControlPlaneStore,
 } from '@mcp/store/control-plane/index.js';
+import type { ControlPlaneAuthority } from './file-control-plane-store.js';
 
 const EXECUTOR_LEASE_MS = 10 * 60_000;
 
@@ -64,7 +64,7 @@ const DEFAULT_SHADOW_WRITE_QUEUE_CAP = 2_048;
 
 interface ShadowWriteJob {
   label: string;
-  write: () => void;
+  write: () => void | Promise<void>;
   resolve: () => void;
 }
 
@@ -85,7 +85,7 @@ function resolveShadowDrainWaiters(): void {
   while (shadowDrainWaiters.length > 0) shadowDrainWaiters.shift()?.();
 }
 
-function runNextShadowWrite(): void {
+async function runNextShadowWrite(): Promise<void> {
   shadowWriteScheduled = false;
   const job = shadowWriteQueue.shift();
   if (!job) {
@@ -94,17 +94,16 @@ function runNextShadowWrite(): void {
     return;
   }
   shadowWriteRunning = true;
-  executeShadowWriteJob(job);
-  // One synchronous SQLite job per event-loop turn. This preserves FIFO while
-  // yielding between writes so worker bus publication/IPC is never trapped
-  // behind a large shadow-journal burst.
+  await executeShadowWriteJob(job);
+  // One filesystem job per event-loop turn. This preserves FIFO while yielding
+  // between writes so worker bus publication/IPC stays responsive.
   shadowWriteScheduled = true;
-  setImmediate(runNextShadowWrite);
+  setImmediate(() => void runNextShadowWrite());
 }
 
-function executeShadowWriteJob(job: ShadowWriteJob): void {
+async function executeShadowWriteJob(job: ShadowWriteJob): Promise<void> {
   try {
-    measureAppend(job.write);
+    await measureAppend(job.write, 'queued');
   } catch (error) {
     metrics.lifecycleErrors += 1;
     console.warn(
@@ -118,12 +117,12 @@ function executeShadowWriteJob(job: ShadowWriteJob): void {
 function scheduleShadowWritePump(): void {
   if (shadowWriteScheduled || shadowWriteRunning) return;
   shadowWriteScheduled = true;
-  setImmediate(runNextShadowWrite);
+  setImmediate(() => void runNextShadowWrite());
 }
 
 function enqueueShadowWrite(
   label: string,
-  write: () => void,
+  write: () => void | Promise<void>,
 ): Promise<void> {
   return new Promise((resolve) => {
     const cap = shadowWriteQueueCap();
@@ -154,12 +153,16 @@ function recordAppendLatency(ms: number): void {
   }
 }
 
-function measureAppend<T>(write: () => T): T {
+async function measureAppend<T>(
+  write: () => T | Promise<T>,
+  _label?: string,
+): Promise<T> {
   const startedAt = performance.now();
   try {
-    return write();
+    return await write();
   } finally {
-    recordAppendLatency(performance.now() - startedAt);
+    const ms = performance.now() - startedAt;
+    recordAppendLatency(ms);
   }
 }
 
@@ -183,7 +186,7 @@ export function recordLocalCoderShadowDivergences(count: number): void {
 export function coderControlPlaneShadowEnabled(): boolean {
   // Compatibility name: this now controls only the optional root AgentRun
   // projection. SessionCommand acceptance/terminal state is always authoritative
-  // whenever the HTTP server's ControlPlaneStore is available.
+  // whenever the HTTP server's filesystem control-plane authority is available.
   // Child AgentRun enforcement requires the root run to be established
   // synchronously with command acceptance. Opting into ENFORCE therefore
   // enables this projection even when the audit-only root flag is omitted.
@@ -241,15 +244,29 @@ function opaqueValueHash(value: unknown): string {
   }
 }
 
+function stableUuid(value: string): string {
+  const bytes = Buffer.from(digest(value).slice(0, 32), 'hex');
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join('-');
+}
+
 function stableCommandKey(input: {
-  legacySessionId: number;
+  sessionId: string;
   kind: SessionCommandKind;
   idempotencyKey?: string | null;
 }): { key: string; digest: string } {
   const key = input.idempotencyKey ?? `server:${randomUUID()}`;
   return {
     key,
-    digest: digest(`coder:${input.legacySessionId}:${input.kind}:${key}`),
+    digest: digest(`coder:${input.sessionId}:${input.kind}:${key}`),
   };
 }
 
@@ -309,8 +326,8 @@ export function fingerprintLocalCompanyCommand(input: {
 }
 
 export interface AcceptLocalCoderCommandInput {
-  store?: ControlPlaneStore | null;
-  legacySessionId: number;
+  store?: ControlPlaneAuthority | null;
+  sessionId: ReturnType<typeof asSessionId>;
   kind: SessionCommandKind;
   idempotencyKey?: string | null;
   fingerprint: Record<string, unknown>;
@@ -344,19 +361,23 @@ function commandExecutionBusId(command: { result?: unknown }): string | undefine
   return typeof busId === 'string' && busId.length > 0 ? busId : undefined;
 }
 
-export function acceptLocalCoderCommand(
+export async function acceptLocalCoderCommand(
   input: AcceptLocalCoderCommandInput,
-): LocalCoderShadowAcceptance | null {
+): Promise<LocalCoderShadowAcceptance | null> {
   // The command ledger is the idempotency authority, independently from the
   // diagnostic shadow flags. Journal/AgentRun projections remain separately
-  // gated by their callers and ControlPlaneStore.journalEnabled.
+  // gated by their callers and the filesystem authority's journal setting.
   if (!input.store) return null;
 
   const requestedAt = input.requestedAt ?? new Date().toISOString();
   const identity = stableCommandKey(input);
-  const sessionId = asSessionId(`session:coder:${input.legacySessionId}`);
-  const commandId = asSessionCommandId(`command:coder:${identity.digest}`);
-  const correlationId = asCorrelationId(`correlation:coder:${identity.digest}`);
+  const sessionId = input.sessionId;
+  const commandId = asSessionCommandId(
+    stableUuid(`command:coder:${identity.digest}`),
+  );
+  const correlationId = asCorrelationId(
+    stableUuid(`correlation:coder:${identity.digest}`),
+  );
   const actor = {
     actorId: 'local-user',
     actorType: 'user' as const,
@@ -373,14 +394,17 @@ export function acceptLocalCoderCommand(
     correlationId,
     payload: input.fingerprint,
   };
-  const agentRunId = asAgentRunId(`agent-run:coder:${identity.digest}`);
-  const attemptId = asAgentRunAttemptId(`agent-run-attempt:coder:${identity.digest}:1`);
+  const agentRunId = asAgentRunId(
+    stableUuid(`agent-run:coder:${identity.digest}`),
+  );
+  const attemptId = asAgentRunAttemptId(
+    stableUuid(`agent-run-attempt:coder:${identity.digest}:1`),
+  );
 
   try {
-    const result = measureAppend(() => input.store!.acceptCommand({
+    const result = await measureAppend(() => input.store!.acceptCommand({
       command,
       payloadHash: hashControlPlanePayload(command.payload),
-      legacySessionId: input.legacySessionId,
       // Before this contract was stabilized, the first POST /messages was
       // persisted as `start` and later messages as `send_message`. Canonical
       // non-resume requests are now always `send_message`, but an old first
@@ -399,11 +423,11 @@ export function acceptLocalCoderCommand(
             requestedReasoningEffort: input.requestedReasoningEffort,
             requestedPreset: input.requestedPreset,
             requestedCapabilityProfile: input.requestedCapabilityProfile,
-            executorOwnerId: `coder-worker:${input.legacySessionId}:${agentRunId}`,
+            executorOwnerId: `coder-worker:${input.sessionId}:${agentRunId}`,
             executorExpiresAt: new Date(Date.parse(requestedAt) + EXECUTOR_LEASE_MS).toISOString(),
           }
         : undefined,
-    }));
+    }), 'acceptCommand');
 
     if (result.kind === 'accepted') {
       metrics.accepted += 1;
@@ -415,7 +439,7 @@ export function acceptLocalCoderCommand(
 
     if (result.kind === 'payload_conflict' || result.kind === 'version_conflict') {
       console.warn('[control-plane] command rejected', {
-        sessionId: input.legacySessionId,
+        sessionId: input.sessionId,
         kind: input.kind,
         outcome: result.kind,
       });
@@ -441,7 +465,6 @@ export function acceptLocalCoderCommand(
     const persistedCommand = result.command;
     const commandContext: ControlPlaneCommandContext = {
       sessionId: persistedCommand.sessionId,
-      legacySessionId: persistedCommand.legacySessionId ?? input.legacySessionId,
       commandId: persistedCommand.commandId,
       correlationId: persistedCommand.correlationId,
       actor: persistedCommand.actor,
@@ -473,27 +496,31 @@ export function acceptLocalCoderCommand(
   } catch (error) {
     metrics.writeErrors += 1;
     console.warn(
-      `[control-plane] command accept failed session=${input.legacySessionId}: ${error instanceof Error ? error.message : String(error)}`,
+      `[control-plane] command accept failed session=${input.sessionId}: ${error instanceof Error ? error.message : String(error)}`,
     );
     return null;
   }
 }
 
-export function acceptLocalCompanyCommand(input: {
-  store?: ControlPlaneStore | null;
-  companySessionId: number;
+export async function acceptLocalCompanyCommand(input: {
+  store?: ControlPlaneAuthority | null;
+  companySessionId: string;
   kind: Extract<SessionCommandKind, 'start' | 'resume'>;
   idempotencyKey?: string | null;
   fingerprint: Record<string, unknown>;
   requestedAt?: string;
-}): LocalCoderShadowAcceptance | null {
+}): Promise<LocalCoderShadowAcceptance | null> {
   if (!input.store) return null;
   const requestedAt = input.requestedAt ?? new Date().toISOString();
   const key = input.idempotencyKey ?? `server:${randomUUID()}`;
   const identity = digest(`company:${input.companySessionId}:${input.kind}:${key}`);
-  const sessionId = asSessionId(`session:company:${input.companySessionId}`);
-  const commandId = asSessionCommandId(`command:company:${identity}`);
-  const correlationId = asCorrelationId(`correlation:company:${identity}`);
+  const sessionId = asSessionId(input.companySessionId);
+  const commandId = asSessionCommandId(
+    stableUuid(`command:company:${identity}`),
+  );
+  const correlationId = asCorrelationId(
+    stableUuid(`correlation:company:${identity}`),
+  );
   const actor = {
     actorId: 'local-user',
     actorType: 'user' as const,
@@ -511,11 +538,10 @@ export function acceptLocalCompanyCommand(input: {
     payload: input.fingerprint,
   };
   try {
-    // Deliberately omit legacySessionId: company ids are not coder-session FKs.
-    const result = measureAppend(() => input.store!.acceptCommand({
+    const result = await measureAppend(() => input.store!.acceptCommand({
       command,
       payloadHash: hashControlPlanePayload(command.payload),
-    }));
+    }), 'acceptCommand');
     if (result.kind === 'payload_conflict' || result.kind === 'version_conflict') {
       return {
         outcome: result.kind,
@@ -549,14 +575,17 @@ export function acceptLocalCompanyCommand(input: {
   }
 }
 
-export function bindLocalCommandBus(
-  store: ControlPlaneStore | null | undefined,
+export async function bindLocalCommandBus(
+  store: ControlPlaneAuthority | null | undefined,
   acceptance: LocalCoderShadowAcceptance | null,
   busId: string,
-): boolean {
+): Promise<boolean> {
   if (!store || !acceptance?.commandContext) return false;
   try {
-    measureAppend(() => store.bindCommandExecution(acceptance.commandContext!, busId));
+    await measureAppend(
+      () => store.bindCommandExecution(acceptance.commandContext!, busId),
+      'bindCommandExecution',
+    );
     acceptance.commandStatus = 'running';
     acceptance.executionBusId = busId;
     return true;
@@ -569,22 +598,22 @@ export function bindLocalCommandBus(
   }
 }
 
-export function terminalizeLocalCoderCommand(
-  store: ControlPlaneStore | null | undefined,
+export async function terminalizeLocalCoderCommand(
+  store: ControlPlaneAuthority | null | undefined,
   acceptance: LocalCoderShadowAcceptance | null,
   input: { status: 'succeeded' | 'failed' | 'cancelled'; reason: string; errorRef?: string },
-): void {
+): Promise<void> {
   // Command terminal state is part of idempotency authority, not a shadow
-  // projection. Keep it synchronous so a racing retry observes the terminal
-  // result before any in-memory fallback can re-enter the side-effect path.
+  // projection. Callers await it so a racing retry observes terminal state
+  // before any side-effect path can be re-entered.
   if (!store || !acceptance?.commandContext) return;
   try {
-    measureAppend(() => store.terminalizeCommand({
+    await measureAppend(() => store.terminalizeCommand({
       context: acceptance.commandContext!,
       status: input.status,
       reason: input.reason,
       errorRef: input.errorRef,
-    }));
+    }), 'terminalizeCommand');
     acceptance.commandStatus = input.status;
     acceptance.commandReasonCode = input.reason;
     recordMirrored('A');
@@ -596,17 +625,20 @@ export function terminalizeLocalCoderCommand(
   }
 }
 
-export function markLocalCoderRunStarted(
-  store: ControlPlaneStore | null | undefined,
+export async function markLocalCoderRunStarted(
+  store: ControlPlaneAuthority | null | undefined,
   context: ControlPlaneRunContext | null | undefined,
   runnerRunId?: string,
-): void {
+): Promise<void> {
   if (!store || !context) return;
   // This transition establishes runner_run_id → AgentRun resolution used by
   // child fencing. It is authority, not observational journal traffic, so it
   // must be committed before a following tool/subagent event can overtake it.
   try {
-    measureAppend(() => store.markRunStarted(context, runnerRunId));
+    await measureAppend(
+      () => store.markRunStarted(context, runnerRunId),
+      'markRunStarted',
+    );
     metrics.runsStarted += 1;
     recordMirrored('C');
   } catch (error) {
@@ -617,18 +649,18 @@ export function markLocalCoderRunStarted(
   }
 }
 
-export function renewLocalCoderRunLease(
-  store: ControlPlaneStore | null | undefined,
+export async function renewLocalCoderRunLease(
+  store: ControlPlaneAuthority | null | undefined,
   context: ControlPlaneRunContext | null | undefined,
   at = new Date().toISOString(),
-): boolean {
+): Promise<boolean> {
   if (!store || !context) return false;
   try {
-    measureAppend(() => store.runs.renewAttemptLease(
+    await measureAppend(() => store.renewAttemptLease(
         context,
         new Date(Date.parse(at) + EXECUTOR_LEASE_MS).toISOString(),
         at,
-      ));
+      ), 'renewAttemptLease');
     metrics.leaseRenewals += 1;
     return true;
   } catch (error) {
@@ -641,7 +673,7 @@ export function renewLocalCoderRunLease(
 }
 
 export function mirrorLocalCoderToolBoundary(
-  store: ControlPlaneStore | null | undefined,
+  store: ControlPlaneAuthority | null | undefined,
   context: ControlPlaneRunContext | null | undefined,
   input: {
     phase: 'started' | 'completed';
@@ -660,8 +692,8 @@ export function mirrorLocalCoderToolBoundary(
   const phase = input.phase;
   const toolUseId = input.toolUseId;
   const toolName = input.toolName;
-  return enqueueShadowWrite(`tool-${input.phase}`, () => {
-    store.appendToolBoundary({
+  return enqueueShadowWrite(`tool-${input.phase}`, async () => {
+    await store.appendToolBoundary({
       context,
       toolUseId,
       toolName,
@@ -683,7 +715,7 @@ export function mirrorLocalCoderToolBoundary(
  * redaction metadata records exactly which keys were projected.
  */
 export function mirrorLocalCoderLifecycleEvent(
-  store: ControlPlaneStore | null | undefined,
+  store: ControlPlaneAuthority | null | undefined,
   context: ControlPlaneRunContext | null | undefined,
   input: {
     type: ControlPlaneEventType;
@@ -698,14 +730,15 @@ export function mirrorLocalCoderLifecycleEvent(
   const occurredAt = input.occurredAt ?? new Date().toISOString();
   const eventClass = runtimeEventClass(input.type);
   const eventKey = input.idempotencyKey ?? opaqueValueHash(input.payload);
-  return enqueueShadowWrite(`lifecycle:${input.type}`, () => {
-    store.journal.append({
+  return enqueueShadowWrite(`lifecycle:${input.type}`, async () => {
+    await store.appendRuntimeEvent({
         schemaVersion: CONTROL_PLANE_SCHEMA_VERSION,
-        eventId: asRuntimeEventId(`evt:${context.agentRunId}:${input.type}:${eventKey}`),
+        eventId: asRuntimeEventId(
+          stableUuid(`evt:${context.agentRunId}:${input.type}:${eventKey}`),
+        ),
         eventClass,
         partitionKey: context.sessionId,
         sessionId: context.sessionId,
-        legacySessionId: context.legacySessionId,
         commandId: context.commandId,
         agentRunId: context.agentRunId,
         attemptId: context.attemptId,
@@ -782,15 +815,15 @@ function terminalStatus(input: {
   return { runStatus: 'completed', commandStatus: 'succeeded', reason, errorRef, leaseStatus: 'released' };
 }
 
-export function terminalizeLocalCoderRun(
-  store: ControlPlaneStore | null | undefined,
+export async function terminalizeLocalCoderRun(
+  store: ControlPlaneAuthority | null | undefined,
   context: ControlPlaneRunContext | null | undefined,
   input: {
     event: 'done' | 'error';
     data: unknown;
     mode?: 'normal' | 'worker_crash' | 'worker_start_failure' | 'evicted' | 'authority_lost';
   },
-): void {
+): Promise<void> {
   if (!store || !context) return;
   const terminal = terminalStatus(input);
   const terminalInput = {
@@ -802,21 +835,21 @@ export function terminalizeLocalCoderRun(
       attemptLeaseStatus: terminal.leaseStatus,
   };
   // Run + command terminal state is idempotency authority. CoderWorkerPool
-  // marks/publishes the bus terminal first, then calls this synchronously so a
-  // retry in the next turn cannot observe stale `running`.
+  // marks/publishes the bus terminal first, then callers await this authority
+  // commit before admitting a retry.
   try {
-    measureAppend(() => {
+    await measureAppend(async () => {
       if (
         input.mode === 'worker_crash'
         || input.mode === 'worker_start_failure'
         || input.mode === 'evicted'
         || input.mode === 'authority_lost'
       ) {
-        store.interruptRun(terminalInput);
+        await store.interruptRun(terminalInput);
       } else {
-        store.terminalizeRun(terminalInput);
+        await store.terminalizeRun(terminalInput);
       }
-    });
+    }, 'terminalizeRun');
     metrics.runsTerminalized += 1;
     recordMirrored('A');
     recordMirrored('C');

@@ -49,12 +49,12 @@ export function CenterSurface({
   activeAsset: SpriteAsset | null;
   activeVersion: AssetVersion | null;
   /** Shared version lookup + refresh (lifted useAssetVersions) for animate. */
-  versionById: Map<number, AssetVersion>;
+  versionById: Map<string, AssetVersion>;
   /** Generation batches of the active asset (re-slice affordance). */
   generations: GenerationGroup[];
   refreshVersions: () => void;
   /** (assetId, versionId) after a generation is saved OR an edit is committed. */
-  onSaved: (assetId: number, versionId: number) => void;
+  onSaved: (assetId: string, versionId: string) => void;
   /** Overwrite-in-place handler — present whenever there's a version to save
    *  over (focused session OR the normal editor). */
   onSaveOverwrite?: (blob: Blob) => void | Promise<void>;
@@ -67,7 +67,7 @@ export function CenterSurface({
   iterateRef?: IterateRef | null;
   onIterateConsumed?: () => void;
   /** Timeline "edit frame": select that version + jump to edit mode. */
-  onEditVersion?: (assetId: number, versionId: number, frameIndex: number, track: number) => void;
+  onEditVersion?: (assetId: string, versionId: string, frameIndex: number, track: number) => void;
   /** Contextual animation export opens the shared export dialog pre-scoped. */
   onExportAnimation?: () => void;
   /** Multi-tab editor: focus / close an open image tab. */

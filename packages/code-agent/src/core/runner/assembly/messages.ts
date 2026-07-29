@@ -28,7 +28,7 @@ export interface AssembleMessagesArgs {
   /**
    * Callback that resolves the `<active_skills>` block off the trailing
    * user message of the COMPACTED history. Returns null when nothing to
-   * inject. Side-effects (skill_usage_log writes) are the caller's.
+   * inject. Side-effects (`skill.usage` bundle events) are the caller's.
    */
   buildActiveSkillsBlock: (compactedHistory: AgentMessage[]) => string | null;
   /**

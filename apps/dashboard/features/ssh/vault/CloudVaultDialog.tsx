@@ -16,7 +16,10 @@ import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { UpgradeNotice } from '../../../components/UpgradeNotice.js';
 import { cloudCall } from '../../../lib/cloud/cloud-client.js';
 import { useEntitlements } from '../../account/useEntitlements.js';
+import { listHosts } from '../api.js';
 import { useSshVaultSync } from './use-ssh-vault-sync.js';
+import { ShareWithOrgDialog } from './ShareWithOrgDialog.js';
+import type { SshHost } from '../types.js';
 
 interface Props {
   projectId: number;
@@ -40,7 +43,7 @@ function vaultErrorMessage(error: string, t: (k: string) => string): string {
 export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
   const { t } = useTranslation('ssh');
   const { has } = useEntitlements();
-  const { workspaceId, busy, error, last, unlocked, recoveryEnabled, unlock, unlockWithRecovery, enrollRecoveryKey, sync, linkWorkspace, shareWithOrg, pullTeam } = useSshVaultSync(projectId);
+  const { workspaceId, busy, error, last, unlocked, recoveryEnabled, unlock, unlockWithRecovery, enrollRecoveryKey, sync, linkWorkspace, shareWithOrg, listShareRecipients, pullTeam } = useSshVaultSync(projectId);
   const [passphrase, setPassphrase] = useState('');
   const [copied, setCopied] = useState(false);
   const [joinId, setJoinId] = useState('');
@@ -52,6 +55,9 @@ export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
   const [newPassphrase, setNewPassphrase] = useState('');
   const [generated, setGenerated] = useState<string | null>(null);
   const [recoveryCopied, setRecoveryCopied] = useState(false);
+  // Share is gated behind an explicit selection dialog — see ShareWithOrgDialog.
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareHosts, setShareHosts] = useState<SshHost[]>([]);
 
   const entitled = has('sshVault');
   const teamEntitled = has('teamSshVault');
@@ -123,6 +129,17 @@ export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
     } catch {
       /* clipboard blocked */
     }
+  };
+
+  // Load the host list only when the user actually opens the share dialog, so
+  // the rows reflect the current state rather than whatever was cached earlier.
+  const openShare = async () => {
+    try {
+      setShareHosts(await listHosts(projectId));
+    } catch {
+      setShareHosts([]);
+    }
+    setShareOpen(true);
   };
 
   const join = async () => {
@@ -294,8 +311,8 @@ export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
                 </Select>
                 <div className="flex items-center gap-2">
                   {canShare ? (
-                    <Button size="sm" variant="outline" disabled={busy || !orgId} onClick={() => void shareWithOrg(orgId)}>
-                      <UploadCloud className="h-3.5 w-3.5 mr-1" /> {t('vault.share')}
+                    <Button size="sm" variant="outline" disabled={busy || !orgId} onClick={() => void openShare()}>
+                      <UploadCloud className="h-3.5 w-3.5 mr-1" /> {t('vault.share.confirm')}
                     </Button>
                   ) : null}
                   <Button size="sm" variant="outline" disabled={busy || !orgId} onClick={() => void pullTeam(orgId)}>
@@ -308,6 +325,20 @@ export function CloudVaultDialog({ projectId, open, onOpenChange }: Props) {
           </div>
         ) : null}
       </DialogContent>
+
+      <ShareWithOrgDialog
+        open={shareOpen}
+        orgId={orgId}
+        orgName={orgs.find((o) => o.org.id === orgId)?.org.name ?? orgId}
+        hosts={shareHosts}
+        busy={busy}
+        onOpenChange={setShareOpen}
+        loadRecipients={listShareRecipients}
+        onConfirm={(selection) => {
+          setShareOpen(false);
+          void shareWithOrg(orgId, selection);
+        }}
+      />
     </Dialog>
   );
 }

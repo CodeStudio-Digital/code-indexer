@@ -1,23 +1,25 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  upsertBugCard,
-  syncFeatureCard,
-  renderBugTitle,
   renderBugDescription,
+  renderBugTitle,
   renderRecurrenceComment,
+  syncFeatureCard,
+  upsertBugCard,
   type KanbanBridgeDeps,
 } from '@mcp/services/qa/kanban-bridge.js';
 import type { QaRun, QaTestResult } from '@mcp/services/qa/types.js';
 
-/**
- * Unit tests for the QA-Kanban bridge. Uses in-memory fakes so the
- * bridge can be exercised without a full DB or orchestrator. The fakes
- * expose just enough of `CompanyStore` + `IQaTestResultStore` to satisfy
- * the bridge's dependency surface — extending them later is mechanical.
- */
+const SESSION_ID = '11111111-1111-4111-8111-111111111111';
+const RUN_ID = '22222222-2222-4222-8222-222222222222';
+const RESULT_ID = '33333333-3333-4333-8333-333333333333';
+const FEATURE_CARD_ID = '44444444-4444-4444-8444-444444444444';
+
+function cardId(sequence: number): string {
+  return `55555555-5555-4555-8555-${String(sequence).padStart(12, '0')}`;
+}
 
 interface FakeCard {
-  id: number;
+  id: string;
   title: string;
   description: string;
   column: string;
@@ -26,19 +28,18 @@ interface FakeCard {
 }
 
 class FakeCompanyStore {
-  cards = new Map<number, FakeCard>();
-  dependencies: Array<{ card_id: number; depends_on_id: number }> = [];
+  cards = new Map<string, FakeCard>();
+  dependencies: Array<{ card_id: string; depends_on_id: string }> = [];
   private nextId = 100;
 
-  createKanbanCard(_sessionId: number, input: {
+  createKanbanCard(_sessionId: string, input: {
     title: string;
     description?: string;
     column?: string;
     tag?: string | null;
-    created_by?: string;
   }): FakeCard {
     const card: FakeCard = {
-      id: this.nextId++,
+      id: cardId(this.nextId++),
       title: input.title,
       description: input.description ?? '',
       column: input.column ?? 'backlog',
@@ -49,22 +50,26 @@ class FakeCompanyStore {
     return card;
   }
 
-  getKanbanCard(cardId: number): FakeCard | null {
-    return this.cards.get(cardId) ?? null;
+  getKanbanCard(id: string): FakeCard | null {
+    return this.cards.get(id) ?? null;
   }
 
-  addKanbanComment(cardId: number, author: string, _runId: number | null, content: string): void {
-    const card = this.cards.get(cardId);
-    if (card) card.comments.push({ author, content });
+  addKanbanComment(
+    id: string,
+    author: string,
+    _agentRunId: string | null,
+    content: string,
+  ): void {
+    this.cards.get(id)?.comments.push({ author, content });
   }
 
-  addCardDependency(cardId: number, dependsOnId: number): void {
-    this.dependencies.push({ card_id: cardId, depends_on_id: dependsOnId });
+  addCardDependency(id: string, dependsOnId: string): void {
+    this.dependencies.push({ card_id: id, depends_on_id: dependsOnId });
   }
 
-  moveKanbanCard(cardId: number, column: string): FakeCard {
-    const card = this.cards.get(cardId);
-    if (!card) throw new Error(`card ${cardId} not found`);
+  moveKanbanCard(id: string, column: string): FakeCard {
+    const card = this.cards.get(id);
+    if (!card) throw new Error(`card ${id} not found`);
     card.column = column;
     return card;
   }
@@ -72,15 +77,20 @@ class FakeCompanyStore {
 
 class FakeQaResultStore {
   byTest = new Map<string, QaTestResult>();
-  stamps = new Map<number, number | null>();
+  stamps = new Map<string, string | null>();
 
-  findRecentResultByName(opts: { spec_file: string; test_name: string }): QaTestResult | null {
-    const key = `${opts.spec_file}::${opts.test_name}`;
-    return this.byTest.get(key) ?? null;
+  async findRecentResultByName(opts: {
+    spec_file: string;
+    test_name: string;
+  }): Promise<QaTestResult | null> {
+    return this.byTest.get(`${opts.spec_file}::${opts.test_name}`) ?? null;
   }
 
-  setKanbanCardId(resultId: number, cardId: number | null): void {
-    this.stamps.set(resultId, cardId);
+  async setKanbanCardId(
+    resultId: string,
+    kanbanCardId: string | null,
+  ): Promise<void> {
+    this.stamps.set(resultId, kanbanCardId);
   }
 }
 
@@ -90,24 +100,25 @@ function makeDeps(
 ): KanbanBridgeDeps {
   return {
     companyStore: companyStore as unknown as KanbanBridgeDeps['companyStore'],
-    qaResultStore: qaResultStore as unknown as KanbanBridgeDeps['qaResultStore'],
+    qaResultStore,
   };
 }
 
 function makeRun(over: Partial<QaRun> = {}): QaRun {
   return {
-    id: 11,
-    company_session_id: 7,
+    id: RUN_ID,
+    seq: 1,
+    company_session_id: SESSION_ID,
     agent_run_id: null,
     suite: 'login',
     service_id: 'main',
     status: 'completed',
-    started_at: '2026-04-25 10:00:00',
-    completed_at: '2026-04-25 10:01:00',
+    started_at: '2026-04-25T10:00:00.000Z',
+    completed_at: '2026-04-25T10:01:00.000Z',
     passed: 0,
     failed: 1,
     skipped: 0,
-    duration_ms: 60000,
+    duration_ms: 60_000,
     trigger: 'agent',
     report_persisted_path: null,
     kanban_feature_card_id: null,
@@ -121,19 +132,20 @@ function makeRun(over: Partial<QaRun> = {}): QaRun {
 
 function makeResult(over: Partial<QaTestResult> = {}): QaTestResult {
   return {
-    id: 99,
-    run_id: 11,
+    id: RESULT_ID,
+    seq: 1,
+    run_id: RUN_ID,
     spec_file: 'tests/e2e/login.spec.ts',
     test_name: 'wrong password keeps the form',
     status: 'failed',
-    duration_ms: 1500,
+    duration_ms: 1_500,
     error: 'Expected text not visible',
     trace_path: 'test-results/login/trace.zip',
     screenshot_path: 'test-results/login/screenshot.png',
     video_path: 'test-results/login/video.webm',
     summary_md_path: 'test-results/login/summary.md',
     kanban_card_id: null,
-    created_at: '2026-04-25 10:00:30',
+    created_at: '2026-04-25T10:00:30.000Z',
     ...over,
   };
 }
@@ -141,90 +153,76 @@ function makeResult(over: Partial<QaTestResult> = {}): QaTestResult {
 describe('upsertBugCard', () => {
   let companyStore: FakeCompanyStore;
   let qaResultStore: FakeQaResultStore;
+
   beforeEach(() => {
     companyStore = new FakeCompanyStore();
     qaResultStore = new FakeQaResultStore();
   });
 
-  it('creates a new bug card on first failure and stamps the result', () => {
+  it('creates a new bug card on first failure and stamps the result', async () => {
     const run = makeRun();
     const result = makeResult();
-    const out = upsertBugCard(
-      makeDeps(companyStore, qaResultStore),
-      {
-        sessionId: 7,
-        run,
-        result,
-        buildEvidenceUrl: (p) => `/api/sessions/7/qa/artifact?path=${p}`,
-        runDetailUrl: '/c/7?tab=tests&run=11',
-      },
-    );
-    expect(out.created).toBe(true);
-    expect(out.cardId).not.toBeNull();
+    const out = await upsertBugCard(makeDeps(companyStore, qaResultStore), {
+      sessionId: SESSION_ID,
+      run,
+      result,
+      buildEvidenceUrl: (path) => `/api/sessions/${SESSION_ID}/qa/artifact?path=${path}`,
+      runDetailUrl: `/c/${SESSION_ID}?tab=tests&run=${RUN_ID}`,
+    });
+
+    expect(out).toMatchObject({ created: true, cardId: expect.any(String) });
     const card = companyStore.cards.get(out.cardId!);
-    expect(card?.tag).toBe('bug');
-    expect(card?.column).toBe('todo');
-    expect(card?.title).toBe('[QA-BUG] login: wrong password keeps the form');
+    expect(card).toMatchObject({
+      tag: 'bug',
+      column: 'todo',
+      title: '[QA-BUG] login: wrong password keeps the form',
+    });
     expect(card?.description).toContain('Expected text not visible');
     expect(card?.description).toContain('test-results/login/video.webm');
-    expect(qaResultStore.stamps.get(99)).toBe(out.cardId);
+    expect(qaResultStore.stamps.get(RESULT_ID)).toBe(out.cardId);
   });
 
-  it('reuses the existing card when the same test fails again (idempotent)', () => {
+  it('reuses the existing card when the same test fails again', async () => {
     const run = makeRun();
-    const result1 = makeResult({ id: 100 });
-    const result2 = makeResult({ id: 101, error: 'Different message' });
-
-    const first = upsertBugCard(
-      makeDeps(companyStore, qaResultStore),
-      {
-        sessionId: 7,
-        run,
-        result: result1,
-        buildEvidenceUrl: (p) => p,
-      },
-    );
-
-    // Simulate the bridge stamp persisting back: the second call's
-    // findRecentResultByName must return the prior result.
+    const firstResult = makeResult();
+    const first = await upsertBugCard(makeDeps(companyStore, qaResultStore), {
+      sessionId: SESSION_ID,
+      run,
+      result: firstResult,
+      buildEvidenceUrl: (path) => path,
+    });
     qaResultStore.byTest.set(
-      `${result1.spec_file}::${result1.test_name}`,
-      { ...result1, kanban_card_id: first.cardId },
+      `${firstResult.spec_file}::${firstResult.test_name}`,
+      { ...firstResult, kanban_card_id: first.cardId },
     );
+    const secondResult = makeResult({
+      id: '66666666-6666-4666-8666-666666666666',
+      error: 'Different message',
+    });
 
-    const second = upsertBugCard(
-      makeDeps(companyStore, qaResultStore),
-      {
-        sessionId: 7,
-        run,
-        result: result2,
-        buildEvidenceUrl: (p) => p,
-      },
-    );
+    const second = await upsertBugCard(makeDeps(companyStore, qaResultStore), {
+      sessionId: SESSION_ID,
+      run,
+      result: secondResult,
+      buildEvidenceUrl: (path) => path,
+    });
 
-    expect(second.created).toBe(false);
-    expect(second.cardId).toBe(first.cardId);
-    const card = companyStore.cards.get(first.cardId!);
-    expect(card?.comments.length).toBe(1);
-    expect(card!.comments[0].content).toContain('Failure recurred in run #11');
-    expect(qaResultStore.stamps.get(101)).toBe(first.cardId);
+    expect(second).toMatchObject({ created: false, cardId: first.cardId });
+    expect(companyStore.cards.get(first.cardId!)?.comments[0]?.content)
+      .toContain(`Failure recurred in run #${RUN_ID}`);
+    expect(qaResultStore.stamps.get(secondResult.id)).toBe(first.cardId);
   });
 
-  it('links the bug card to the feature card via dependency', () => {
-    const run = makeRun({ kanban_feature_card_id: 42 });
-    const result = makeResult();
-    const out = upsertBugCard(
-      makeDeps(companyStore, qaResultStore),
-      {
-        sessionId: 7,
-        run,
-        result,
-        buildEvidenceUrl: (p) => p,
-      },
-    );
+  it('links the bug card to the feature card via UUID dependency', async () => {
+    const out = await upsertBugCard(makeDeps(companyStore, qaResultStore), {
+      sessionId: SESSION_ID,
+      run: makeRun({ kanban_feature_card_id: FEATURE_CARD_ID }),
+      result: makeResult(),
+      buildEvidenceUrl: (path) => path,
+    });
     expect(companyStore.dependencies).toContainEqual({
       card_id: out.cardId,
-      depends_on_id: 42,
+      depends_on_id: FEATURE_CARD_ID,
     });
   });
 });
@@ -232,101 +230,87 @@ describe('upsertBugCard', () => {
 describe('syncFeatureCard', () => {
   let companyStore: FakeCompanyStore;
   let qaResultStore: FakeQaResultStore;
+
   beforeEach(() => {
     companyStore = new FakeCompanyStore();
     qaResultStore = new FakeQaResultStore();
   });
 
-  it('moves a card to done when all green', () => {
-    companyStore.cards.set(50, {
-      id: 50,
+  function seedFeature(column: string): void {
+    companyStore.cards.set(FEATURE_CARD_ID, {
+      id: FEATURE_CARD_ID,
       title: 'QA: login',
       description: '',
-      column: 'in_progress',
+      column,
       tag: null,
       comments: [],
     });
-    const run = makeRun({ passed: 3, failed: 0 });
-    const out = syncFeatureCard(
-      makeDeps(companyStore, qaResultStore),
-      { featureCardId: 50, run, passed: 3, failed: 0, runDetailUrl: '/c/7' },
-    );
+  }
+
+  it('moves a card to done when all green', async () => {
+    seedFeature('in_progress');
+    const out = await syncFeatureCard(makeDeps(companyStore, qaResultStore), {
+      featureCardId: FEATURE_CARD_ID,
+      run: makeRun({ passed: 3, failed: 0 }),
+      passed: 3,
+      failed: 0,
+      runDetailUrl: `/c/${SESSION_ID}`,
+    });
     expect(out.column).toBe('done');
-    expect(companyStore.cards.get(50)?.column).toBe('done');
-    expect(companyStore.cards.get(50)?.comments[0].content).toContain('QA verde');
+    expect(companyStore.cards.get(FEATURE_CARD_ID)?.comments[0]?.content)
+      .toContain('QA verde');
   });
 
-  it('moves a card from done back to in_progress when red', () => {
-    companyStore.cards.set(50, {
-      id: 50,
-      title: 'QA: login',
-      description: '',
-      column: 'done',
-      tag: null,
-      comments: [],
+  it('moves a done card back to in_progress when red', async () => {
+    seedFeature('done');
+    const out = await syncFeatureCard(makeDeps(companyStore, qaResultStore), {
+      featureCardId: FEATURE_CARD_ID,
+      run: makeRun({ passed: 2, failed: 1 }),
+      passed: 2,
+      failed: 1,
     });
-    const run = makeRun({ passed: 2, failed: 1 });
-    const out = syncFeatureCard(
-      makeDeps(companyStore, qaResultStore),
-      { featureCardId: 50, run, passed: 2, failed: 1, runDetailUrl: '/c/7' },
-    );
     expect(out.column).toBe('in_progress');
-    expect(companyStore.cards.get(50)?.comments[0].content).toContain('QA red');
+    expect(companyStore.cards.get(FEATURE_CARD_ID)?.comments[0]?.content)
+      .toContain('QA red');
   });
 
-  it('does NOT move when card is missing — surfaces a warning instead', () => {
-    const run = makeRun();
-    const out = syncFeatureCard(
-      makeDeps(companyStore, qaResultStore),
-      { featureCardId: 9999, run, passed: 0, failed: 1 },
-    );
+  it('does not move a missing card and reports a warning', async () => {
+    const out = await syncFeatureCard(makeDeps(companyStore, qaResultStore), {
+      featureCardId: FEATURE_CARD_ID,
+      run: makeRun(),
+      passed: 0,
+      failed: 1,
+    });
     expect(out.column).toBeNull();
-    expect(out.warnings.some((w) => w.includes('missing'))).toBe(true);
+    expect(out.warnings.some((warning) => warning.includes('missing'))).toBe(true);
   });
 });
 
 describe('renderers', () => {
-  it('renderBugTitle uses the suite + test name', () => {
+  it('renders title, evidence, UUID run reference, and recurrence safely', () => {
     const run = makeRun({ suite: 'auth/forgot-password' });
-    const result = makeResult({ test_name: 'sends email when address is valid' });
-    expect(
-      renderBugTitle({
-        sessionId: 1,
-        run,
-        result,
-        buildEvidenceUrl: () => '',
-      }),
-    ).toBe('[QA-BUG] auth/forgot-password: sends email when address is valid');
-  });
-
-  it('renderBugDescription includes evidence URLs and run id', () => {
-    const run = makeRun();
-    const result = makeResult();
-    const desc = renderBugDescription({
-      sessionId: 7,
+    const result = makeResult({
+      test_name: 'sends email when address is valid',
+      error: 'first line\nignored detail',
+    });
+    const opts = {
+      sessionId: SESSION_ID,
       run,
       result,
-      buildEvidenceUrl: (p) => `/x/${p}`,
-      runDetailUrl: '/c/7?run=11',
-    });
-    expect(desc).toContain('/x/test-results/login/video.webm');
-    expect(desc).toContain('/x/test-results/login/screenshot.png');
-    expect(desc).toContain('/x/test-results/login/summary.md');
-    expect(desc).toContain('run #11');
-    expect(desc).toContain('/c/7?run=11');
-  });
+      buildEvidenceUrl: (path: string) => `/x/${path}`,
+      runDetailUrl: `/c/${SESSION_ID}?run=${RUN_ID}`,
+    };
 
-  it('renderRecurrenceComment quotes the first line of the error', () => {
-    const run = makeRun({ id: 7 });
-    const result = makeResult({ error: 'first line\nignored detail' });
-    const c = renderRecurrenceComment({
-      sessionId: 1,
-      run,
-      result,
-      buildEvidenceUrl: () => '',
-    });
-    expect(c).toContain('first line');
-    expect(c).not.toContain('ignored detail');
-    expect(c).toContain('run #7');
+    expect(renderBugTitle(opts))
+      .toBe('[QA-BUG] auth/forgot-password: sends email when address is valid');
+    const description = renderBugDescription(opts);
+    expect(description).toContain('/x/test-results/login/video.webm');
+    expect(description).toContain('/x/test-results/login/screenshot.png');
+    expect(description).toContain(`/c/${SESSION_ID}?run=${RUN_ID}`);
+    expect(description).toContain(`run #${RUN_ID}`);
+    const recurrence = renderRecurrenceComment(opts);
+    expect(recurrence).toContain('first line');
+    expect(recurrence).not.toContain('ignored detail');
+    expect(recurrence).toContain(`run #${RUN_ID}`);
   });
 });

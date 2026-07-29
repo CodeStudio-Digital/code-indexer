@@ -29,11 +29,11 @@ export function dsAnalyzeImport(binding: DsToolBinding): CoderTool {
         const summary = await writeThemeDigest(resolved.path);
 
         const store = getDesignSystemStore();
-        const session = store ? binding.resolveDsSession(store) : null;
+        const session = store ? await binding.resolveDsSession(store) : null;
         const state = session ? parsePipelineState(session.pipeline_json) : null;
         if (store && session && state) {
           state.theme_digest = summary;
-          store.setPipelineJson(session.id, serializePipelineState(state));
+          await store.setPipelineJson(session.id, serializePipelineState(state));
         }
         return ok(
           `Theme digest regenerated: ${summary.files} files scanned, ${summary.colors} colors, ` +

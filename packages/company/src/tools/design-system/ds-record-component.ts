@@ -71,22 +71,22 @@ export function dsRecordComponent(binding: DsToolBinding): CoderTool {
           );
         }
 
-        const session = binding.resolveDsSession(store);
+        const session = await binding.resolveDsSession(store);
         if (!session) {
           return err(
             `No DesignSystemSession bound to ${binding.describeBinding()}. Was this session created via the Design Systems tab?`,
           );
         }
 
-        const draft = ensureDraftVersion(store, session);
-        const existing = store.getComponentByName(draft.id, name);
+        const draft = await ensureDraftVersion(store, session);
+        const existing = await store.getComponentByName(draft.id, name);
         if (existing) {
           return ok(
             `Component '${name}' already recorded in draft v${draft.semver} (id=${existing.id}). Skipping insert.`,
           );
         }
 
-        const component = store.createComponent({
+        const component = await store.createComponent({
           version_id: draft.id,
           name,
           kind,
@@ -109,15 +109,15 @@ export function dsRecordComponent(binding: DsToolBinding): CoderTool {
  * in `published` or `failed`, opens a new draft. `bump_kind` defaults to
  * the session's `next_bump_hint` (or 'initial' for the first version).
  */
-export function ensureDraftVersion(
+export async function ensureDraftVersion(
   store: DesignSystemStore,
   session: DesignSystemSession,
-): DesignSystemVersion {
-  const latest = store.getLatestVersionAny(session.id);
+): Promise<DesignSystemVersion> {
+  const latest = await store.getLatestVersionAny(session.id);
   if (latest && (latest.status === 'draft' || latest.status === 'building')) {
     return latest;
   }
-  const isFirst = !latest || !store.getLatestPublishedVersion(session.id);
+  const isFirst = !latest || !(await store.getLatestPublishedVersion(session.id));
   return store.createVersion({
     ds_session_id: session.id,
     semver: 'pending',

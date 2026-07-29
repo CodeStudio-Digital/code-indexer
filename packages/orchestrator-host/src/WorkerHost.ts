@@ -45,6 +45,12 @@ export interface WorkerHostOpts<TWorkerData = unknown> {
   onExit?: (code: number, planned: boolean) => void;
   /** Optional fatal-error logger. */
   onError?: (err: Error) => void;
+  /**
+   * Timing hook for synchronous worker→host event dispatch. On the Electron
+   * main process this IS main-thread blocking time, so reporting it is what
+   * makes a freeze attributable to a specific event type. See MessageBridgeOpts.
+   */
+  onDispatch?: (type: string, ms: number) => void;
 }
 
 export type WorkerHostStatus = 'idle' | 'starting' | 'running' | 'evicting' | 'crashed';
@@ -156,6 +162,7 @@ export class WorkerHost<TWorkerData = unknown> {
       onListenerError: (err) => {
         this.opts.onError?.(err instanceof Error ? err : new Error(String(err)));
       },
+      onDispatch: this.opts.onDispatch,
     });
     worker.on('error', (err) => {
       this.opts.onError?.(err);

@@ -13,12 +13,14 @@
  * Listeners are best-effort: if a subscriber throws, the bus catches and
  * continues so one bad listener can't break delivery to the others.
  */
+import type { AgentRunId } from '@mcp/agent-runtime-contracts';
+import type { CompanySessionId } from '@mcp/session-storage';
 
 /** Shape forwarded from the worker bridge. */
 export interface SupervisorIncidentEnvelope {
-  sessionId: number;
+  sessionId: CompanySessionId;
   kind: string;
-  agentRunId: number | null;
+  agentRunId: AgentRunId | null;
   fromState?: string;
   attemptedTo?: string;
   detail: string;
@@ -30,8 +32,8 @@ export type SupervisorIncidentListener = (env: SupervisorIncidentEnvelope) => vo
 /**
  * Bounded ring of recent incidents. Lets new SSE subscribers replay
  * what they missed so the dashboard shows context immediately on
- * connect. Capacity is small on purpose — the persisted log
- * (`agent_supervision_incidents`) is the source of truth for history.
+ * connect. Capacity is small on purpose — the immutable incident files in the
+ * owning Company bundle are the source of truth for history.
  */
 const RING_CAPACITY = 100;
 

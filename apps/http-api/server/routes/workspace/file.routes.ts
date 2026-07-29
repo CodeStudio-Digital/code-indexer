@@ -7,7 +7,7 @@ export function mountFileRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/company/sessions/:sid/projects/:pid/file', async (c) => {
     const relPath = c.req.query('path') ?? '';
     if (!relPath) return c.json({ error: 'Missing path query' }, 400);
-    const guard = guardWorkspaceRequest(c, deps, relPath);
+    const guard = await guardWorkspaceRequest(c, deps, relPath);
     if (guard instanceof Response) return guard;
     try {
       const result = await readText(guard.resolved.abs);

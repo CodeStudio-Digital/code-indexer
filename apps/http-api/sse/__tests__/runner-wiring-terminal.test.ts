@@ -157,7 +157,7 @@ describe('wireRunnerEventsToBus terminal ordering', () => {
     wireRunnerEventsToBus(runner, bus);
     const payload = {
       ask_id: 'budget-run-1',
-      run_id: 'run-1',
+      run_id: '11111111-1111-4111-8111-111111111111',
       spent: 100,
       cap: 100,
       estimated: 50,

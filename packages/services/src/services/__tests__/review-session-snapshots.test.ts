@@ -6,8 +6,10 @@
  * call the pipeline → persist comments → propagate errors.
  */
 import { describe, it, expect } from 'vitest';
-import type { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
-import type { SessionFileReviewStore } from '@mcp/store/session-file-review-store.js';
+import type {
+  SessionReviewStorePort,
+  SessionSnapshotStorePort,
+} from '../session-snapshot-port.js';
 import type { SessionSnapshotService } from '../session-snapshots.js';
 import type {
   SnapshotReviewFinding,
@@ -16,7 +18,9 @@ import type {
 } from '../snapshot-review-pipeline.js';
 import { reviewSessionSnapshots } from '../review-session-snapshots.js';
 
-const BASELINE_ID = 10;
+const SESSION_ID = '10000000-0000-4000-8000-000000000042';
+const BASELINE_ID = '20000000-0000-4000-8000-000000000010';
+const REVIEW_RUN_ID = '30000000-0000-4000-8000-000000000001';
 
 function fakeDiff() {
   return {
@@ -57,12 +61,20 @@ const FINDING: SnapshotReviewFinding = {
   diffExcerpt: null,
 };
 
-function snapshotStoreWith(baselineIds: number[]): SessionFileSnapshotStore {
-  return { listActiveBaselineIds: () => baselineIds } as unknown as SessionFileSnapshotStore;
+function snapshotStoreWith(
+  baselineIds: string[],
+): SessionSnapshotStorePort<string, string> {
+  return {
+    listActiveBaselineIds: () => baselineIds,
+  } as unknown as SessionSnapshotStorePort<string, string>;
 }
 
-function snapshotServiceWith(diff: ReturnType<typeof fakeDiff> | null): SessionSnapshotService {
-  return { getDiff: async () => diff } as unknown as SessionSnapshotService;
+function snapshotServiceWith(
+  diff: ReturnType<typeof fakeDiff> | null,
+): SessionSnapshotService<string, string> {
+  return {
+    getDiff: async () => diff,
+  } as unknown as SessionSnapshotService<string, string>;
 }
 
 function pipelineReturning(
@@ -79,21 +91,24 @@ function pipelineReturning(
 
 function makeReviewStore() {
   const runs: Array<Record<string, unknown>> = [];
-  const completed: Array<{ id: number; patch: Record<string, unknown> }> = [];
+  const completed: Array<{ id: string; patch: Record<string, unknown> }> = [];
   const comments: Array<Record<string, unknown>> = [];
   const store = {
     createRun: (i: Record<string, unknown>) => {
-      const r = { id: 1, ...i };
+      const r = { id: REVIEW_RUN_ID, ...i };
       runs.push(r);
       return r;
     },
-    completeRun: (id: number, patch: Record<string, unknown>) => completed.push({ id, patch }),
+    completeRun: (id: string, patch: Record<string, unknown>) => completed.push({ id, patch }),
     createComment: (i: Record<string, unknown>) => {
-      const c = { id: comments.length + 1, ...i };
+      const c = {
+        id: `40000000-0000-4000-8000-${String(comments.length + 1).padStart(12, '0')}`,
+        ...i,
+      };
       comments.push(c);
       return c;
     },
-  } as unknown as SessionFileReviewStore;
+  } as unknown as SessionReviewStorePort<string, string>;
   return { store, runs, completed, comments };
 }
 
@@ -112,7 +127,7 @@ describe('reviewSessionSnapshots', () => {
         pipeline,
         reviewStore: rs.store,
       },
-      42,
+      SESSION_ID,
     );
 
     expect(out.ok).toBe(true);
@@ -120,8 +135,8 @@ describe('reviewSessionSnapshots', () => {
     expect(out.findings).toHaveLength(1);
     expect(captured).toMatchObject({
       sessionKind: 'coder',
-      sessionId: 42,
-      resolveContext: { sessionId: 42 },
+      sessionId: SESSION_ID,
+      resolveContext: { sessionId: SESSION_ID },
     });
     // Persisted exactly one auto comment on the right baseline/file.
     expect(rs.comments).toHaveLength(1);
@@ -144,7 +159,7 @@ describe('reviewSessionSnapshots', () => {
         pipeline,
         reviewStore: rs.store,
       },
-      7,
+      SESSION_ID,
     );
 
     expect(out.pendingHunks).toBe(0);
@@ -169,7 +184,7 @@ describe('reviewSessionSnapshots', () => {
         pipeline,
         reviewStore: rs.store,
       },
-      9,
+      SESSION_ID,
     );
 
     expect(out.ok).toBe(false);
@@ -190,7 +205,7 @@ describe('reviewSessionSnapshots', () => {
         snapshotService: snapshotServiceWith(fakeDiff()),
         pipeline,
       },
-      42,
+      SESSION_ID,
       { focus: 'watch the null handling', intent: 'Session: fix crash on empty list' },
     );
     expect(out.ok).toBe(true);
@@ -214,7 +229,7 @@ describe('reviewSessionSnapshots', () => {
         snapshotService: snapshotServiceWith(fakeDiff()),
         pipeline,
       },
-      42,
+      SESSION_ID,
     );
     expect(captured!.contextText).toBeNull();
   });
@@ -227,7 +242,7 @@ describe('reviewSessionSnapshots', () => {
         snapshotService: snapshotServiceWith(fakeDiff()),
         pipeline,
       },
-      5,
+      SESSION_ID,
     );
     expect(out.ok).toBe(true);
     expect(out.findings).toHaveLength(1);
@@ -244,7 +259,7 @@ describe('reviewSessionSnapshots', () => {
         snapshotService: snapshotServiceWith(ignored),
         pipeline,
       },
-      11,
+      SESSION_ID,
     );
     expect(out.pendingHunks).toBe(0);
     expect(out.findings).toEqual([]);

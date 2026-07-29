@@ -8,7 +8,7 @@ import type { WorkerLogEntry } from '../../hooks/agent-stream/types.js';
 
 export async function exportWorkerLogs(
   entries: readonly WorkerLogEntry[],
-  sessionId: number | null,
+  sessionId: string | null,
   kind: 'coder' | 'company',
 ): Promise<void> {
   const backend = sessionId != null ? await fetchRuntimeLogs(kind, sessionId) : null;
@@ -20,7 +20,7 @@ export async function exportWorkerLogs(
 
 async function fetchRuntimeLogs(
   kind: 'coder' | 'company',
-  sessionId: number,
+  sessionId: string,
 ): Promise<{ jsonl: string; summary: unknown } | null> {
   try {
     const base = `/api/${kind}/sessions/${sessionId}`;

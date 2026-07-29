@@ -16,8 +16,12 @@ beforeEach(() => { db = new Database(':memory:'); });
 afterEach(() => db.close());
 
 describe('migration 210 — coder tool-call guard telemetry', () => {
-  it('is the next migration after 209', () => {
-    expect(MIGRATIONS.at(-1)).toMatchObject({
+  // Asserts POSITION, not "is last" — the original form rotted the moment
+  // migration 211 landed and says nothing about this migration.
+  it('is registered directly after 209', () => {
+    const versions = MIGRATIONS.map((migration) => migration.version);
+    expect(versions.indexOf(210)).toBe(versions.indexOf(209) + 1);
+    expect(MIGRATIONS[versions.indexOf(210)]).toMatchObject({
       version: 210,
       name: 'coder_tool_call_guard_telemetry',
     });

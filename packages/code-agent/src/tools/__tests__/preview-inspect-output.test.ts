@@ -12,10 +12,21 @@ import {
   previewNetworkTool,
   previewSnapshotTool,
 } from '@mcp/code-agent/tools/preview/inspect.js';
+import {
+  asAgentRunId,
+  asCompanySessionId,
+  asSessionId,
+} from '@mcp/session-storage';
+import type { CompanyContext } from '@mcp/company/types.js';
 
 afterEach(() => setGlobalPreviewDevtools(null));
 
-const ctx = { sessionId: 7, cwd: '/tmp', projectName: 'preview-test' } as ToolContext;
+const SESSION_ID = asSessionId('00000000-0000-4000-8000-000000000007');
+const ctx = {
+  sessionId: SESSION_ID,
+  cwd: '/tmp',
+  projectName: 'preview-test',
+} as ToolContext;
 
 describe('preview inspector output ownership', () => {
   it('passes a large inspector payload intact to the central finalizer', async () => {
@@ -51,7 +62,7 @@ describe('preview inspector output ownership', () => {
     }, ctx);
 
     expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
-      key: 'coder-7',
+      key: `coder-${SESSION_ID}`,
       method: 'network',
       args: expect.objectContaining({
         includeBody: true,
@@ -95,10 +106,27 @@ describe('preview bridge protocol', () => {
   });
 
   it('isolates company preview keys by both company session and agent run', () => {
+    const companyContext: CompanyContext = {
+      orchestrator: {} as CompanyContext['orchestrator'],
+      companySessionId: asCompanySessionId(
+        '00000000-0000-4000-8000-000000000042',
+      ),
+      agentRole: 'preview-test',
+      agentRunId: asAgentRunId(
+        '00000000-0000-4000-8000-000000000009',
+      ),
+      allowedProjectIds: [],
+      isMaster: false,
+    };
     const companyCtx = {
-      companyContext: { companySessionId: 42, agentRunId: 9 },
-    } as ToolContext;
-    expect(previewKey(companyCtx)).toBe('company-session-42-agent-9');
+      cwd: '/tmp',
+      projectName: 'preview-test',
+      companyContext,
+    } satisfies ToolContext;
+    expect(previewKey(companyCtx)).toBe(
+      'company-session-00000000-0000-4000-8000-000000000042-' +
+      'agent-00000000-0000-4000-8000-000000000009',
+    );
   });
 
   it('propagates caller aborts to the backend request', async () => {

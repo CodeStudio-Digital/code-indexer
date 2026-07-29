@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiPatch } from '../../hooks/useApi.js';
 import { toast } from '../../components/ui/prompt-dialog.js';
-import type { CoderSession, ExecutionMode, SessionData } from './types.js';
+import type { CoderSession, ExecutionMode, SessionData, SessionId } from './types.js';
 import {
   DEFAULT_NEW_EXECUTION_MODE,
   createSerializedAsyncQueue,
@@ -13,13 +13,13 @@ import {
 const EXECUTION_MODE_CHANGED_EVENT = 'coder:session_execution_mode_changed';
 
 interface ExecutionModeChangedDetail {
-  sessionId: number;
+  sessionId: SessionId;
   mode: ExecutionMode;
   session?: CoderSession;
 }
 
 interface UseSessionExecutionModeOptions {
-  selectedId: number | null;
+  selectedId: SessionId | null;
   sessionData: SessionData | null;
   updateSessionData: (fn: (previous: SessionData) => SessionData) => void;
   runnerBusy: boolean;

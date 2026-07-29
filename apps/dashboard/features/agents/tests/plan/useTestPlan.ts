@@ -31,7 +31,7 @@ export interface UseTestPlanResult {
   save: (next: string) => Promise<void>;
 }
 
-export function useTestPlan(sessionId: number): UseTestPlanResult {
+export function useTestPlan(sessionId: string): UseTestPlanResult {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exists, setExists] = useState(false);
@@ -86,9 +86,9 @@ export function useTestPlan(sessionId: number): UseTestPlanResult {
  * fall back to the most recent completed run's. Either gives us enough
  * signal to annotate scenario verdicts.
  */
-async function fetchLatestResults(sessionId: number): Promise<QaTestResult[]> {
+async function fetchLatestResults(sessionId: string): Promise<QaTestResult[]> {
   try {
-    const active = await fetchActiveRun(sessionId);
+    const active = await fetchActiveRun({ sessionId });
     if (active.run && active.results && active.results.length > 0) {
       return [...active.results].reverse(); // newest first
     }

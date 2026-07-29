@@ -4,11 +4,13 @@ import { chapterPreviewText, resolvedChapterKind } from '../ConversationChapters
 
 function chapter(overrides: Partial<ConversationChapter> = {}): ConversationChapter {
   return {
-    id: 1,
-    session_id: 1241,
+    id: '018f0f5e-7b2d-7a45-8c11-0123456789ad',
+    seq: 1,
+    revision: 1,
+    session_id: '018f0f5e-7b2d-7a45-8c11-0123456789ab',
     ordinal: 1,
-    start_message_id: 10,
-    end_message_id: 30,
+    start_message_seq: 10,
+    end_message_seq: 30,
     source: 'auto',
     trigger: 'threshold',
     title: 'Reliable compaction',

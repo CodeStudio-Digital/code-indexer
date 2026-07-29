@@ -1,34 +1,36 @@
 /**
  * v4.5 — host-side persistence of Playwright artifacts.
  *
- * The user's pain (sessions like 68): once a sandbox is destroyed —
+ * Once a sandbox is destroyed —
  * orphan recovery, session cleanup, server restart, container rebuild —
  * the operator loses every screenshot, video, trace, and the HTML report.
- * The DB still has `qa_test_runs` rows but the file-paths in
- * `screenshot_path` / `video_path` / `trace_path` no longer resolve.
  *
  * This helper runs once per `qa_run_completed`: it walks
  * `playwright-report/` and `test-results/` inside the sandbox, copies
- * every file to a host directory under
- * `<mcpDataDir>/qa-reports/<sessionId>/<runId>/`
- * (i.e. `~/.mcp-code-indexer/qa-reports/…`), and stamps
- * the absolute path on `qa_test_runs.report_persisted_path`. The
+ * every file to
+ * `<session bundle>/company/qa-artifacts/<run UUID>/`, and stamps that
+ * path on the file-backed QA run entity. The
  * artifacts route then prefers that path over the (possibly gone)
  * sandbox.
  *
  * Best-effort by design — failures are logged but never thrown back to
- * the test-event handler. Losing evidence is sad, but the run row is
+ * the test-event handler. Losing evidence is sad, but the run entity is
  * the source of truth and must always be marked `completed` regardless
  * of whether the copy succeeded. A partial copy is also fine: the
- * dashboard renders what it finds.
+ * dashboard renders what it finds. Artifacts are never pruned by age or
+ * count; deleting the owning session is the only retention boundary.
  *
  * Pure-ish: takes the manager + store as arguments so unit tests can
  * inject fakes and assert the surface (cap, list, write order).
  */
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { mcpDataDir } from '@mcp/shared/utils/config.js';
-import { qaReportsDir } from '@mcp/shared/utils/data-paths.js';
+import {
+  assertContainedPath,
+  assertSafeFileName,
+  atomicWriteFile,
+  ensureDirectoryTreeNoLinks,
+} from '@mcp/session-storage';
 import type { SandboxManager } from '../sandbox/sandbox-manager.js';
 import type { IQaTestRunStore } from './store/interfaces.js';
 
@@ -37,11 +39,14 @@ const DEFAULT_MAX_BYTES = 1 * 1024 * 1024 * 1024; // 1 GiB per run
 const DEFAULT_PER_FILE_MAX_BYTES = 50 * 1024 * 1024; // 50 MiB per file
 
 export interface PersistRunArtifactsOpts {
-  sessionId: number;
-  runId: number;
+  sessionId: string;
+  runId: string;
   serviceId: string;
-  /** Override base dir. Defaults to `<mcpDataDir>/qa-reports`. */
-  baseDir?: string;
+  /**
+   * Exact run directory inside the owning session bundle. Required:
+   * there is deliberately no central data-dir fallback.
+   */
+  outputDirectory: string;
   /** Override total cap. Defaults to MCP_QA_PERSIST_MAX_BYTES_PER_RUN env or 1 GiB. */
   maxBytes?: number;
   /** Override per-file cap. Defaults to 50 MiB. */
@@ -62,20 +67,6 @@ export interface PersistRunArtifactsResult {
 }
 
 /**
- * Pure: resolve the host directory for a `(sessionId, runId)` pair.
- * Exported so the artifacts route can compute the same path on read
- * without re-computing the env-var defaulting logic.
- */
-export function resolveRunReportDir(
-  sessionId: number | string,
-  runId: number | string,
-  baseDir?: string,
-): string {
-  const root = (baseDir ?? mcpDataDir()).replace(/[\\/]+$/, '');
-  return path.resolve(path.join(root, 'qa-reports', String(sessionId), String(runId)));
-}
-
-/**
  * Resolve the env-driven default for `maxBytes`. Exported for tests.
  */
 export function resolveDefaultMaxBytes(): number {
@@ -91,7 +82,7 @@ export function resolveDefaultMaxBytes(): number {
  * host. Returns a structured report; never throws (catches and logs).
  *
  * Caller is responsible for stamping `report_persisted_path` on the run
- * row — we keep the store-write outside the helper so unit tests can
+ * entity — we keep the store-write outside the helper so unit tests can
  * use the helper without instantiating a store.
  */
 export async function persistRunArtifacts(
@@ -101,8 +92,7 @@ export async function persistRunArtifacts(
   >,
   opts: PersistRunArtifactsOpts,
 ): Promise<PersistRunArtifactsResult> {
-  const baseDir = opts.baseDir ?? qaReportsDir();
-  const absolutePath = resolveRunReportDir(opts.sessionId, opts.runId, baseDir);
+  const absolutePath = path.resolve(opts.outputDirectory);
   const maxBytes = opts.maxBytes ?? resolveDefaultMaxBytes();
   const perFileMax = opts.perFileMaxBytes ?? DEFAULT_PER_FILE_MAX_BYTES;
 
@@ -115,7 +105,7 @@ export async function persistRunArtifacts(
   };
 
   try {
-    await fs.mkdir(absolutePath, { recursive: true });
+    await fs.access(absolutePath);
   } catch (e) {
     result.warnings.push(`mkdir ${absolutePath} failed: ${errMsg(e)}`);
     return result;
@@ -137,7 +127,14 @@ export async function persistRunArtifacts(
     if (files.length === 0) continue;
 
     for (const rel of files) {
-      const sourceRel = `${sourceDir}/${rel}`;
+      let relativeSegments: string[];
+      try {
+        relativeSegments = safeRelativeSegments(rel);
+      } catch (e) {
+        result.warnings.push(`unsafe ${sourceDir} path ignored: ${errMsg(e)}`);
+        continue;
+      }
+      const sourceRel = `${sourceDir}/${relativeSegments.join('/')}`;
       // Budget guard — if even reading the file would exceed the cap,
       // skip without attempting the read (saves a base64 round-trip).
       const remaining = maxBytes - usedBytes;
@@ -173,10 +170,18 @@ export async function persistRunArtifacts(
         continue;
       }
 
-      const targetAbs = path.join(absolutePath, sourceRel);
+      const targetAbs = path.join(
+        absolutePath,
+        assertSafeFileName(sourceDir, 'QA artifact source directory'),
+        ...relativeSegments,
+      );
+      assertContainedPath(absolutePath, targetAbs);
       try {
-        await fs.mkdir(path.dirname(targetAbs), { recursive: true });
-        await fs.writeFile(targetAbs, buf);
+        await ensureDirectoryTreeNoLinks(
+          absolutePath,
+          path.dirname(targetAbs),
+        );
+        await atomicWriteFile(targetAbs, buf);
         usedBytes += buf.byteLength;
         result.copied += 1;
       } catch (e) {
@@ -189,7 +194,7 @@ export async function persistRunArtifacts(
 }
 
 /**
- * Convenience: persist + stamp the run row in one shot. Used by the
+ * Convenience: persist + stamp the run entity in one shot. Used by the
  * test-event route on `completed`. Logs warnings but never throws.
  */
 export async function persistAndStamp(
@@ -197,73 +202,52 @@ export async function persistAndStamp(
     SandboxManager,
     'listWorkspaceFilesOnService' | 'readWorkspaceFileBufferOnService'
   >,
-  runStore: Pick<IQaTestRunStore, 'setReportPersistedPath'>,
-  opts: PersistRunArtifactsOpts,
+  runStore: Pick<
+    IQaTestRunStore,
+    'setReportPersistedPath' | 'withRunArtifactDirectory'
+  >,
+  opts: Omit<PersistRunArtifactsOpts, 'outputDirectory'>,
 ): Promise<PersistRunArtifactsResult> {
-  const report = await persistRunArtifacts(manager, opts);
+  const report = await runStore.withRunArtifactDirectory(
+    opts.sessionId,
+    opts.runId,
+    (outputDirectory) =>
+      persistRunArtifacts(manager, {
+        ...opts,
+        outputDirectory,
+      }),
+  );
+  // Stamp in a second short writer operation. Calling this inside
+  // withRunArtifactDirectory would recursively acquire the same
+  // session writer/lease.
   if (report.copied > 0) {
     try {
-      runStore.setReportPersistedPath(opts.runId, report.absolutePath);
+      await runStore.setReportPersistedPath(
+        opts.runId,
+        report.absolutePath,
+      );
     } catch (e) {
-      report.warnings.push(`stamp report_persisted_path failed: ${errMsg(e)}`);
+      report.warnings.push(
+        `stamp report_persisted_path failed: ${errMsg(e)}`,
+      );
     }
   }
   return report;
 }
 
-/**
- * Retention pruning — delete every host-side run dir for a session
- * except the most recent `keep` (sorted numerically by runId, since
- * they're auto-incremented). Used by `qa_start_run`'s pre-flight so
- * the disk doesn't grow unboundedly run after run.
- *
- * Best-effort: rmdir failures are surfaced but never thrown.
- */
-export async function pruneOldRunDirs(
-  sessionId: number | string,
-  keep: number,
-  baseDir?: string,
-): Promise<{ removed: string[]; warnings: string[] }> {
-  const sessionDir = path.dirname(resolveRunReportDir(sessionId, 0, baseDir));
-  const out: { removed: string[]; warnings: string[] } = { removed: [], warnings: [] };
-  let entries: string[];
-  try {
-    entries = await fs.readdir(sessionDir);
-  } catch (e) {
-    const msg = errMsg(e);
-    if (/ENOENT|no such file/i.test(msg)) return out;
-    out.warnings.push(`readdir ${sessionDir} failed: ${msg}`);
-    return out;
-  }
-  const numeric = entries
-    .map((e) => ({ name: e, n: Number(e) }))
-    .filter((e) => Number.isFinite(e.n) && e.n > 0)
-    .sort((a, b) => b.n - a.n);
-  const toDelete = numeric.slice(Math.max(0, keep));
-  for (const { name } of toDelete) {
-    const target = path.join(sessionDir, name);
-    try {
-      await fs.rm(target, { recursive: true, force: true });
-      out.removed.push(target);
-    } catch (e) {
-      out.warnings.push(`rm ${target} failed: ${errMsg(e)}`);
-    }
-  }
-  return out;
-}
-
-/**
- * Pure: resolve the env-driven default for `MCP_QA_RETAIN_RUNS`.
- * Falls back to 5. Exported for the qa_start_run tool + tests.
- */
-export function resolveRetainRuns(): number {
-  const raw = process.env.MCP_QA_RETAIN_RUNS;
-  if (!raw) return 5;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return 5;
-  return Math.floor(n);
-}
-
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+function safeRelativeSegments(value: string): string[] {
+  if (typeof value !== 'string' || value.length === 0 || path.isAbsolute(value)) {
+    throw new Error(`invalid relative path ${JSON.stringify(value)}`);
+  }
+  const segments = value.replaceAll('\\', '/').split('/');
+  if (segments.length === 0) {
+    throw new Error(`invalid relative path ${JSON.stringify(value)}`);
+  }
+  return segments.map((segment) =>
+    assertSafeFileName(segment, 'QA artifact path segment'),
+  );
 }

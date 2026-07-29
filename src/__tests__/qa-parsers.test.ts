@@ -9,6 +9,10 @@ import {
 } from '@mcp/services/qa/parsers/run-status-format.js';
 import type { QaTestResult } from '@mcp/services/qa/types.js';
 
+const RUN_ID = '00000000-0000-4000-8000-000000000001';
+const RESULT_A_ID = '00000000-0000-4000-8000-000000000007';
+const RESULT_B_ID = '00000000-0000-4000-8000-000000000009';
+
 // ─── parseTestPlanSections ───────────────────────────────────────
 
 describe('parseTestPlanSections', () => {
@@ -72,8 +76,9 @@ describe('parseTestPlanSections', () => {
 
 function mkResult(partial: Partial<QaTestResult> & { test_name: string }): QaTestResult {
   return {
-    id: 1,
-    run_id: 1,
+    id: RESULT_A_ID,
+    seq: 1,
+    run_id: RUN_ID,
     spec_file: 'tests/e2e/x.spec.ts',
     status: 'passed',
     duration_ms: 0,
@@ -99,16 +104,16 @@ describe('matchPlanToResults', () => {
   it('matches by exact test name (case-insensitive)', () => {
     const sections = parseTestPlanSections('### S (P0)\n- Login valid').sections;
     const annotated = matchPlanToResults(sections, [
-      mkResult({ id: 7, test_name: 'login valid', status: 'passed' }),
+      mkResult({ id: RESULT_A_ID, test_name: 'login valid', status: 'passed' }),
     ]);
     expect(annotated[0].scenarios[0].verdict).toBe('passed');
-    expect(annotated[0].scenarios[0].resultId).toBe(7);
+    expect(annotated[0].scenarios[0].resultId).toBe(RESULT_A_ID);
   });
 
   it('falls back to substring match', () => {
     const sections = parseTestPlanSections('### S (P0)\n- login flow').sections;
     const annotated = matchPlanToResults(sections, [
-      mkResult({ id: 9, test_name: 'login flow > valid credentials', status: 'failed' }),
+      mkResult({ id: RESULT_B_ID, test_name: 'login flow > valid credentials', status: 'failed' }),
     ]);
     expect(annotated[0].scenarios[0].verdict).toBe('failed');
   });
@@ -116,10 +121,10 @@ describe('matchPlanToResults', () => {
   it('uses the newest result when several match (input order = newest first)', () => {
     const sections = parseTestPlanSections('### S (P0)\n- login').sections;
     const annotated = matchPlanToResults(sections, [
-      mkResult({ id: 2, test_name: 'login', status: 'failed', created_at: '2026-04-25' }),
-      mkResult({ id: 1, test_name: 'login', status: 'passed', created_at: '2026-04-24' }),
+      mkResult({ id: RESULT_B_ID, seq: 2, test_name: 'login', status: 'failed', created_at: '2026-04-25' }),
+      mkResult({ id: RESULT_A_ID, seq: 1, test_name: 'login', status: 'passed', created_at: '2026-04-24' }),
     ]);
-    expect(annotated[0].scenarios[0].resultId).toBe(2);
+    expect(annotated[0].scenarios[0].resultId).toBe(RESULT_B_ID);
     expect(annotated[0].scenarios[0].verdict).toBe('failed');
   });
 });

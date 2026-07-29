@@ -46,7 +46,7 @@ type Item =
   | { kind: 'recent'; path: string }
   | { kind: 'symbol'; hit: SymbolHitDTO }
   | { kind: 'text'; path: string }
-  | { kind: 'semantic'; hit: SemanticHitDTO }
+  | { kind: 'semantic'; hit: SemanticHitDTO; telemetryRequestId?: string }
   | { kind: 'command'; id: string; title: string; category: string };
 
 interface ComputeResult {
@@ -196,6 +196,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
           vectorAvailable?: boolean;
           embeddingAvailable?: boolean;
           vectorError?: string;
+          telemetryRequestId?: string;
         };
       }>('search.project', {
         projectId,
@@ -206,6 +207,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
         type: 'all',
         limit: 50,
         supersessionKey: searchEverywhereSupersessionKey(projectId),
+        consumer: 'search_everywhere',
       }, { signal }).catch(() => ({ results: [], diagnostics: { vectorError: 'unavailable' } }));
     const semanticNotice = (
       response.diagnostics.vectorAvailable === false
@@ -213,7 +215,11 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
       || response.diagnostics.vectorError
     ) ? t('everywhere.semanticFallback') : null;
     return {
-      items: response.results.map<Item>((hit) => ({ kind: 'semantic', hit })),
+      items: response.results.map<Item>((hit) => ({
+        kind: 'semantic',
+        hit,
+        telemetryRequestId: response.diagnostics.telemetryRequestId,
+      })),
       semanticNotice,
     };
   }, [projectId, t]);
@@ -278,6 +284,14 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
         ? (item.hit.data.file_path ?? item.hit.data.path ?? '')
         : item.path;
     if (!path) return;
+    if (item.kind === 'semantic' && item.telemetryRequestId) {
+      void apiCall('search.outcome', {
+        projectId,
+        requestId: item.telemetryRequestId,
+        semanticWin: item.hit.vector_score != null
+          && (item.hit.fts_rank == null || item.hit.fts_rank > 5),
+      }).catch(() => undefined);
+    }
     onOpenFile(path);
     const target = item.kind === 'symbol'
       ? { line: item.hit.line, col: item.hit.col }
@@ -295,7 +309,7 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
         editor?.focus();
       }, 120);
     }
-  }, [close, onOpenFile]);
+  }, [close, onOpenFile, projectId]);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Tab') {

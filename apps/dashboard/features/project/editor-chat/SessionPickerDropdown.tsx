@@ -36,13 +36,13 @@ interface Props {
   projectName: string;
   sessions: CoderSession[] | null;
   groups?: CoderSessionGroup[] | null;
-  onPick: (id: number) => void;
-  onFavorite?: (id: number, favorite: boolean) => Promise<void> | void;
-  onArchive?: (id: number) => Promise<void> | void;
-  onDelete?: (id: number) => Promise<void> | void;
-  onRename?: (id: number, currentTitle: string) => Promise<void> | void;
-  onDuplicate?: (id: number) => Promise<unknown> | void;
-  onMoveToGroup?: (id: number, groupId: number | null) => Promise<void> | void;
+  onPick: (id: string) => void;
+  onFavorite?: (id: string, favorite: boolean) => Promise<void> | void;
+  onArchive?: (id: string) => Promise<void> | void;
+  onDelete?: (id: string) => Promise<void> | void;
+  onRename?: (id: string, currentTitle: string) => Promise<void> | void;
+  onDuplicate?: (id: string) => Promise<unknown> | void;
+  onMoveToGroup?: (id: string, groupId: number | null) => Promise<void> | void;
 }
 
 interface SessionSection {
@@ -194,13 +194,13 @@ function SessionRow({
 }: {
   session: CoderSession;
   groups: CoderSessionGroup[];
-  onPick: (id: number) => void;
-  onFavorite?: (id: number, favorite: boolean) => Promise<void> | void;
-  onArchive?: (id: number) => Promise<void> | void;
-  onDelete?: (id: number) => Promise<void> | void;
-  onRename?: (id: number, currentTitle: string) => Promise<void> | void;
-  onDuplicate?: (id: number) => Promise<unknown> | void;
-  onMoveToGroup?: (id: number, groupId: number | null) => Promise<void> | void;
+  onPick: (id: string) => void;
+  onFavorite?: (id: string, favorite: boolean) => Promise<void> | void;
+  onArchive?: (id: string) => Promise<void> | void;
+  onDelete?: (id: string) => Promise<void> | void;
+  onRename?: (id: string, currentTitle: string) => Promise<void> | void;
+  onDuplicate?: (id: string) => Promise<unknown> | void;
+  onMoveToGroup?: (id: string, groupId: number | null) => Promise<void> | void;
 }) {
   const { t } = useTranslation(['chat', 'common']);
   const hasActions = Boolean(onFavorite || onArchive || onDelete || onRename || onDuplicate || onMoveToGroup);
@@ -355,12 +355,12 @@ function SessionActionsMenu({
 }: {
   session: CoderSession;
   groups: CoderSessionGroup[];
-  onFavorite?: (id: number, favorite: boolean) => Promise<void> | void;
-  onArchive?: (id: number) => Promise<void> | void;
-  onDelete?: (id: number) => Promise<void> | void;
-  onRename?: (id: number, currentTitle: string) => Promise<void> | void;
-  onDuplicate?: (id: number) => Promise<unknown> | void;
-  onMoveToGroup?: (id: number, groupId: number | null) => Promise<void> | void;
+  onFavorite?: (id: string, favorite: boolean) => Promise<void> | void;
+  onArchive?: (id: string) => Promise<void> | void;
+  onDelete?: (id: string) => Promise<void> | void;
+  onRename?: (id: string, currentTitle: string) => Promise<void> | void;
+  onDuplicate?: (id: string) => Promise<unknown> | void;
+  onMoveToGroup?: (id: string, groupId: number | null) => Promise<void> | void;
 }) {
   const { t } = useTranslation(['chat', 'common']);
   return (

@@ -45,6 +45,7 @@ export function sizeToBucket(n: number): SizeBucket {
 }
 
 export interface TelemetryEvent {
+  queryId?: string;
   pipelineName: string;
   stage: StageName;
   component: string;
@@ -58,8 +59,12 @@ export interface TelemetryEvent {
   errors?: number;
   diag?: Record<string, unknown>;
   traceSampled?: boolean;
-  sessionId?: number;
-  companySessionId?: number;
+  sessionId?: string;
+  companySessionId?: string;
+  requestId?: string;
+  projectId?: number;
+  consumer?: string;
+  queryClass?: string;
 }
 
 export interface TelemetrySink {

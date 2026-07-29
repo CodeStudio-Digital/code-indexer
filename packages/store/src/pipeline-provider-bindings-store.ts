@@ -2,8 +2,9 @@
  * PipelineProviderBindingsStore — admin-managed mapping of which
  * provider+model+config a given pipeline should use for a given role.
  *
- * Schema is owned by migration 080. The hierarchy (session → template →
- * global) is resolved by `PipelineProviderResolver` in `packages/services`.
+ * Schema is owned by migration 080. SQLite only owns reusable template and
+ * global bindings. Session-specific provider/tool configuration belongs to
+ * the filesystem session bundle and is never read or written here.
  *
  * Why this exists: every pipeline introduced by the candidate-pipeline
  * framework needs at least one LLM-backed dependency (embedder, classifier,
@@ -14,7 +15,7 @@ import type DatabaseConstructor from 'better-sqlite3';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
-export type BindingScopeType = 'global' | 'template' | 'session';
+export type BindingScopeType = 'global' | 'template';
 
 export interface PipelineProviderBinding {
   id: number;
@@ -85,7 +86,26 @@ interface RawRow {
   updated_at: string;
 }
 
+const REUSABLE_SCOPE_SQL = `scope_type IN ('global', 'template')`;
+
+function isBindingScopeType(value: unknown): value is BindingScopeType {
+  return value === 'global' || value === 'template';
+}
+
+function assertBindingScope(
+  scopeType: unknown,
+  scopeId: number | null | undefined,
+): asserts scopeType is BindingScopeType {
+  if (!isBindingScopeType(scopeType)) {
+    throw new Error('pipeline provider binding scope must be global or template');
+  }
+  if (scopeType === 'template' && scopeId == null) {
+    throw new Error('scope_id is required for template pipeline provider bindings');
+  }
+}
+
 function mapRow(row: RawRow): PipelineProviderBinding {
+  assertBindingScope(row.scope_type, row.scope_id);
   return {
     id: row.id,
     pipeline_name: row.pipeline_name,
@@ -94,7 +114,7 @@ function mapRow(row: RawRow): PipelineProviderBinding {
     model_id: row.model_id,
     model_mode: row.model_mode,
     config: row.config_json ? (JSON.parse(row.config_json) as Record<string, unknown>) : {},
-    scope_type: row.scope_type as BindingScopeType,
+    scope_type: row.scope_type,
     scope_id: row.scope_id,
     enabled: row.enabled !== 0,
     priority: row.priority,
@@ -107,13 +127,13 @@ export class PipelineProviderBindingsStore {
   constructor(private db: DB) {}
 
   list(opts: { pipelineName?: string; scopeType?: BindingScopeType; scopeId?: number | null; enabledOnly?: boolean } = {}): PipelineProviderBinding[] {
-    const where: string[] = [];
+    const where: string[] = [REUSABLE_SCOPE_SQL];
     const params: Record<string, unknown> = {};
     if (opts.pipelineName) { where.push('pipeline_name = @pipelineName'); params.pipelineName = opts.pipelineName; }
     if (opts.scopeType)    { where.push('scope_type = @scopeType');       params.scopeType = opts.scopeType; }
     if (opts.scopeId != null) { where.push('scope_id = @scopeId');        params.scopeId = opts.scopeId; }
     if (opts.enabledOnly)  { where.push('enabled = 1'); }
-    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const whereSql = `WHERE ${where.join(' AND ')}`;
     const rows = this.db
       .prepare(
         `SELECT * FROM pipeline_provider_bindings ${whereSql}
@@ -125,7 +145,7 @@ export class PipelineProviderBindingsStore {
 
   get(id: number): PipelineProviderBinding | null {
     const row = this.db
-      .prepare('SELECT * FROM pipeline_provider_bindings WHERE id = ?')
+      .prepare(`SELECT * FROM pipeline_provider_bindings WHERE id = ? AND ${REUSABLE_SCOPE_SQL}`)
       .get(id) as RawRow | undefined;
     return row ? mapRow(row) : null;
   }
@@ -133,8 +153,8 @@ export class PipelineProviderBindingsStore {
   /**
    * Resolve the active binding for a given pipeline+role at a given scope.
    * Returns the highest-priority enabled binding within the requested scope.
-   * Hierarchical lookup (session → template → global) is the resolver's job —
-   * this method only answers "what's bound at THIS scope?".
+   * Template → global lookup is the resolver's job — this method only answers
+   * "what's bound at THIS reusable scope?".
    */
   findActiveAtScope(opts: {
     pipelineName: string;
@@ -142,12 +162,14 @@ export class PipelineProviderBindingsStore {
     scopeType: BindingScopeType;
     scopeId: number | null;
   }): PipelineProviderBinding | null {
+    assertBindingScope(opts.scopeType, opts.scopeId);
     const row = this.db
       .prepare(
         `SELECT * FROM pipeline_provider_bindings
          WHERE pipeline_name = @pipelineName
            AND binding_role  = @bindingRole
            AND scope_type    = @scopeType
+           AND ${REUSABLE_SCOPE_SQL}
            AND (scope_id IS @scopeId OR scope_id = @scopeId)
            AND enabled = 1
          ORDER BY priority DESC, id ASC
@@ -177,12 +199,14 @@ export class PipelineProviderBindingsStore {
     scopeType: BindingScopeType;
     scopeId: number | null;
   }): PipelineProviderBinding[] {
+    assertBindingScope(opts.scopeType, opts.scopeId);
     const rows = this.db
       .prepare(
         `SELECT * FROM pipeline_provider_bindings
          WHERE pipeline_name = @pipelineName
            AND binding_role  = @bindingRole
            AND scope_type    = @scopeType
+           AND ${REUSABLE_SCOPE_SQL}
            AND (scope_id IS @scopeId OR scope_id = @scopeId)
            AND enabled = 1
          ORDER BY priority DESC, id ASC`,
@@ -197,12 +221,15 @@ export class PipelineProviderBindingsStore {
   }
 
   upsert(input: PipelineProviderBindingInput): number {
+    assertBindingScope(input.scope_type, input.scope_id);
+    const scopeId = input.scope_type === 'global' ? null : input.scope_id!;
     const existing = this.db
       .prepare(
         `SELECT id FROM pipeline_provider_bindings
          WHERE pipeline_name = @pipeline_name
            AND binding_role  = @binding_role
            AND scope_type    = @scope_type
+           AND ${REUSABLE_SCOPE_SQL}
            AND (scope_id IS @scope_id OR scope_id = @scope_id)
            AND provider_id   = @provider_id
            AND model_id      = @model_id
@@ -212,7 +239,7 @@ export class PipelineProviderBindingsStore {
         pipeline_name: input.pipeline_name,
         binding_role:  input.binding_role,
         scope_type:    input.scope_type,
-        scope_id:      input.scope_id ?? null,
+        scope_id:      scopeId,
         provider_id:   input.provider_id,
         model_id:      input.model_id,
         model_mode:    input.model_mode ?? '',
@@ -255,7 +282,7 @@ export class PipelineProviderBindingsStore {
         model_mode:    input.model_mode ?? '',
         config_json:   JSON.stringify(input.config ?? {}),
         scope_type:    input.scope_type,
-        scope_id:      input.scope_id ?? null,
+        scope_id:      scopeId,
         enabled:       input.enabled === false ? 0 : 1,
         priority:      input.priority ?? 0,
       });
@@ -263,6 +290,8 @@ export class PipelineProviderBindingsStore {
   }
 
   update(id: number, input: PipelineProviderBindingInput): boolean {
+    assertBindingScope(input.scope_type, input.scope_id);
+    const scopeId = input.scope_type === 'global' ? null : input.scope_id!;
     const result = this.db
       .prepare(
         `UPDATE pipeline_provider_bindings
@@ -277,7 +306,8 @@ export class PipelineProviderBindingsStore {
                 enabled       = @enabled,
                 priority      = @priority,
                 updated_at    = datetime('now')
-          WHERE id = @id`,
+          WHERE id = @id
+            AND ${REUSABLE_SCOPE_SQL}`,
       )
       .run({
         id,
@@ -288,7 +318,7 @@ export class PipelineProviderBindingsStore {
         model_mode: input.model_mode ?? '',
         config_json: JSON.stringify(input.config ?? {}),
         scope_type: input.scope_type,
-        scope_id: input.scope_id ?? null,
+        scope_id: scopeId,
         enabled: input.enabled === false ? 0 : 1,
         priority: input.priority ?? 0,
       });
@@ -300,7 +330,8 @@ export class PipelineProviderBindingsStore {
       .prepare(
         `UPDATE pipeline_provider_bindings
             SET enabled = ?, updated_at = datetime('now')
-          WHERE id = ?`,
+          WHERE id = ?
+            AND ${REUSABLE_SCOPE_SQL}`,
       )
       .run(enabled ? 1 : 0, id);
     return Number(result.changes) > 0;
@@ -308,8 +339,8 @@ export class PipelineProviderBindingsStore {
 
   /**
    * Make one GLOBAL binding the sole active route for a pipeline role while
-   * preserving every previous row for audit/manual recovery. Template and
-   * session overrides are deliberately outside this operation.
+   * preserving every previous row for audit/manual recovery. Template
+   * overrides are deliberately outside this operation.
    */
   activateGlobal(input: PipelineBindingActivationInput): { id: number; disabledIds: number[] } {
     const selectOthers = this.db.prepare(
@@ -349,7 +380,7 @@ export class PipelineProviderBindingsStore {
 
   delete(id: number): boolean {
     const result = this.db
-      .prepare('DELETE FROM pipeline_provider_bindings WHERE id = ?').run(id);
+      .prepare(`DELETE FROM pipeline_provider_bindings WHERE id = ? AND ${REUSABLE_SCOPE_SQL}`).run(id);
     return Number(result.changes) > 0;
   }
 
@@ -359,6 +390,7 @@ export class PipelineProviderBindingsStore {
       .prepare(
         `SELECT pipeline_name, binding_role, COUNT(*) AS count
          FROM pipeline_provider_bindings
+         WHERE ${REUSABLE_SCOPE_SQL}
          GROUP BY pipeline_name, binding_role
          ORDER BY pipeline_name, binding_role`,
       )
@@ -373,19 +405,20 @@ export class PipelineProviderBindingsStore {
    * and want a clean slate before re-applying via {@link bulkApply}.
    *
    * Behavior:
-   *   - When `scopeType` is omitted, ALL bindings are wiped (any scope).
-   *   - When `scopeType='global'`, only global rows are wiped (templates +
-   *     session overrides survive). This is the safer default the admin
-   *     panel uses.
-   *   - When `scopeType='template'|'session'`, you can additionally narrow
-   *     to a specific `scopeId`.
+   *   - When `scopeType` is omitted, all reusable bindings are wiped.
+   *   - When `scopeType='global'`, only global rows are wiped.
+   *   - When `scopeType='template'`, you can additionally narrow to a
+   *     specific `scopeId`.
    *
    * Wrapped in a transaction — either all matching rows go, or none.
    *
    * @returns Number of rows removed.
    */
   bulkDelete(opts: { scopeType?: BindingScopeType; scopeId?: number | null } = {}): number {
-    const where: string[] = [];
+    if (opts.scopeType && !isBindingScopeType(opts.scopeType)) {
+      throw new Error('pipeline provider binding scope must be global or template');
+    }
+    const where: string[] = [REUSABLE_SCOPE_SQL];
     const params: Record<string, unknown> = {};
     if (opts.scopeType) {
       where.push('scope_type = @scopeType');
@@ -395,7 +428,7 @@ export class PipelineProviderBindingsStore {
       where.push('scope_id = @scopeId');
       params.scopeId = opts.scopeId;
     }
-    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const whereSql = `WHERE ${where.join(' AND ')}`;
     const stmt = this.db.prepare(`DELETE FROM pipeline_provider_bindings ${whereSql}`);
     const run = this.db.transaction((p: Record<string, unknown>) => stmt.run(p));
     const result = run(params);
@@ -438,6 +471,7 @@ export class PipelineProviderBindingsStore {
     priority?: number;
   }): number[] {
     const scope = input.scope_type ?? 'global';
+    assertBindingScope(scope, input.scope_id);
     const scopeId = scope === 'global' ? null : input.scope_id ?? null;
     const txn = this.db.transaction(
       (targets: ReadonlyArray<{ pipeline_name: string; binding_role: string }>) => {
@@ -481,7 +515,7 @@ export class PipelineProviderBindingsStore {
    *     catalog's per-role recommended config (classifier max_tokens:256 vs
    *     reviewer max_tokens:4000+json_mode) in a single transaction.
    *
-   * Template/session bindings are never touched.
+   * Template bindings are never touched.
    *
    * @returns The inserted row ids, in input order.
    */

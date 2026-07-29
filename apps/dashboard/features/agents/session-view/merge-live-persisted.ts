@@ -27,7 +27,7 @@ export function mergeBoardMessages(
   persisted: BoardMessage[],
   live: BoardMessage[],
 ): BoardMessage[] {
-  const byId = new Map<number, BoardMessage>();
+  const byId = new Map<string, BoardMessage>();
   for (const m of persisted) byId.set(m.id, m);
   for (const m of live) byId.set(m.id, m);
   return Array.from(byId.values());
@@ -45,9 +45,9 @@ export function mergeBoardMessages(
  */
 export function mergeSubordinates(
   persisted: PersistedAgentRun[],
-  live: Map<number, AgentStreamState>,
+  live: Map<string, AgentStreamState>,
 ): AgentStreamState[] {
-  const byId = new Map<number, AgentStreamState>();
+  const byId = new Map<string, AgentStreamState>();
   for (const run of persisted) {
     if (run.role === 'master') continue;
     byId.set(run.id, {
@@ -66,5 +66,7 @@ export function mergeSubordinates(
       coderSessionId: liveState.coderSessionId ?? seed?.coderSessionId,
     });
   }
-  return Array.from(byId.values()).sort((a, b) => a.agentRunId - b.agentRunId);
+  return Array.from(byId.values()).sort((a, b) =>
+    (a.agentRunId ?? '').localeCompare(b.agentRunId ?? ''),
+  );
 }

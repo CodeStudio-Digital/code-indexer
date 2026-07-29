@@ -59,7 +59,8 @@ declare global {
     oauthLoopbackStop?: () => void;
     /**
      * Spawn a new Electron window pointing at `route` (e.g. `/projects/42`
-     * or `/company/sessions/7/main/work/chat`). The new window inherits
+     * or `/company/sessions/dddddddd-dddd-4ddd-8ddd-dddddddddddd/main/work/chat`).
+     * The new window inherits
      * the same preload + protocol setup, so it talks to the same
      * in-process backend without extra wiring.
      */

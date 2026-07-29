@@ -31,9 +31,9 @@ function incidentToEvent(row: unknown): AutonomyEvent | null {
   const r = row as Record<string, unknown>;
   const atMs = num(r.detectedAtMs) ?? Date.now();
   return {
-    id: `rest-incident:${num(r.id) ?? atMs}`, atMs, type: 'incident',
+    id: `rest-incident:${str(r.id) ?? atMs}`, atMs, type: 'incident',
     event: 'supervisor_incident', kind: str(r.incidentKind),
-    agentRunId: num(r.agentRunId) ?? undefined, detail: str(r.detail),
+    agentRunId: str(r.agentRunId), detail: str(r.detail),
   };
 }
 
@@ -46,7 +46,7 @@ function postToEvent(row: unknown): AutonomyEvent | null {
   const createdAt = str(r.created_at);
   const parsed = createdAt ? Date.parse(`${createdAt.replace(' ', 'T')}Z`) : NaN;
   return {
-    id: `rest-post:${num(r.id) ?? content.slice(0, 40)}`,
+    id: `rest-post:${str(r.id) ?? content.slice(0, 40)}`,
     atMs: Number.isFinite(parsed) ? parsed : Date.now(),
     type: content.startsWith('[auto-approved]') ? 'approval' : 'dispatch',
     detail: content,
@@ -67,7 +67,7 @@ function parseRoles(text: string): string[] | '*' | null {
   return roles.length > 0 ? roles : null;
 }
 
-export function AutonomyPanel({ sessionId = null }: { sessionId?: number | null }) {
+export function AutonomyPanel({ sessionId = null }: { sessionId?: string | null }) {
   const { t } = useTranslation('agents');
   const state = useCompanyStore((s) => selectAutonomy(s, sessionId ?? null));
   const hydrate = useCompanyStore((s) => s.autonomyHydrate);

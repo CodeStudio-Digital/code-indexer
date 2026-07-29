@@ -94,11 +94,11 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         const verdaccio = tryGetVerdaccioService();
         if (!verdaccio) return err('ds_publish_version: VerdaccioService not wired.');
 
-        const session = binding.resolveDsSession(store);
+        const session = await binding.resolveDsSession(store);
         if (!session) {
           return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
         }
-        let draft = store.getLatestVersionAny(session.id);
+        let draft = await store.getLatestVersionAny(session.id);
         // Accept `'failed'` AND `'skipped'` as retry targets:
         //   - 'failed' means "publish attempt errored, fix the cause
         //     and retry" (not "buried forever").
@@ -116,7 +116,7 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         // confusing "not a draft" error and the operator had to drop
         // to SQL surgery (session 73 v1.2.2 incident).
         if (draft && (draft.status === 'failed' || draft.status === 'skipped')) {
-          draft = store.updateVersion(draft.id, { status: 'draft', error: null });
+          draft = await store.updateVersion(draft.id, { status: 'draft', error: null });
         }
         // Recovery path: if no draft exists at all (e.g. extractor never
         // got to call ds_record_component because the container died),
@@ -124,8 +124,8 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         // this version — that's a known gap the operator can patch by
         // re-running record calls — but at least the publish succeeds.
         if (!draft) {
-          const isFirst = !store.getLatestPublishedVersion(session.id);
-          draft = store.createVersion({
+          const isFirst = !(await store.getLatestPublishedVersion(session.id));
+          draft = await store.createVersion({
             ds_session_id: session.id,
             semver: 'pending',
             bump_kind: isFirst ? 'initial' : session.next_bump_hint,
@@ -145,7 +145,7 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         // the builder prompt block, the global skill). Session 979 shipped
         // 1.0.0 empty and the 21 components landed in the NEXT draft 33s
         // later. Refuse unless the emptiness is explicitly intentional.
-        if (args.allow_empty !== true && store.listComponents(draft.id).length === 0) {
+        if (args.allow_empty !== true && (await store.listComponents(draft.id)).length === 0) {
           return err(
             'Refusing to publish: this draft has 0 recorded components, so consumers would see an empty design system. ' +
               'Run ds_list_components to inspect the registry and ds_record_component({ name, kind, props_schema_json, example_code }) for every approved gallery component, then publish again. ' +
@@ -165,7 +165,7 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         const audit = await auditDesignSystemPackage(pkgDir, { profile: binding.profile });
         if (!audit.ok) {
           const auditMessage = formatPackageAudit(audit);
-          store.updateVersion(draft.id, {
+          await store.updateVersion(draft.id, {
             status: 'failed',
             error: shortenError(auditMessage),
           });
@@ -188,12 +188,12 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
               workspaceDir: workspace.path,
               stack: session.stack,
               mode: session.mode,
-              recorded: collectRecordedComponents(store, session.id),
+              recorded: await collectRecordedComponents(store, session.id),
               scope: 'publish',
             });
             if (!studio.ok) {
               const studioMessage = formatStudioAudit(studio);
-              store.updateVersion(draft.id, {
+              await store.updateVersion(draft.id, {
                 status: 'failed',
                 error: shortenError(studioMessage),
               });
@@ -256,9 +256,9 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         //      byte different → different hash → publish. Same model
         //      as npm's own integrity check.
         const sourceHash = await hashTarball(tarballPath);
-        const lastPublished = store.getLatestPublishedVersion(session.id);
+        const lastPublished = await store.getLatestPublishedVersion(session.id);
         if (lastPublished && lastPublished.source_hash === sourceHash) {
-          store.updateVersion(draft.id, {
+          await store.updateVersion(draft.id, {
             status: 'skipped',
             source_hash: sourceHash,
           });
@@ -285,7 +285,7 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
           timeoutMs: NPM_PACK_TIMEOUT_MS,
         });
         if (!versionRes.ok) {
-          store.updateVersion(draft.id, {
+          await store.updateVersion(draft.id, {
             status: 'failed',
             error: shortenError(versionRes.stderr || versionRes.stdout),
           });
@@ -296,7 +296,7 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         }
         const finalPack = await packPackage(pkgDir);
         if (!finalPack.ok || !finalPack.tarballPath) {
-          store.updateVersion(draft.id, {
+          await store.updateVersion(draft.id, {
             status: 'failed',
             error: shortenError(finalPack.stderr || finalPack.stdout),
           });
@@ -309,7 +309,7 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         const finalHash = await hashTarball(tarballPath);
 
         // Step: mark building.
-        store.updateVersion(draft.id, {
+        await store.updateVersion(draft.id, {
           status: 'building',
           source_hash: finalHash,
         });
@@ -322,7 +322,7 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
         });
 
         if (!publishResult.ok) {
-          store.updateVersion(draft.id, {
+          await store.updateVersion(draft.id, {
             status: 'failed',
             error: shortenError(publishResult.stderr || publishResult.stdout),
           });
@@ -343,7 +343,10 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
 
         // Step: persist artefacts + mark published. Rewrites semver into the row.
         const now = new Date().toISOString();
-        const persisted = store.updateVersion(draft.id, {
+        const persisted = await store.updateVersion(draft.id, {
+          semver: nextSemver,
+          bump_kind: bumpKind,
+          is_auto_bump: false,
           status: 'published',
           tarball_path: tarballPath,
           manifest_json: optString(args.manifest_json) ?? discovered.manifest_json ?? draft.manifest_json,
@@ -352,20 +355,14 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
           storybook_path: optString(args.storybook_path) ?? discovered.storybook_path ?? draft.storybook_path,
           markPublished: true,
         });
-        // Rewrite semver + bump_kind to reflect the resolved values (the
-        // draft was created with semver='pending'). We do it via a raw
-        // statement because store.updateVersion deliberately doesn't
-        // expose semver — semver shouldn't change once published.
-        rewriteSemver(store, draft.id, nextSemver, bumpKind, /* isAutoBump */ false);
-
         // Reset hint so the next round defaults to patch.
         if (session.next_bump_hint !== 'patch') {
-          store.setNextBumpHint(session.id, 'patch');
+          await store.setNextBumpHint(session.id, 'patch');
         }
 
         // Auto-upsert a global inline skill so that regular chat agents
         // discover this design system on their next session start.
-        upsertDesignSystemSkill(store, persisted.id, session.package_name, nextSemver, publishResult.registryUrl);
+        await upsertDesignSystemSkill(store, persisted.id, session.package_name, nextSemver, publishResult.registryUrl);
 
         return ok(
           [
@@ -380,31 +377,6 @@ export function dsPublishVersion(binding: DsToolBinding): CoderTool {
       }
     },
   };
-}
-
-/**
- * Rewrite semver + bump_kind on the version row directly.
- *
- * Why a private path: `DesignSystemStore.updateVersion` deliberately
- * omits `semver` and `bump_kind` from its allowed patch keys — published
- * versions are immutable from the typical update path. We poke the
- * underlying handle here, scoped to a single tool call right after a
- * successful publish, to materialise the resolved values that the
- * draft row didn't know yet.
- */
-function rewriteSemver(
-  store: DesignSystemStore,
-  versionId: number,
-  semver: string,
-  bumpKind: 'initial' | 'patch' | 'minor' | 'major',
-  isAutoBump: boolean,
-): void {
-  const handle = (store as unknown as { db: import('better-sqlite3').Database }).db;
-  handle
-    .prepare(
-      'UPDATE design_system_versions SET semver = ?, bump_kind = ?, is_auto_bump = ? WHERE id = ?',
-    )
-    .run(semver, bumpKind, isAutoBump ? 1 : 0, versionId);
 }
 
 function resolveAgainstCwd(cwd: string, p: string): string {
@@ -591,13 +563,13 @@ export { discoverArtifacts };
  * Silently swallows errors — skill creation is best-effort and must
  * never block the publish success path.
  */
-function upsertDesignSystemSkill(
+async function upsertDesignSystemSkill(
   dsStore: DesignSystemStore,
-  versionId: number,
+  versionId: string,
   packageName: string,
   semver: string,
   registryUrl: string,
-): void {
+): Promise<void> {
   try {
     const skillStore = getSkillStore();
     if (!skillStore) return;
@@ -612,7 +584,7 @@ function upsertDesignSystemSkill(
     // Cap the component list: this prompt_body is injected into every chat
     // session's system prompt, so an unbounded list would bloat every turn.
     const MAX_SKILL_COMPONENTS = 80;
-    const components = dsStore.listComponents(versionId);
+    const components = await dsStore.listComponents(versionId);
     const shown = components.slice(0, MAX_SKILL_COMPONENTS);
     const overflow = components.length - shown.length;
     const componentLines = [

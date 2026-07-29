@@ -54,4 +54,37 @@ describe('project search route', () => {
       supersessionKey: 'semantic-test:p7',
     }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
+
+  it('attributes an MCP search only after validating session project authority', async () => {
+    mocks.project.mockResolvedValueOnce({ results: [], diagnostics: {} });
+    const app = new Hono();
+    mountSearchRoutes(app, {
+      sessionStore: {
+        getSession: vi.fn(async () => ({
+          id: 'session-7',
+          project_id: 7,
+          is_global: false,
+          linked_projects: [],
+        })),
+      },
+      db: {
+        getProject: (id: number) => id === 7
+          ? { id, name: 'demo', root_path: 'D:/demo', is_synthetic: 0 }
+          : null,
+      },
+    } as unknown as ServerDeps);
+
+    const response = await app.request(
+      '/api/projects/7/search?q=where+is+the+agent&mode=auto&consumer=agent',
+      { headers: { 'x-mcp-session-id': 'session-7' } },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.project).toHaveBeenCalledWith(
+      expect.objectContaining({ consumer: 'agent' }),
+      expect.objectContaining({
+        telemetryScope: { sessionId: 'session-7' },
+      }),
+    );
+  });
 });

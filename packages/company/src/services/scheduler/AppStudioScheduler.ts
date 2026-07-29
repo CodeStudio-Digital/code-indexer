@@ -68,13 +68,13 @@ export class AppStudioScheduler {
     const appSessionId = this.deps.ctx.appStudioSessionId;
     if (appSessionId == null) return;
     const store = getAppStudioStore();
-    const session = store?.getSession(appSessionId) ?? null;
+    const session = store ? await store.getSession(appSessionId) : null;
     if (!store || !session || session.company_session_id !== this.deps.ctx.companySessionId) return;
 
-    const reconciled = reconcileAppWorkItemRuns({
+    const reconciled = await reconcileAppWorkItemRuns({
       store,
       session,
-      getAgentRun: (id) => this.deps.ctx.companyStore.getAgentRun(id),
+      getAgentRun: (id) => this.deps.ctx.companyFiles.getAgentRunSync(id),
     });
     if (reconciled.length > 0) {
       const needsAttention = reconciled.filter((change) => change.action !== 'recovered');

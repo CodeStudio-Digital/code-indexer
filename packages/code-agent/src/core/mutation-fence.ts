@@ -9,14 +9,15 @@ import {
   sep,
 } from 'node:path';
 import { existsSync, realpathSync } from 'node:fs';
-import type {
-  AgentRunId,
-  EnvironmentId,
-  ExecutionEnvironmentRef,
-  ResourceBinding,
-  ResourceConstraint,
-  WorkspaceLease,
-  WorkspaceLeaseId,
+import {
+  asAgentRunId,
+  type AgentRunId,
+  type EnvironmentId,
+  type ExecutionEnvironmentRef,
+  type ResourceBinding,
+  type ResourceConstraint,
+  type WorkspaceLease,
+  type WorkspaceLeaseId,
 } from '@mcp/agent-runtime-contracts';
 import {
   bindResource,
@@ -42,11 +43,13 @@ export interface MutationFenceAuthorityOptions {
   mode: 'shadow' | 'enforce';
   /** Primary/default filesystem root for relative paths. */
   authorizedRoot: string;
+  /** Public aliases (normally the primary project slug/name) for authorizedRoot. */
+  authorizedRootAliases?: ReadonlyArray<string>;
   /**
    * All roots that may receive writes in this delegated context. Aliases map
-   * the native `project`/`project_name` selector to a linked project root;
-   * absolute paths use longest-prefix matching (including writable external
-   * grants).
+   * the public `<project-slug>/...` namespace (and hidden legacy selectors) to
+   * a linked real root; absolute paths use longest-prefix matching, including
+   * writable external grants.
    */
   filesystemRoots?: ReadonlyArray<{
     rootPath: string;
@@ -212,10 +215,25 @@ function leaseFor(
   root: string,
 ): WorkspaceLease | undefined {
   if (!snapshot.workspaceLeaseId) return undefined;
+  if (!snapshot.ownerAgentRunId) {
+    throw new MutationFenceError(
+      'invalid_lease_owner',
+      'workspace lease is missing its owner agent-run UUID',
+    );
+  }
+  let ownerAgentRunId: AgentRunId;
+  try {
+    ownerAgentRunId = asAgentRunId(snapshot.ownerAgentRunId);
+  } catch {
+    throw new MutationFenceError(
+      'invalid_lease_owner',
+      'workspace lease owner must be a canonical UUID',
+    );
+  }
   return {
     leaseId: snapshot.workspaceLeaseId as WorkspaceLeaseId,
     environmentId: snapshot.environmentId as EnvironmentId,
-    ownerAgentRunId: (snapshot.ownerAgentRunId ?? 'agent-run:unknown') as AgentRunId,
+    ownerAgentRunId,
     access: 'exclusive_write',
     status: 'active',
     rootRef: root,
@@ -302,7 +320,7 @@ function filesystemRoots(
   const roots = [
     {
       rootPath: options.authorizedRoot,
-      aliases: [] as ReadonlyArray<string>,
+      aliases: options.authorizedRootAliases ?? [],
       access: 'write' as const,
     },
     ...configured.map((root) => ({
@@ -324,14 +342,14 @@ function rootForPath(
   options: MutationFenceAuthorityOptions,
   input: Record<string, unknown>,
   rawPath: string,
-): string {
+): { rootPath: string; pathWithinRoot: string } {
   const roots = filesystemRoots(options).filter((root) => root.access === 'write');
   if (isAbsolute(rawPath)) {
     const candidate = normalizedAbsolute(rawPath);
     const matches = roots
       .filter((root) => pathInside(candidate, normalizedAbsolute(root.rootPath)))
       .sort((a, b) => b.rootPath.length - a.rootPath.length);
-    if (matches[0]) return matches[0].rootPath;
+    if (matches[0]) return { rootPath: matches[0].rootPath, pathWithinRoot: rawPath };
     throw new MutationFenceError(
       'path_escape',
       `${rawPath} is outside every delegated writable root`,
@@ -344,9 +362,20 @@ function rootForPath(
       : '';
   if (requested) {
     const selected = roots.find((root) => root.aliases.includes(requested));
-    if (selected) return selected.rootPath;
+    if (selected) return { rootPath: selected.rootPath, pathWithinRoot: rawPath };
   }
-  return options.authorizedRoot;
+  const normalized = rawPath.replace(/\\/g, '/').replace(/^(?:\.\/)+/, '');
+  const slash = normalized.indexOf('/');
+  const prefix = slash >= 0 ? normalized.slice(0, slash) : normalized;
+  const selected = roots.find((root) =>
+    root.aliases.some((alias) => alias.toLowerCase() === prefix.toLowerCase()));
+  if (selected) {
+    return {
+      rootPath: selected.rootPath,
+      pathWithinRoot: slash >= 0 ? normalized.slice(slash + 1) || '.' : '.',
+    };
+  }
+  return { rootPath: options.authorizedRoot, pathWithinRoot: rawPath };
 }
 
 function resourceMatches(
@@ -522,12 +551,12 @@ class MutationFenceAuthority implements ToolMutationFence {
           }, environment, lease));
         }
         for (const resource of pathResources) {
-          const selectedRoot = rootForPath(
+          const selected = rootForPath(
             this.options,
             input.effectiveInput,
             resource.path ?? '',
           );
-          const canonical = canonicalHostPath(resource.path ?? '', selectedRoot);
+          const canonical = canonicalHostPath(selected.pathWithinRoot, selected.rootPath);
           parts.push(bindResource({
             ...common,
             resources: [{ ...resource, path: canonical.candidate }],
@@ -601,12 +630,12 @@ class MutationFenceAuthority implements ToolMutationFence {
       }
       let physicalEffect = effect;
       if (effect.kind === 'filesystem' && effect.resource) {
-        const selectedRoot = rootForPath(
+        const selected = rootForPath(
           this.options,
           invocation.effectiveInput,
           effect.resource,
         );
-        const canonical = canonicalHostPath(effect.resource, selectedRoot);
+        const canonical = canonicalHostPath(selected.pathWithinRoot, selected.rootPath);
         physicalEffect = { ...effect, resource: canonical.candidate };
       }
       if (!resourceMatches(binding, physicalEffect)

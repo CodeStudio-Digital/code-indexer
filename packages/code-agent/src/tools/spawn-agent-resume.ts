@@ -18,6 +18,7 @@ import {
   type ResumeCheckpointStore,
   type ResumableGroup,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
+import type { SessionId } from '@mcp/session-storage';
 
 export interface SpawnRetentionAgent {
   index: number;
@@ -60,14 +61,14 @@ export function countFailed(agents: Array<{ reason: StopReason }>): number {
  * read_agent_transcript and the dashboard Transcript tab; with
  * CODER_RESUME_RETAIN_COMPLETED=0 the old failed-only economy returns.
  */
-export function retainSpawnGroup(args: {
-  sessionId: number | undefined;
+export async function retainSpawnGroup(args: {
+  sessionId: SessionId | undefined;
   spawnId: string;
   provider: string;
   model: string;
   agents: SpawnRetentionAgent[];
   store?: ResumeCheckpointStore;
-}): number {
+}): Promise<number> {
   if (args.sessionId == null) return 0;
   const resumableCount = args.agents.filter((a) => a.reason !== 'completed' && (a.transcript?.length ?? 0) > 0).length;
   if (countFailed(args.agents) === 0 && !retainCompletedTranscripts()) return 0;
@@ -101,6 +102,6 @@ export function retainSpawnGroup(args: {
       approxBytes: 0,
     })),
   };
-  retainGroup(args.sessionId, group, args.store);
+  await retainGroup(args.sessionId, group, args.store);
   return resumableCount;
 }

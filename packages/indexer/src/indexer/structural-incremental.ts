@@ -12,16 +12,24 @@
 import { join } from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
 import type { CodeIndexDB } from '@mcp/store/db.js';
+import type { ScannedFile } from '@mcp/shared/types.js';
 import { mergeIndexIgnorePatterns, projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
 import { buildScannerIgnore } from '@mcp/indexer/indexer/scanner-ignore.js';
 import { isHardExcluded } from '@mcp/indexer/indexer/mapper.js';
 import { buildTreeSitterDispatch } from '@mcp/indexer/indexer/tree-sitter-dispatch.js';
 import { hashContent, countLines } from './content-hash.js';
-import { processFileStructural } from './indexer/process-file-structural.js';
+import { withConcurrency } from './indexer/enrich-references.js';
+import {
+  persistPreparedFileStructural,
+  prepareFileStructural,
+  type PreparedFileStructural,
+} from './indexer/process-file-structural.js';
+import { resolveStructuralPipelineSchedule } from './structural-pipeline-schedule.js';
 
 export interface IndexFilesStructuralOptions {
   ignorePatterns?: string[];
   maxFileSizeKB?: number;
+  concurrency?: number;
 }
 
 export interface IndexFilesStructuralResult {
@@ -31,6 +39,10 @@ export interface IndexFilesStructuralResult {
   /** Paths that turned out missing/oversized on disk and were removed. */
   removed: number;
   errors: number;
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 export async function indexFilesStructural(
@@ -52,43 +64,151 @@ export async function indexFilesStructural(
   const result: IndexFilesStructuralResult = {
     indexed: 0, skippedUnchanged: 0, skippedIgnored: 0, removed: 0, errors: 0,
   };
+  const candidates: ScannedFile[] = [];
+  const removals: string[] = [];
+  const touches: Array<{ path: string; mtimeMs: number }> = [];
+
+  for (const rel of new Set(relPaths.map((p) => p.replace(/\\/g, '/')))) {
+    try {
+      if (ig.ignores(rel)) {
+        result.skippedIgnored++;
+        removals.push(rel);
+        continue;
+      }
+      const abs = join(root, rel);
+      const st = statSync(abs, { throwIfNoEntry: false });
+      if (!st?.isFile() || st.size > maxBytes) {
+        // Gone or over the cap — match the full scanner, which drops
+        // oversized files from the index (they land in toRemove).
+        removals.push(rel);
+        continue;
+      }
+      const content = readFileSync(abs, 'utf-8');
+      const hash = hashContent(content);
+      const mtimeMs = Math.trunc(st.mtimeMs);
+      const existing = db.getFile(projectId, rel);
+      if (existing && existing.content_hash === hash) {
+        touches.push({ path: rel, mtimeMs });
+        continue;
+      }
+      candidates.push({
+        path: abs,
+        relativePath: rel,
+        content,
+        hash,
+        sizeBytes: st.size,
+        lineCount: countLines(content),
+        mtimeMs,
+      });
+    } catch (err) {
+      result.errors++;
+      console.warn(`[structural-incremental] ${rel}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  const schedule = resolveStructuralPipelineSchedule(
+    db.useProjectDb(projectId),
+    opts.concurrency ?? 5,
+  );
+
+  // Validation above is read-only. All SQLite mutations now flow through this
+  // single writer stage before parser work begins.
+  const maintenance = [
+    ...removals.map((path) => ({ kind: 'remove' as const, path })),
+    ...touches.map((touch) => ({ kind: 'touch' as const, ...touch })),
+  ];
+  for (let offset = 0; offset < maintenance.length; offset += schedule.writeBatchSize) {
+    const wave = maintenance.slice(offset, offset + schedule.writeBatchSize);
+    let waveRemoved = 0;
+    let waveSkippedUnchanged = 0;
+    let waveErrors = 0;
+    try {
+      db.indexTransaction(projectId, () => {
+        for (const item of wave) {
+          try {
+            if (item.kind === 'remove') {
+              waveRemoved += removeFilesStructural(db, projectId, [item.path]).removed;
+            } else {
+              db.touchFileMtime(projectId, item.path, item.mtimeMs);
+              waveSkippedUnchanged++;
+            }
+          } catch (error) {
+            waveErrors++;
+            console.warn(
+              `[structural-incremental] ${item.path}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+      });
+      result.removed += waveRemoved;
+      result.skippedUnchanged += waveSkippedUnchanged;
+      result.errors += waveErrors;
+    } catch (error) {
+      // Commit failure rolls back the whole wave, including successful items.
+      result.errors += wave.length;
+      console.warn(
+        `[structural-incremental] maintenance wave: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    if ((offset + wave.length) % schedule.yieldEvery === 0) await yieldToEventLoop();
+  }
+
   const treeSitter = buildTreeSitterDispatch();
   try {
-    for (const rel of new Set(relPaths.map((p) => p.replace(/\\/g, '/')))) {
+    for (let offset = 0; offset < candidates.length; offset += schedule.writeBatchSize) {
+      const wave = candidates.slice(offset, offset + schedule.writeBatchSize);
+      const outcomes: Array<{
+        file: ScannedFile;
+        prepared?: PreparedFileStructural;
+        error?: unknown;
+      }> = new Array(wave.length);
+
+      await withConcurrency(wave, async (file, index) => {
+        try {
+          outcomes[index] = {
+            file,
+            prepared: await prepareFileStructural(file, treeSitter),
+          };
+        } catch (error) {
+          outcomes[index] = { file, error };
+        }
+      }, schedule.parseConcurrency);
+
+      let waveIndexed = 0;
+      let waveErrors = 0;
       try {
-        if (ig.ignores(rel)) {
-          result.skippedIgnored++;
-          result.removed += removeFilesStructural(db, projectId, [rel]).removed;
-          continue;
-        }
-        const abs = join(root, rel);
-        const st = statSync(abs, { throwIfNoEntry: false });
-        if (!st?.isFile() || st.size > maxBytes) {
-          // Gone or over the cap — match the full scanner, which drops
-          // oversized files from the index (they land in toRemove).
-          result.removed += removeFilesStructural(db, projectId, [rel]).removed;
-          continue;
-        }
-        const content = readFileSync(abs, 'utf-8');
-        const hash = hashContent(content);
-        const mtimeMs = Math.trunc(st.mtimeMs);
-        const existing = db.getFile(projectId, rel);
-        if (existing && existing.content_hash === hash) {
-          // Already indexed under this content (in-session hook or an earlier
-          // event in the same burst) — stamp mtime so scans stay stat-only.
-          db.touchFileMtime(projectId, rel, mtimeMs);
-          result.skippedUnchanged++;
-          continue;
-        }
-        await processFileStructural(db, projectId, {
-          path: abs, relativePath: rel, content, hash,
-          sizeBytes: st.size, lineCount: countLines(content), mtimeMs,
-        }, treeSitter);
-        result.indexed++;
-      } catch (err) {
-        result.errors++;
-        console.warn(`[structural-incremental] ${rel}: ${err instanceof Error ? err.message : String(err)}`);
+        db.indexTransaction(projectId, () => {
+          for (const outcome of outcomes) {
+            if (outcome.error || !outcome.prepared) {
+              waveErrors++;
+              console.warn(
+                `[structural-incremental] ${outcome.file.relativePath}: ` +
+                `${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`,
+              );
+              continue;
+            }
+            try {
+              persistPreparedFileStructural(db, projectId, outcome.prepared);
+              waveIndexed++;
+            } catch (error) {
+              waveErrors++;
+              console.warn(
+                `[structural-incremental] ${outcome.file.relativePath}: ` +
+                `${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          }
+        });
+        result.indexed += waveIndexed;
+        result.errors += waveErrors;
+      } catch (error) {
+        // Every prepared item was rolled back; parse failures still count once.
+        result.errors += outcomes.length;
+        console.warn(
+          `[structural-incremental] write wave: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
+      if ((offset + wave.length) % schedule.yieldEvery === 0) await yieldToEventLoop();
     }
   } finally {
     treeSitter.dispose();

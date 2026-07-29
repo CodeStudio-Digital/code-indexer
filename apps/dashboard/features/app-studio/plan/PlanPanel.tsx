@@ -5,7 +5,7 @@ import { Button } from '../../../components/ui/button.js';
 import type { AppDecisionView, AppStudioSessionDetail } from '../app-studio-api.js';
 import { answerAppDecision, runAppAction } from '../app-studio-api.js';
 
-function Decision({ appId, decision, onChanged }: { appId: number; decision: AppDecisionView; onChanged: () => void }) {
+function Decision({ appId, decision, onChanged }: { appId: string; decision: AppDecisionView; onChanged: () => void }) {
   const { t } = useTranslation('appStudio');
   const [answer, setAnswer] = useState('');
   const [busy, setBusy] = useState(false);

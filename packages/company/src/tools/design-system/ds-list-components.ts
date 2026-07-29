@@ -32,16 +32,16 @@ export function dsListComponents(binding: DsToolBinding): CoderTool {
       try {
         const store = getDesignSystemStore();
         if (!store) return err('ds_list_components: DesignSystemStore not wired.');
-        const session = binding.resolveDsSession(store);
+        const session = await binding.resolveDsSession(store);
         if (!session) {
           return err(`No DesignSystemSession bound to ${binding.describeBinding()}.`);
         }
 
-        const draft = store.getLatestVersionAny(session.id);
-        const published = store.getLatestPublishedVersion(session.id);
+        const draft = await store.getLatestVersionAny(session.id);
+        const published = await store.getLatestPublishedVersion(session.id);
         const draftIsOpen = !!draft && (draft.status === 'draft' || draft.status === 'building');
-        const draftComponents = draftIsOpen ? store.listComponents(draft.id) : [];
-        const publishedComponents = published ? store.listComponents(published.id) : [];
+        const draftComponents = draftIsOpen ? await store.listComponents(draft.id) : [];
+        const publishedComponents = published ? await store.listComponents(published.id) : [];
 
         const publishedNames = new Set(publishedComponents.map((c) => c.name));
         const newSincePublish = draftComponents.filter((c) => !publishedNames.has(c.name));

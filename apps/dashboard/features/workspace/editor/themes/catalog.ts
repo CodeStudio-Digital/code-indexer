@@ -203,12 +203,15 @@ const intellijDarcula: Palette = {
 
 // Marca CodeStudio — fundo azul-preto do site (#050a16) para casar com o chrome
 // do app; sintaxe em cyan/índigo/violeta/verde da paleta de marca.
+// `decorator` (anotações: `#[Attr]`, `@Override`, `@decorator`) é o único tom
+// quente da paleta — anotações são declarações, e o amarelo as separa tanto do
+// comentário cinza quanto do violeta/cyan do restante do código.
 const codeStudioDark: Palette = {
   background: '050a16', foreground: 'e8ecfa', comment: '5b6a7f', keyword: 'c084fc',
   string: '7ee787', number: 'c4b5fd', operator: '67e8f9', function: '818cf8',
   method: '60a5fa', property: 'a5b4fc', variable: 'f0abf7', parameter: 'ddd6fe',
   type: '67e8f9', klass: '22d3ee', namespace: '94a3b8', constant: 'c4b5fd',
-  decorator: 'e879f9', regexp: '7ee787', tag: 'f0abf7', attribute: '67e8f9',
+  decorator: 'fdfd96', regexp: '7ee787', tag: 'f0abf7', attribute: '67e8f9',
   punctuation: '9ca3af', lineHighlight: '0d1629', selection: '26307a',
   lineNumber: '2a3550', lineNumberActive: '9ca3af',
 };
@@ -218,7 +221,9 @@ const codeStudioLight: Palette = {
   string: '15803d', number: '6d28d9', operator: '0891b2', function: '4f46e5',
   method: '2563eb', property: '1d4ed8', variable: '9f5dea', parameter: '7c3aed',
   type: '0e7490', klass: '0369a1', namespace: '64748b', constant: '6d28d9',
-  decorator: 'c026d3', regexp: '15803d', tag: 'c026d3', attribute: '0891b2',
+  // Mesmo amarelo do tema escuro, escurecido: o pastel #fdfd96 fica ilegível
+  // sobre o fundo claro (≈1.2:1); este oliva mantém o matiz com ~5.4:1.
+  decorator: '6b6b00', regexp: '15803d', tag: 'c026d3', attribute: '0891b2',
   punctuation: '5b6a7f', lineHighlight: 'eef2ff', selection: 'c7d2fe',
   lineNumber: '9ca3af', lineNumberActive: '0f1b35',
 };

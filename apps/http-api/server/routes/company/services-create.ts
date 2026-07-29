@@ -14,7 +14,12 @@ import { rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { virtualProjectDir } from '@mcp/shared/utils/data-paths.js';
 import type { ServerDeps } from '../../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from '../_helpers.js';
+import {
+  parseCompanySessionIdParam,
+  parseJsonBody,
+  resolveCompanySessionContext,
+  notFound,
+} from '../_helpers.js';
 import { getSandboxManager } from '@mcp/services/sandbox/index.js';
 import type { BuilderStack } from '@mcp/services/sandbox/types.js';
 import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
@@ -29,14 +34,18 @@ import {
 } from './sandbox-helpers.js';
 
 export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): void {
-  const { companyStore, db } = deps;
+  const { sessionStore, db } = deps;
 
   // ─── Add a new owned-image microservice ─────────────────────────
 
   app.post('/api/company/sessions/:id/services', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+    const resolved = await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
+    const session = resolved.root;
 
     interface AddServiceBody {
       service_id: string;
@@ -118,7 +127,11 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
         projectId = created.id;
         createdOwnedProject = true;
       }
-      companyStore.addProjectToCompanySession(id, projectId, body.service_id);
+      await resolved.rootFiles.addLinkedProject({
+        projectId,
+        rootPath,
+        label: body.service_id,
+      });
     } catch (e) {
       return c.json(
         {
@@ -151,7 +164,7 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
         );
       }
       const sandbox = await getSandboxManager().provisionAdditionalService({
-        sessionId: String(id),
+        sessionId: id,
         serviceId: body.service_id,
         stack: body.stack as BuilderStack,
         name: body.name,
@@ -190,7 +203,7 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
       // bare deleteProject would leave an orphan row that the UI
       // renders as `project-<id>` in the sidebar forever), then drop
       // the project row and wipe the empty workdir we just mkdirSync'd.
-      try { companyStore.removeProjectFromCompanySession(id, projectId); } catch { /* best effort */ }
+      try { await resolved.rootFiles.removeLinkedProject(projectId); } catch { /* best effort */ }
       if (createdOwnedProject) {
         try {
           await deps.projectIndexService.stopWatching(projectId).catch(() => undefined);
@@ -212,9 +225,12 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
   // ─── Attach to an existing external container ───────────────────
 
   app.post('/api/company/sessions/:id/services/attach', async (c) => {
-    const id = parseIdParam(c);
-    const session = companyStore.getCompanySession(id);
-    if (!session) return notFound(c);
+    const resolved = await resolveCompanySessionContext(
+      sessionStore,
+      parseCompanySessionIdParam(c),
+    );
+    if (!resolved) return notFound(c);
+    const id = resolved.rootId;
 
     interface AttachBody {
       service_id?: string;
@@ -234,7 +250,7 @@ export function mountCompanyServicesCreateRoutes(app: Hono, deps: ServerDeps): v
     }
     try {
       const sandbox = await getSandboxManager().attachExternalService({
-        sessionId: String(id),
+        sessionId: id,
         serviceId,
         containerRef,
         name: body.name,

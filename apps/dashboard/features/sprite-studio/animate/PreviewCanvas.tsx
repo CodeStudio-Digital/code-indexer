@@ -178,7 +178,7 @@ export function PreviewCanvas({
   loopStart: number | null;
   loopEnd: number | null;
   /** Version rows — contentHash busts the preload cache after in-place edits. */
-  versionById?: Map<number, import('../types.js').AssetVersion>;
+  versionById?: Map<string, import('../types.js').AssetVersion>;
   /** True while the backend is baking a manually repositioned frame. */
   repositioning?: boolean;
   onPatch: (patch: { fps?: number; loopMode?: AnimLoopMode }) => void;
@@ -193,7 +193,7 @@ export function PreviewCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
-  const imagesRef = useRef(new Map<number, HTMLImageElement>());
+  const imagesRef = useRef(new Map<string, HTMLImageElement>());
   const playheadRef = useRef(0);
   const dirRef = useRef(1); // pingpong bounce direction
   const dragRef = useRef<DragState | null>(null);
@@ -232,7 +232,7 @@ export function PreviewCanvas({
   // Preload every frame image; drop entries whose version disappeared and
   // RELOAD entries whose contentHash changed (in-place "Salvar Sprite" edits
   // keep the versionId but swap the bytes).
-  const hashesRef = useRef(new Map<number, string | null>());
+  const hashesRef = useRef(new Map<string, string | null>());
   const loadGenRef = useRef(0);
   useEffect(() => {
     const gen = loadGenRef.current + 1;

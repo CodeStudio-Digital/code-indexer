@@ -16,14 +16,23 @@ import {
 } from '@apps/dashboard/state/company/types.js';
 import type { MasterPrompt } from '@mcp/company-contracts';
 
+const SESSION_ID = '00000000-0000-4000-8000-000000000042';
+const MASTER_RUN_ID = '00000000-0000-4000-8000-000000000010';
+const REVIEWER_RUN_ID = '00000000-0000-4000-8000-000000000020';
+const UNKNOWN_RUN_ID = '00000000-0000-4000-8000-000000000099';
+const PROMPT_1_ID = '00000000-0000-4000-8000-000000000101';
+const PROMPT_2_ID = '00000000-0000-4000-8000-000000000102';
+const BOARD_1_ID = '00000000-0000-4000-8000-000000000201';
+const BOARD_2_ID = '00000000-0000-4000-8000-000000000202';
+
 function blank(): StreamState {
   return { ...INITIAL_STREAM_STATE, subordinateStates: new Map(), masterPrompts: new Map(), boardMessages: [], fallbackNotices: [] };
 }
 
 function prompt(overrides: Partial<MasterPrompt> = {}): MasterPrompt {
   return {
-    id: 1,
-    company_session_id: 42,
+    id: PROMPT_1_ID,
+    company_session_id: SESSION_ID,
     agent_run_id: null,
     kind: 'question',
     runner_block_id: null,
@@ -45,13 +54,13 @@ describe('stream-handlers / agentEvent', () => {
     let state = blank();
     state = applyAgentEvent(state, {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'text_delta',
       data: { text: 'hello ' },
     });
     state = applyAgentEvent(state, {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'text_delta',
       data: { text: 'world' },
     });
@@ -61,24 +70,24 @@ describe('stream-handlers / agentEvent', () => {
   it('creates a subordinate slot on first event', () => {
     const state = applyAgentEvent(blank(), {
       agent: 'reviewer',
-      agentRunId: 20,
+      agentRunId: REVIEWER_RUN_ID,
       event: 'text_delta',
       data: { text: 'meh' },
     });
-    expect(state.subordinateStates.get(20)?.textChunks).toEqual(['meh']);
+    expect(state.subordinateStates.get(REVIEWER_RUN_ID)?.textChunks).toEqual(['meh']);
   });
 
   it('dedupes tool_call_start by id', () => {
     let state = blank();
     state = applyAgentEvent(state, {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'tool_call_start',
       data: { id: 't1', name: 'fs.read' },
     });
     state = applyAgentEvent(state, {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'tool_call_start',
       data: { id: 't1', name: 'fs.read' },
     });
@@ -89,13 +98,13 @@ describe('stream-handlers / agentEvent', () => {
     let state = blank();
     state = applyAgentEvent(state, {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'tool_call_start',
       data: { id: 't1', name: 'fs.read' },
     });
     state = applyAgentEvent(state, {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'tool_call_result',
       data: { id: 't1', duration_ms: 42 },
     });
@@ -107,13 +116,13 @@ describe('stream-handlers / agentEvent', () => {
     let state = blank();
     state = applyAgentEvent(state, {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'text_delta',
       data: { text: 'x' },
     });
     state = applyAgentEvent(state, {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'done',
       data: { reason: 'completed' },
     });
@@ -125,7 +134,7 @@ describe('stream-handlers / agentEvent', () => {
     for (let i = 0; i < 7; i++) {
       state = applyAgentEvent(state, {
         agent: 'master',
-        agentRunId: 10,
+        agentRunId: MASTER_RUN_ID,
         event: 'fallback_activated',
         data: { error: `oops-${i}` },
       });
@@ -139,7 +148,8 @@ describe('stream-handlers / boardEvent', () => {
   it('appends in order and dedupes by id', () => {
     let state = blank();
     state = applyBoardEntry(state, {
-      id: 1,
+      id: BOARD_1_ID,
+      seq: 1,
       author_role: 'master',
       agent_run_id: null,
       kind: 'message',
@@ -148,7 +158,8 @@ describe('stream-handlers / boardEvent', () => {
       created_at: '2025-01-01',
     });
     state = applyBoardEntry(state, {
-      id: 2,
+      id: BOARD_2_ID,
+      seq: 2,
       author_role: 'master',
       agent_run_id: null,
       kind: 'message',
@@ -157,7 +168,8 @@ describe('stream-handlers / boardEvent', () => {
       created_at: '2025-01-01',
     });
     state = applyBoardEntry(state, {
-      id: 1,
+      id: BOARD_1_ID,
+      seq: 1,
       author_role: 'master',
       agent_run_id: null,
       kind: 'message',
@@ -172,27 +184,27 @@ describe('stream-handlers / boardEvent', () => {
 describe('stream-handlers / masterPromptEvent', () => {
   it('applyMasterPrompt upserts by id', () => {
     let state = blank();
-    state = applyMasterPrompt(state, prompt({ id: 1, body: 'q1' }));
-    state = applyMasterPrompt(state, prompt({ id: 1, body: 'q1-revised' }));
-    expect(state.masterPrompts.get(1)?.body).toBe('q1-revised');
+    state = applyMasterPrompt(state, prompt({ id: PROMPT_1_ID, body: 'q1' }));
+    state = applyMasterPrompt(state, prompt({ id: PROMPT_1_ID, body: 'q1-revised' }));
+    expect(state.masterPrompts.get(PROMPT_1_ID)?.body).toBe('q1-revised');
   });
 
   it('hydrateMasterPrompts keeps existing entries (no overwrite)', () => {
     let state = blank();
-    state = applyMasterPrompt(state, prompt({ id: 1, body: 'live' }));
+    state = applyMasterPrompt(state, prompt({ id: PROMPT_1_ID, body: 'live' }));
     state = hydrateMasterPrompts(state, [
-      prompt({ id: 1, body: 'rest' }),
-      prompt({ id: 2, body: 'fresh' }),
+      prompt({ id: PROMPT_1_ID, body: 'rest' }),
+      prompt({ id: PROMPT_2_ID, body: 'fresh' }),
     ]);
-    expect(state.masterPrompts.get(1)?.body).toBe('live');
-    expect(state.masterPrompts.get(2)?.body).toBe('fresh');
+    expect(state.masterPrompts.get(PROMPT_1_ID)?.body).toBe('live');
+    expect(state.masterPrompts.get(PROMPT_2_ID)?.body).toBe('fresh');
   });
 
   it('hydrateMasterPrompts is a no-op when nothing new', () => {
     let state = blank();
-    state = applyMasterPrompt(state, prompt({ id: 1 }));
+    state = applyMasterPrompt(state, prompt({ id: PROMPT_1_ID }));
     const ref = state;
-    state = hydrateMasterPrompts(state, [prompt({ id: 1, body: 'stale' })]);
+    state = hydrateMasterPrompts(state, [prompt({ id: PROMPT_1_ID, body: 'stale' })]);
     expect(state).toBe(ref);
   });
 });
@@ -201,12 +213,12 @@ describe('stream-handlers / agentStatusEvent', () => {
   it('applyAgentStatus updates the master row', () => {
     let state = applyAgentEvent(blank(), {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'text_delta',
       data: { text: 'x' },
     });
     state = applyAgentStatus(state, {
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       role: 'master',
       status: 'waiting',
       message: 'idle',
@@ -218,28 +230,28 @@ describe('stream-handlers / agentStatusEvent', () => {
   it('applyAgentStatus updates a subordinate slot when present', () => {
     let state = applyAgentEvent(blank(), {
       agent: 'reviewer',
-      agentRunId: 20,
+      agentRunId: REVIEWER_RUN_ID,
       event: 'text_delta',
       data: { text: 'x' },
     });
     state = applyAgentStatus(state, {
-      agentRunId: 20,
+      agentRunId: REVIEWER_RUN_ID,
       role: 'reviewer',
       status: 'completed',
       message: 'done',
     });
-    expect(state.subordinateStates.get(20)?.status).toBe('completed');
+    expect(state.subordinateStates.get(REVIEWER_RUN_ID)?.status).toBe('completed');
   });
 
   it('applySubordinateWaitingStatus is a no-op when the agent is unknown', () => {
-    const state = applySubordinateWaitingStatus(blank(), 99, 'waiting_plan');
+    const state = applySubordinateWaitingStatus(blank(), UNKNOWN_RUN_ID, 'waiting_plan');
     expect(state).toEqual(blank());
   });
 
   it('applySessionIdle bumps masterErrorDetail on master_error reason', () => {
     let state = applyAgentEvent(blank(), {
       agent: 'master',
-      agentRunId: 10,
+      agentRunId: MASTER_RUN_ID,
       event: 'text_delta',
       data: { text: 'x' },
     });

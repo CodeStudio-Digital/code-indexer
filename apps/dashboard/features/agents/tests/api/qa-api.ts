@@ -13,7 +13,7 @@ const BASE = '/api/company/sessions';
 
 /** Recent runs for a session, newest first. Optional service filter. */
 export async function fetchRuns(opts: {
-  sessionId: number;
+  sessionId: string;
   serviceId?: string;
   limit?: number;
   offset?: number;
@@ -27,7 +27,7 @@ export async function fetchRuns(opts: {
 
 /** Currently active run for a session, with its inflight results. */
 export async function fetchActiveRun(opts: {
-  sessionId: number;
+  sessionId: string;
   serviceId?: string;
 }): Promise<{
   run: QaRun | null;
@@ -43,8 +43,8 @@ export async function fetchActiveRun(opts: {
 
 /** Detail of a single past run (with all its result rows + report URL). */
 export async function fetchRunDetail(opts: {
-  sessionId: number;
-  runId: number;
+  sessionId: string;
+  runId: string;
 }): Promise<{
   run: QaRun;
   results: QaTestResultWithUrls[];
@@ -55,7 +55,7 @@ export async function fetchRunDetail(opts: {
 
 /** Pure: build the URL of an arbitrary workspace artifact (used in places that don't go through `enrichResultsWithUrls`). */
 export function buildArtifactUrl(opts: {
-  sessionId: number;
+  sessionId: string;
   serviceId?: string;
   path: string;
 }): string {
@@ -67,7 +67,7 @@ export function buildArtifactUrl(opts: {
 
 /** Pure: build the URL of the Playwright HTML report. */
 export function buildPlaywrightReportUrl(opts: {
-  sessionId: number;
+  sessionId: string;
   serviceId?: string;
   file?: string;
 }): string {
@@ -78,7 +78,7 @@ export function buildPlaywrightReportUrl(opts: {
 }
 
 /** Soft-abort: marks the run as `aborted` so the UI stops showing the spinner. */
-export async function abortRun(opts: { sessionId: number; runId: number }): Promise<{ run: QaRun }> {
+export async function abortRun(opts: { sessionId: string; runId: string }): Promise<{ run: QaRun }> {
   const res = await fetch(`${BASE}/${opts.sessionId}/qa/runs/${opts.runId}/abort`, {
     method: 'POST',
   });
@@ -105,7 +105,7 @@ export interface QaRestoreReport {
   warnings: string[];
 }
 
-export async function restoreQaConfig(opts: { sessionId: number }): Promise<{
+export async function restoreQaConfig(opts: { sessionId: string }): Promise<{
   ok: boolean;
   report?: QaRestoreReport;
   error?: string;
@@ -126,7 +126,7 @@ export async function restoreQaConfig(opts: { sessionId: number }): Promise<{
  * a mute "No QA run in flight".
  */
 export async function fetchQaDiagnostics(opts: {
-  sessionId: number;
+  sessionId: string;
 }): Promise<QaDiagnostics> {
   return getJson(`${BASE}/${opts.sessionId}/qa/diagnostics`);
 }

@@ -1,19 +1,34 @@
 /**
  * SubAgentResultCache tests.
  *
- * Uses a real in-memory better-sqlite3 instance with migration 081 applied,
- * so we exercise the actual SQL path (not a mock).
+ * Uses the post-filesystem-cutover global cache schema.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRequire } from 'node:module';
 import type DatabaseConstructor from 'better-sqlite3';
-import { subAgentResultCache081 } from '@mcp/store/migrations/081_sub_agent_result_cache.js';
 import { SubAgentResultCacheStore } from '@mcp/store/sub-agent-result-cache-store.js';
 import { SubAgentResultCache } from '../sub-agent-result-cache.js';
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const Database = require('better-sqlite3') as typeof DatabaseConstructor;
+
+function createGlobalCacheTable(db: InstanceType<typeof Database>): void {
+  db.exec(`
+    CREATE TABLE sub_agent_result_cache (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      prompt_hash TEXT NOT NULL,
+      context_digest TEXT NOT NULL,
+      agent_type TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      hit_count INTEGER NOT NULL DEFAULT 0,
+      ttl_seconds INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_used_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(prompt_hash, context_digest, agent_type)
+    )
+  `);
+}
 
 describe('SubAgentResultCache', () => {
   let db: InstanceType<typeof Database>;
@@ -23,7 +38,7 @@ describe('SubAgentResultCache', () => {
   beforeEach(() => {
     db = new Database(':memory:');
     db.pragma('journal_mode = WAL');
-    subAgentResultCache081.up(db);
+    createGlobalCacheTable(db);
     store = new SubAgentResultCacheStore(db);
     cache = new SubAgentResultCache(store);
   });
@@ -97,15 +112,11 @@ describe('SubAgentResultCache', () => {
     expect(hit?.hitCount).toBe(3);
   });
 
-  it('invalidateSession drops only matching session rows', () => {
-    const k1 = cache.buildKey({ prompt: 'a', agentType: 'Explore' });
-    const k2 = cache.buildKey({ prompt: 'b', agentType: 'Explore' });
-    cache.write(k1, { x: 1 }, { sessionId: 100 });
-    cache.write(k2, { x: 2 }, { sessionId: 200 });
-    const removed = cache.invalidateSession(100);
-    expect(removed).toBe(1);
-    expect(cache.tryRead(k1)).toBeNull();
-    expect(cache.tryRead(k2)).not.toBeNull();
+  it('has no session locator column after the filesystem cutover', () => {
+    const columns = db
+      .prepare('PRAGMA table_info(sub_agent_result_cache)')
+      .all() as Array<{ name: string }>;
+    expect(columns.map((column) => column.name)).not.toContain('session_id');
   });
 
   it('overwriting the same key resets hit_count', () => {

@@ -10,21 +10,26 @@ import { apiBaseUrl } from '../../../lib/api-client.js';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 
 export interface BuilderCheckpoint {
-  id: number;
+  id: string;
+  seq: number;
   project_id: number;
-  session_id: number | null;
+  session_id: string;
   commit_sha: string;
   label: string;
   kind: 'auto' | 'visual' | 'restore' | 'manual';
-  screenshot_path: string | null;
+  screenshot: {
+    artifact_id: string;
+    media_type: string | null;
+  } | null;
   created_at: string;
+  updated_at: string;
 }
 
 const POLL_MS = 15_000;
 
 export function useCheckpoints(projectId: number) {
   const [checkpoints, setCheckpoints] = useState<BuilderCheckpoint[]>([]);
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -45,7 +50,7 @@ export function useCheckpoints(projectId: number) {
   }, [refresh]);
 
   const restore = useCallback(
-    async (checkpointId: number) => {
+    async (checkpointId: string) => {
       setBusyId(checkpointId);
       setError(null);
       try {
@@ -62,7 +67,7 @@ export function useCheckpoints(projectId: number) {
 
   /** Open the checkpoint's patch as a workspace diff tab (vs parent or vs `fromId`). */
   const viewDiff = useCallback(
-    async (checkpoint: BuilderCheckpoint, fromId?: number) => {
+    async (checkpoint: BuilderCheckpoint, fromId?: string) => {
       setError(null);
       try {
         const qs = fromId != null ? `?from=${fromId}` : '';
@@ -92,6 +97,6 @@ export function useCheckpoints(projectId: number) {
 }
 
 export function thumbnailUrl(projectId: number, checkpoint: BuilderCheckpoint): string | null {
-  if (!checkpoint.screenshot_path) return null;
+  if (!checkpoint.screenshot) return null;
   return `${apiBaseUrl()}/api/projects/${projectId}/checkpoints/${checkpoint.id}/thumbnail`;
 }

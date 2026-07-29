@@ -1,12 +1,9 @@
 /**
  * PR-B: write-through persistence from `execute_tasks` to the
- * `coder_task_runs` / `coder_task_run_items` tables.
+ * independent task-run entities in the owner session bundle.
  *
- * These tests use a mock `SessionStore` so we can assert the exact
- * sequence and shape of writes without spinning up a real SQLite
- * (the migration + repo CRUD live in
- * `packages/store/src/migrations/__tests__/108_coder_task_runs.test.ts`
- * and `packages/code-agent/src/sessions/store/__tests__/task-runs.test.ts`).
+ * These tests use a mock `FsSessionStore` so we can assert the exact
+ * sequence and shape of file-backed writes.
  *
  * Invariants under test:
  *   - One `createTaskRun` per execute_tasks call.
@@ -20,6 +17,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import { newSessionId, type SessionId } from '@mcp/session-storage';
+
+const SESSION_ID = newSessionId();
+const SECOND_SESSION_ID = newSessionId();
 
 vi.mock('../implement-subagent.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../implement-subagent.js')>();
@@ -59,6 +61,7 @@ function makeMockStore() {
     listTaskRunItems: vi.fn(),
     getTaskRunWithItems: vi.fn(),
     recoverRunningTaskRuns: vi.fn(),
+    findLastCompletedTaskItem: vi.fn(() => null),
   };
 }
 
@@ -66,12 +69,17 @@ type MockStore = ReturnType<typeof makeMockStore>;
 
 function setup(
   tasks: CoderTask[],
-  opts: { execution_mode?: TasksState['execution_mode']; store?: MockStore | null; sessionId?: number | null } = {},
+  opts: {
+    execution_mode?: TasksState['execution_mode'];
+    store?: MockStore | null;
+    sessionId?: SessionId | null;
+  } = {},
 ) {
   const store = opts.store ?? makeMockStore();
   // Use ternary not `??` so explicit `null` reaches the runner (the test
-  // for "no session" wants runner.sessionId === null, but `null ?? 99` is 99).
-  const sessionId = opts.sessionId === undefined ? 99 : opts.sessionId;
+  // for "no session" wants runner.sessionId === null.
+  const sessionId =
+    opts.sessionId === undefined ? SESSION_ID : opts.sessionId;
   const runner = {
     emit: vi.fn(),
     sessionId,
@@ -97,7 +105,7 @@ function setup(
   const tool = buildExecuteTasksTool({
     provider: {} as never,
     parentTools: [],
-    sessionStore: store as unknown as import('@mcp/code-agent/sessions/store.js').SessionStore | undefined,
+    sessionStore: store as unknown as FsSessionStore | undefined,
   });
   return { tool, ctx, runner, store };
 }
@@ -121,15 +129,20 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
       usage: { input_tokens: 1, output_tokens: 1 },
       sandboxViolations: [],
     });
-    const { tool, ctx, store } = setup([task({ id: 'tsk_one' })], { sessionId: 42 });
+    const { tool, ctx, store } = setup(
+      [task({ id: 'tsk_one' })],
+      { sessionId: SECOND_SESSION_ID },
+    );
     await tool.handler({}, ctx);
 
     expect(store.createTaskRun).toHaveBeenCalledTimes(1);
     expect(store.createTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        session_id: 42,
+        session_id: SECOND_SESSION_ID,
         mode: 'auto',
-        run_id: expect.stringMatching(/^taskrun_/),
+        run_id: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+        ),
         started_at: expect.any(String),
       }),
     );
@@ -224,6 +237,7 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
 
     expect(store.updateTaskRun).toHaveBeenCalledTimes(1);
     expect(store.updateTaskRun).toHaveBeenCalledWith(
+      SESSION_ID,
       expect.any(String),
       expect.objectContaining({
         status: 'completed',
@@ -248,7 +262,7 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
     await tool.handler({}, ctx);
     // No `aborted` updateTaskRun call.
     const abortedCall = store.updateTaskRun.mock.calls.find(
-      (c) => (c[1] as { status?: string }).status === 'aborted',
+      (c) => (c[2] as { status?: string }).status === 'aborted',
     );
     expect(abortedCall).toBeUndefined();
   });
@@ -263,6 +277,7 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
     const { tool, ctx, store } = setup([task({ id: 'tsk_one' })]);
     await tool.handler({}, ctx);
     expect(store.updateTaskRun).toHaveBeenCalledWith(
+      SESSION_ID,
       expect.any(String),
       expect.objectContaining({ status: 'failed' }),
     );
@@ -275,7 +290,11 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
       usage: { input_tokens: 1, output_tokens: 1 },
       sandboxViolations: [],
     });
-    const runner = { emit: vi.fn(), sessionId: 99, agentLoopV2: false };
+    const runner = {
+      emit: vi.fn(),
+      sessionId: SESSION_ID,
+      agentLoopV2: false,
+    };
     const state: TasksState = {
       summary: '', tasks: [task({ id: 'tsk_one' })],
       execution_mode: 'all-subagent', approved: true, current_task_id: null,
@@ -306,13 +325,13 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
     const store = makeMockStore();
     const { tool, ctx } = setup([task({ id: 'tsk_one' })], { store, sessionId: null });
     await tool.handler({}, ctx);
-    // Without sessionId, the bridge returns NOOP_PERSIST → no DB calls.
+    // Without sessionId, the bridge returns NOOP_PERSIST → no bundle writes.
     expect(store.createTaskRun).not.toHaveBeenCalled();
     expect(store.updateTaskRun).not.toHaveBeenCalled();
     expect(store.upsertTaskRunItem).not.toHaveBeenCalled();
   });
 
-  it('persistence failure does NOT abort the run', async () => {
+  it('fails closed when the task-run journal cannot be written', async () => {
     vi.mocked(runSubagent).mockResolvedValue({
       reason: 'completed',
       finalText: 'ok',
@@ -324,8 +343,6 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
     store.upsertTaskRunItem.mockImplementation(() => { throw new Error('disk full'); });
     store.updateTaskRun.mockImplementation(() => { throw new Error('disk full'); });
     const { tool, ctx } = setup([task({ id: 'tsk_one' })], { store });
-    const result = await tool.handler({}, ctx);
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('tsk_one');
+    await expect(tool.handler({}, ctx)).rejects.toThrow('disk full');
   });
 });

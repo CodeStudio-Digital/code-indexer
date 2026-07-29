@@ -135,7 +135,9 @@ export function LspServersPanel() {
             {family.length > 1 && (
               <div className="px-1 text-[12px] font-semibold">
                 {family[0]?.label}
-                <span className="ml-2 font-normal text-muted-foreground">{family.length} perfis</span>
+                <span className="ml-2 font-normal text-muted-foreground">
+                  {t('lspServers.profileCount', { count: family.length })}
+                </span>
               </div>
             )}
             {family.map((s) => (
@@ -144,7 +146,7 @@ export function LspServersPanel() {
               <div className="text-[13px] font-medium">
                 {family.length > 1 ? s.profileId ?? s.label : s.label}
                 {s.supportTier === 'best-effort' && (
-                  <span className="ml-2 text-[10px] text-amber-400">legado</span>
+                  <span className="ml-2 text-[10px] text-amber-400">{t('lspServers.legacy')}</span>
                 )}
               </div>
               <div className="text-[11px] text-muted-foreground">

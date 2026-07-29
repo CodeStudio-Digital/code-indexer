@@ -68,40 +68,18 @@ describe('runRetention', () => {
     expect(runs).toHaveLength(0);
   });
 
-  it('skips passes whose tables are missing (trimmed per-project DB) without throwing', async () => {
-    const { db } = fakeDb(['coder_turn_telemetry']); // everything else absent
-    const res = await runRetention(db, { retentionDays: 90, pauseMs: 0 });
-    expect(Object.keys(res.counts)).toEqual(['coder_turn_telemetry']);
-    expect(res.skipped).toEqual([
+  it('has no SQLite session-retention passes after the filesystem cutover', async () => {
+    const legacySessionTables = [
+      'coder_turn_telemetry',
       'session_events',
-      'baselines_closed',
-      'baselines_orphaned',
-    ]);
-  });
-
-  it('binds the right cutoff kind per pass: text for created_at, ms for at_ms, none for orphans', async () => {
-    const tables = ['coder_turn_telemetry', 'session_events', 'session_file_baselines', 'coder_sessions'];
-    const { db, runs } = fakeDb(tables, {
-      coder_turn_telemetry: [3],
-      session_events: [2],
-      session_file_baselines: [4],
-    });
-    const now = Date.UTC(2026, 6, 20);
-    const res = await runRetention(db, { retentionDays: 90, nowMs: now, pauseMs: 0 });
+      'session_file_baselines',
+      'coder_sessions',
+    ];
+    const { db, runs } = fakeDb(legacySessionTables);
+    const res = await runRetention(db, { retentionDays: 90, pauseMs: 0 });
+    expect(res.counts).toEqual({});
     expect(res.skipped).toEqual([]);
-    expect(res.counts['coder_turn_telemetry']).toBe(3);
-
-    const { text, ms } = retentionCutoffs(now, 90);
-    const bySql = (frag: string) => runs.filter((r) => r.sql.includes(frag));
-    // created_at passes bind the datetime text (+ batch size).
-    expect(bySql('coder_turn_telemetry')[0]!.args[0]).toBe(text);
-    // session_events binds epoch ms (at_ms column, mig 195).
-    expect(bySql('session_events')[0]!.args[0]).toBe(ms);
-    // Orphaned-baselines pass has NO cutoff — only the batch size.
-    const orphan = runs.find((r) => r.sql.includes("status = 'active'"));
-    expect(orphan!.args).toHaveLength(1);
-    // The transcript tables are never touched.
-    expect(runs.some((r) => r.sql.includes('coder_messages') || r.sql.includes('coder_tool_calls'))).toBe(false);
+    expect(runs).toEqual([]);
   });
 });
 

@@ -17,7 +17,7 @@ import { RotateCcw, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { restoreQaConfig, type QaRestoreReport } from '../api/qa-api.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   /** Optional: refresh the parent's data (e.g. test plan) after restore. */
   onRestored?: () => void;
 }

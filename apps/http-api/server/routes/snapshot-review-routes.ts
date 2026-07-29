@@ -1,13 +1,18 @@
 import type { Hono } from 'hono';
 import type { ServerDeps } from '../deps.js';
-import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
-import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
 import {
-  SessionFileReviewStore,
-  type SnapshotReviewComment,
-  type SnapshotReviewCommentStatus,
-  type SnapshotReviewSeverity,
-} from '@mcp/store/session-file-review-store.js';
+  parseJsonBody,
+  parseSessionIdParam,
+  parseSessionRecordIdParam,
+  notFound,
+} from './_helpers.js';
+import type {
+  SessionReviewStorePort,
+  SessionSnapshotStorePort,
+  SnapshotReviewComment,
+  SnapshotReviewCommentStatus,
+  SnapshotReviewSeverity,
+} from '@mcp/services/services/session-snapshot-port.js';
 import { SessionSnapshotService, type FileDiff } from '@mcp/services/services/session-snapshots.js';
 import { SnapshotReviewPipeline } from '@mcp/services/services/snapshot-review-pipeline.js';
 import { filterReviewableDiffs } from '@mcp/services/services/snapshot-review-ignore.js';
@@ -16,6 +21,7 @@ import {
   formatReviewContext,
 } from '@mcp/services/services/snapshot-review-context.js';
 import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
+import type { SessionId } from '@mcp/session-storage';
 
 type Scope = 'coder' | 'company';
 
@@ -28,7 +34,9 @@ interface ReviewMessageDelivery {
 
 interface MountOptions {
   scope: Scope;
-  listCoderSessionIds?: (companySessionId: number) => number[];
+  listCoderSessionIds?: (
+    companySessionId: SessionId,
+  ) => SessionId[] | Promise<SessionId[]>;
   /**
    * Optional server-side delivery of the compiled review feedback. When
    * provided (company scope), `/submit` injects the message straight into
@@ -37,13 +45,13 @@ interface MountOptions {
    * the two paths never double-deliver the same review.
    */
   deliverMessage?: (
-    sessionId: number,
+    sessionId: SessionId,
     message: string,
   ) => ReviewMessageDelivery | Promise<ReviewMessageDelivery>;
 }
 
 interface CommentBody {
-  baselineId: number;
+  baselineId: string;
   filePath: string;
   hunkFingerprint?: string | null;
   oldLine?: number | null;
@@ -59,53 +67,71 @@ function routeBase(scope: Scope): string {
 }
 
 function projectRootResolver(deps: ServerDeps) {
-  return (kind: 'coder' | 'company', sessionId: number, projectId?: number | null): string | null => {
+  return async (
+    kind: 'coder' | 'company',
+    sessionId: SessionId,
+    projectId?: number | null,
+  ): Promise<string | null> => {
     if (kind !== 'coder') return null;
-    const session = deps.sessionStore.getSession(sessionId);
+    const session = await deps.sessionStore.getSession(sessionId);
     if (!session) return null;
     if (projectId != null && projectId < 0) {
-      return deps.sessionStore.listSessionFilesystemRoots(sessionId)
-        .find((root) => root.id === -projectId)?.root_path ?? null;
+      return (await deps.sessionStore.listSessionFilesystemRoots(sessionId))
+        .find((root) => root.seq === -projectId)?.root_path ?? null;
     }
     // Global session: honor the baseline's project_id (linked secondary root),
     // falling back to the session's primary project.
-    const project = deps.db.getProject(projectId ?? session.project_id);
-    return project?.root_path ?? null;
+    const targetProjectId = projectId ?? session.project_id;
+    if (targetProjectId == null) return null;
+    const project = deps.db.getProject(targetProjectId);
+    return project && !project.is_synthetic && project.root_path.trim().length > 0
+      ? project.root_path
+      : null;
   };
 }
 
-function coderIdsFor(scope: Scope, sessionId: number, opts: MountOptions): number[] {
+async function coderIdsFor(
+  scope: Scope,
+  sessionId: SessionId,
+  opts: MountOptions,
+): Promise<SessionId[]> {
   if (scope === 'coder') return [sessionId];
-  return opts.listCoderSessionIds?.(sessionId) ?? [];
+  return await opts.listCoderSessionIds?.(sessionId) ?? [];
 }
 
-function activeBaselineIds(
-  snapshotStore: SessionFileSnapshotStore,
+async function activeBaselineIds(
+  snapshotStore: SessionSnapshotStorePort<SessionId, string>,
   scope: Scope,
-  sessionId: number,
+  sessionId: SessionId,
   opts: MountOptions,
-): number[] {
-  return coderIdsFor(scope, sessionId, opts).flatMap((id) =>
-    snapshotStore.listActiveBaselineIds('coder', id),
-  );
+): Promise<string[]> {
+  return (await Promise.all(
+    (await coderIdsFor(scope, sessionId, opts)).map((id) =>
+      snapshotStore.listActiveBaselineIds('coder', id),
+    ),
+  )).flat();
 }
 
-function allBaselineIds(
-  snapshotStore: SessionFileSnapshotStore,
+async function allBaselineIds(
+  snapshotStore: SessionSnapshotStorePort<SessionId, string>,
   scope: Scope,
-  sessionId: number,
+  sessionId: SessionId,
   opts: MountOptions,
-): number[] {
-  return coderIdsFor(scope, sessionId, opts).flatMap((id) =>
-    snapshotStore.listBaselines('coder', id, { includeClosed: true }).map((b) => b.id),
-  );
+): Promise<string[]> {
+  return (await Promise.all(
+    (await coderIdsFor(scope, sessionId, opts)).map(async (id) =>
+      (await snapshotStore.listBaselines('coder', id, {
+        includeClosed: true,
+      })).map((baseline) => baseline.id),
+    ),
+  )).flat();
 }
 
 async function loadDiffs(
-  service: SessionSnapshotService,
-  baselineIds: number[],
-): Promise<FileDiff[]> {
-  const diffs: FileDiff[] = [];
+  service: SessionSnapshotService<SessionId, string>,
+  baselineIds: string[],
+): Promise<FileDiff<string>[]> {
+  const diffs: FileDiff<string>[] = [];
   for (const baselineId of baselineIds) {
     const diff = await service.getDiff(baselineId, { context: 3 });
     if (diff) diffs.push(diff);
@@ -113,15 +139,17 @@ async function loadDiffs(
   return diffs;
 }
 
-function listComments(
-  snapshotStore: SessionFileSnapshotStore,
-  reviewStore: SessionFileReviewStore,
+async function listComments(
+  snapshotStore: SessionSnapshotStorePort<SessionId, string>,
+  reviewStore: SessionReviewStorePort<SessionId, string>,
   scope: Scope,
-  sessionId: number,
+  sessionId: SessionId,
   opts: MountOptions,
-): SnapshotReviewComment[] {
-  if (scope === 'coder') return reviewStore.listComments('coder', sessionId);
-  return reviewStore.listCommentsByBaselineIds(allBaselineIds(snapshotStore, scope, sessionId, opts));
+): Promise<SnapshotReviewComment<string>[]> {
+  if (scope === 'coder') return await reviewStore.listComments('coder', sessionId);
+  return reviewStore.listCommentsByBaselineIds(
+    await allBaselineIds(snapshotStore, scope, sessionId, opts),
+  );
 }
 
 function normalizeSeverity(value: unknown): SnapshotReviewSeverity {
@@ -144,7 +172,7 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function excerptFor(diff: FileDiff, fingerprint?: string | null): string | null {
+function excerptFor(diff: FileDiff<string>, fingerprint?: string | null): string | null {
   if (diff.diffDisabled) return null;
   const hunk = fingerprint
     ? diff.hunks.find((h) => h.fingerprint === fingerprint)
@@ -157,7 +185,7 @@ function excerptFor(diff: FileDiff, fingerprint?: string | null): string | null 
   return [`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`, ...lines].join('\n');
 }
 
-function buildFeedbackMessage(comments: SnapshotReviewComment[]): string {
+function buildFeedbackMessage(comments: SnapshotReviewComment<string>[]): string {
   const blocks = comments.map((c, index) => {
     const loc = [
       `file=${c.file_path}`,
@@ -190,33 +218,33 @@ export function mountSnapshotReviewRoutes(
   opts: MountOptions,
 ): void {
   const { scope } = opts;
-  const snapshotStore = new SessionFileSnapshotStore(deps.sessionStore.getDb());
-  const reviewStore = new SessionFileReviewStore(deps.sessionStore.getDb());
+  const snapshotStore = deps.sessionStore;
+  const reviewStore = deps.sessionStore;
   const snapshotService = new SessionSnapshotService(snapshotStore, projectRootResolver(deps));
   const pipeline = new SnapshotReviewPipeline(deps.pipelineProviderResolver, deps.pipelineTelemetrySink);
 
   app.get(routeBase(scope), async (c) => {
-    const sessionId = parseIdParam(c);
-    if (!Number.isFinite(sessionId)) return c.json({ error: 'bad id' }, 400);
+    const sessionId = parseSessionIdParam(c);
     return c.json({
-      runs: reviewStore.listRuns(scope, sessionId),
-      comments: listComments(snapshotStore, reviewStore, scope, sessionId, opts),
+      runs: await reviewStore.listRuns(scope, sessionId),
+      comments: await listComments(snapshotStore, reviewStore, scope, sessionId, opts),
     });
   });
 
   app.post(`${routeBase(scope)}/comments`, async (c) => {
-    const sessionId = parseIdParam(c);
-    if (!Number.isFinite(sessionId)) return c.json({ error: 'bad id' }, 400);
+    const sessionId = parseSessionIdParam(c);
     const body = await parseJsonBody<CommentBody>(c);
-    const baselineId = asNumber(body.baselineId);
+    const baselineId = asString(body.baselineId);
     const filePath = asString(body.filePath);
     const text = asString(body.body);
     if (!baselineId || !filePath || !text) {
       return c.json({ error: 'baselineId, filePath and body required' }, 400);
     }
-    const allowed = new Set(allBaselineIds(snapshotStore, scope, sessionId, opts));
+    const allowed = new Set(
+      await allBaselineIds(snapshotStore, scope, sessionId, opts),
+    );
     if (!allowed.has(baselineId)) return c.json({ error: 'baseline outside session' }, 403);
-    const comment = reviewStore.createComment({
+    const comment = await reviewStore.createComment({
       baseline_id: baselineId,
       source: 'manual',
       status: 'open',
@@ -233,12 +261,12 @@ export function mountSnapshotReviewRoutes(
   });
 
   app.patch(`${routeBase(scope)}/comments/:commentId`, async (c) => {
-    const sessionId = parseIdParam(c);
-    const commentId = parseIdParam(c, 'commentId');
-    if (!Number.isFinite(sessionId) || !Number.isFinite(commentId)) {
-      return c.json({ error: 'bad id' }, 400);
-    }
-    const allowed = new Set(listComments(snapshotStore, reviewStore, scope, sessionId, opts).map((x) => x.id));
+    const sessionId = parseSessionIdParam(c);
+    const commentId = parseSessionRecordIdParam(c, 'commentId');
+    const allowed = new Set(
+      (await listComments(snapshotStore, reviewStore, scope, sessionId, opts))
+        .map((comment) => comment.id),
+    );
     if (!allowed.has(commentId)) return notFound(c, 'comment not found');
     const body = await parseJsonBody<{
       status?: SnapshotReviewCommentStatus;
@@ -246,7 +274,7 @@ export function mountSnapshotReviewRoutes(
       severity?: SnapshotReviewSeverity;
       suggestedFix?: string | null;
     }>(c);
-    const comment = reviewStore.updateComment(commentId, {
+    const comment = await reviewStore.updateComment(commentId, {
       status: normalizeStatus(body.status),
       body: asString(body.body) ?? undefined,
       severity: body.severity === undefined ? undefined : normalizeSeverity(body.severity),
@@ -257,24 +285,30 @@ export function mountSnapshotReviewRoutes(
   });
 
   app.post(`${routeBase(scope)}/auto`, async (c) => {
-    const sessionId = parseIdParam(c);
-    if (!Number.isFinite(sessionId)) return c.json({ error: 'bad id' }, 400);
-    const run = reviewStore.createRun({ session_kind: scope, session_id: sessionId, source: 'auto' });
+    const sessionId = parseSessionIdParam(c);
+    const run = await reviewStore.createRun({
+      session_kind: scope,
+      session_id: sessionId,
+      source: 'auto',
+    });
     // Skip internal/never-reviewed paths (.mcp-indexer/**, .git, node_modules, dist).
     const diffs = filterReviewableDiffs(
-      await loadDiffs(snapshotService, activeBaselineIds(snapshotStore, scope, sessionId, opts)),
+      await loadDiffs(
+        snapshotService,
+        await activeBaselineIds(snapshotStore, scope, sessionId, opts),
+      ),
     );
     const pendingHunks = diffs.reduce(
       (sum, diff) => sum + (diff.diffDisabled ? 0 : diff.hunks.filter((h) => h.decision === 'pending').length),
       0,
     );
     if (pendingHunks === 0) {
-      reviewStore.completeRun(run.id, {
+      await reviewStore.completeRun(run.id, {
         status: 'completed',
         raw_response: '{"findings":[]}',
       });
       return c.json({
-        run: reviewStore.getRun(run.id),
+        run: await reviewStore.getRun(run.id),
         comments: [],
         message: 'No pending snapshot diff hunks to review.',
       });
@@ -285,7 +319,7 @@ export function mountSnapshotReviewRoutes(
     let intent: string | null = null;
     if (scope === 'coder') {
       try {
-        intent = buildSessionIntent(deps.sessionStore, sessionId);
+        intent = await buildSessionIntent(deps.sessionStore, sessionId);
       } catch {
         /* best-effort */
       }
@@ -301,7 +335,7 @@ export function mountSnapshotReviewRoutes(
       }),
     });
     if (!result.ok) {
-      reviewStore.completeRun(run.id, {
+      await reviewStore.completeRun(run.id, {
         status: 'error',
         provider_id: result.providerId ?? null,
         model_id: result.modelId ?? null,
@@ -317,20 +351,20 @@ export function mountSnapshotReviewRoutes(
       return c.json({
         error: result.error ?? 'review failed',
         code: result.errorCode ?? 'review_pipeline_error',
-        run: reviewStore.getRun(run.id),
+        run: await reviewStore.getRun(run.id),
       }, status);
     }
-    reviewStore.completeRun(run.id, {
+    await reviewStore.completeRun(run.id, {
       status: 'completed',
       provider_id: result.providerId ?? null,
       model_id: result.modelId ?? null,
       raw_response: result.raw,
     });
-    const comments = result.findings.flatMap((finding) => {
+    const comments = (await Promise.all(result.findings.map(async (finding) => {
       const diff = diffs.find((d) =>
         d.baseline.id === finding.baselineId || d.baseline.filePath === finding.filePath,
       );
-      if (!diff) return [];
+      if (!diff) return null;
       return reviewStore.createComment({
         run_id: run.id,
         baseline_id: diff.baseline.id,
@@ -345,18 +379,26 @@ export function mountSnapshotReviewRoutes(
         suggested_fix: finding.suggestedFix ?? null,
         diff_excerpt: finding.diffExcerpt ?? excerptFor(diff, finding.hunkFingerprint),
       });
-    });
-    return c.json({ run: reviewStore.getRun(run.id), comments });
+    }))).filter((comment): comment is SnapshotReviewComment<string> => comment != null);
+    return c.json({ run: await reviewStore.getRun(run.id), comments });
   });
 
   app.post(`${routeBase(scope)}/submit`, async (c) => {
-    const sessionId = parseIdParam(c);
-    if (!Number.isFinite(sessionId)) return c.json({ error: 'bad id' }, 400);
-    const body = await parseJsonBody<{ commentIds: number[] }>(c);
-    const ids = Array.isArray(body.commentIds) ? body.commentIds.filter(Number.isFinite) : [];
-    const allowed = new Set(listComments(snapshotStore, reviewStore, scope, sessionId, opts).map((x) => x.id));
-    const comments = reviewStore
-      .listCommentsByIds(ids)
+    const sessionId = parseSessionIdParam(c);
+    const body = await parseJsonBody<{ commentIds: string[] }>(c);
+    const ids = Array.isArray(body.commentIds)
+      ? body.commentIds.filter(
+          (id): id is string =>
+            typeof id === 'string' &&
+            /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id),
+        )
+      : [];
+    const allowed = new Set(
+      (await listComments(snapshotStore, reviewStore, scope, sessionId, opts))
+        .map((comment) => comment.id),
+    );
+    const comments = (await reviewStore
+      .listCommentsByIds(ids))
       .filter((cmt) => allowed.has(cmt.id) && cmt.status !== 'dismissed' && cmt.status !== 'sent');
     if (comments.length === 0) return c.json({ error: 'no comments to submit' }, 400);
     const message = buildFeedbackMessage(comments);
@@ -364,11 +406,11 @@ export function mountSnapshotReviewRoutes(
     // A company-side delivery refusal is retryable. Do not irreversibly mark
     // those comments as sent until the worker acknowledges the message.
     if (delivery?.ok !== false) {
-      reviewStore.markSent(comments.map((cmt) => cmt.id));
+      await reviewStore.markSent(comments.map((cmt) => cmt.id));
     }
     return c.json({
       message,
-      comments: reviewStore.listCommentsByIds(comments.map((cmt) => cmt.id)),
+      comments: await reviewStore.listCommentsByIds(comments.map((cmt) => cmt.id)),
       delivered: delivery ? delivery.ok : null,
       pending: delivery?.pending ?? null,
       delivery_code: delivery?.code ?? null,

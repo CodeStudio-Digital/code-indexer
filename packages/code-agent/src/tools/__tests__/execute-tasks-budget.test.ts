@@ -4,6 +4,7 @@
  * live in `budget-tracker.test.ts`.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
 
@@ -48,7 +49,7 @@ function makeStubRunner(answer: string | null) {
     on: (event: string, fn: (...args: unknown[]) => void) => {
       (listeners[event] ??= []).push(fn);
     },
-    sessionId: 99,
+    sessionId: newSessionId(),
     agentLoopV2: false,
     waitForUserInput: (askId?: string) => new Promise<string>((r) => {
       const key = askId ?? '__default__';

@@ -10,6 +10,7 @@
  */
 export type BuiltinRightPanelId =
   | 'meta'        // Goal / tasks / files / skills picker (was SessionStateSidebar)
+  | 'preview'     // Live project preview, when the hosting project exposes one
   | 'drive'       // Session Drive: working memory (map/notes/investigations/plans)
   | 'chapters'    // Navigable context/milestone/rebuild chapter history
   | 'config'      // Per-session Skills + Tools enable/disable, tabbed (was 'skills' + 'tools')

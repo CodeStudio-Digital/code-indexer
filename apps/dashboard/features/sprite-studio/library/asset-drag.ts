@@ -8,9 +8,9 @@
 export const SPRITE_ASSET_MIME = 'application/x-sprite-asset';
 
 export interface SpriteAssetDragPayload {
-  assetId: number;
+  assetId: string;
   slug: string;
-  versionId?: number | null;
+  versionId?: string | null;
   thumbUrl?: string | null;
 }
 
@@ -31,8 +31,8 @@ export function readAssetDragData(dt: DataTransfer): SpriteAssetDragPayload | nu
     const raw = dt.getData(SPRITE_ASSET_MIME);
     if (!raw) return null;
     const o = JSON.parse(raw) as Partial<SpriteAssetDragPayload>;
-    if (!Number.isInteger(o.assetId) || typeof o.slug !== 'string') return null;
-    if (o.versionId != null && !Number.isInteger(o.versionId)) return null;
+    if (typeof o.assetId !== 'string' || !o.assetId || typeof o.slug !== 'string') return null;
+    if (o.versionId != null && (typeof o.versionId !== 'string' || !o.versionId)) return null;
     if (o.thumbUrl != null && typeof o.thumbUrl !== 'string') return null;
     return { assetId: o.assetId, slug: o.slug, versionId: o.versionId ?? null, thumbUrl: o.thumbUrl ?? null };
   } catch {

@@ -16,48 +16,52 @@ import {
   DEFAULT_BREAKER_CONFIG,
   configFromEnv,
 } from '../circuit-breakers.js';
+import { agentRunId } from './uuid-fixtures.js';
+
+const AGENT_1 = agentRunId(1);
+const AGENT_2 = agentRunId(2);
 
 describe('per-agent breaker', () => {
   it('does not trip below the limit', () => {
     const cb = new CircuitBreakers({ agentLimit: 3, agentWindowMs: 60_000 });
-    expect(cb.recordAgentFailure(1, 0)).toBe(false);
-    expect(cb.recordAgentFailure(1, 100)).toBe(false);
-    expect(cb.isAgentTripped(1, 200)).toBe(false);
+    expect(cb.recordAgentFailure(AGENT_1, 0)).toBe(false);
+    expect(cb.recordAgentFailure(AGENT_1, 100)).toBe(false);
+    expect(cb.isAgentTripped(AGENT_1, 200)).toBe(false);
   });
 
   it('trips exactly at the limit', () => {
     const cb = new CircuitBreakers({ agentLimit: 3, agentWindowMs: 60_000 });
-    cb.recordAgentFailure(1, 0);
-    cb.recordAgentFailure(1, 100);
-    expect(cb.recordAgentFailure(1, 200)).toBe(true);
-    expect(cb.isAgentTripped(1, 300)).toBe(true);
+    cb.recordAgentFailure(AGENT_1, 0);
+    cb.recordAgentFailure(AGENT_1, 100);
+    expect(cb.recordAgentFailure(AGENT_1, 200)).toBe(true);
+    expect(cb.isAgentTripped(AGENT_1, 300)).toBe(true);
   });
 
   it('prunes stale entries — old failures fall off the window', () => {
     const cb = new CircuitBreakers({ agentLimit: 3, agentWindowMs: 1_000 });
-    cb.recordAgentFailure(1, 0);
-    cb.recordAgentFailure(1, 100);
-    cb.recordAgentFailure(1, 200);
-    expect(cb.isAgentTripped(1, 300)).toBe(true);
+    cb.recordAgentFailure(AGENT_1, 0);
+    cb.recordAgentFailure(AGENT_1, 100);
+    cb.recordAgentFailure(AGENT_1, 200);
+    expect(cb.isAgentTripped(AGENT_1, 300)).toBe(true);
     // 2_000 is past the window — all three are stale
-    expect(cb.isAgentTripped(1, 2_000)).toBe(false);
+    expect(cb.isAgentTripped(AGENT_1, 2_000)).toBe(false);
   });
 
   it('clearAgent wipes history', () => {
     const cb = new CircuitBreakers({ agentLimit: 2, agentWindowMs: 60_000 });
-    cb.recordAgentFailure(1, 0);
-    cb.recordAgentFailure(1, 100);
-    expect(cb.isAgentTripped(1, 200)).toBe(true);
-    cb.clearAgent(1);
-    expect(cb.isAgentTripped(1, 300)).toBe(false);
+    cb.recordAgentFailure(AGENT_1, 0);
+    cb.recordAgentFailure(AGENT_1, 100);
+    expect(cb.isAgentTripped(AGENT_1, 200)).toBe(true);
+    cb.clearAgent(AGENT_1);
+    expect(cb.isAgentTripped(AGENT_1, 300)).toBe(false);
   });
 
   it('separate agents have separate counters', () => {
     const cb = new CircuitBreakers({ agentLimit: 2, agentWindowMs: 60_000 });
-    cb.recordAgentFailure(1, 0);
-    cb.recordAgentFailure(1, 100);
-    expect(cb.isAgentTripped(1, 200)).toBe(true);
-    expect(cb.isAgentTripped(2, 200)).toBe(false);
+    cb.recordAgentFailure(AGENT_1, 0);
+    cb.recordAgentFailure(AGENT_1, 100);
+    expect(cb.isAgentTripped(AGENT_1, 200)).toBe(true);
+    expect(cb.isAgentTripped(AGENT_2, 200)).toBe(false);
   });
 });
 
@@ -164,8 +168,8 @@ describe('status snapshot', () => {
       globalWindowMs: 60_000,
       globalReadOnlyMs: 1_000,
     });
-    cb.recordAgentFailure(1, 0);
-    cb.recordAgentFailure(1, 100);
+    cb.recordAgentFailure(AGENT_1, 0);
+    cb.recordAgentFailure(AGENT_1, 100);
     cb.recordRoleFailure('qa', 0);
     cb.recordRoleFailure('qa', 100);
     cb.recordIncident(0);
@@ -173,7 +177,11 @@ describe('status snapshot', () => {
 
     const s = cb.status(200);
     expect(s.agents).toHaveLength(1);
-    expect(s.agents[0]).toMatchObject({ agentRunId: 1, recentAttempts: 2, tripped: true });
+    expect(s.agents[0]).toMatchObject({
+      agentRunId: AGENT_1,
+      recentAttempts: 2,
+      tripped: true,
+    });
     expect(s.roles).toHaveLength(1);
     expect(s.roles[0]).toMatchObject({ role: 'qa', recentFailures: 2 });
     expect(s.roles[0]?.quarantinedUntilMs).not.toBeNull();
@@ -238,8 +246,8 @@ describe('config', () => {
 describe('clearAllForTests', () => {
   it('resets all state', () => {
     const cb = new CircuitBreakers({ agentLimit: 2, roleLimit: 2, globalLimit: 2 });
-    cb.recordAgentFailure(1, 0);
-    cb.recordAgentFailure(1, 1);
+    cb.recordAgentFailure(AGENT_1, 0);
+    cb.recordAgentFailure(AGENT_1, 1);
     cb.recordRoleFailure('qa', 0);
     cb.recordRoleFailure('qa', 1);
     cb.recordIncident(0);

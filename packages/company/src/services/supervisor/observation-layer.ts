@@ -56,7 +56,7 @@ export type IncidentEmitter = (incident: {
     /** Runner injected an enforcement reminder into an agent stuck in an
      *  insistent tool-call loop (same tool+args refused across cycles). */
     | 'loop_enforced';
-  agentRunId: number | null;
+  agentRunId: string | null;
   fromState?: SupervisionState;
   attemptedTo?: SupervisionState;
   detail: string;
@@ -158,8 +158,8 @@ export class ObservationLayer {
    * this is replaced by hooking into `SubordinateLifecycle.spawn`.
    */
   registerSpawn(args: {
-    agentRunId: number;
-    companySessionId: number;
+    agentRunId: string;
+    companySessionId: string;
     role: string;
   }): void {
     this.tracker.register(args);
@@ -170,7 +170,7 @@ export class ObservationLayer {
    * but for the master role. Phase 1 keeps masters in their own
    * records since they have distinct lifecycle semantics.
    */
-  registerMaster(args: { agentRunId: number; companySessionId: number }): void {
+  registerMaster(args: { agentRunId: string; companySessionId: string }): void {
     this.tracker.register({
       agentRunId: args.agentRunId,
       companySessionId: args.companySessionId,

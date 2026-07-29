@@ -16,12 +16,12 @@ export interface SpriteProcessOp {
 export interface GenerationJobParams {
   kind: 'generation';
   /** Target asset — omitted for "generate into a new asset" flows. */
-  assetId?: number;
+  assetId?: string;
   prompt: string;
   /** Variant count; n>1 stages candidates (no version rows until picked). */
   n: number;
   /** Version ids attached as identity/style references (validated server-side). */
-  referenceIds?: number[];
+  referenceIds?: string[];
   /** Attach the asset's CURRENT version as the identity reference. */
   useCurrentAsRef?: boolean;
   /** Disk-upload references (client downscales to ≤768px before sending). */
@@ -34,8 +34,8 @@ export interface GenerationJobParams {
 
 export interface InpaintJobParams {
   kind: 'inpaint';
-  assetId: number;
-  versionId: number;
+  assetId: string;
+  versionId: string;
   prompt: string;
   /** Raw PNG mask bytes as base64 (white = repaint region). */
   maskBase64: string;
@@ -46,8 +46,8 @@ export interface InpaintJobParams {
 
 export interface EnhanceJobParams {
   kind: 'enhance';
-  assetId: number;
-  versionId: number;
+  assetId: string;
+  versionId: string;
   prompt: string;
   rawPrompt?: boolean;
   seed?: number | null;
@@ -56,15 +56,15 @@ export interface EnhanceJobParams {
 
 export interface ProcessJobParams {
   kind: 'process';
-  assetId: number;
-  versionId: number;
+  assetId: string;
+  versionId: string;
   ops: SpriteProcessOp[];
 }
 
 export interface ExportJobParams {
   kind: 'export';
   scope: 'asset' | 'category' | 'approved';
-  assetId?: number;
+  assetId?: string;
   category?: SpriteCategory;
   exportProfileId?: number;
 }
@@ -83,7 +83,7 @@ export type SpriteJobStatus =
 
 /** Event `sprite_job` — status/progress ticks while a job runs. */
 export interface SpriteJobEvent {
-  jobId: number;
+  jobId: string;
   status: SpriteJobStatus;
   pct?: number;
   note?: string;
@@ -92,7 +92,7 @@ export interface SpriteJobEvent {
 /** Event `sprite_variant_ready` — one staged candidate finished (scratch,
  *  NOT a version row; picking it later creates the version). */
 export interface SpriteVariantReadyEvent {
-  jobId: number;
+  jobId: string;
   index: number;
   candidateId: string;
   thumbUrl: string;
@@ -107,13 +107,13 @@ export interface SpriteJobCandidate {
 /** Event `sprite_job_done` — auto-saved jobs carry `versionId`; interactive
  *  n>1 jobs carry `candidates` instead (staged flow). */
 export interface SpriteJobDoneEvent {
-  jobId: number;
-  versionId?: number;
+  jobId: string;
+  versionId?: string;
   candidates?: SpriteJobCandidate[];
 }
 
 /** Event `sprite_job_failed`. */
 export interface SpriteJobFailedEvent {
-  jobId: number;
+  jobId: string;
   error: string;
 }

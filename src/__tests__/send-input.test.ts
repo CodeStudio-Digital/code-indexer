@@ -3,6 +3,12 @@ import { sendInput } from '@mcp/code-agent/tools/send-input.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CompanyContext } from '@mcp/company/types.js';
 
+const COMPANY_ID = '00000001-0000-4000-8000-000000000001';
+const ID_1 = '00000001-0000-4000-8000-000000000001';
+const ID_7 = '00000007-0000-4000-8000-000000000007';
+const ID_9 = '00000009-0000-4000-8000-000000000009';
+const ID_99 = '00000099-0000-4000-8000-000000000099';
+
 interface FakeSubHandle {
   role: string;
   runner: {
@@ -12,7 +18,7 @@ interface FakeSubHandle {
 }
 
 interface FakeOrchestratorOpts {
-  subs: Array<{ agentRunId: number; role: string; running: boolean; handle?: FakeSubHandle }>;
+  subs: Array<{ agentRunId: string; role: string; running: boolean; handle?: FakeSubHandle }>;
   masterInterruptResult?: boolean;
 }
 
@@ -23,10 +29,10 @@ function makeFakeOrchestrator(opts: FakeOrchestratorOpts) {
       agentRunId: s.agentRunId, role: s.role,
       status: s.running ? 'running' : 'waiting',
       statusMessage: '', projectIds: [], provider: 'a', model: 'm',
-      coderSessionId: 1, isAlive: true,
+      coderSessionId: s.agentRunId, isAlive: true,
     })),
-    isSubordinateRunning: (id: number) => !!subById.get(id)?.running,
-    getSubordinate: (id: number) => {
+    isSubordinateRunning: (id: string) => !!subById.get(id)?.running,
+    getSubordinate: (id: string) => {
       const s = subById.get(id);
       if (!s) return undefined;
       return s.handle ?? {
@@ -44,13 +50,13 @@ function makeFakeOrchestrator(opts: FakeOrchestratorOpts) {
 
 function makeCompanyCtx(opts: {
   isMaster: boolean;
-  selfAgentRunId?: number;
+  selfAgentRunId?: string;
   selfRole?: string;
   orch: ReturnType<typeof makeFakeOrchestrator>;
 }): ToolContext {
   const cc: CompanyContext = {
     orchestrator: opts.orch as unknown as CompanyContext['orchestrator'],
-    companySessionId: 1,
+    companySessionId: COMPANY_ID,
     agentRole: opts.selfRole ?? (opts.isMaster ? 'master' : 'qa'),
     agentRunId: opts.selfAgentRunId ?? null,
     allowedProjectIds: [],
@@ -73,7 +79,7 @@ describe('send_input — input validation', () => {
     const orch = makeFakeOrchestrator({ subs: [] });
     const r = await sendInput.handler(
       { to: '/root/master', message: '   ' },
-      makeCompanyCtx({ isMaster: false, selfAgentRunId: 1, orch }),
+      makeCompanyCtx({ isMaster: false, selfAgentRunId: ID_1, orch }),
     );
     expect(r.isError).toBe(true);
     expect(r.content).toContain('cannot be empty');
@@ -104,19 +110,19 @@ describe('send_input — master caller', () => {
   it('rejects unknown agent_run_id', async () => {
     const orch = makeFakeOrchestrator({ subs: [] });
     const r = await sendInput.handler(
-      { to: '/root/master/qa-99', message: 'hi' },
+      { to: `/root/master/qa-${ID_99}`, message: 'hi' },
       makeCompanyCtx({ isMaster: true, orch }),
     );
     expect(r.isError).toBe(true);
-    expect(r.content).toContain('no subordinate with agent_run_id=99');
+    expect(r.content).toContain(`no subordinate with agent_run_id=${ID_99}`);
   });
 
   it('rejects sending to a non-running sub', async () => {
     const orch = makeFakeOrchestrator({
-      subs: [{ agentRunId: 7, role: 'qa', running: false }],
+      subs: [{ agentRunId: ID_7, role: 'qa', running: false }],
     });
     const r = await sendInput.handler(
-      { to: '/root/master/qa-7', message: 'hi' },
+      { to: `/root/master/qa-${ID_7}`, message: 'hi' },
       makeCompanyCtx({ isMaster: true, orch }),
     );
     expect(r.isError).toBe(true);
@@ -131,10 +137,10 @@ describe('send_input — master caller', () => {
       runner: { pushUserMessage: pushFn, interruptWait: interruptFn },
     };
     const orch = makeFakeOrchestrator({
-      subs: [{ agentRunId: 7, role: 'qa', running: true, handle }],
+      subs: [{ agentRunId: ID_7, role: 'qa', running: true, handle }],
     });
     const r = await sendInput.handler(
-      { to: '/root/master/qa-7', message: 'context changed: stop and reread the brief' },
+      { to: `/root/master/qa-${ID_7}`, message: 'context changed: stop and reread the brief' },
       makeCompanyCtx({ isMaster: true, orch }),
     );
     expect(r.isError).toBeFalsy();
@@ -149,10 +155,10 @@ describe('send_input — master caller', () => {
       runner: { pushUserMessage: vi.fn(), interruptWait: vi.fn(() => false) },
     };
     const orch = makeFakeOrchestrator({
-      subs: [{ agentRunId: 7, role: 'qa', running: true, handle }],
+      subs: [{ agentRunId: ID_7, role: 'qa', running: true, handle }],
     });
     const r = await sendInput.handler(
-      { to: '/root/master/qa-7', message: 'fyi' },
+      { to: `/root/master/qa-${ID_7}`, message: 'fyi' },
       makeCompanyCtx({ isMaster: true, orch }),
     );
     expect(r.isError).toBeFalsy();
@@ -162,8 +168,8 @@ describe('send_input — master caller', () => {
 
 describe('send_input — subordinate caller', () => {
   it('to=/root/master notifies AND interrupts master wait', async () => {
-    const orch = makeFakeOrchestrator({ subs: [{ agentRunId: 7, role: 'qa', running: true }], masterInterruptResult: true });
-    const ctx = makeCompanyCtx({ isMaster: false, selfAgentRunId: 7, selfRole: 'qa', orch });
+    const orch = makeFakeOrchestrator({ subs: [{ agentRunId: ID_7, role: 'qa', running: true }], masterInterruptResult: true });
+    const ctx = makeCompanyCtx({ isMaster: false, selfAgentRunId: ID_7, selfRole: 'qa', orch });
     const r = await sendInput.handler({ to: '/root/master', message: 'tests are failing on main' }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('released a pending wait');
@@ -174,15 +180,15 @@ describe('send_input — subordinate caller', () => {
     expect(notifyArg).toContain('tests are failing on main');
     expect(orch.interruptMasterWait).toHaveBeenCalledTimes(1);
     const interruptArg = (orch.interruptMasterWait as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(interruptArg).toEqual({ kind: 'question', agentRunId: 7, role: 'qa' });
+    expect(interruptArg).toEqual({ kind: 'question', agentRunId: ID_7, role: 'qa' });
   });
 
   it('reports queued when master had no pending wait', async () => {
     const orch = makeFakeOrchestrator({
-      subs: [{ agentRunId: 7, role: 'qa', running: true }],
+      subs: [{ agentRunId: ID_7, role: 'qa', running: true }],
       masterInterruptResult: false,
     });
-    const ctx = makeCompanyCtx({ isMaster: false, selfAgentRunId: 7, selfRole: 'qa', orch });
+    const ctx = makeCompanyCtx({ isMaster: false, selfAgentRunId: ID_7, selfRole: 'qa', orch });
     const r = await sendInput.handler({ to: '/root/master', message: 'fyi' }, ctx);
     expect(r.isError).toBeFalsy();
     expect(r.content).toContain('queued for next turn');
@@ -191,13 +197,13 @@ describe('send_input — subordinate caller', () => {
   it('refuses peer-to-peer interrupts', async () => {
     const orch = makeFakeOrchestrator({
       subs: [
-        { agentRunId: 7, role: 'qa', running: true },
-        { agentRunId: 9, role: 'frontend', running: true },
+        { agentRunId: ID_7, role: 'qa', running: true },
+        { agentRunId: ID_9, role: 'frontend', running: true },
       ],
     });
-    const ctx = makeCompanyCtx({ isMaster: false, selfAgentRunId: 7, selfRole: 'qa', orch });
+    const ctx = makeCompanyCtx({ isMaster: false, selfAgentRunId: ID_7, selfRole: 'qa', orch });
     const r = await sendInput.handler(
-      { to: '/root/master/frontend-9', message: 'hi' },
+      { to: `/root/master/frontend-${ID_9}`, message: 'hi' },
       ctx,
     );
     expect(r.isError).toBe(true);

@@ -44,6 +44,30 @@ const cache = new Map<string, CacheEntry>();
  *  caching the body (so the next read after settle still revalidates). */
 const inflightOnly = new Map<string, Promise<unknown>>();
 
+/**
+ * How many live entries trigger a sweep of expired ones.
+ *
+ * Eviction used to be purely lazy: an entry was dropped only when that EXACT
+ * key was read again after its TTL, or when a mutation called
+ * `invalidateAll()`. Every other key kept its full response body resident
+ * forever. A read-heavy stretch with no writes — scrolling transcript pages,
+ * opening files, running searches, each a distinct URL — therefore accumulated
+ * megabytes of bodies that could never be served again, since they were all
+ * long past the 1500 ms TTL.
+ *
+ * The sweep is provably behaviour-neutral: it deletes exactly the entries
+ * `getCached` would already have treated as a miss. 64 keeps it rare (the
+ * cache exists to collapse a single render pass, which is a handful of keys)
+ * and the pass itself is over a map that small.
+ */
+const SWEEP_AT_SIZE = 64;
+
+function sweepExpired(now: number): void {
+  for (const [key, entry] of cache) {
+    if (now - entry.at > TTL_MS) cache.delete(key);
+  }
+}
+
 /** Fresh cached body for `key`, or undefined (miss/expired). Empty key never hits. */
 export function getCached<T>(key: string): T | undefined {
   if (!key) return undefined;
@@ -68,7 +92,11 @@ export function dedupe<T>(key: string, producer: () => Promise<T>): Promise<T> {
 
   const p = producer()
     .then((data) => {
-      cache.set(key, { data, at: Date.now() });
+      const now = Date.now();
+      cache.set(key, { data, at: now });
+      // Amortized cleanup: bodies whose TTL lapsed are unreachable by
+      // `getCached` and must not stay resident for the life of the renderer.
+      if (cache.size >= SWEEP_AT_SIZE) sweepExpired(now);
       return data;
     })
     .finally(() => {

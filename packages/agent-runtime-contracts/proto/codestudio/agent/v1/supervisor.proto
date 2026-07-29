@@ -1,0 +1,378 @@
+syntax = "proto3";
+
+package codestudio.agent.v1;
+
+import "codestudio/agent/v1/common.proto";
+
+// Header for the permanent, bounded host-supervisor management channel.
+message ManagementFrameHeader {
+  uint32 protocol_version = 1;
+  string connection_id = 2;
+  string message_id = 3;
+  optional string reply_to_message_id = 4;
+  uint64 stream_seq = 5;
+  int64 sent_at_unix_ms = 6;
+  optional int64 deadline_at_unix_ms = 7;
+  // SHA-256("codestudio.agent.management-payload.v1\0" || encoded_payload).
+  bytes payload_sha256 = 8;
+}
+
+// encoded_payload is size/hash checked before decoding ManagementPayload.
+message ManagementFrame {
+  ManagementFrameHeader header = 1;
+  bytes encoded_payload = 2;
+}
+
+// The management channel carries physical lifecycle facts only. Domain task,
+// transcript, provider, tool, artifact body, and live delta types are absent.
+message ManagementPayload {
+  oneof body {
+    HostSupervisorHello host_supervisor_hello = 10;
+    SupervisorHello supervisor_hello = 11;
+    LaunchAttemptProcess launch_attempt_process = 12;
+    LaunchAccepted launch_accepted = 13;
+    LaunchRejected launch_rejected = 14;
+    AttemptProcessSpawned attempt_process_spawned = 15;
+    AttemptContainmentReport attempt_containment_report = 16;
+    UpdateAttemptAuthority update_attempt_authority = 17;
+    CancelAttemptProcess cancel_attempt_process = 18;
+    FenceAttemptProcess fence_attempt_process = 19;
+    ReapAttemptProcess reap_attempt_process = 20;
+    AttemptProcessExited attempt_process_exited = 21;
+    AttemptProcessReaped attempt_process_reaped = 22;
+    QuerySupervisorState query_supervisor_state = 23;
+    SupervisorState supervisor_state = 24;
+    ShutdownSupervisor shutdown_supervisor = 25;
+    SupervisorResourceSample supervisor_resource_sample = 26;
+    SupervisorFault supervisor_fault = 27;
+    ManagementAck management_ack = 28;
+  }
+}
+
+message ExpectedRuntimeProvenance {
+  string build_id = 1;
+  string source_commit = 2;
+  bytes binary_sha256 = 3;
+  string operating_system = 4;
+  string architecture = 5;
+}
+
+message SupervisorLimits {
+  uint32 max_active_attempts = 1;
+  uint32 max_pending_launches = 2;
+  uint64 max_reserved_memory_bytes = 3;
+  uint32 max_reserved_processes = 4;
+  uint64 host_disconnect_grace_ms = 5;
+  uint64 runner_pulse_timeout_ms = 6;
+}
+
+message HostSupervisorHello {
+  ProtocolVersion selected_protocol = 1;
+  string connection_id = 2;
+  string contract_version = 3;
+  uint32 contract_schema_version = 4;
+  ExpectedRuntimeProvenance expected_supervisor_provenance = 5;
+  repeated ExpectedRuntimeProvenance allowed_runner_provenance = 6;
+  SupervisorLimits limits = 7;
+  FrameLimits frame_limits = 8;
+  bytes management_session_token = 9;
+  ContainmentLevel required_containment_level = 10;
+  uint64 allowed_feature_bits = 11;
+}
+
+message SupervisorHello {
+  ProtocolVersionRange supported_protocols = 1;
+  string contract_version = 2;
+  uint32 contract_schema_version = 3;
+  RuntimeProvenance provenance = 4;
+  bytes launch_nonce = 5;
+  ContainmentCapabilities containment = 6;
+  uint64 supported_feature_bits = 7;
+}
+
+enum AttemptEndpointKind {
+  ATTEMPT_ENDPOINT_KIND_UNSPECIFIED = 0;
+  ATTEMPT_ENDPOINT_KIND_CONTROL = 1;
+  ATTEMPT_ENDPOINT_KIND_DATA = 2;
+  ATTEMPT_ENDPOINT_KIND_RUNNER_PULSE = 3;
+}
+
+message ProtectedAttemptEndpoint {
+  AttemptEndpointKind kind = 1;
+  string endpoint_id = 2;
+  string address = 3;
+  bytes connection_token = 4;
+  uint64 max_frame_bytes = 5;
+  string connection_id = 6;
+}
+
+message LaunchAttemptProcess {
+  AttemptIdentity identity = 1;
+  ResourceBudget resource_budget = 2;
+  int64 hard_deadline_at_unix_ms = 3;
+  int64 authority_lease_expires_at_unix_ms = 4;
+  bytes launch_nonce = 5;
+  repeated ProtectedAttemptEndpoint protected_endpoints = 6;
+  ExpectedRuntimeProvenance expected_runner_provenance = 7;
+  string idempotency_key = 8;
+  repeated ResourceLimitKind required_enforced_limits = 9;
+  ActivationAuthoritySeal activation_authority_seal = 10;
+}
+
+message LaunchAccepted {
+  AttemptIdentity identity = 1;
+  string reservation_id = 2;
+  ResourceBudget reserved_budget = 3;
+  int64 hard_deadline_at_unix_ms = 4;
+  int64 accepted_at_unix_ms = 5;
+}
+
+enum LaunchRejectionReason {
+  LAUNCH_REJECTION_REASON_UNSPECIFIED = 0;
+  LAUNCH_REJECTION_REASON_ADMISSION_CLOSED = 1;
+  LAUNCH_REJECTION_REASON_BUDGET_UNAVAILABLE = 2;
+  LAUNCH_REJECTION_REASON_STALE_AUTHORITY = 3;
+  LAUNCH_REJECTION_REASON_INVALID_DEADLINE = 4;
+  LAUNCH_REJECTION_REASON_PROVENANCE_DENIED = 5;
+  LAUNCH_REJECTION_REASON_CONTAINMENT_UNAVAILABLE = 6;
+  LAUNCH_REJECTION_REASON_INVALID_ENDPOINTS = 7;
+  LAUNCH_REJECTION_REASON_DUPLICATE_CONFLICT = 8;
+}
+
+message LaunchRejected {
+  AttemptIdentity identity = 1;
+  LaunchRejectionReason reason = 2;
+  string reason_code = 3;
+  optional string redacted_detail = 4;
+  int64 rejected_at_unix_ms = 5;
+}
+
+message AttemptProcessSpawned {
+  AttemptIdentity identity = 1;
+  RuntimeProvenance runner_provenance = 2;
+  string resource_group_id = 3;
+  string reservation_id = 4;
+  repeated string endpoint_ids = 5;
+  int64 spawned_at_unix_ms = 6;
+}
+
+message AttemptContainmentReport {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  ResourceBudget requested_budget = 3;
+  ContainmentReport effective_containment = 4;
+  int64 reported_at_unix_ms = 5;
+}
+
+// Single bounded input consumed by the in-process native Host bridge.
+// The bridge rebinds launch authority to already durable supervisor facts
+// before opening Control/Data on the exact OS connections.
+message HostAttemptBridgeOpenRequest {
+  LaunchAttemptProcess launch = 1;
+  LaunchAccepted accepted = 2;
+  AttemptProcessSpawned spawned = 3;
+  AttemptContainmentReport containment = 4;
+  int64 open_deadline_at_unix_ms = 5;
+  ContainmentLevel required_containment_level = 6;
+}
+
+message UpdateAttemptAuthority {
+  AttemptIdentity identity = 1;
+  int64 authority_lease_expires_at_unix_ms = 2;
+  int64 hard_deadline_at_unix_ms = 3;
+  int64 updated_at_unix_ms = 4;
+  string idempotency_key = 5;
+}
+
+message CancelAttemptProcess {
+  AttemptIdentity identity = 1;
+  int64 grace_deadline_at_unix_ms = 2;
+  string reason_code = 3;
+  string idempotency_key = 4;
+}
+
+message FenceAttemptProcess {
+  AttemptIdentity identity = 1;
+  uint64 replacement_fencing_epoch = 2;
+  string reason_code = 3;
+  int64 fenced_at_unix_ms = 4;
+  string idempotency_key = 5;
+}
+
+message ReapAttemptProcess {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  int64 reap_deadline_at_unix_ms = 3;
+  string reason_code = 4;
+  string idempotency_key = 5;
+}
+
+enum PhysicalExitCause {
+  PHYSICAL_EXIT_CAUSE_UNSPECIFIED = 0;
+  PHYSICAL_EXIT_CAUSE_COOPERATIVE = 1;
+  PHYSICAL_EXIT_CAUSE_CANCELLED = 2;
+  PHYSICAL_EXIT_CAUSE_DEADLINE_EXCEEDED = 3;
+  PHYSICAL_EXIT_CAUSE_RESOURCE_LIMIT = 4;
+  PHYSICAL_EXIT_CAUSE_FENCED = 5;
+  PHYSICAL_EXIT_CAUSE_CRASHED = 6;
+  PHYSICAL_EXIT_CAUSE_HARD_KILLED = 7;
+  PHYSICAL_EXIT_CAUSE_HOST_DISCONNECTED = 8;
+}
+
+message AttemptProcessExited {
+  AttemptIdentity identity = 1;
+  RuntimeProvenance runner_provenance = 2;
+  PhysicalExitCause cause = 3;
+  optional int32 exit_code = 4;
+  optional uint32 signal_number = 5;
+  int64 exited_at_unix_ms = 6;
+  ResourceSample final_resources = 7;
+}
+
+enum ReleasedResourceKind {
+  RELEASED_RESOURCE_KIND_UNSPECIFIED = 0;
+  RELEASED_RESOURCE_KIND_PROCESS = 1;
+  RELEASED_RESOURCE_KIND_DESCENDANTS = 2;
+  RELEASED_RESOURCE_KIND_IPC_ENDPOINTS = 3;
+  RELEASED_RESOURCE_KIND_OS_HANDLES = 4;
+  RELEASED_RESOURCE_KIND_SCRATCH_STORAGE = 5;
+  RELEASED_RESOURCE_KIND_RESOURCE_GROUP = 6;
+}
+
+message ReleasedResource {
+  ReleasedResourceKind kind = 1;
+  string resource_id = 2;
+  uint64 released_count = 3;
+}
+
+message AttemptProcessReaped {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string resource_group_id = 3;
+  repeated ReleasedResource released_resources = 4;
+  int64 reaped_at_unix_ms = 5;
+}
+
+message QuerySupervisorState {
+  optional AttemptIdentity identity_filter = 1;
+  bool include_resource_samples = 2;
+}
+
+enum AttemptProcessPhase {
+  ATTEMPT_PROCESS_PHASE_UNSPECIFIED = 0;
+  ATTEMPT_PROCESS_PHASE_RESERVED = 1;
+  ATTEMPT_PROCESS_PHASE_RUNNING = 2;
+  ATTEMPT_PROCESS_PHASE_CANCELLING = 3;
+  ATTEMPT_PROCESS_PHASE_EXITED = 4;
+  ATTEMPT_PROCESS_PHASE_REAPING = 5;
+}
+
+message AttemptProcessSnapshot {
+  AttemptIdentity identity = 1;
+  RuntimeProvenance runner_provenance = 2;
+  string resource_group_id = 3;
+  AttemptProcessPhase phase = 4;
+  int64 hard_deadline_at_unix_ms = 5;
+  int64 authority_lease_expires_at_unix_ms = 6;
+  int64 last_pulse_at_unix_ms = 7;
+  ResourceSample resources = 8;
+}
+
+message SupervisorState {
+  string connection_id = 1;
+  bool accepting_launches = 2;
+  repeated AttemptProcessSnapshot attempts = 3;
+  SupervisorResourceSample resources = 4;
+  int64 observed_at_unix_ms = 5;
+}
+
+enum SupervisorShutdownMode {
+  SUPERVISOR_SHUTDOWN_MODE_UNSPECIFIED = 0;
+  SUPERVISOR_SHUTDOWN_MODE_DRAIN = 1;
+  SUPERVISOR_SHUTDOWN_MODE_TERMINATE_AFTER_GRACE = 2;
+}
+
+message ShutdownSupervisor {
+  SupervisorShutdownMode mode = 1;
+  int64 shutdown_deadline_at_unix_ms = 2;
+  string reason_code = 3;
+  string idempotency_key = 4;
+}
+
+message SupervisorResourceSample {
+  uint32 active_attempts = 1;
+  uint32 pending_launches = 2;
+  uint32 process_count = 3;
+  uint64 reserved_memory_bytes = 4;
+  uint64 resident_memory_bytes = 5;
+  uint64 peak_resident_memory_bytes = 6;
+  uint64 cpu_time_ms = 7;
+  uint32 open_handle_count = 8;
+  uint64 scratch_bytes = 9;
+  int64 sampled_at_unix_ms = 10;
+}
+
+enum SupervisorFaultScope {
+  SUPERVISOR_FAULT_SCOPE_UNSPECIFIED = 0;
+  SUPERVISOR_FAULT_SCOPE_MANAGEMENT_CHANNEL = 1;
+  SUPERVISOR_FAULT_SCOPE_LAUNCH = 2;
+  SUPERVISOR_FAULT_SCOPE_ATTEMPT = 3;
+  SUPERVISOR_FAULT_SCOPE_REAP = 4;
+}
+
+enum SupervisorFaultSeverity {
+  SUPERVISOR_FAULT_SEVERITY_UNSPECIFIED = 0;
+  SUPERVISOR_FAULT_SEVERITY_RECOVERABLE = 1;
+  SUPERVISOR_FAULT_SEVERITY_FATAL = 2;
+}
+
+message SupervisorFault {
+  SupervisorFaultScope scope = 1;
+  SupervisorFaultSeverity severity = 2;
+  optional AttemptIdentity identity = 3;
+  optional string runtime_instance_id = 4;
+  string fault_code = 5;
+  optional string redacted_detail = 6;
+  int64 occurred_at_unix_ms = 7;
+}
+
+// Runner pulses use a private per-attempt channel. They never carry task,
+// transcript, provider, tool, artifact, or live-delta payloads.
+enum RunnerPulsePhase {
+  RUNNER_PULSE_PHASE_UNSPECIFIED = 0;
+  RUNNER_PULSE_PHASE_BOOTSTRAPPING = 1;
+  RUNNER_PULSE_PHASE_NEGOTIATING = 2;
+  RUNNER_PULSE_PHASE_HYDRATING = 3;
+  RUNNER_PULSE_PHASE_PREPARED = 4;
+  RUNNER_PULSE_PHASE_ACTIVE = 5;
+  RUNNER_PULSE_PHASE_WAITING = 6;
+  RUNNER_PULSE_PHASE_CHECKPOINTING = 7;
+  RUNNER_PULSE_PHASE_TERMINALIZING = 8;
+  RUNNER_PULSE_PHASE_EXITING = 9;
+}
+
+message RunnerPulse {
+  string attempt_id = 1;
+  string runtime_instance_id = 2;
+  uint64 fencing_epoch = 3;
+  RunnerPulsePhase phase = 4;
+  uint64 monotonic_counter = 5;
+  uint64 last_progress_seq = 6;
+  ResourceSample resources = 7;
+}
+
+// encoded_pulse contains exactly one serialized RunnerPulse. The transport
+// validates its bounded length and per-attempt authentication tag before
+// decoding it.
+message PulseFrame {
+  bytes encoded_pulse = 1;
+  bytes authentication_tag = 2;
+}
+
+message ManagementAck {
+  // For lifecycle outcomes and physical facts, the host emits this ACK only
+  // after its single SQLite writer durably commits the correlated fact.
+  string acknowledged_message_id = 1;
+  bytes acknowledged_payload_sha256 = 2;
+  int64 acknowledged_at_unix_ms = 3;
+}

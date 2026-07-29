@@ -27,37 +27,50 @@ export interface GenerateKeyResult {
   fingerprint: string;
 }
 
+/**
+ * ASYNC on purpose. `generateKeyPairSync` bottoms out in Node's synchronous
+ * RSA keygen, which blocks the event loop for seconds at 4096 bits — on the
+ * Electron main process that is every window, all IPC and every PTY stream
+ * frozen while the user waits. ssh2's callback form runs the same work on
+ * libuv's threadpool instead.
+ */
 export function generateSshKey(input: {
   type?: 'ed25519' | 'rsa';
   bits?: number;
   comment?: string;
   passphrase?: string;
-}): GenerateKeyResult {
+}): Promise<GenerateKeyResult> {
   const type = input.type === 'rsa' ? 'rsa' : 'ed25519';
   const comment = input.comment?.trim() || undefined;
   // ssh2 needs cipher + rounds alongside a passphrase to encrypt the private key.
   const pp = input.passphrase ? { passphrase: input.passphrase, cipher: 'aes256-cbc', rounds: 16 } : null;
-  let pair: { private: string; public: string };
-  try {
-    if (type === 'rsa') {
-      const bits = input.bits && input.bits >= 2048 ? input.bits : 4096;
-      pair = pp
-        ? sshUtils.generateKeyPairSync('rsa', { bits, comment, passphrase: pp.passphrase, cipher: pp.cipher, rounds: pp.rounds })
-        : sshUtils.generateKeyPairSync('rsa', { bits, comment });
-    } else {
-      pair = pp
-        ? sshUtils.generateKeyPairSync('ed25519', { comment, passphrase: pp.passphrase, cipher: pp.cipher, rounds: pp.rounds })
-        : sshUtils.generateKeyPairSync('ed25519', { comment });
-    }
-  } catch (e) {
-    throw new ApiError('ssh_keygen_failed', 500, e instanceof Error ? e.message : String(e));
+  const opts: Record<string, unknown> = { comment };
+  if (type === 'rsa') opts.bits = input.bits && input.bits >= 2048 ? input.bits : 4096;
+  if (pp) {
+    opts.passphrase = pp.passphrase;
+    opts.cipher = pp.cipher;
+    opts.rounds = pp.rounds;
   }
-  return {
-    publicKey: pair.public.trim(),
-    privateKey: pair.private,
-    keyType: type === 'rsa' ? 'ssh-rsa' : 'ssh-ed25519',
-    fingerprint: fingerprintOf(pair.public),
-  };
+
+  return new Promise<GenerateKeyResult>((resolve, reject) => {
+    const done = (err: Error | null, pair?: { private: string; public: string }): void => {
+      if (err || !pair) {
+        reject(new ApiError('ssh_keygen_failed', 500, err?.message ?? 'keygen produced no key'));
+        return;
+      }
+      resolve({
+        publicKey: pair.public.trim(),
+        privateKey: pair.private,
+        keyType: type === 'rsa' ? 'ssh-rsa' : 'ssh-ed25519',
+        fingerprint: fingerprintOf(pair.public),
+      });
+    };
+    try {
+      (sshUtils.generateKeyPair as unknown as (t: string, o: unknown, cb: typeof done) => void)(type, opts, done);
+    } catch (e) {
+      done(e instanceof Error ? e : new Error(String(e)));
+    }
+  });
 }
 
 /** OpenSSH SHA-256 fingerprint = base64(sha256(raw key blob)), no padding, `SHA256:` prefixed. */

@@ -27,7 +27,6 @@ import {
   renderPlaywrightConfig,
   QA_GLOBAL_SETUP_TEMPLATE,
 } from '../sandbox/scaffolders/playwright-bootstrap.js';
-import { pruneOldRunDirs, resolveRetainRuns } from './report-persistence.js';
 
 export interface WorkspaceRestoreReport {
   runConfigWritten: boolean;
@@ -39,11 +38,7 @@ export interface WorkspaceRestoreReport {
   configRecommendations: string[];
   /** True when we wrote `playwright.config.recommended.ts` next to the user file. */
   configRecommendedWritten: boolean;
-  /**
-   * v4.5 — host-side run dirs pruned by the retention policy
-   * (`MCP_QA_RETAIN_RUNS`, default 5). Surfaces in the agent's
-   * `qa_start_run` reply so the operator sees what was reclaimed.
-   */
+  /** Always empty: QA artifacts live until the owning session is deleted. */
   prunedRunDirs: string[];
   /**
    * v4.5 — sandbox dirs we wiped before the new run started
@@ -71,24 +66,13 @@ export function emptyReport(): WorkspaceRestoreReport {
 }
 
 export interface RestoreOptions {
-  sessionId: number | string;
+  sessionId: string;
   /** When provided, also writes `tests/e2e/.mcp-qa-run.json`. */
-  runConfig?: { runId: string | number; endpoint: string };
+  runConfig?: { runId: string; endpoint: string };
   /** Default 5173 — same as the scaffolder. */
   devServerPort?: number;
-  /**
-   * v4.5 — when true (default), the restore pass also:
-   *   - prunes old `data/qa-reports/<sessionId>/<runId>/` dirs to keep
-   *     only the last `MCP_QA_RETAIN_RUNS` (default 5) on host disk;
-   *   - wipes `tests/e2e/test-results/` and `tests/e2e/playwright-report/`
-   *     in the sandbox so the upcoming run starts with a clean slate.
-   * Set false in tests that don't want the side-effects.
-   */
+  /** When true (default), wipe transient sandbox output before a new run. */
   pruneArtifacts?: boolean;
-  /** Override for retention count. Defaults to env / 5. */
-  retainRuns?: number;
-  /** Override for the host base directory (testing). */
-  hostBaseDir?: string;
 }
 
 /**
@@ -97,7 +81,7 @@ export interface RestoreOptions {
  * what the reporter expects.
  */
 export function renderRunConfigFile(
-  runId: string | number,
+  runId: string,
   endpoint: string,
 ): string {
   const body = {
@@ -112,9 +96,8 @@ export function renderRunConfigFile(
  * Run the restore pass. Caller passes a SandboxManager so the helper
  * stays free of singleton lookups in tests.
  *
- * v4.5: also handles retention pruning + sandbox dir wipes when
- * `pruneArtifacts` is true (default). Both side-effects are
- * best-effort — failures are logged but never block the restore.
+ * Also wipes transient sandbox output when `pruneArtifacts` is true
+ * (default). Persisted bundle artifacts are never pruned.
  */
 export async function restoreQaWorkspace(
   manager: Pick<
@@ -196,18 +179,10 @@ export async function restoreQaWorkspace(
     report.warnings.push(`Could not read playwright.config.ts: ${errMsg(e)}.`);
   }
 
-  // v4.5 retention + sandbox wipe. Default true; tests pass false.
+  // Transient sandbox wipe only. Persisted bundle artifacts live until
+  // their owning session is deleted.
   const pruneOn = opts.pruneArtifacts !== false;
   if (pruneOn) {
-    const keep = opts.retainRuns ?? resolveRetainRuns();
-    try {
-      const pruned = await pruneOldRunDirs(opts.sessionId, keep, opts.hostBaseDir);
-      report.prunedRunDirs = pruned.removed;
-      for (const w of pruned.warnings) report.warnings.push(w);
-    } catch (e) {
-      report.warnings.push(`pruneOldRunDirs failed: ${errMsg(e)}`);
-    }
-
     const wipeTargets = ['test-results', 'playwright-report'];
     for (const dir of wipeTargets) {
       try {

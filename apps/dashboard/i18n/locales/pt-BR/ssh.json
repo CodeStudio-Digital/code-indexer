@@ -23,11 +23,13 @@
     "exited": "Concluído — saída mantida (feche para dispensar)",
     "dropped": "Desconectado — Reconecte ou feche",
     "disconnected": "Conexão perdida.",
-    "reconnect": "Reconectar",
     "reconnecting": "Reconectando…",
     "autoReconnect": "Reconexão automática",
     "autoReconnectOn": "Reconexão automática: ligada",
-    "autoReconnectOff": "Reconexão automática: desligada"
+    "autoReconnectOff": "Reconexão automática: desligada",
+    "insecureTitle": "Credenciais gravadas sem criptografia",
+    "insecureBody_one": "{{count}} host salvo está com a senha ou chave privada em texto puro (gravado antes de o keychain do sistema virar obrigatório). Edite o host e digite de novo para selar.",
+    "insecureBody_other": "{{count}} hosts salvos estão com a senha ou chave privada em texto puro (gravados antes de o keychain do sistema virar obrigatório). Edite cada host e digite de novo para selar."
   },
   "dialog": {
     "titleNew": "Novo host SSH",
@@ -120,7 +122,37 @@
       "name": "Nome",
       "size": "Tamanho",
       "modified": "Modificado",
-      "permissions": "Permissões"
+      "permissions": "Permissões",
+      "owner": "Dono",
+      "group": "Grupo"
+    },
+    "resizeColumn": "Redimensionar coluna {{column}}",
+    "copy": "Copiar",
+    "copyName": "Nome",
+    "copyPath": "Caminho",
+    "copyAbsPath": "Caminho absoluto",
+    "copied": "Copiado para a área de transferência",
+    "copyFailed": "Não foi possível copiar",
+    "reveal": "Mostrar no explorador",
+    "newFile": "Novo arquivo",
+    "newFilePrompt": "Nome do arquivo",
+    "fileCreated": "\"{{name}}\" criado",
+    "permissions": "Permissões…",
+    "permissionsTitle": "Permissões",
+    "octal": "Octal",
+    "apply": "Aplicar",
+    "applyRecursively": "Aplicar a todo o conteúdo",
+    "unknownAccount": "Usuário ou grupo desconhecido — digite um nome existente ou um id numérico.",
+    "chownHint": "Trocar dono ou grupo normalmente exige root no servidor.",
+    "class": {
+      "user": "Dono",
+      "group": "Grupo",
+      "other": "Outros"
+    },
+    "bit": {
+      "r": "Ler",
+      "w": "Gravar",
+      "x": "Executar"
     }
   },
   "files": {
@@ -141,7 +173,8 @@
     "overwrite": "Sobrescrever",
     "skip": "Pular",
     "keepBoth": "Manter os dois",
-    "applyToAll": "Aplicar a todos os conflitos"
+    "applyToAll": "Aplicar a todos os conflitos",
+    "zipStillRunning": "Ainda rodando no servidor — está demorando mais do que o cliente espera. Atualize o painel daqui a pouco para ver o arquivo."
   },
   "snippets": {
     "title": "Snippets",
@@ -242,7 +275,25 @@
     "linkConfirmBody": "Juntar-se a um workspace zera a contabilidade de sync do vault deste projeto e puxa esse workspace do zero.",
     "teams": "Compartilhar com a equipe",
     "selectOrg": "Selecione uma equipe",
-    "share": "Compartilhar meus hosts",
+    "share": {
+      "title": "Compartilhar hosts com {{org}}",
+      "subtitle": "Escolha exatamente o que sai desta máquina. As credenciais ficam aqui a menos que você marque — quem usa a própria chave só precisa do endereço.",
+      "loadingRecipients": "Carregando destinatários…",
+      "recipients_one": "{{count}} destinatário",
+      "recipients_other": "{{count}} destinatários",
+      "firstSeen": "primeira vez",
+      "keyChangedSkipped_one": "{{count}} membro será IGNORADO: a chave de criptografia mudou desde que você fixou.",
+      "keyChangedSkipped_other": "{{count}} membros serão IGNORADOS: as chaves de criptografia mudaram desde que você fixou.",
+      "includeCredentials": "Enviar também: {{kinds}}",
+      "noSecrets": "Sem credenciais salvas — só o endereço.",
+      "summary": "{{hosts}} host(s) · {{withCredentials}} com credenciais → {{members}} membro(s)",
+      "confirm": "Compartilhar",
+      "secretKind": {
+        "password": "senha",
+        "privateKey": "chave privada",
+        "passphrase": "passphrase"
+      }
+    },
     "pullTeam": "Puxar hosts da equipe",
     "teamHint": "Um admin compartilha os hosts do projeto; os membros puxam. Recompartilhar rotaciona a chave da equipe.",
     "noOrgs": "Você ainda não está em nenhuma equipe.",
@@ -253,6 +304,6 @@
   },
   "error": {
     "connectFailed": "Falha ao conectar: {{reason}}"
-  }
-  ,"secrets.reference": "${secret:{{name}}}"
+  },
+  "secrets.reference": "${secret:{{name}}}"
 }

@@ -60,7 +60,7 @@ export interface AppDataQueryResult {
   duration_ms: number;
 }
 
-export function useAppData(sessionId: number, enabled: boolean): {
+export function useAppData(sessionId: string, enabled: boolean): {
   tables: AppDataTable[] | null;
   provision: AppDataProvisionState | null;
   loading: boolean;
@@ -98,7 +98,7 @@ export function useAppData(sessionId: number, enabled: boolean): {
 }
 
 export async function fetchTableSheet(
-  sessionId: number,
+  sessionId: string,
   table: string,
 ): Promise<{ columns: string[]; rows: Array<Record<string, unknown>> }> {
   const r = await fetch(`/api/app-studio/apps/${sessionId}/data?table=${encodeURIComponent(table)}`);
@@ -107,7 +107,7 @@ export async function fetchTableSheet(
   return { columns: body.columns ?? [], rows: body.rows ?? [] };
 }
 
-export async function runAppDataQuery(sessionId: number, sql: string): Promise<AppDataQueryResult> {
+export async function runAppDataQuery(sessionId: string, sql: string): Promise<AppDataQueryResult> {
   const r = await fetch(`/api/app-studio/apps/${sessionId}/data/query`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -124,7 +124,7 @@ export async function runAppDataQuery(sessionId: number, sql: string): Promise<A
   };
 }
 
-export async function provisionAppData(sessionId: number): Promise<AppDataProvisionResult> {
+export async function provisionAppData(sessionId: string): Promise<AppDataProvisionResult> {
   const r = await fetch(`/api/app-studio/apps/${sessionId}/data/provision`, { method: 'POST' });
   const body = (await r.json()) as Partial<AppDataProvisionResult> & { error?: string };
   if (!r.ok || body.error) throw new Error(body.error ?? r.statusText);

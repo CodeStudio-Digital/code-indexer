@@ -9,6 +9,9 @@ import { ReconnectingWebSocketClient, type WebSocketLike } from '../Reconnecting
 import type { SSEEvent } from '../../sse/SSEFramer.js';
 import { ExponentialBackoff } from '../../sse/BackoffStrategy.js';
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000001';
+const BOARD_ENTRY_ID = 'b0000000-0000-4000-8000-000000000001';
+
 class MockWebSocket implements WebSocketLike {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
@@ -69,7 +72,7 @@ describe('ReconnectingWebSocketClient', () => {
     const phases: string[] = [];
     const ctrl = new AbortController();
     const client = new ReconnectingWebSocketClient({
-      url: 'ws://localhost:1/api/company/sessions/1/ws',
+      url: `ws://localhost:1/api/company/sessions/${COMPANY_SESSION_ID}/ws`,
       signal: ctrl.signal,
       onEvent: (ev) => events.push(ev),
       onPhase: (phase) => phases.push(phase),
@@ -81,13 +84,17 @@ describe('ReconnectingWebSocketClient', () => {
     const ws = MockWebSocket.instances[0];
     expect(ws).toBeTruthy();
     ws.push({ v: 1, type: 'bus_info', data: { bus_id: 'bus-1' } });
-    ws.push({ v: 1, seq: 1, type: 'board_entry', data: { id: 1 } });
+    ws.push({ v: 1, seq: 1, type: 'board_entry', data: { id: BOARD_ENTRY_ID } });
     ws.push({ v: 1, type: 'ping' });
     ws.push({ v: 1, seq: 2, type: 'done', data: {} });
     await runPromise;
     expect(events).toEqual([
       { id: undefined, event: 'bus_info', data: JSON.stringify({ bus_id: 'bus-1' }) },
-      { id: 1, event: 'board_entry', data: JSON.stringify({ id: 1 }) },
+      {
+        id: 1,
+        event: 'board_entry',
+        data: JSON.stringify({ id: BOARD_ENTRY_ID }),
+      },
       { id: 2, event: 'done', data: JSON.stringify({}) },
     ]);
     expect(phases).toContain('connecting');
@@ -98,7 +105,7 @@ describe('ReconnectingWebSocketClient', () => {
     const ctrl = new AbortController();
     let lastSeen = 42;
     const client = new ReconnectingWebSocketClient({
-      url: 'ws://h/api/company/sessions/1/ws',
+      url: `ws://h/api/company/sessions/${COMPANY_SESSION_ID}/ws`,
       signal: ctrl.signal,
       onEvent: () => undefined,
       getLastEventId: () => lastSeen,
@@ -108,7 +115,9 @@ describe('ReconnectingWebSocketClient', () => {
     const runPromise = client.run();
     await new Promise((r) => setTimeout(r, 0));
     const ws = MockWebSocket.instances[0];
-    expect(ws.url).toBe('ws://h/api/company/sessions/1/ws?sinceSeq=42&busId=bus%20%2F%2042');
+    expect(ws.url).toBe(
+      `ws://h/api/company/sessions/${COMPANY_SESSION_ID}/ws?sinceSeq=42&busId=bus%20%2F%2042`,
+    );
     ws.push({ v: 1, seq: 1, type: 'done', data: {} });
     await runPromise;
     lastSeen = -1; // suppress eslint unused var warning

@@ -27,11 +27,11 @@ export interface InspectorTrack {
 /** The animation currently loaded in the timeline — context the RIGHT-rail
  *  inspector needs (re-slice target + which asset/animation is loaded). */
 export interface AnimContext {
-  animationId: number;
-  assetId: number;
+  animationId: string;
+  assetId: string;
   name: string;
   /** The last generation's job that produced this animation (re-slice source). */
-  jobId: number | null;
+  jobId: string | null;
   /** Frame count of that generation (re-slice default columns). */
   frameCount: number;
   /** That generation kept its original sheet → re-slice is available. */
@@ -40,27 +40,27 @@ export interface AnimContext {
 
 interface AnimateSessionState {
   // ── unified multi-selection (versionIds) ──
-  selected: Set<number>;
+  selected: Set<string>;
   /** Shift-range pivot (a versionId), set by the last single toggle. */
-  anchorId: number | null;
+  anchorId: string | null;
   /** Checkboxes only show in select mode; off → single click drags/opens. */
   selectMode: boolean;
 
   // ── bridge: AnimatePanel publishes, the rails consume ──
   /** versionIds currently on the timeline (drives the "em uso" badge). */
-  frameVersionIds: number[];
+  frameVersionIds: string[];
   /** The timeline-selected frame's version (FrameInspector focus). */
-  selectedFrameVersionId: number | null;
+  selectedFrameVersionId: string | null;
   /** The timeline-selected frame index (re-roll target). */
   selectedFrameIndex: number | null;
   /** Append versions (in order) as new frames — set by AnimatePanel. */
-  appendToTimeline: ((versionIds: number[]) => void) | null;
+  appendToTimeline: ((versionIds: string[]) => void) | null;
   /** Drop every frame pointing at one of these versions — pre-delete sync. */
-  removeFramesUsing: ((versionIds: number[]) => void) | null;
+  removeFramesUsing: ((versionIds: string[]) => void) | null;
   /** Repoint one frame at a version (re-roll pick) — set by AnimatePanel. */
-  replaceFrameAt: ((index: number, versionId: number, track?: number, expectedVersionId?: number) => void) | null;
+  replaceFrameAt: ((index: number, versionId: string, track?: number, expectedVersionId?: string) => void) | null;
   /** Replace the WHOLE timeline with these versions (restore a batch). */
-  setTimeline: ((versionIds: number[]) => void) | null;
+  setTimeline: ((versionIds: string[]) => void) | null;
   /** Tracks of the loaded animation (inspector "Camadas" separation). */
   inspectorTracks: InspectorTrack[];
   /** The active track id (highlighted in the inspector). */
@@ -79,11 +79,11 @@ interface AnimateSessionState {
   setSelectMode: (on: boolean) => void;
   clearSelection: () => void;
   /** Additive toggle (checkbox / ctrl-click): flip id, keep the rest. */
-  toggleOne: (id: number) => void;
+  toggleOne: (id: string) => void;
   /** Shift-select the contiguous run anchorId→id over the browser's flat order. */
-  selectRange: (id: number, orderedIds: number[]) => void;
+  selectRange: (id: string, orderedIds: string[]) => void;
   /** Tri-state group header: add or remove a whole batch. */
-  setGroup: (ids: number[], on: boolean) => void;
+  setGroup: (ids: string[], on: boolean) => void;
   publishBridge: (patch: BridgePatch) => void;
   resetForAsset: () => void;
 }
@@ -98,7 +98,7 @@ type BridgePatch = Partial<
 >;
 
 export const useAnimateSession = create<AnimateSessionState>((set) => ({
-  selected: new Set<number>(),
+  selected: new Set<string>(),
   anchorId: null,
   selectMode: false,
   frameVersionIds: [],

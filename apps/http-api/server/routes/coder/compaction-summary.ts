@@ -7,7 +7,8 @@ import {
   type SummarizeSpanV3Options,
 } from '@mcp/code-agent/core/summarizer.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import type { CoderSession } from '@mcp/code-agent/sessions/types.js';
+import type { FsCoderSession } from '@mcp/code-agent/sessions/fs-store/index.js';
+import type { SessionId } from '@mcp/agent-runtime-contracts';
 
 export interface ReliableSummaryResult {
   summary: CompactionSummaryV3 | null;
@@ -39,8 +40,8 @@ export function compactionOptionsFromConfig(
 /** Resolve auxiliary then session provider, preserving the binding's request config. */
 export async function resolveCompactionProviders(
   deps: ServerDeps,
-  session: CoderSession,
-  sessionId: number,
+  session: FsCoderSession,
+  sessionId: SessionId,
 ): Promise<{
   providers: ChatProvider[];
   options: Omit<SummarizeSpanV3Options, 'signal'>;

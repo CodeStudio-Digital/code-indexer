@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import { createAutonomyProvider } from '../autonomy-provider.js';
 
 const EMPTY_ENV = {} as NodeJS.ProcessEnv;
+const SESSION_ID = '00000000-0000-4000-8000-000000000007';
+const MISSING_SESSION_ID = '00000000-0000-4000-8000-000000000099';
 
 function fakeStore(initial: string | null) {
   let configJson = initial;
@@ -14,7 +16,7 @@ function fakeStore(initial: string | null) {
   return {
     get reads() { return reads; },
     set(json: string | null) { configJson = json; },
-    getCompanySession(_id: number) {
+    getCompanySession(_id: string) {
       reads += 1;
       return { config_json: configJson };
     },
@@ -24,7 +26,11 @@ function fakeStore(initial: string | null) {
 describe('createAutonomyProvider', () => {
   it('get() resolves from config_json and caches (one store read)', () => {
     const store = fakeStore(JSON.stringify({ autonomy: { scheduler: true } }));
-    const provider = createAutonomyProvider({ companyStore: store, sessionId: 7, env: EMPTY_ENV });
+    const provider = createAutonomyProvider({
+      sessionSource: store,
+      sessionId: SESSION_ID,
+      env: EMPTY_ENV,
+    });
 
     expect(provider.get().scheduler).toBe(true);
     expect(provider.get().scheduler).toBe(true);
@@ -33,7 +39,11 @@ describe('createAutonomyProvider', () => {
 
   it('invalidate() drops the cache — next get() sees the new config', () => {
     const store = fakeStore(JSON.stringify({ autonomy: { freeze: false } }));
-    const provider = createAutonomyProvider({ companyStore: store, sessionId: 7, env: EMPTY_ENV });
+    const provider = createAutonomyProvider({
+      sessionSource: store,
+      sessionId: SESSION_ID,
+      env: EMPTY_ENV,
+    });
     expect(provider.get().freeze).toBe(false);
 
     store.set(JSON.stringify({ autonomy: { freeze: true } }));
@@ -45,8 +55,8 @@ describe('createAutonomyProvider', () => {
 
   it('missing session row → env+defaults (never throws)', () => {
     const provider = createAutonomyProvider({
-      companyStore: { getCompanySession: () => null },
-      sessionId: 99,
+      sessionSource: { getCompanySession: () => null },
+      sessionId: MISSING_SESSION_ID,
       env: { MCP_COMPANY_SCHEDULER: '1' },
     });
     const cfg = provider.get();
@@ -56,15 +66,15 @@ describe('createAutonomyProvider', () => {
 
   it('store throwing → env+defaults (defensive read)', () => {
     const provider = createAutonomyProvider({
-      companyStore: { getCompanySession: () => { throw new Error('db locked'); } },
-      sessionId: 99,
+      sessionSource: { getCompanySession: () => { throw new Error('fs unavailable'); } },
+      sessionId: MISSING_SESSION_ID,
       env: { MCP_COMPANY_SCHEDULER: '0' },
     });
     // The env kill-switch is honored on the fallback path (C2 default is ON).
     expect(provider.get().scheduler).toBe(false);
     const defaults = createAutonomyProvider({
-      companyStore: { getCompanySession: () => { throw new Error('db locked'); } },
-      sessionId: 99,
+      sessionSource: { getCompanySession: () => { throw new Error('fs unavailable'); } },
+      sessionId: MISSING_SESSION_ID,
       env: EMPTY_ENV,
     });
     expect(defaults.get().scheduler).toBe(true);

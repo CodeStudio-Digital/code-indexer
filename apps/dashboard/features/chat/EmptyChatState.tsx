@@ -1,6 +1,6 @@
 import { memo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MessageSquareCode, PanelLeft, Plus, Sparkles } from 'lucide-react';
+import { Loader2, MessageSquareCode, PanelLeft, Plus, Sparkles } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
 import { markRouteEvent } from '../../lib/perf/route-startup-metrics.js';
@@ -10,9 +10,16 @@ interface EmptyChatStateProps {
   projectId?: number;
   projectName: string;
   onOpenSidebar?: () => void;
+  creating?: boolean;
 }
 
-export const EmptyChatState = memo(function EmptyChatState({ onNew, projectId, projectName, onOpenSidebar }: EmptyChatStateProps) {
+export const EmptyChatState = memo(function EmptyChatState({
+  onNew,
+  projectId,
+  projectName,
+  onOpenSidebar,
+  creating = false,
+}: EmptyChatStateProps) {
   const { t } = useTranslation('chat');
   const suggestions = [t('empty.suggestion1'), t('empty.suggestion2'), t('empty.suggestion3'), t('empty.suggestion4')];
   useEffect(() => {
@@ -48,8 +55,11 @@ export const EmptyChatState = memo(function EmptyChatState({ onNew, projectId, p
               {t('empty.chatWith', { name: projectName })}
             </p>
           </div>
-          <Button onClick={onNew} size="lg">
-            <Plus className="h-4 w-4" /> {t('empty.newSession')}
+          <Button onClick={onNew} size="lg" disabled={creating} aria-busy={creating}>
+            {creating
+              ? <Loader2 className="h-4 w-4 animate-spin" />
+              : <Plus className="h-4 w-4" />}
+            {creating ? t('sessionLaunch.creating') : t('empty.newSession')}
           </Button>
           <div className="pt-4">
             <div className="text-[10px] uppercase text-muted-foreground tracking-wider mb-2 flex items-center justify-center gap-1">

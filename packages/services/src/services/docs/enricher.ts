@@ -30,7 +30,7 @@ export interface EnrichmentOutput {
 
 export interface EnricherOptions {
   resolver: PipelineProviderResolver;
-  resolveContext?: { sessionId?: number; companySessionId?: number; templateId?: number };
+  resolveContext?: { sessionId?: string; companySessionId?: string; templateId?: number };
   concurrency?: number;
   /** Optional progress callback fired after each chunk completes. */
   onProgress?: (done: number, total: number) => void;

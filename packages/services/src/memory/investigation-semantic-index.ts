@@ -10,9 +10,9 @@ import type { VectorItemState, VectorStore, VectorWriteTarget } from '@mcp/store
 
 /** Relational source shape intentionally contains text/metadata only. */
 export interface InvestigationSemanticRow {
-  id: number;
+  id: string;
   project_id: number | null;
-  session_id: number | null;
+  session_id: string;
   topic: string;
   summary: string;
   body: string;
@@ -23,7 +23,9 @@ export interface InvestigationSemanticRow {
 }
 
 export interface InvestigationSemanticSource {
-  listProject(projectId: number): InvestigationSemanticRow[];
+  listProject(
+    projectId: number,
+  ): InvestigationSemanticRow[] | Promise<InvestigationSemanticRow[]>;
 }
 
 export function investigationEmbeddingText(
@@ -41,7 +43,7 @@ export function investigationEmbeddingTextHash(
     .digest('hex');
 }
 
-export function investigationVectorId(investigationId: number): string {
+export function investigationVectorId(investigationId: string): string {
   return 'inv_' + createHash('md5')
     .update(`investigation:${investigationId}`)
     .digest('hex')
@@ -51,8 +53,8 @@ export function investigationVectorId(investigationId: number): string {
 /**
  * Derivable semantic side of Session Drive investigations.
  *
- * Rows stay in the central relational ledger. Vectors share the project's
- * Memory generation/table with project memory, using the collision-free
+ * Rows stay in their owning session bundles. Vectors share the project's
+ * Memory generation with project memory, using the collision-free
  * `investigation:<id>` semantic item key and `type=investigation` filter.
  */
 export class InvestigationSemanticIndex {
@@ -63,7 +65,7 @@ export class InvestigationSemanticIndex {
     private readonly queryEmbeddingService: EmbeddingService | null = embeddingService,
   ) {}
 
-  listProject(projectId: number): InvestigationSemanticRow[] {
+  async listProject(projectId: number): Promise<InvestigationSemanticRow[]> {
     return this.source.listProject(projectId);
   }
 
@@ -84,7 +86,9 @@ export class InvestigationSemanticIndex {
       && items[0].itemKey === itemKey
       && items[0].chunkIndex === 0
       && items[0].status === 'indexed'
-      && items[0].vectorId === investigationVectorId(Number(itemKey.slice('investigation:'.length)))
+      && items[0].vectorId === investigationVectorId(
+        itemKey.slice('investigation:'.length),
+      )
       && items[0].sourceHash === hash;
   }
 
@@ -144,7 +148,7 @@ export class InvestigationSemanticIndex {
   async backfillProject(
     projectId: number,
   ): Promise<{ embedded: number; failed: number; skipped: number; total: number }> {
-    const rows = this.listProject(projectId);
+    const rows = await this.listProject(projectId);
     let embedded = 0;
     let failed = 0;
     let skipped = 0;
@@ -157,7 +161,7 @@ export class InvestigationSemanticIndex {
     return { embedded, failed, skipped, total: rows.length };
   }
 
-  async search(projectId: number, query: string, limit = 8): Promise<number[]> {
+  async search(projectId: number, query: string, limit = 8): Promise<string[]> {
     const text = query.trim();
     const topK = Math.max(1, Math.min(50, Math.floor(limit)));
     if (!text || !this.queryEmbeddingService || !this.vectorStore) return [];
@@ -175,11 +179,17 @@ export class InvestigationSemanticIndex {
         topK: topK * 4,
         filter: { type: 'investigation' },
       });
-      const ids: number[] = [];
-      const seen = new Set<number>();
+      const ids: string[] = [];
+      const seen = new Set<string>();
       for (const match of matches) {
-        const id = Number(match.metadata.ref_id);
-        if (!Number.isSafeInteger(id) || id < 1 || seen.has(id)) continue;
+        const id = match.metadata.ref_id;
+        if (
+          typeof id !== 'string' ||
+          !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id) ||
+          seen.has(id)
+        ) {
+          continue;
+        }
         seen.add(id);
         ids.push(id);
         if (ids.length >= topK) break;

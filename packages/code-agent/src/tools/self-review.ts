@@ -13,13 +13,9 @@
  * Always registered (bootstrap tier). A settings toggle (CODER_SELF_REVIEW)
  * only controls the proactive reminder, not availability.
  */
-import type DatabaseConstructor from 'better-sqlite3';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import { SessionFileSnapshotStore } from '@mcp/store/session-file-snapshot-store.js';
-import { SessionFileReviewStore } from '@mcp/store/session-file-review-store.js';
-import { ReviewIntelStore } from '@mcp/store/review-intel-store.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { SessionSnapshotService } from '@mcp/services/services/session-snapshots.js';
@@ -32,17 +28,19 @@ import type {
   ReviewReferenceHit,
   ReviewReferenceLookup,
 } from '@mcp/services/services/review-absences.js';
-import { SessionStore } from '@mcp/code-agent/sessions/store.js';
+import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 import { buildVerifyEvidence, formatVerifyEvidence } from '@mcp/code-agent/core/review-evidence.js';
 
-type DB = InstanceType<typeof DatabaseConstructor>;
-
 export interface SelfReviewDeps {
-  /** Shared better-sqlite3 handle (store.getDb()) — never closed here. */
-  dbHandle: DB;
+  /** Essential provider/pipeline settings DB; contains no session runtime data. */
+  settingsDbHandle: ConstructorParameters<
+    typeof PipelineProviderBindingsStore
+  >[0];
+  /** Filesystem authority for snapshots, review state, intent and evidence. */
+  sessionStore: FsSessionStore;
   /** Coder session id whose snapshots get reviewed (the current session). */
-  sessionId: number;
+  sessionId: import('@mcp/session-storage').SessionId;
   /** Absolute root of the PRIMARY project, for resolving on-disk file content. */
   projectRoot: string;
   /** Linked SECONDARY roots for a global session, so snapshots of files edited
@@ -142,8 +140,8 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       additionalProperties: false,
     },
     handler: async (args, ctx): Promise<ToolResult> => {
-      const snapshotStore = new SessionFileSnapshotStore(deps.dbHandle);
-      const reviewStore = new SessionFileReviewStore(deps.dbHandle);
+      const snapshotStore = deps.sessionStore;
+      const reviewStore = deps.sessionStore;
       const snapshotService = new SessionSnapshotService(snapshotStore, (kind, sessionId, projectId) => {
         if (kind !== 'coder' || sessionId !== deps.sessionId) return null;
         // Global session: a baseline may belong to a linked secondary root.
@@ -154,8 +152,8 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
         return deps.projectRoot;
       });
       const resolver = new PipelineProviderResolver(
-        new PipelineProviderBindingsStore(deps.dbHandle),
-        new ProviderStore(deps.dbHandle),
+        new PipelineProviderBindingsStore(deps.settingsDbHandle),
+        new ProviderStore(deps.settingsDbHandle),
       );
       const pipeline = new SnapshotReviewPipeline(resolver);
 
@@ -165,14 +163,17 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       // context — a store hiccup must not block the review itself.
       let intent: string | null = null;
       try {
-        intent = buildSessionIntent(new SessionStore(deps.dbHandle), deps.sessionId);
+        intent = await buildSessionIntent(deps.sessionStore, deps.sessionId);
       } catch {
         /* review runs without intent */
       }
 
       // Recorded verification evidence (which verify commands actually ran +
       // staleness) replaces author claims. Best-effort like intent.
-      const evidenceData = buildVerifyEvidence(deps.dbHandle, deps.sessionId);
+      const evidenceData = await buildVerifyEvidence(
+        deps.sessionStore,
+        deps.sessionId,
+      );
       const evidence = evidenceData ? formatVerifyEvidence(evidenceData) : null;
 
       // Consult the registered owner-backed tool live. Do not freeze this
@@ -186,11 +187,12 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       // Learning + alignment surfaces (migration 224): fate tracking priors
       // and the compiled intent contract. Both degrade silently when the
       // migration has not run yet.
-      let intelStore: ReviewIntelStore | undefined;
       let intentCompiler: IntentContractCompiler | undefined;
       try {
-        intelStore = new ReviewIntelStore(deps.dbHandle);
-        intentCompiler = new IntentContractCompiler(resolver, intelStore);
+        intentCompiler = new IntentContractCompiler(
+          resolver,
+          deps.sessionStore,
+        );
       } catch {
         /* review runs without priors/contract */
       }
@@ -204,7 +206,7 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
             pipeline,
             reviewStore,
             referenceLookup,
-            intelStore,
+            intelStore: deps.sessionStore,
             intentCompiler,
             projectId: deps.projectId,
           },

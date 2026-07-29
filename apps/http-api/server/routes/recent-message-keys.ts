@@ -75,6 +75,7 @@ interface PendingEntry<Bus extends object> {
 }
 
 type Entry<Bus extends object> = ReadyEntry<Bus> | PendingEntry<Bus>;
+type RecentSessionKey = string;
 
 export type RecentMessageClaim<Bus extends object> =
   | { kind: 'owner'; token: symbol }
@@ -89,7 +90,10 @@ export class RecentMessageKeys<Bus extends object = CoderRunBus> {
   private readonly maxSessions: number;
   private readonly now: () => number;
   // Outer map insertion order = session LRU; inner map insertion order = key LRU.
-  private readonly bySession = new Map<number, Map<string, Entry<Bus>>>();
+  private readonly bySession = new Map<
+    RecentSessionKey,
+    Map<string, Entry<Bus>>
+  >();
 
   constructor(opts: {
     ttlMs?: number;
@@ -112,7 +116,11 @@ export class RecentMessageKeys<Bus extends object = CoderRunBus> {
    * claim. This closes the old append→record window without allowing cache
    * policy to become negative command authority.
    */
-  claim(sessionId: number, key: string, fingerprintHash = ''): RecentMessageClaim<Bus> {
+  claim(
+    sessionId: RecentSessionKey,
+    key: string,
+    fingerprintHash = '',
+  ): RecentMessageClaim<Bus> {
     let inner = this.bySession.get(sessionId);
     let createdSession = false;
     if (!inner) {
@@ -168,7 +176,7 @@ export class RecentMessageKeys<Bus extends object = CoderRunBus> {
   }
 
   record(
-    sessionId: number,
+    sessionId: RecentSessionKey,
     key: string,
     bus: Bus,
     sinceHint: number,
@@ -213,7 +221,7 @@ export class RecentMessageKeys<Bus extends object = CoderRunBus> {
    * commands whose bus has already gone use `done`.
    */
   recordTerminal(
-    sessionId: number,
+    sessionId: RecentSessionKey,
     key: string,
     terminal: NonNullable<RecentMessageLookup<Bus>['terminal']>,
     sinceHint = -1,
@@ -261,7 +269,7 @@ export class RecentMessageKeys<Bus extends object = CoderRunBus> {
    * it would poison a later retry of the original, valid payload.
    */
   rejectClaim(
-    sessionId: number,
+    sessionId: RecentSessionKey,
     key: string,
     token: symbol,
     fingerprintHash: string,
@@ -280,7 +288,10 @@ export class RecentMessageKeys<Bus extends object = CoderRunBus> {
     if (inner.size === 0) this.bySession.delete(sessionId);
   }
 
-  lookup(sessionId: number, key: string): RecentMessageLookup<Bus> | undefined {
+  lookup(
+    sessionId: RecentSessionKey,
+    key: string,
+  ): RecentMessageLookup<Bus> | undefined {
     const inner = this.bySession.get(sessionId);
     if (!inner) return undefined;
     this.sweep(inner);
@@ -367,7 +378,7 @@ export class RecentMessageKeys<Bus extends object = CoderRunBus> {
   }
 
   private sessionForSettlement(
-    sessionId: number,
+    sessionId: RecentSessionKey,
     requireExisting: boolean,
   ): Map<string, Entry<Bus>> | undefined {
     const existing = this.bySession.get(sessionId);
@@ -411,7 +422,10 @@ export class RecentMessageKeys<Bus extends object = CoderRunBus> {
     inner.set(key, entry);
   }
 
-  private touchSession(sessionId: number, inner: Map<string, Entry<Bus>>): void {
+  private touchSession(
+    sessionId: RecentSessionKey,
+    inner: Map<string, Entry<Bus>>,
+  ): void {
     // Move the existing session to MRU. Capacity is preflighted before a new
     // session/claim is installed, so touching can never evict an owner.
     this.bySession.delete(sessionId);

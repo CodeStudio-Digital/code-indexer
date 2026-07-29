@@ -44,6 +44,11 @@ export interface ApiContext {
    * Mirrors Codex's `clientInfo` on the app-server initialize.
    */
   clientInfo?: ClientInfo;
+  /** Optional filesystem-session attribution for pipeline telemetry. */
+  telemetryScope?: {
+    sessionId?: string;
+    companySessionId?: string;
+  };
 }
 
 /** Request-source provenance attached to every {@link ApiContext}. */

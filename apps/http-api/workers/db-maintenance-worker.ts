@@ -10,10 +10,9 @@
  * `synchronous=NORMAL`, `busy_timeout=5000` — see `openWorkerDb`) and owns:
  *
  *   - `wal_checkpoint(PASSIVE)` every MCP_SQLITE_CHECKPOINT_MS (default 30s)
- *   - retention: batched DELETEs of rows older than
- *     MCP_CENTRAL_RETENTION_DAYS (default 90; 0 disables) — hourly, plus a
- *     first pass ~1min after boot. Batches of 5000 with a short pause so a
- *     long prune never monopolizes the write lock.
+ * Session retention does not run here. Session events, metrics, baselines,
+ * transcripts and tool output now live in filesystem bundles and are removed
+ * only with their owning session.
  *
  * The main handle keeps `wal_autocheckpoint=0` + close-time TRUNCATE (see
  * CodeIndexDB `externalCheckpointer`). Kill switch MCP_DB_MAINTENANCE=0 in
@@ -47,9 +46,7 @@ export function envInt(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** UTC cutoffs `days` back from `nowMs`: `datetime('now')`-format text
- *  ("YYYY-MM-DD HH:MM:SS", how created_at/closed_at are stored) + epoch ms
- *  (how session_events.at_ms is stored, mig 195). */
+/** UTC cutoffs `days` back from `nowMs`, for explicitly shared catalogs. */
 export function retentionCutoffs(nowMs: number, days: number): { text: string; ms: number } {
   const ms = nowMs - days * 86_400_000;
   return { ms, text: new Date(ms).toISOString().slice(0, 19).replace('T', ' ') };
@@ -87,36 +84,11 @@ interface RetentionPass {
   sql: string;
 }
 
-/** What gets pruned. `coder_tool_calls`/`coder_messages` are deliberately NOT
- *  here (transcript + audit). Every DELETE is `rowid IN (… LIMIT ?)` so each
- *  batch holds the write lock only briefly. */
+/**
+ * Intentionally empty after the filesystem cutover. Any future central
+ * retention pass must target an explicitly shared, non-session catalog.
+ */
 const RETENTION_PASSES: RetentionPass[] = [
-  {
-    name: 'coder_turn_telemetry', requires: ['coder_turn_telemetry'], cutoff: 'text',
-    sql: `DELETE FROM coder_turn_telemetry WHERE rowid IN (
-            SELECT rowid FROM coder_turn_telemetry WHERE created_at < ? LIMIT ?)`,
-  },
-  {
-    name: 'session_events', requires: ['session_events'], cutoff: 'ms',
-    sql: `DELETE FROM session_events WHERE rowid IN (
-            SELECT rowid FROM session_events WHERE at_ms < ? LIMIT ?)`,
-  },
-  {
-    name: 'baselines_closed', requires: ['session_file_baselines'], cutoff: 'text',
-    sql: `DELETE FROM session_file_baselines WHERE rowid IN (
-            SELECT rowid FROM session_file_baselines
-            WHERE status != 'active' AND closed_at IS NOT NULL AND closed_at < ? LIMIT ?)`,
-  },
-  { // Active baselines whose coder session is archived or deleted. No date
-    // cutoff: once the session is gone the baseline can never close itself.
-    name: 'baselines_orphaned', requires: ['session_file_baselines', 'coder_sessions'], cutoff: 'none',
-    sql: `DELETE FROM session_file_baselines WHERE rowid IN (
-            SELECT b.rowid FROM session_file_baselines b
-            LEFT JOIN coder_sessions s ON s.id = b.session_id
-            WHERE b.session_kind = 'coder' AND b.status = 'active'
-              AND (s.id IS NULL OR s.is_archived = 1)
-            LIMIT ?)`,
-  },
 ];
 
 export interface RetentionResult { counts: Record<string, number>; skipped: string[] }
@@ -211,26 +183,6 @@ async function bootWorker(port: MessagePort, dbPath: string): Promise<void> {
       const took = Date.now() - started;
       if (took > 100) console.warn(`[db-maintenance-worker] wal_checkpoint(PASSIVE) took ${took}ms`);
     }, checkpointMs));
-  }
-
-  const retentionDays = envInt('MCP_CENTRAL_RETENTION_DAYS', DEFAULT_RETENTION_DAYS);
-  let pruning = false;
-  const retentionCycle = async (): Promise<void> => {
-    if (pruning) return; // an hourly tick must never overlap a slow boot pass
-    pruning = true;
-    const started = Date.now();
-    try {
-      const { counts, skipped } = await runRetention(db, { retentionDays });
-      const parts = Object.entries(counts).map(([name, n]) => `${name}=${n}`);
-      if (skipped.length > 0) parts.push(`skipped=${skipped.join(',')}`);
-      console.log(`[db-maintenance-worker] retention(${retentionDays}d): ${parts.join(' ')} in ${Date.now() - started}ms`);
-    } catch (error) {
-      console.warn(`[db-maintenance-worker] retention failed: ${error instanceof Error ? error.message : String(error)}`);
-    } finally { pruning = false; }
-  };
-  if (retentionDays > 0) {
-    schedule(setTimeout(() => { void retentionCycle(); }, 60_000) as unknown as ReturnType<typeof setInterval>);
-    schedule(setInterval(() => { void retentionCycle(); }, 3_600_000));
   }
 
   bridge.handle('stop', async () => {

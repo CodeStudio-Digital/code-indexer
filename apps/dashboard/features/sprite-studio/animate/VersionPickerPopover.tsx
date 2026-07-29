@@ -17,12 +17,12 @@ export function VersionPickerPopover({
   projectId, assetId, currentVersionId, title, onPick, clearLabel, onClear, children,
 }: {
   projectId: number;
-  assetId: number;
+  assetId: string;
   /** Highlighted entry (what the consumer points at today); null = none. */
-  currentVersionId: number | null;
+  currentVersionId: string | null;
   /** Popover heading — already translated by the consumer. */
   title: string;
-  onPick: (versionId: number) => void;
+  onPick: (versionId: string) => void;
   /** Optional footer action (e.g. anchor picker's "use current version"). */
   clearLabel?: string;
   onClear?: () => void;

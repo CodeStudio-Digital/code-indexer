@@ -70,8 +70,7 @@ export function resolveHostWorkdirMount(sessionId: string): string | null {
 }
 
 /**
- * Resolve shared env vars for a session. Returns an empty record when
- * the store isn't wired or the session id isn't numeric.
+ * Resolve shared env vars for a filesystem session.
  *
  * Pass `serviceId` ('main' = primary container) to ENFORCE per-service
  * scoping (migration 192): vars whose `service_scope` names other
@@ -84,12 +83,10 @@ export function resolveSessionEnvs(
   serviceId?: string,
 ): Record<string, string> {
   if (!envStore) return {};
-  const numericId = Number(sessionId);
-  if (!Number.isFinite(numericId)) return {};
   try {
     return serviceId !== undefined
-      ? envStore.asRecordForService(numericId, serviceId)
-      : envStore.asRecord(numericId);
+      ? envStore.asRecordForService(sessionId, serviceId)
+      : envStore.asRecord(sessionId);
   } catch {
     return {};
   }
@@ -97,25 +94,23 @@ export function resolveSessionEnvs(
 
 /**
  * Best-effort import of an existing `.env` file in `hostWorkdirMount`
- * into `company_session_envs`. No-ops on missing file/store/numeric id
+ * into the session bundle. No-ops on missing file/store
  * or read failure. Rows written with `source: 'imported'`,
  * `onlyIfAbsent: true` so user-managed values always win.
  */
-export function importDotEnvIntoStore(
+export async function importDotEnvIntoStore(
   envStore: CompanySessionEnvStore | null,
   hostWorkdirMount: string,
   sessionId: string,
-): void {
+): Promise<void> {
   if (!envStore) return;
-  const numericId = Number(sessionId);
-  if (!Number.isFinite(numericId)) return;
   const envPath = join(hostWorkdirMount, '.env');
   if (!existsSync(envPath)) return;
   try {
     const content = readFileSync(envPath, 'utf8');
     const pairs = parseDotEnv(content);
     for (const [key, value] of Object.entries(pairs)) {
-      envStore.upsert(numericId, key, value, false, {
+      await envStore.upsert(sessionId, key, value, false, {
         source: 'imported',
         onlyIfAbsent: true,
       });

@@ -91,9 +91,14 @@ export class SshStore {
    * row (used when relocating a host between the central DB and a project DB on
    * an `is_shared` toggle — the id must stay stable so `saved:<id>` terminal
    * refs, jump-host FKs and the edit dialog's `initial.id` keep resolving, and
-   * the TOFU `known_host_sha256` / `sort_order` / timestamps must travel with
-   * it so no re-trust prompt fires and ordering is preserved). The source row
-   * is a full `SshHost` snapshot from `getHost` on the other store.
+   * `sort_order` / timestamps must travel with it so ordering is preserved).
+   * The source row is a full `SshHost` snapshot from `getHost` on the other store.
+   *
+   * NOTE: `known_host_sha256` is copied for completeness but is NOT the TOFU
+   * pin, despite its name. Nothing writes it at runtime — the real trust store
+   * is `<dataDir>/ssh/known_hosts.json`, keyed by `host:port`, and that is what
+   * `hostVerifier` consults. Relocating a host therefore never affects trust
+   * (which is why no re-trust prompt fires: the endpoint didn't change).
    */
   createHostWithId(row: SshHost): SshHost {
     this.db

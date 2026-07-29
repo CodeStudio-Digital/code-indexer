@@ -171,7 +171,7 @@ export class ToolSelectionOutcomeMatcher implements OutcomeMatcher<ToolSelection
 export interface RolePipelineObservedEvent {
   queryHash: string;
   roleSpawned: string;
-  agentRunId?: number;
+  agentRunId?: string;
 }
 
 export class RolePipelineOutcomeMatcher implements OutcomeMatcher<RolePipelineObservedEvent> {

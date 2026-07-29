@@ -6,10 +6,10 @@
 import React from 'react';
 import { formatDurationMs } from '@mcp/services/qa/parsers/run-status-format.js';
 import { QaStatusBadge } from '../shared/QaStatusBadge.js';
-import type { QaTestResultWithUrlsWithUrls } from '../shared/types.js';
+import type { QaTestResultWithUrls } from '../shared/types.js';
 
 interface Props {
-  results: QaTestResultWithUrlsWithUrls[];
+  results: QaTestResultWithUrls[];
 }
 
 export function LiveRunTree({ results }: Props) {

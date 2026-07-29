@@ -20,7 +20,7 @@ import { useSessionProjects } from '../../../builder/preview/useSessionProjects.
 import type { BuildTab } from '../types.js';
 
 interface BuildZoneProps {
-  sessionId: number;
+  sessionId: string;
   tab: BuildTab;
 }
 

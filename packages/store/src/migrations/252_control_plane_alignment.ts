@@ -3,6 +3,10 @@ import type { Migration } from './index.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 
+function tableExists(db: DB, table: string): boolean {
+  return !!db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`).get(table);
+}
+
 /**
  * Control-plane contract alignment (Fase 1).
  *
@@ -24,6 +28,12 @@ export const controlPlaneAlignment252: Migration = {
   version: 252,
   name: 'control_plane_alignment',
   up(db: DB): void {
+    // The control-plane tables ∈ CENTRAL_DROP_TABLES — a per-project DB runs this
+    // central migration lineage but trims them away (see project-db/trim/drop-list.ts).
+    // Without the guard the UPDATE and the trigger throw `no such table` and
+    // crash-loop the boot. `runtime_events` and `agent_runs` both come from 251.
+    if (!tableExists(db, 'runtime_events')) return;
+
     db.exec(`
       UPDATE runtime_events
         SET event_class = 'A'

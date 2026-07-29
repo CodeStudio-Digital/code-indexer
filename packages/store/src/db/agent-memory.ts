@@ -50,7 +50,6 @@ export interface AgentMemoryEvent {
   scope?: string | null;
   projectId?: number | null;
   memoryId?: number | null;
-  sessionId?: number | null;
   kept?: number | null;
   dropped?: number | null;
   queryHash?: string | null;
@@ -213,18 +212,34 @@ export function getStaleBatch(
 ): Map<number, { stale: string[]; total: number }> {
   const map = new Map<number, { stale: string[]; total: number }>();
   if (ids.length === 0) return map;
-  const rowStmt = db.prepare('SELECT project_id, referenced_files FROM agent_memory WHERE id = ?');
-  const fileStmt = db.prepare('SELECT content_hash FROM files WHERE project_id = ? AND path = ?');
+  // Was 1 + N statements per memory (one row lookup, then one `files` lookup per
+  // referenced path). On a recall that is hundreds of synchronous queries on the
+  // Electron main thread. Now: one row batch, then one `files` batch per project.
   const indexedCache = new Map<number, boolean>();
   const indexed = (pid: number): boolean => {
     let v = indexedCache.get(pid);
     if (v === undefined) { v = projectHasFileIndex(db, pid); indexedCache.set(pid, v); }
     return v;
   };
+
+  const rows = new Map<number, { project_id: number; referenced_files: string | null }>();
+  for (let i = 0; i < ids.length; i += BATCH_IDS) {
+    const chunk = ids.slice(i, i + BATCH_IDS);
+    const batch = db
+      .prepare(
+        `SELECT id, project_id, referenced_files
+           FROM agent_memory
+          WHERE id IN (${chunk.map(() => '?').join(',')})`,
+      )
+      .all(...chunk) as Array<{ id: number; project_id: number; referenced_files: string | null }>;
+    for (const r of batch) rows.set(r.id, { project_id: r.project_id, referenced_files: r.referenced_files });
+  }
+
+  // Pass 1 — parse, and collect the paths each project needs looked up.
+  const pending = new Map<number, { projectId: number; refs: ReferencedFileSnapshot[] }>();
+  const wantedByProject = new Map<number, Set<string>>();
   for (const id of ids) {
-    const row = rowStmt.get(id) as
-      | { project_id: number; referenced_files: string | null }
-      | undefined;
+    const row = rows.get(id);
     if (!row?.referenced_files || !indexed(row.project_id)) {
       map.set(id, { stale: [], total: 0 });
       continue;
@@ -242,18 +257,52 @@ export function getStaleBatch(
       continue;
     }
     const withBaseline = refs.filter((r) => r.hash != null);
-    const stale: string[] = [];
-    for (const ref of withBaseline) {
-      let current: string | null = null;
+    pending.set(id, { projectId: row.project_id, refs: withBaseline });
+    let wanted = wantedByProject.get(row.project_id);
+    if (!wanted) { wanted = new Set(); wantedByProject.set(row.project_id, wanted); }
+    for (const ref of withBaseline) wanted.add(ref.path);
+  }
+
+  // Pass 2 — one batched hash lookup per project.
+  const hashesByProject = new Map<number, Map<string, string | null>>();
+  for (const [projectId, wanted] of wantedByProject) {
+    const found = new Map<string, string | null>();
+    const paths = [...wanted];
+    for (let i = 0; i < paths.length; i += BATCH_IDS) {
+      const chunk = paths.slice(i, i + BATCH_IDS);
       try {
-        const f = fileStmt.get(row.project_id, ref.path) as { content_hash?: string } | undefined;
-        current = f?.content_hash ?? null;
+        const batch = db
+          .prepare(
+            `SELECT path, content_hash
+               FROM files
+              WHERE project_id = ? AND path IN (${chunk.map(() => '?').join(',')})`,
+          )
+          .all(projectId, ...chunk) as Array<{ path: string; content_hash?: string }>;
+        for (const f of batch) found.set(f.path, f.content_hash ?? null);
       } catch {
+        // Per-project table trouble: leave this chunk unknown. Matches the old
+        // per-path `catch { continue }`, which skipped rather than marking stale.
+        for (const p of chunk) found.set(p, undefined as unknown as string | null);
+      }
+    }
+    hashesByProject.set(projectId, found);
+  }
+
+  // Pass 3 — compare.
+  for (const [id, { projectId, refs }] of pending) {
+    const hashes = hashesByProject.get(projectId);
+    const stale: string[] = [];
+    for (const ref of refs) {
+      if (!hashes || !hashes.has(ref.path)) {
+        // Not present in `files` at all → the path vanished from the index.
+        stale.push(ref.path);
         continue;
       }
+      const current = hashes.get(ref.path);
+      if (current === undefined) continue; // Lookup failed; cannot judge.
       if (current === null || current !== ref.hash) stale.push(ref.path);
     }
-    map.set(id, { stale, total: withBaseline.length });
+    map.set(id, { stale, total: refs.length });
   }
   return map;
 }
@@ -343,6 +392,33 @@ export function getById(db: DB, id: number): AgentMemoryRow | undefined {
   return db.prepare('SELECT * FROM agent_memory WHERE id = ?').get(id) as
     | AgentMemoryRow
     | undefined;
+}
+
+/** Chunk size for the IN(...) hydration below; keeps the statement cache small. */
+const BATCH_IDS = 100;
+
+/**
+ * Hydrate many memories in one statement per chunk.
+ *
+ * Callers previously looped `getById`, which on a hybrid search meant up to 60
+ * (per-turn retrieve) or 144 (recall_memory) synchronous point queries — each
+ * one blocking the Electron main thread, since this store shares the main
+ * process connection.
+ *
+ * Returns ONLY the rows that exist, in an unspecified order. Callers that care
+ * about ordering (vector-match rank feeds RRF scoring) must re-impose it.
+ */
+export function getByIds(db: DB, ids: readonly number[]): AgentMemoryRow[] {
+  if (ids.length === 0) return [];
+  const out: AgentMemoryRow[] = [];
+  for (let i = 0; i < ids.length; i += BATCH_IDS) {
+    const chunk = ids.slice(i, i + BATCH_IDS);
+    const rows = db
+      .prepare(`SELECT * FROM agent_memory WHERE id IN (${chunk.map(() => '?').join(',')})`)
+      .all(...chunk) as AgentMemoryRow[];
+    out.push(...rows);
+  }
+  return out;
 }
 
 export function getByName(
@@ -543,14 +619,13 @@ export function recordEvent(db: DB, e: AgentMemoryEvent): void {
   try {
     db.prepare(
       `INSERT INTO agent_memory_events
-         (event_type, scope, project_id, memory_id, session_id, kept, dropped, query_hash, meta_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (event_type, scope, project_id, memory_id, kept, dropped, query_hash, meta_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       e.eventType,
       e.scope ?? null,
       e.projectId ?? null,
       e.memoryId ?? null,
-      e.sessionId ?? null,
       e.kept ?? null,
       e.dropped ?? null,
       e.queryHash ?? null,

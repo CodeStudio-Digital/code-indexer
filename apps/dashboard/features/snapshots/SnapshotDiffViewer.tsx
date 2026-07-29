@@ -12,7 +12,7 @@ import { hunkExcerpt } from './diff/diff-format.js';
 import type { SnapshotFileDiff, SnapshotHunkLine, SnapshotReviewComment } from './types.js';
 
 export interface AddReviewCommentInput {
-  baselineId: number;
+  baselineId: string;
   filePath: string;
   hunkFingerprint?: string | null;
   oldLine?: number | null;
@@ -29,7 +29,7 @@ interface Props {
   onAcceptFile: () => Promise<void>;
   onRevertFile: () => Promise<void>;
   onAddComment: (input: AddReviewCommentInput) => Promise<void>;
-  onUpdateComment: (id: number, patch: Partial<Pick<SnapshotReviewComment, 'status'>>) => Promise<void>;
+  onUpdateComment: (id: string, patch: Partial<Pick<SnapshotReviewComment, 'status'>>) => Promise<void>;
   onAutoReview: () => Promise<void>;
   onSubmitReview: () => Promise<void>;
   onExpandContext: (side: 'before' | 'after') => void;

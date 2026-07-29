@@ -33,12 +33,12 @@ import type { AddReviewCommentInput } from './SnapshotDiffViewer.js';
 
 interface Props {
   scope: SessionScope;
-  sessionId: number;
+  sessionId: string;
   /** When provided, the panel will refetch every time the value changes — used to react
    *  to live `session_snapshot_changed` SSE events from the chat stream. */
   refreshKey?: number;
   /** Baseline to preselect on open (deep-link from a chat "View snapshot" action). */
-  initialBaselineId?: number | null;
+  initialBaselineId?: string | null;
   onSubmitReviewMessage?: (message: string) => Promise<void>;
   /** Reserves room in the shared toolbar for the dialog's close control. */
   dialogMode?: boolean;
@@ -58,7 +58,7 @@ export function SnapshotsPanel({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showClosed, setShowClosed] = useState(false);
-  const [selectedBaselineId, setSelectedBaselineId] = useState<number | null>(null);
+  const [selectedBaselineId, setSelectedBaselineId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [reviews, setReviews] = useState<SnapshotReviewsResponse>({ runs: [], comments: [] });
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -149,7 +149,7 @@ export function SnapshotsPanel({
     if (firstActive) setSelectedBaselineId(firstActive.baselineId);
   }, [files, selectedBaselineId, initialBaselineId, showClosed]);
 
-  const handleSelect = useCallback((baselineId: number) => {
+  const handleSelect = useCallback((baselineId: string) => {
     setSelectedBaselineId(baselineId);
     setContextBefore(3);
     setContextAfter(3);
@@ -268,7 +268,7 @@ export function SnapshotsPanel({
   }, [scope, sessionId, reloadReviews, t]);
 
   const handleUpdateReviewComment = useCallback(async (
-    id: number,
+    id: string,
     patch: Partial<Pick<SnapshotReviewComment, 'status'>>,
   ) => {
     setReviewBusy(true);

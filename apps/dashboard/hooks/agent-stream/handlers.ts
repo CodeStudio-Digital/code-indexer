@@ -5,6 +5,7 @@ import type {
   PipelineNodeRuntimeStatus,
   PipelineRuntimeState,
   ResearchDepth,
+  SessionId,
   StreamBlock,
   StreamTask,
   StreamTaskMode,
@@ -53,9 +54,10 @@ import {
   type OperationPayload,
   type ProviderCallPayload,
 } from './activity-blocks.js';
+import { rollbackStreamedChars } from './stream-rollback.js';
 
 interface HandlerContext {
-  sid: number;
+  sid: SessionId;
   blocks: StreamBlock[];
   toolIndex: Map<string, number>;
   flush: () => void;
@@ -169,6 +171,19 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       } else {
         blocks.push({ type: 'thinking', text: t, id: nextContentBlockId('thinking') });
       }
+      flush();
+    },
+
+    // A provider attempt died mid-stream. Its deltas were rendered but will
+    // never be persisted, and the retry is about to stream a near-identical
+    // replacement — retract the discarded attempt so the two don't stack up.
+    stream_rollback: (data) => {
+      const d = data as { textChars?: number; thinkingChars?: number };
+      const trimmedText = rollbackStreamedChars(blocks, 'text', Number(d.textChars ?? 0));
+      const trimmedThinking = rollbackStreamedChars(blocks, 'thinking', Number(d.thinkingChars ?? 0));
+      if (!trimmedText && !trimmedThinking) return;
+      // Splices shift every later block, so the id→index map must be rebuilt.
+      rebuildToolIndex(blocks, toolIndex);
       flush();
     },
 
@@ -1129,7 +1144,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
  * swaps to a placeholder while open. Window-level CustomEvent — same bridge
  * pattern as `coder:session_agent_changed`. Defensive: never crash the stream.
  */
-function dispatchAgentPreview(sessionId: number, open: boolean): void {
+function dispatchAgentPreview(sessionId: SessionId, open: boolean): void {
   if (typeof window === 'undefined') return;
   try {
     window.dispatchEvent(new CustomEvent('coder:agent_preview', { detail: { sessionId, open } }));
@@ -1197,7 +1212,7 @@ function rebuildToolIndex(blocks: StreamBlock[], toolIndex: Map<string, number>)
 // chat-turn state.
 
 interface PipelineHandlerContext {
-  sid: number;
+  sid: SessionId;
   updateSession: UpdateSession;
 }
 
@@ -1207,7 +1222,7 @@ export function createPipelineEventHandlers(
   const { sid, updateSession } = ctx;
   return {
     pipeline_started: (data) => {
-      const d = data as { executionId: number; pipelineId: number; startNodeId?: string };
+      const d = data as { executionId: string; pipelineId: number | string; startNodeId?: string };
       updateSession(sid, {
         pipelineRuntime: {
           executionId: d.executionId,
@@ -1222,7 +1237,7 @@ export function createPipelineEventHandlers(
 
     pipeline_node_started: (data) => {
       const d = data as {
-        executionId: number;
+        executionId: string;
         nodeId: string;
         nodeLabel?: string;
         kind?: 'agent' | 'validate';
@@ -1250,7 +1265,7 @@ export function createPipelineEventHandlers(
 
     pipeline_node_completed: (data) => {
       const d = data as {
-        executionId: number;
+        executionId: string;
         nodeId: string;
         outcome?: string | null;
         verdict?: 'pass' | 'fail' | 'review' | null;
@@ -1278,7 +1293,7 @@ export function createPipelineEventHandlers(
     },
 
     pipeline_node_failed: (data) => {
-      const d = data as { executionId: number; nodeId: string; error?: string };
+      const d = data as { executionId: string; nodeId: string; error?: string };
       updateSession(sid, (cur) => {
         const cur_runtime = cur.pipelineRuntime;
         if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
@@ -1299,7 +1314,7 @@ export function createPipelineEventHandlers(
     },
 
     pipeline_paused: (data) => {
-      const d = data as { executionId: number; nodeId?: string | null };
+      const d = data as { executionId: string; nodeId?: string | null };
       updateSession(sid, (cur) => {
         const cur_runtime = cur.pipelineRuntime;
         if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
@@ -1314,7 +1329,7 @@ export function createPipelineEventHandlers(
     },
 
     pipeline_resumed: (data) => {
-      const d = data as { executionId: number; nodeId?: string };
+      const d = data as { executionId: string; nodeId?: string };
       updateSession(sid, (cur) => {
         const cur_runtime = cur.pipelineRuntime;
         if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
@@ -1329,7 +1344,7 @@ export function createPipelineEventHandlers(
     },
 
     pipeline_completed: (data) => {
-      const d = data as { executionId: number };
+      const d = data as { executionId: string };
       updateSession(sid, (cur) => {
         const cur_runtime = cur.pipelineRuntime;
         if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
@@ -1344,7 +1359,7 @@ export function createPipelineEventHandlers(
     },
 
     pipeline_aborted: (data) => {
-      const d = data as { executionId: number; reason?: string | null };
+      const d = data as { executionId: string; reason?: string | null };
       updateSession(sid, (cur) => {
         const cur_runtime = cur.pipelineRuntime;
         if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
@@ -1360,7 +1375,7 @@ export function createPipelineEventHandlers(
     },
 
     pipeline_failed: (data) => {
-      const d = data as { executionId: number; error?: string };
+      const d = data as { executionId: string; error?: string };
       updateSession(sid, (cur) => {
         const cur_runtime = cur.pipelineRuntime;
         if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};

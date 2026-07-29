@@ -5,7 +5,7 @@ import { DiffBlock } from './DiffBlock.js';
 import { ConfirmDiscardDialog } from './ConfirmDiscardDialog.js';
 
 interface Props {
-  sessionId: number;
+  sessionId: string;
   projectId: number;
   file: GitFileStatus;
   staged: boolean;

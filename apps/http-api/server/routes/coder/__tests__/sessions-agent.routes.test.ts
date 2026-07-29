@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
+import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
 import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
@@ -20,20 +21,23 @@ vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
   }),
 }));
 
+const SESSION_ID = asSessionId('66666666-6666-4666-8666-666666666666');
+const MISSING_SESSION_ID = asSessionId('66666666-6666-4666-8666-666666666667');
+
 function setup() {
-  const calls: Array<{ id: number; agent: string | null }> = [];
-  const messages: Array<{ id: number; message: Record<string, unknown> }> = [];
+  const calls: Array<{ id: SessionId; agent: string | null }> = [];
+  const messages: Array<{ id: SessionId; message: Record<string, unknown> }> = [];
   const inputs: Array<Record<string, unknown>> = [];
-  const pendingTransitions = new Map<number, {
-    sessionId: number;
+  const pendingTransitions = new Map<SessionId, {
+    sessionId: SessionId;
     fromAgent: string | null;
     toAgent: string | null;
   }>();
-  const sessions = new Map<number, { id: number; agent: string | null }>([
-    [1, { id: 1, agent: 'explore' }],
+  const sessions = new Map<SessionId, { id: SessionId; agent: string | null }>([
+    [SESSION_ID, { id: SESSION_ID, agent: 'explore' }],
   ]);
   const sessionStore = {
-    stageManualAgentTransition: (id: number, agent: string | null) => {
+    stageManualAgentTransition: (id: SessionId, agent: string | null) => {
       calls.push({ id, agent });
       const s = sessions.get(id);
       if (!s) return null;
@@ -48,8 +52,8 @@ function setup() {
       pendingTransitions.set(id, pending);
       return pending;
     },
-    getSession: (id: number) => sessions.get(id) ?? null,
-    appendMessage: (id: number, message: Record<string, unknown>) => {
+    getSession: (id: SessionId) => sessions.get(id) ?? null,
+    appendMessage: (id: SessionId, message: Record<string, unknown>) => {
       messages.push({ id, message });
       return messages.length;
     },
@@ -79,7 +83,7 @@ function setup() {
   const app = new Hono();
   mountCoderSessionsRoutes(app, deps, runtime);
 
-  const patchAgent = (id: number, agent: unknown) =>
+  const patchAgent = (id: SessionId, agent: unknown) =>
     app.request(`/api/coder/sessions/${id}/agent`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -92,13 +96,13 @@ function setup() {
 describe('coder PATCH /sessions/:id/agent', () => {
   it('persists a valid agent and stages the reminder for the next run', async () => {
     const { calls, inputs, messages, pendingTransitions, patchAgent } = setup();
-    const r = await patchAgent(1, 'build');
+    const r = await patchAgent(SESSION_ID, 'build');
     expect(r.status).toBe(200);
     const body = (await r.json()) as { agent: string };
     expect(body.agent).toBe('build');
-    expect(calls).toEqual([{ id: 1, agent: 'build' }]);
-    expect(pendingTransitions.get(1)).toEqual({
-      sessionId: 1,
+    expect(calls).toEqual([{ id: SESSION_ID, agent: 'build' }]);
+    expect(pendingTransitions.get(SESSION_ID)).toEqual({
+      sessionId: SESSION_ID,
       fromAgent: 'explore',
       toAgent: 'build',
     });
@@ -108,11 +112,11 @@ describe('coder PATCH /sessions/:id/agent', () => {
 
   it('accepts null to clear the column', async () => {
     const { calls, messages, pendingTransitions, patchAgent } = setup();
-    const r = await patchAgent(1, null);
+    const r = await patchAgent(SESSION_ID, null);
     expect(r.status).toBe(200);
-    expect(calls).toEqual([{ id: 1, agent: null }]);
-    expect(pendingTransitions.get(1)).toEqual({
-      sessionId: 1,
+    expect(calls).toEqual([{ id: SESSION_ID, agent: null }]);
+    expect(pendingTransitions.get(SESSION_ID)).toEqual({
+      sessionId: SESSION_ID,
       fromAgent: 'explore',
       toAgent: null,
     });
@@ -122,11 +126,11 @@ describe('coder PATCH /sessions/:id/agent', () => {
   it('accepts an enabled custom agent selection id', async () => {
     const { calls, customAgent, messages, pendingTransitions, patchAgent } = setup();
     const selectionId = `custom:${customAgent.id}`;
-    const r = await patchAgent(1, selectionId);
+    const r = await patchAgent(SESSION_ID, selectionId);
     expect(r.status).toBe(200);
-    expect(calls).toEqual([{ id: 1, agent: selectionId }]);
-    expect(pendingTransitions.get(1)).toEqual({
-      sessionId: 1,
+    expect(calls).toEqual([{ id: SESSION_ID, agent: selectionId }]);
+    expect(pendingTransitions.get(SESSION_ID)).toEqual({
+      sessionId: SESSION_ID,
       fromAgent: 'explore',
       toAgent: selectionId,
     });
@@ -135,11 +139,11 @@ describe('coder PATCH /sessions/:id/agent', () => {
 
   it('coalesces selector churn into the final transition only', async () => {
     const { messages, pendingTransitions, patchAgent } = setup();
-    await patchAgent(1, 'build');
-    await patchAgent(1, 'plan');
+    await patchAgent(SESSION_ID, 'build');
+    await patchAgent(SESSION_ID, 'plan');
 
-    expect(pendingTransitions.get(1)).toEqual({
-      sessionId: 1,
+    expect(pendingTransitions.get(SESSION_ID)).toEqual({
+      sessionId: SESSION_ID,
       fromAgent: 'explore',
       toAgent: 'plan',
     });
@@ -148,16 +152,16 @@ describe('coder PATCH /sessions/:id/agent', () => {
 
   it('cancels the pending reminder when selection returns to the original agent', async () => {
     const { messages, pendingTransitions, patchAgent } = setup();
-    await patchAgent(1, 'build');
-    await patchAgent(1, 'explore');
+    await patchAgent(SESSION_ID, 'build');
+    await patchAgent(SESSION_ID, 'explore');
 
-    expect(pendingTransitions.has(1)).toBe(false);
+    expect(pendingTransitions.has(SESSION_ID)).toBe(false);
     expect(messages).toEqual([]);
   });
 
   it('does not append another reminder when the selected agent is unchanged', async () => {
     const { calls, inputs, messages, patchAgent } = setup();
-    const r = await patchAgent(1, 'explore');
+    const r = await patchAgent(SESSION_ID, 'explore');
     expect(r.status).toBe(200);
     expect(calls).toEqual([]);
     expect(messages).toEqual([]);
@@ -166,14 +170,14 @@ describe('coder PATCH /sessions/:id/agent', () => {
 
   it('rejects an unknown agent with 400 and does not persist', async () => {
     const { calls, patchAgent } = setup();
-    const r = await patchAgent(1, 'wizard');
+    const r = await patchAgent(SESSION_ID, 'wizard');
     expect(r.status).toBe(400);
     expect(calls).toEqual([]);
   });
 
   it('404s on an unknown session', async () => {
     const { calls, inputs, messages, patchAgent } = setup();
-    const r = await patchAgent(999, 'build');
+    const r = await patchAgent(MISSING_SESSION_ID, 'build');
     expect(r.status).toBe(404);
     expect(calls).toEqual([]);
     expect(messages).toEqual([]);

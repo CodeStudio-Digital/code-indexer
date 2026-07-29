@@ -13,6 +13,12 @@ import { setServiceSupervisorStores } from '../../services/service-supervisor/st
 import { serviceTools } from '../service-tools.js';
 import { decideServiceControl } from '../service-tools-core.js';
 
+const COMPANY_SESSION_ID = '00000000-0000-4000-8000-000000000007';
+const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000001';
+const TRANSITION_ID = '00000000-0000-4000-8000-000000000101';
+const NEWER_LOG_ID = '00000000-0000-4000-8000-000000000112';
+const OLDER_LOG_ID = '00000000-0000-4000-8000-000000000111';
+
 const tool = (name: string) => {
   const t = serviceTools.find((x) => x.name === name);
   if (!t) throw new Error(`tool ${name} not registered`);
@@ -38,8 +44,15 @@ function installManager(m: ReturnType<typeof makeManager>): void {
 }
 
 function makeStores() {
-  const record = vi.fn(() => 1);
-  const listPage = vi.fn(() => [] as Array<{ id: number; serviceId: string; stream: string; line: string; atMs: number }>);
+  const record = vi.fn(() => TRANSITION_ID);
+  const listPage = vi.fn(() => [] as Array<{
+    id: string;
+    seq: number;
+    serviceId: string;
+    stream: 'devserver' | 'container' | 'scaffold';
+    line: string;
+    atMs: number;
+  }>);
   setServiceSupervisorStores({
     health: { updateHealth: () => true, bumpRestartCount: () => 1 },
     transitions: { record },
@@ -59,9 +72,9 @@ function makeCtx(opts: {
     projectName: 'p',
     companyContext: {
       orchestrator: { getRoleDefaults: () => ({ skills: opts.skills ?? [] }) },
-      companySessionId: 7,
+      companySessionId: COMPANY_SESSION_ID,
       agentRole: opts.role ?? 'dev',
-      agentRunId: 1,
+      agentRunId: AGENT_RUN_ID,
       allowedProjectIds: [],
       isMaster: opts.isMaster ?? false,
       sandbox: opts.bound
@@ -102,9 +115,14 @@ describe('service_restart / service_start / service_stop', () => {
       makeCtx({ isMaster: true, role: 'master' }),
     );
     expect(res.isError).toBeUndefined();
-    expect(m.restartService).toHaveBeenCalledWith('7', 'api');
+    expect(m.restartService).toHaveBeenCalledWith(COMPANY_SESSION_ID, 'api');
     expect(record).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 7, serviceId: 'api', toState: 'restarted', actor: 'master' }),
+      expect.objectContaining({
+        sessionId: COMPANY_SESSION_ID,
+        serviceId: 'api',
+        toState: 'restarted',
+        actor: 'master',
+      }),
     );
   });
 
@@ -113,7 +131,7 @@ describe('service_restart / service_start / service_stop', () => {
     installManager(m);
     makeStores();
     await tool('service_restart').handler({ service_id: 'main' }, makeCtx({ isMaster: true, role: 'master' }));
-    expect(m.restartDevServer).toHaveBeenCalledWith('7');
+    expect(m.restartDevServer).toHaveBeenCalledWith(COMPANY_SESSION_ID);
     expect(m.restartService).not.toHaveBeenCalled();
   });
 
@@ -146,7 +164,7 @@ describe('service_restart / service_start / service_stop', () => {
       makeCtx({ bound: 'api', skills: ['devops'] }),
     );
     expect(res.isError).toBeUndefined();
-    expect(m.restartService).toHaveBeenCalledWith('7', 'db');
+    expect(m.restartService).toHaveBeenCalledWith(COMPANY_SESSION_ID, 'db');
   });
 
   it('attached services are refused with a readable message', async () => {
@@ -179,12 +197,15 @@ describe('service_restart / service_start / service_stop', () => {
     installManager(m);
     makeStores();
     await tool('service_start').handler({ service_id: 'api' }, makeCtx({ isMaster: true, role: 'master' }));
-    expect(m.unpauseRuntimeContainer).toHaveBeenCalledWith('7', 'api');
+    expect(m.unpauseRuntimeContainer).toHaveBeenCalledWith(
+      COMPANY_SESSION_ID,
+      'api',
+    );
 
     const m2 = makeManager({ get: vi.fn(() => ({ status: 'paused' })) });
     installManager(m2);
     await tool('service_start').handler({ service_id: 'main' }, makeCtx({ isMaster: true, role: 'master' }));
-    expect(m2.resumeSandbox).toHaveBeenCalledWith('7');
+    expect(m2.resumeSandbox).toHaveBeenCalledWith(COMPANY_SESSION_ID);
   });
 
   it('service_stop pauses via the runtime-pause path', async () => {
@@ -192,7 +213,10 @@ describe('service_restart / service_start / service_stop', () => {
     installManager(m);
     const { record } = makeStores();
     await tool('service_stop').handler({ service_id: 'api' }, makeCtx({ isMaster: true, role: 'master' }));
-    expect(m.pauseRuntimeContainer).toHaveBeenCalledWith('7', 'api');
+    expect(m.pauseRuntimeContainer).toHaveBeenCalledWith(
+      COMPANY_SESSION_ID,
+      'api',
+    );
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ toState: 'paused' }));
   });
 });
@@ -202,20 +226,37 @@ describe('service_logs', () => {
     installManager(makeManager());
     const { listPage } = makeStores();
     listPage.mockReturnValue([
-      { id: 12, serviceId: 'api', stream: 'devserver', line: 'newer', atMs: 2_000 },
-      { id: 11, serviceId: 'db', stream: 'container', line: 'older', atMs: 1_000 },
+      {
+        id: NEWER_LOG_ID,
+        seq: 12,
+        serviceId: 'api',
+        stream: 'devserver',
+        line: 'newer',
+        atMs: 2_000,
+      },
+      {
+        id: OLDER_LOG_ID,
+        seq: 11,
+        serviceId: 'db',
+        stream: 'container',
+        line: 'older',
+        atMs: 1_000,
+      },
     ]);
     const res = await tool('service_logs').handler(
-      { service_id: undefined, lines: 2, before_id: 99 },
+      { service_id: undefined, lines: 2, before_seq: 99 },
       makeCtx({ bound: 'api' }),
     );
     expect(res.isError).toBeUndefined();
-    expect(listPage).toHaveBeenCalledWith(7, expect.objectContaining({ limit: 2, beforeId: 99 }));
+    expect(listPage).toHaveBeenCalledWith(
+      COMPANY_SESSION_ID,
+      expect.objectContaining({ limit: 2, beforeSeq: 99 }),
+    );
     const [first, second] = res.content.split('\n');
     expect(first).toContain('[db/container]');
     expect(first).toContain('older');
     expect(second).toContain('[api/devserver]');
-    expect(res.content).toContain('before_id=11'); // full page → cursor footer
+    expect(res.content).toContain('before_seq=11'); // full page → cursor footer
   });
 
   it('degrades clearly when the store is not wired (main process)', async () => {
