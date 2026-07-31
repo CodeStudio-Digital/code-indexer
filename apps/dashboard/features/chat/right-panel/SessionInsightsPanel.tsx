@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { FileText, Gauge, LayoutDashboard, Wrench } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../../components/ui/tabs.js';
+import { cn } from '../../../lib/utils.js';
 import {
   SessionInputsView,
   SessionSummaryView,
@@ -64,20 +65,33 @@ export function SessionInsightsPanel({ sessionId, session, stats }: SessionInsig
     >
       <div className="shrink-0 border-b bg-[var(--workbench-surface)] px-2 py-1.5">
         <TabsList
-          className="flex h-9 w-full justify-start gap-0.5 overflow-x-auto rounded-md bg-muted/40 p-0.5"
+          className="flex h-9 w-full min-w-0 justify-start gap-0.5 overflow-hidden rounded-md bg-muted/40 p-0.5"
           aria-label={t('insights.tabsLabel')}
         >
-          {tabs.map(({ id, icon: Icon, label }) => (
-            <TabsTrigger
-              key={id}
-              value={id}
-              title={label}
-              className="h-8 min-w-[64px] flex-1 gap-1 rounded px-1.5 text-[10px] shadow-none data-[state=active]:bg-background data-[state=active]:shadow-sm"
-            >
-              <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{label}</span>
-            </TabsTrigger>
-          ))}
+          {tabs.map(({ id, icon: Icon, label }) => {
+            const isActive = activeTab === id;
+            return (
+              <TabsTrigger
+                key={id}
+                value={id}
+                title={label}
+                aria-label={label}
+                className="group/insights-tab h-8 shrink-0 gap-0 rounded px-2 text-[10px] shadow-none transition-all duration-150 data-[state=active]:bg-background data-[state=active]:shadow-sm"
+              >
+                <Icon className="h-3.5 w-3.5 shrink-0" />
+                <span
+                  className={cn(
+                    'overflow-hidden whitespace-nowrap transition-all duration-150 ease-out',
+                    isActive
+                      ? 'ml-1.5 max-w-[120px] opacity-100'
+                      : 'ml-0 max-w-0 opacity-0 group-hover/insights-tab:ml-1.5 group-hover/insights-tab:max-w-[120px] group-hover/insights-tab:opacity-100 group-focus-visible/insights-tab:ml-1.5 group-focus-visible/insights-tab:max-w-[120px] group-focus-visible/insights-tab:opacity-100',
+                  )}
+                >
+                  {label}
+                </span>
+              </TabsTrigger>
+            );
+          })}
         </TabsList>
       </div>
 

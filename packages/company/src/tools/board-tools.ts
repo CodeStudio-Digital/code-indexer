@@ -42,11 +42,8 @@ function postToBoard(
         description:
           'Type of post (default: message). Use "decision" for important choices, "question" for queries, ' +
           '"deliverable" for completed work, "handoff" for passing work to another agent. ' +
-          '"blocker" = IMPEDIMENT — use ONLY when you genuinely cannot proceed without human ' +
-          'intervention (missing tool/permission, ambiguous external state, contradictory instructions). ' +
-          'Calling with kind="blocker" posts the message AND ENDS YOUR SESSION; the user will see the ' +
-          'impediment, decide how to intervene, and their next message will resurrect you with full ' +
-          'history. Reserve this for true dead-ends — for normal questions use awaits_response instead.',
+          '"blocker" flags an unresolved impediment on the board but does not stop the agent or Company. ' +
+          'If human input is required, use kind="question" with awaits_response.',
       },
       // ── Interactive mode ──
       // When set, the post BLOCKS the runner and renders a card with
@@ -61,8 +58,8 @@ function postToBoard(
         description:
           'Optional. When set, BLOCKS this agent until the user responds via an interactive card ' +
           '(approve/reject buttons, choice buttons, or freeform text). Use this when your message ' +
-          'requires explicit acknowledgement — never post a plain message and loop waiting for the ' +
-          "user to type a reply, the user has no structured way to do that.",
+          'requires explicit acknowledgement. Never use on deliverable, handoff, or blocker posts: ' +
+          'those are always fire-and-forget.',
         properties: {
           mode: {
             type: 'string',
@@ -116,13 +113,21 @@ function postToBoard(
     handler: async (args, ctx) => {
       const content = args.content as string;
       const kind = (args.kind as string) ?? 'message';
-      const awaits = args.awaits_response as
+      const requestedAwait = args.awaits_response as
         | {
             mode: 'approval' | 'choice' | 'freeform';
             options?: Array<{ label: string; value: string }>;
             allow_freeform?: boolean;
           }
         | undefined;
+      // A final artefact cannot logically require approval just to finish
+      // reporting it. Weak models occasionally attach awaits_response to the
+      // mandatory deliverable and deadlock their own completion. Keep final
+      // communication deterministic even when that optional field leaks in.
+      const awaits =
+        kind === 'deliverable' || kind === 'handoff' || kind === 'blocker'
+          ? undefined
+          : requestedAwait;
 
       // ── Fire-and-forget path (current behaviour, byte-identical) ──
       if (!awaits) {
@@ -133,30 +138,6 @@ function postToBoard(
             kind as 'message' | 'decision' | 'question' | 'deliverable' | 'handoff' | 'blocker',
             content,
           );
-          // ── Blocker variant ──
-          // Posts THEN aborts the runner. The agent is reporting an
-          // impediment it can't resolve; the master ends gracefully
-          // and the user sees the board entry. When the user later
-          // sends a new message, `MasterLifecycle.sendUserMessage`
-          // detects the master is ended and resurrects it with full
-          // history. This is the "the runner stops here, human takes
-          // over" path — distinct from `awaits_response` which
-          // expects a structured reply mid-run.
-          if (kind === 'blocker') {
-            if (ctx.runner) {
-              // Schedule the abort on the next microtask so the
-              // tool_result still gets queued through the normal
-              // dispatch path. Aborting synchronously here would
-              // race with the runner's own "result emitted" book-
-              // keeping and risk dropping the post from history.
-              queueMicrotask(() => ctx.runner?.abort());
-            }
-            return ok(
-              `Posted blocker to board as ${agentRole}. Session is ending — the user will see the ` +
-                `impediment and decide how to intervene. Their next message will resurrect you with ` +
-                `full history preserved.`,
-            );
-          }
           return ok(`Posted to board as ${agentRole} [${kind}]`);
         } catch (e) {
           return err(`Failed to post: ${e instanceof Error ? e.message : String(e)}`);
@@ -182,13 +163,17 @@ function postToBoard(
 
       if (awaits.mode === 'approval') {
         ctx.recordPlan?.(id, content);
+        // Arm the waiter before emitting. HumanInTheLoop can auto-approve
+        // synchronously from the plan_posted listener; emitting first loses
+        // that response before waitForUserInput has installed its resolver.
+        const response = runner.waitForUserInput();
         runner.emit('plan_posted', {
           type: 'plan',
           id,
           plan: content,
           kind: 'mutating',
         });
-        const raw = await runner.waitForUserInput();
+        const raw = await response;
         let parsed: { approved?: boolean; feedback?: string; aborted?: boolean; interrupted?: boolean };
         try {
           parsed = JSON.parse(raw);
@@ -225,6 +210,7 @@ function postToBoard(
           seen.add(o.value);
         }
       }
+      const response = runner.waitForUserInput();
       runner.emit('question_posted', {
         type: 'question',
         id,
@@ -233,7 +219,7 @@ function postToBoard(
         allowFreeform,
         header: kind === 'decision' ? 'Decision' : 'Question',
       });
-      const raw = await runner.waitForUserInput();
+      const raw = await response;
       let parsed: { answer?: string; aborted?: boolean; interrupted?: boolean };
       try {
         parsed = JSON.parse(raw);
@@ -331,7 +317,7 @@ function setAgentStatus(
       status: {
         type: 'string',
         enum: ['working', 'waiting', 'reviewing', 'blocked', 'done'],
-        description: 'Your current status. Use "waiting" when done with current task and ready for more. Use "working" when actively coding. Use "done" when all work is finished.',
+        description: 'Board metadata only; this does not pause or end your run. Use "working" or "reviewing" during active work, "blocked" for an impediment, and "waiting"/"done" only for status visibility.',
       },
       message: { type: 'string', description: 'Brief status description (e.g., "Investigation done. Ready for next task.", "Working on campaign routes")' },
     },
@@ -341,8 +327,8 @@ function setAgentStatus(
   return {
     name: 'set_agent_status',
     description:
-      'Set your current agent status on the company board (working/waiting/reviewing/blocked/done).\n' +
-      'Use "waiting" when you finish a task and are ready for the next one — this keeps you alive for reuse instead of being discarded.',
+      'Publish current agent status on the company board (working/waiting/reviewing/blocked/done). ' +
+      'This is metadata only: it does not pause, terminate, or keep the runner alive. When work is complete, post the mandatory deliverable, return one concise final response, and stop instead of polling the board.',
     parameters,
     source: 'native',
     handler: async (args) => {

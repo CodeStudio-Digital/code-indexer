@@ -673,6 +673,7 @@ export function buildCodeExecTool(
               repeatPolicy: metadata.repeatPolicy,
             });
             observer?.afterNestedCall({
+              invocationId: attemptOrigin,
               name: t.name,
               args: argObj,
               isError: input.isError,

@@ -964,6 +964,63 @@ describe('code_exec metadata safety and scheduling', () => {
     expect(result.content).toContain('"tool": "read_file"');
   });
 
+  it('keeps invocation ids stable when parallel siblings finish out of order', async () => {
+    const registry = new ToolRegistry();
+    registry.register({
+      ...noopTool('run_command'),
+      mutates: false,
+      parallelSafe: true,
+      repeatPolicy: 'volatile',
+      executionClass: 'execute',
+      handler: async (args) => {
+        if (args.command === 'slow') await sleep(20);
+        return ok(String(args.command));
+      },
+    });
+    const settled: Array<{ invocationId: string; resultPreview: string }> = [];
+    const observer: NonNullable<ToolContext['nestedToolObserver']> = {
+      beforeNestedCall: (_name, args, opts) => args.command === 'blocked'
+        ? {
+            action: 'block',
+            reason: 'test-block',
+            refusalKind: 'dedup',
+            shouldReflect: true,
+            affectsFailureStreak: false,
+            originToolUseId: opts?.originToolUseId,
+            refusalText: 'blocked immediately',
+            kind: 'dedup',
+          }
+        : null,
+      afterNestedCall: (entry) => {
+        settled.push({
+          invocationId: entry.invocationId,
+          resultPreview: entry.resultPreview,
+        });
+      },
+    };
+
+    const result = await buildCodeExecTool(registry).handler({
+      code: `return await Promise.all([
+        tools.run_command({command:'slow'}),
+        (async () => {
+          try { return await tools.run_command({command:'blocked'}); }
+          catch (error) { return String(error); }
+        })()
+      ]);`,
+    }, {
+      ...makeCtx(),
+      currentToolUseId: 'parent-order',
+      nestedToolObserver: observer,
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(settled.map((entry) => entry.invocationId)).toEqual([
+      'parent-order#2',
+      'parent-order#1',
+    ]);
+    expect(new Set(settled.map((entry) => entry.invocationId)).size).toBe(2);
+  });
+
   it('settles Promise.all siblings, preserves partial results, and propagates an uncaught block once', async () => {
     vi.useFakeTimers();
     try {

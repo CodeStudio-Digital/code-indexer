@@ -5,7 +5,7 @@
  * `ProjectList`. The compact list view uses `ProjectRow` instead.
  */
 import { useTranslation } from 'react-i18next';
-import { Boxes, Clock, FileCode2, FolderGit2, Pencil } from 'lucide-react';
+import { Boxes, Clock, Ellipsis, FileCode2, FolderGit2, LoaderCircle } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { Button } from '../../../components/ui/button.js';
 import {
@@ -34,15 +34,25 @@ export interface ProjectCardProps {
   project: ProjectCardData;
   onSelect: () => void;
   onEdit: () => void;
+  onIndex: () => void;
+  indexing?: boolean;
 }
 
-export function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) {
+export function ProjectCard({
+  project: p,
+  onSelect,
+  onEdit,
+  onIndex,
+  indexing = false,
+}: ProjectCardProps) {
   const { t } = useTranslation(['projects', 'common']);
-  const { triggerProps, Menu } = useContextMenu(
+  const { triggerProps, openAt, Menu } = useContextMenu(
     buildProjectContextMenuItems({
       project: p,
       onSelect,
       onEdit,
+      onIndex: p.last_indexed ? undefined : onIndex,
+      indexing,
       labels: {
         open: t('projects:contextMenu.open', 'Open'),
         openInNewWindow: t('projects:contextMenu.openInNewWindow', 'Open in new window'),
@@ -50,6 +60,9 @@ export function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) 
         copyPath: t('projects:contextMenu.copyPath', 'Copy path'),
         edit: t('projects:contextMenu.edit', 'Edit'),
         copied: t('projects:contextMenu.copied', 'Copied'),
+        index: indexing
+          ? t('projects:indexAction.indexing')
+          : t('projects:indexAction.run'),
       },
     }),
   );
@@ -65,20 +78,29 @@ export function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) 
             <FolderGit2 className="h-5 w-5" />
           </div>
           <div className="flex items-center gap-1">
-            <Badge variant={p.last_indexed ? 'success' : 'muted'}>
-              {p.last_indexed ? t('common:status.indexed') : t('common:status.pending')}
+            <Badge
+              variant={indexing ? 'info' : p.last_indexed ? 'success' : 'warning'}
+              className="normal-case tracking-normal"
+            >
+              {indexing && <LoaderCircle className="mr-1 h-3 w-3 animate-spin" />}
+              {indexing
+                ? t('projects:indexAction.indexing')
+                : p.last_indexed
+                  ? t('projects:indexStatus.indexed')
+                  : t('projects:indexStatus.notIndexed')}
             </Badge>
             <Button
               variant="ghost"
-              size="icon"
+              size="icon-sm"
               className="h-7 w-7"
-              onClick={(e) => {
-                e.stopPropagation();
-                onEdit();
+              onClick={(event) => {
+                event.stopPropagation();
+                const rect = event.currentTarget.getBoundingClientRect();
+                openAt(Math.max(4, rect.right - 180), rect.bottom + 4);
               }}
-              aria-label={t('projects:editProject')}
+              aria-label={t('projects:moreActions', { name: p.name })}
             >
-              <Pencil className="h-3.5 w-3.5" />
+              <Ellipsis className="h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -89,20 +111,43 @@ export function ProjectCard({ project: p, onSelect, onEdit }: ProjectCardProps) 
         <div className="grid grid-cols-2 gap-3 text-sm">
           <div className="flex items-center gap-2 text-muted-foreground">
             <FileCode2 className="h-3.5 w-3.5" />
-            <span>
-              <strong className="text-foreground">{p.file_count}</strong> {t('projects:files')}
+            <span className="tabular-nums">
+              <strong className="text-foreground">{p.file_count.toLocaleString()}</strong> {t('projects:files')}
             </span>
           </div>
           <div className="flex items-center gap-2 text-muted-foreground">
             <Boxes className="h-3.5 w-3.5" />
-            <span>
-              <strong className="text-foreground">{p.symbol_count}</strong> {t('projects:symbols')}
+            <span className="tabular-nums">
+              <strong className="text-foreground">{p.symbol_count.toLocaleString()}</strong> {t('projects:symbols')}
             </span>
           </div>
         </div>
-        <div className="mt-3 pt-3 border-t flex items-center gap-1.5 text-xs text-muted-foreground">
-          <Clock className="h-3 w-3" />
-          {p.last_indexed ? formatRelativeTime(p.last_indexed) : t('projects:neverIndexed')}
+        <div className="mt-3 flex items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1.5 truncate">
+            <Clock className="h-3 w-3 shrink-0" />
+            {p.last_indexed
+              ? t('projects:indexStatus.lastIndexed', {
+                  time: formatRelativeTime(p.last_indexed),
+                })
+              : t('projects:neverIndexed')}
+          </span>
+          {!p.last_indexed && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 shrink-0"
+              disabled={indexing}
+              onClick={(event) => {
+                event.stopPropagation();
+                onIndex();
+              }}
+            >
+              {indexing && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+              {indexing
+                ? t('projects:indexAction.indexing')
+                : t('projects:indexAction.run')}
+            </Button>
+          )}
         </div>
       </CardContent>
       {Menu}

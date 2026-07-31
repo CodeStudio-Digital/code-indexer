@@ -33,15 +33,51 @@ export async function discoverGeminiModels(
     .filter((m) => m.supportedGenerationMethods?.includes('generateContent') ?? true)
     .map((m) => {
       const id = m.name.replace(/^models\//, '');
+      const reasoning = geminiReasoningMetadata(id);
       return {
         model_id: id,
         name: m.displayName ?? m.name,
+        display_name: m.displayName ?? m.name,
         context_window: m.inputTokenLimit ?? null,
         default_max_tokens: m.outputTokenLimit ?? null,
+        can_reason: reasoning != null,
+        supported_reasoning_levels: reasoning?.levels ?? null,
+        default_reasoning_level: reasoning?.defaultLevel ?? null,
+        supports_attachments: !isGeminiImageModelId(id),
+        input_modalities: isGeminiImageModelId(id)
+          ? ['text', 'image']
+          : ['text', 'image', 'audio', 'video'],
+        visibility: 'list' as const,
+        supported_in_api: true,
         source: 'live' as const,
         // Family-based tagging (gemini-*-image*, imagen-*, nano banana) so
         // image models surface in the image-role pickers.
         ...(isGeminiImageModelId(id) ? { mode: IMAGE_MODEL_MODE } : {}),
       };
     });
+}
+
+export function geminiReasoningMetadata(
+  model: string,
+): { levels: string[]; defaultLevel: string } | null {
+  const id = model.toLowerCase();
+  if (/^gemini-3\.1-pro/.test(id)) {
+    return { levels: ['low', 'medium', 'high'], defaultLevel: 'high' };
+  }
+  if (/^gemini-3\.(?:1|5)-flash-lite/.test(id)) {
+    return { levels: ['minimal', 'low', 'medium', 'high'], defaultLevel: 'minimal' };
+  }
+  if (/^gemini-3\.(?:5|6)-flash/.test(id)) {
+    return { levels: ['minimal', 'low', 'medium', 'high'], defaultLevel: 'medium' };
+  }
+  if (/^gemini-3(?:-|$)/.test(id)) {
+    return { levels: ['minimal', 'low', 'medium', 'high'], defaultLevel: 'high' };
+  }
+  if (/^gemini-2\.5-pro/.test(id)) {
+    return { levels: ['low', 'medium', 'high'], defaultLevel: 'high' };
+  }
+  if (/^gemini-2\.5-flash/.test(id)) {
+    return { levels: ['none', 'low', 'medium', 'high'], defaultLevel: 'medium' };
+  }
+  return null;
 }

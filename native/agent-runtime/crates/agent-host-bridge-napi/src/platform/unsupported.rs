@@ -1,4 +1,4 @@
-use agent_host_bridge::AuthenticatedHostAttemptChannels;
+use agent_host_bridge::{AuthenticatedHostAttemptChannels, SupervisorCloseEvidence};
 use napi::Result;
 
 use crate::error;
@@ -12,6 +12,9 @@ pub enum ChannelKind {
 #[derive(Debug)]
 pub struct NativeChannelSet;
 
+#[derive(Debug)]
+pub struct NativeSupervisorSet;
+
 impl NativeChannelSet {
     pub fn from_owner(_owner: AuthenticatedHostAttemptChannels) -> Result<Self> {
         Err(error::unsupported())
@@ -22,12 +25,12 @@ impl NativeChannelSet {
         0
     }
 
-    pub fn endpoint_id(&self, _kind: ChannelKind) -> &str {
+    pub const fn endpoint_id(&self, _kind: ChannelKind) -> &'static str {
         let _ = self;
         ""
     }
 
-    pub fn connection_id(&self, _kind: ChannelKind) -> &str {
+    pub const fn connection_id(&self, _kind: ChannelKind) -> &'static str {
         let _ = self;
         ""
     }
@@ -55,5 +58,42 @@ impl NativeChannelSet {
     pub async fn close(&self) -> Result<()> {
         let _ = self;
         std::future::ready(Ok(())).await
+    }
+}
+
+impl NativeSupervisorSet {
+    pub const fn connection_id(&self) -> &'static str {
+        let _ = self;
+        ""
+    }
+
+    pub const fn maximum_frame_bytes(&self) -> u32 {
+        let _ = self;
+        0
+    }
+
+    pub const fn peer_pid(&self) -> u32 {
+        let _ = self;
+        0
+    }
+
+    pub const fn is_closed(&self) -> bool {
+        let _ = self;
+        true
+    }
+
+    pub async fn read(&self, _maximum: u32) -> Result<Option<Vec<u8>>> {
+        let _ = self;
+        std::future::ready(Err(error::unsupported())).await
+    }
+
+    pub async fn write(&self, _bytes: &[u8]) -> Result<()> {
+        let _ = self;
+        std::future::ready(Err(error::unsupported())).await
+    }
+
+    pub async fn close(&self) -> Result<SupervisorCloseEvidence> {
+        let _ = self;
+        std::future::ready(Err(error::unsupported())).await
     }
 }

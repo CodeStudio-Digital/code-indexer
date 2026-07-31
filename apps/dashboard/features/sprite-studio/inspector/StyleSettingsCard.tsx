@@ -9,7 +9,7 @@
  *   settings:       StudioSettings          — current project settings
  *   onSaveSettings: (next) => void|Promise  — persist the mutated settings
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Palette } from 'lucide-react';
 import { Input } from '../../../components/ui/input.js';
@@ -17,6 +17,7 @@ import {
   CANVAS_PRESETS,
   type OutlineStyle, type PaletteMode, type Perspective, type StudioSettings,
 } from '../types.js';
+import { normalizeStudioSettings } from '../settings-normalization.js';
 import { InspectorSection } from './InspectorSection.js';
 
 const PALETTE_MODES: PaletteMode[] = ['free', 'maxColors', 'fixed'];
@@ -42,14 +43,16 @@ export function StyleSettingsCard({
   onSaveSettings: (next: StudioSettings) => void | Promise<void>;
 }) {
   const { t } = useTranslation('spriteStudio');
-  const [keywords, setKeywords] = useState(settings.styleKeywords.join(', '));
-  const [negative, setNegative] = useState(settings.negativeKeywords.join(', '));
-  const [colors, setColors] = useState(settings.palette.colors.join(', '));
+  const current = useMemo(() => normalizeStudioSettings(settings), [settings]);
+  const [keywords, setKeywords] = useState(current.styleKeywords.join(', '));
+  const [negative, setNegative] = useState(current.negativeKeywords.join(', '));
+  const [colors, setColors] = useState(current.palette.colors.join(', '));
 
   useEffect(() => {
-    setKeywords(settings.styleKeywords.join(', '));
-    setNegative(settings.negativeKeywords.join(', '));
-    setColors(settings.palette.colors.join(', '));
+    const normalized = normalizeStudioSettings(settings);
+    setKeywords(normalized.styleKeywords.join(', '));
+    setNegative(normalized.negativeKeywords.join(', '));
+    setColors(normalized.palette.colors.join(', '));
   }, [settings]);
 
   const commit = (next: StudioSettings) => void onSaveSettings(next);
@@ -57,7 +60,7 @@ export function StyleSettingsCard({
 
   const onCanvas = (v: string) => {
     const n = Number(v);
-    commit({ ...settings, canvas: { ...settings.canvas, width: n, height: n } });
+    commit({ ...current, canvas: { ...current.canvas, width: n, height: n } });
   };
 
   return (
@@ -66,7 +69,7 @@ export function StyleSettingsCard({
         <Input
           value={keywords}
           onChange={(e) => setKeywords(e.target.value)}
-          onBlur={() => commit({ ...settings, styleKeywords: parseList(keywords) })}
+          onBlur={() => commit({ ...current, styleKeywords: parseList(keywords) })}
           placeholder={t('styleSettings.keywordsPlaceholder')}
           className="h-7 text-xs"
         />
@@ -76,11 +79,11 @@ export function StyleSettingsCard({
         <Field label={t('styleSettings.canvas')}>
           <select
             className={selectCls}
-            value={CANVAS_PRESETS.includes(settings.canvas.width) ? String(settings.canvas.width) : ''}
+            value={CANVAS_PRESETS.includes(current.canvas.width) ? String(current.canvas.width) : ''}
             onChange={(e) => onCanvas(e.target.value)}
           >
-            {!CANVAS_PRESETS.includes(settings.canvas.width) && (
-              <option value="">{`${settings.canvas.width}×${settings.canvas.height}`}</option>
+            {!CANVAS_PRESETS.includes(current.canvas.width) && (
+              <option value="">{`${current.canvas.width}×${current.canvas.height}`}</option>
             )}
             {CANVAS_PRESETS.map((p) => <option key={p} value={String(p)}>{`${p}×${p}`}</option>)}
           </select>
@@ -88,8 +91,8 @@ export function StyleSettingsCard({
         <Field label={t('styleSettings.perspective.label')}>
           <select
             className={selectCls}
-            value={settings.perspective}
-            onChange={(e) => commit({ ...settings, perspective: e.target.value as Perspective })}
+            value={current.perspective}
+            onChange={(e) => commit({ ...current, perspective: e.target.value as Perspective })}
           >
             {PERSPECTIVES.map((p) => <option key={p} value={p}>{t(`styleSettings.perspective.${p}`)}</option>)}
           </select>
@@ -100,8 +103,8 @@ export function StyleSettingsCard({
         <Field label={t('styleSettings.paletteMode.label')}>
           <select
             className={selectCls}
-            value={settings.palette.mode}
-            onChange={(e) => commit({ ...settings, palette: { ...settings.palette, mode: e.target.value as PaletteMode } })}
+            value={current.palette.mode}
+            onChange={(e) => commit({ ...current, palette: { ...current.palette, mode: e.target.value as PaletteMode } })}
           >
             {PALETTE_MODES.map((m) => <option key={m} value={m}>{t(`styleSettings.paletteMode.${m}`)}</option>)}
           </select>
@@ -109,33 +112,33 @@ export function StyleSettingsCard({
         <Field label={t('styleSettings.outline.label')}>
           <select
             className={selectCls}
-            value={settings.outline.style}
-            onChange={(e) => commit({ ...settings, outline: { ...settings.outline, style: e.target.value as OutlineStyle } })}
+            value={current.outline.style}
+            onChange={(e) => commit({ ...current, outline: { ...current.outline, style: e.target.value as OutlineStyle } })}
           >
             {OUTLINES.map((o) => <option key={o} value={o}>{t(`styleSettings.outline.${o}`)}</option>)}
           </select>
         </Field>
       </div>
 
-      {settings.palette.mode === 'maxColors' && (
+      {current.palette.mode === 'maxColors' && (
         <Field label={t('styleSettings.maxColors')}>
           <Input
             type="number"
             min={2}
             max={256}
-            value={settings.palette.maxColors ?? 16}
-            onChange={(e) => commit({ ...settings, palette: { ...settings.palette, maxColors: Number(e.target.value) } })}
+            value={current.palette.maxColors ?? 16}
+            onChange={(e) => commit({ ...current, palette: { ...current.palette, maxColors: Number(e.target.value) } })}
             className="h-7 text-xs"
           />
         </Field>
       )}
 
-      {settings.palette.mode === 'fixed' && (
+      {current.palette.mode === 'fixed' && (
         <Field label={t('styleSettings.colors')}>
           <Input
             value={colors}
             onChange={(e) => setColors(e.target.value)}
-            onBlur={() => commit({ ...settings, palette: { ...settings.palette, colors: parseList(colors) } })}
+            onBlur={() => commit({ ...current, palette: { ...current.palette, colors: parseList(colors) } })}
             placeholder={t('styleSettings.colorsPlaceholder')}
             className="h-7 text-xs font-mono"
           />
@@ -146,7 +149,7 @@ export function StyleSettingsCard({
         <Input
           value={negative}
           onChange={(e) => setNegative(e.target.value)}
-          onBlur={() => commit({ ...settings, negativeKeywords: parseList(negative) })}
+          onBlur={() => commit({ ...current, negativeKeywords: parseList(negative) })}
           placeholder={t('styleSettings.negativePlaceholder')}
           className="h-7 text-xs"
         />

@@ -13,6 +13,7 @@ import type {
   FileSessionRepository,
   SessionCatalog,
   SessionId,
+  SessionState,
 } from '@mcp/session-storage';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { AgentMemoryService } from '@mcp/services/memory/agent-memory-service.js';
@@ -23,6 +24,7 @@ const DEFAULT_MAX_PER_SWEEP = Number(process.env.MCP_MEMORY_SWEEP_MAX_SESSIONS ?
 const MIN_SPAN_MESSAGES = 4;
 const STEP_TIMEOUT_MS = 60_000;
 const MAX_DISTILL_ATTEMPTS = 3;
+const MAX_UNCHANGED_SESSION_MARKERS = 1_024;
 
 interface MemorySweepCandidate {
   session_id: SessionId;
@@ -65,6 +67,11 @@ export interface StartMemorySweeperArgs {
   db: CodeIndexDB;
   runEndMemory: RunEndMemory;
   agentMemoryService?: AgentMemoryService;
+  /** Live worker truth. Persisted session status can lag while a worker owns it. */
+  isSessionActive?: (sessionId: SessionId) => boolean;
+  /** Optional performance-journal activity hooks owned by the main process. */
+  enterBackgroundActivity?: (label: string) => number;
+  exitBackgroundActivity?: (token: number) => void;
   intervalMs?: number;
   idleAfterMs?: number;
   maxPerSweep?: number;
@@ -72,7 +79,7 @@ export interface StartMemorySweeperArgs {
 }
 
 export interface MemorySweeperSessionStore {
-  refresh(): Promise<void>;
+  ensureCatalog(): Promise<void>;
   readonly catalog: Pick<SessionCatalog, 'list'>;
   readonly repository: Pick<FileSessionRepository, 'readStateSync'>;
   maxMessageSeq(sessionId: SessionId): Promise<number>;
@@ -122,10 +129,27 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
   const idleAfterMs = args.idleAfterMs ?? DEFAULT_IDLE_AFTER_MS;
   const maxPerSweep = args.maxPerSweep ?? DEFAULT_MAX_PER_SWEEP;
   const makeProvider = args.providerFactory ?? createCoderProvider;
+  const isSessionActive = args.isSessionActive ?? (() => false);
   const { sessionStore, db, runEndMemory, agentMemoryService } = args;
 
   let stopped = false;
   let inFlight = false;
+  // A quiet session whose durable projection did not change cannot gain new
+  // conversation records. Remember no-op checks so the five-minute timer does
+  // not reopen even the small JSONL tail forever. Bound the map explicitly:
+  // historical session catalogs can be large and this cache is only a hint.
+  const unchangedSessionMarkers = new Map<string, string>();
+
+  const rememberUnchanged = (sessionId: SessionId, marker: string): void => {
+    const key = String(sessionId);
+    unchangedSessionMarkers.delete(key);
+    unchangedSessionMarkers.set(key, marker);
+    while (unchangedSessionMarkers.size > MAX_UNCHANGED_SESSION_MARKERS) {
+      const oldest = unchangedSessionMarkers.keys().next().value;
+      if (oldest === undefined) break;
+      unchangedSessionMarkers.delete(oldest);
+    }
+  };
 
   const runRelationalWrite = async <T>(operation: () => T): Promise<T> =>
     agentMemoryService
@@ -178,12 +202,59 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
   };
 
   const listCandidates = async (): Promise<MemorySweepCandidate[]> => {
-    await sessionStore.refresh();
+    // Repository events keep newly-created host sessions in the shared
+    // catalog. A forced refresh here used to crawl every registered project
+    // root and every bundle on each five-minute tick. Rank the cheap cached
+    // projections, then authoritatively re-read only old Coder candidates.
+    await sessionStore.ensureCatalog();
     const now = Date.now();
-    const candidates: MemorySweepCandidate[] = [];
-    for (const entry of sessionStore.catalog.list()) {
-      const state = entry.state
-        ?? sessionStore.repository.readStateSync(entry.location);
+    const entries = sessionStore.catalog
+      .list()
+      .filter(
+        (entry) =>
+          entry.session.kind === 'coder' &&
+          entry.session.owner_project_id != null &&
+          !isSessionActive(entry.session.id),
+      )
+      .filter((entry) => {
+        const cachedUpdatedAt = Math.max(
+          Date.parse(entry.session.updated_at),
+          Date.parse(entry.state?.updated_at ?? entry.session.updated_at),
+        );
+        return (
+          !Number.isFinite(cachedUpdatedAt) ||
+          now - cachedUpdatedAt >= idleAfterMs
+        );
+      })
+      .sort((left, right) => {
+        const leftTime = Math.max(
+          Date.parse(left.session.updated_at),
+          Date.parse(left.state?.updated_at ?? left.session.updated_at),
+        );
+        const rightTime = Math.max(
+          Date.parse(right.session.updated_at),
+          Date.parse(right.state?.updated_at ?? right.session.updated_at),
+        );
+        return (
+          leftTime - rightTime ||
+          String(left.session.id).localeCompare(String(right.session.id))
+        );
+      });
+
+    const pending: MemorySweepCandidate[] = [];
+    for (const entry of entries) {
+      // Host writes update the shared catalog. Only a non-idle/missing cached
+      // state can require one authoritative read to observe that an external
+      // worker has finished. Cached idle entries need no synchronous I/O; the
+      // live-worker guard above remains the authority for active work.
+      let state: SessionState | null = entry.state;
+      if (!state || state.status !== 'idle') {
+        try {
+          state = sessionStore.repository.readStateSync(entry.location);
+        } catch {
+          continue;
+        }
+      }
       const projectId = entry.session.owner_project_id;
       if (state.status !== 'idle' || projectId == null) continue;
       try {
@@ -204,7 +275,7 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       ) {
         continue;
       }
-      candidates.push({
+      const candidate: MemorySweepCandidate = {
         session_id: entry.session.id,
         project_id: projectId,
         provider: entry.session.provider ?? '',
@@ -212,20 +283,27 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
         distilled_mark: nonNegativeInteger(runtime.memory_distilled_seq),
         attempts,
         updated_at_ms: updatedAtMs,
-      });
-    }
-
-    candidates.sort((left, right) =>
-      left.updated_at_ms - right.updated_at_ms
-      || String(left.session_id).localeCompare(String(right.session_id)));
-    const pending: MemorySweepCandidate[] = [];
-    for (const candidate of candidates) {
+      };
+      const unchangedMarker = [
+        entry.session.updated_at,
+        state.updated_at,
+        candidate.distilled_mark,
+        candidate.attempts,
+      ].join(':');
+      if (
+        unchangedSessionMarkers.get(String(candidate.session_id))
+        === unchangedMarker
+      ) {
+        continue;
+      }
       if (
         await sessionStore.maxMessageSeq(candidate.session_id)
         <= candidate.distilled_mark
       ) {
+        rememberUnchanged(candidate.session_id, unchangedMarker);
         continue;
       }
+      unchangedSessionMarkers.delete(String(candidate.session_id));
       pending.push(candidate);
       if (pending.length >= maxPerSweep) break;
     }
@@ -326,6 +404,7 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
   const runOnce = async (): Promise<number> => {
     if (stopped || inFlight) return 0;
     inFlight = true;
+    const activityToken = args.enterBackgroundActivity?.('memory-sweeper');
     try {
       const candidates = await listCandidates();
       if (candidates.length === 0) return 0;
@@ -401,7 +480,15 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       );
       return 0;
     } finally {
-      inFlight = false;
+      try {
+        if (activityToken !== undefined) {
+          args.exitBackgroundActivity?.(activityToken);
+        }
+      } catch {
+        // Performance attribution must never wedge the functional sweep.
+      } finally {
+        inFlight = false;
+      }
     }
   };
 
@@ -420,6 +507,7 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
+      unchangedSessionMarkers.clear();
       console.log('[memory/sweeper] stopped');
     },
     runOnce,

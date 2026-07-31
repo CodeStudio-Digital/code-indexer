@@ -23,6 +23,10 @@ import {
   type FsProjectInfoResolver,
 } from './session-projection.js';
 import { toJsonValue } from './conversation-codec.js';
+import {
+  normalizeSessionMaxAutoContinues,
+  normalizeSessionMaxTurns,
+} from '../run-limits.js';
 import type {
   FsAppendMessageUsage,
   FsCoderSession,
@@ -48,18 +52,17 @@ function initialRuntimeState(
     | 'execution_mode_override'
     | 'reasoning_effort_override'
     | 'thinking_enabled'
+    | 'max_turns'
+    | 'max_auto_continues'
   >,
 ) {
-  if (
-    input.execution_mode_override === undefined &&
-    input.reasoning_effort_override === undefined &&
-    input.thinking_enabled === undefined
-  ) {
-    return undefined;
-  }
   return {
     extra: {
       runtime: toJsonValue({
+        max_turns: normalizeSessionMaxTurns(input.max_turns),
+        max_auto_continues: normalizeSessionMaxAutoContinues(
+          input.max_auto_continues,
+        ),
         execution_mode_override: input.execution_mode_override ?? 'standard',
         reasoning_effort_override:
           input.reasoning_effort_override?.trim() || null,
@@ -76,8 +79,6 @@ export class FsSessionDirectory {
 
   private readonly projectInfoResolver?: FsProjectInfoResolver;
   private readonly mutationQueues = new Map<string, Promise<void>>();
-  private catalogReady = false;
-  private catalogRefresh: Promise<void> | null = null;
 
   constructor(options: FsSessionDirectoryOptions) {
     this.locator = options.locator;
@@ -96,22 +97,11 @@ export class FsSessionDirectory {
   }
 
   async ensureCatalog(): Promise<void> {
-    if (this.catalogReady) return;
-    if (!this.catalogRefresh) {
-      this.catalogRefresh = this.catalog.refresh().then(() => {
-        this.catalogReady = true;
-      });
-    }
-    try {
-      await this.catalogRefresh;
-    } finally {
-      this.catalogRefresh = null;
-    }
+    await this.catalog.ensureReady();
   }
 
   async refresh(): Promise<void> {
     await this.catalog.refresh();
-    this.catalogReady = true;
   }
 
   async entry(id: SessionId | string): Promise<CatalogEntry | null> {
@@ -173,7 +163,7 @@ export class FsSessionDirectory {
       model: input.model,
       title: input.title,
       status: input.status ?? 'idle',
-      ...(state ? { state } : {}),
+      state,
       metadata: initialCoderMetadata(input.metadata, {
         agent: input.agent ?? null,
         linked_projects: [
@@ -249,7 +239,7 @@ export class FsSessionDirectory {
       model: input.model,
       title: input.title,
       status: input.status ?? 'idle',
-      ...(state ? { state } : {}),
+      state,
       metadata: initialCoderMetadata(input.metadata, {
         agent: input.agent ?? null,
         linked_projects: linked,
@@ -263,21 +253,32 @@ export class FsSessionDirectory {
     return found ? this.map(found) : null;
   }
 
+  async refreshSession(id: SessionId | string): Promise<FsCoderSession | null> {
+    const found = await this.entry(id);
+    if (!found) return null;
+    this.repository.refreshSessionProjection(found.location);
+    const refreshed = this.catalog.get(found.session.id);
+    return refreshed ? this.map(refreshed) : null;
+  }
+
   async getLastUsedProviderModel(): Promise<{
     provider: string;
     model: string;
   } | null> {
     await this.ensureCatalog();
-    const found = sortedSessions(
-      this.catalog
-        .list()
-        .filter((entry) => entry.session.kind === 'coder')
-        .map((entry) => this.map(entry)),
-    ).find(
-      (session) =>
-        session.provider.trim().length > 0 && session.model.trim().length > 0,
+    // The catalog is already ordered by the session projection's updated_at.
+    // Do not map every session here: mapCatalogEntry also reads each bundle's
+    // metrics summary synchronously, so a single click on a project in a slow
+    // volume used to block on every session across every known project.
+    const found = this.catalog.list().find(
+      (entry) =>
+        entry.session.kind === 'coder' &&
+        (entry.session.provider?.trim().length ?? 0) > 0 &&
+        (entry.session.model?.trim().length ?? 0) > 0,
     );
-    return found ? { provider: found.provider, model: found.model } : null;
+    const provider = found?.session.provider;
+    const model = found?.session.model;
+    return provider && model ? { provider, model } : null;
   }
 
   async listSessions(
@@ -313,18 +314,41 @@ export class FsSessionDirectory {
 
   async listRecentSessionsGlobal(limit = 10): Promise<FsRecentCoderSession[]> {
     await this.ensureCatalog();
-    return sortedSessions(
-      this.catalog
-        .list()
-        .filter(
-          (entry) =>
-            entry.session.kind === 'coder' &&
-            entry.session.storage_scope.kind === 'project',
-        )
-        .map((entry) => this.map(entry))
-        .filter((session) => !session.is_archived),
-    )
-      .slice(0, Math.max(0, limit))
+    const cappedLimit = Math.max(0, limit);
+    if (cappedLimit === 0) return [];
+
+    // Mapping hydrates metrics/summary.json synchronously. Rank the cheap
+    // in-memory projections first so a 10-row sidebar request never touches
+    // every historical session bundle (which can span slow/offline volumes).
+    const candidates = this.catalog
+      .list()
+      .filter(
+        (entry) =>
+          entry.session.kind === 'coder' &&
+          entry.session.storage_scope.kind === 'project' &&
+          entry.state?.archived_at == null,
+      )
+      .sort((left, right) => {
+        if (left.session.favorite !== right.session.favorite) {
+          return left.session.favorite ? -1 : 1;
+        }
+        const leftTime = Math.max(
+          Date.parse(left.session.updated_at),
+          Date.parse(left.state?.updated_at ?? left.session.updated_at),
+        );
+        const rightTime = Math.max(
+          Date.parse(right.session.updated_at),
+          Date.parse(right.state?.updated_at ?? right.session.updated_at),
+        );
+        return (
+          rightTime - leftTime ||
+          String(left.session.id).localeCompare(String(right.session.id))
+        );
+      })
+      .slice(0, cappedLimit)
+      .map((entry) => this.map(entry));
+
+    return candidates
       .map((session) => ({
         ...session,
         project_name:

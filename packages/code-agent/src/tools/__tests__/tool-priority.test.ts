@@ -36,13 +36,14 @@ const BOOTSTRAP_SET = [
   'save_note', 'recall_investigations', 'get_tool_output', 'invoke_skill',
   'rag_search_docs', 'rag_read_doc', 'get_skills_list', 'get_skill_content',
   'list_skill_namespaces', 'mcp__get_project_pulse', 'mcp__search', 'mcp__grep_code',
-  'mcp__get_file_skeleton', 'mcp__read_file', 'mcp__list_directory', 'view_image',
+  'mcp__read_file', 'mcp__list_directory', 'view_image',
   'submit_spec', 'request_review', 'self_review', 'spawn_agent', 'execute_tasks', 'update_todo',
 ];
 const NAVIGATE_SET = [
   'write_file', 'edit_file', 'multi_edit', 'create_file', 'run_command', 'get_diagnostics',
   'git_status', 'git_diff', 'git_log', 'web_fetch', 'web_search', 'task_complete',
   'decision_gate', 'list_tasks', 'read_plan', 'list_notes', 'get_goal', 'mcp__find_references', 'mcp__save_memory',
+  'mcp__get_file_skeleton',
 ];
 const ADMIN_SET = ['git_add', 'git_commit', 'git_branch'];
 const PREVIEW_SET = ['preview_open', 'preview_click'];
@@ -57,7 +58,11 @@ function makeArgs(model: string) {
     registry: { list: () => all } as unknown as ToolRegistry,
     activeTiers: new Set<ToolTier>(['bootstrap', 'navigate', 'admin', 'preview', 'cloudflare']),
     externalToolTiers,
-    toolContext: { cwd: tmpdir(), projectName: 'test' } as unknown as ToolContext,
+    toolContext: {
+      cwd: tmpdir(),
+      projectName: 'test',
+      runner: { planMode: true },
+    } as unknown as ToolContext,
     provider: { name: 'zai', model } as unknown as ChatProvider,
   };
 }
@@ -93,6 +98,27 @@ describe('selectUnderCap', () => {
 });
 
 describe('buildTools — priority trim at a weak-model cap', () => {
+  it('does not expose or re-pin submit_plan for a Build-mode runner', () => {
+    const base = makeArgs('glm-4.5-flash');
+    const tools = buildTools({
+      ...base,
+      pinnedTools: new Set(['submit_plan']),
+      toolContext: {
+        ...base.toolContext,
+        runner: { planMode: false },
+      } as unknown as ToolContext,
+    }).tools;
+    const names = tools.map((tool) => tool.name);
+
+    expect(names).not.toContain('submit_plan');
+    expect(names).toContain('edit_file');
+    expect(names).toContain('write_file');
+    expect(names).toContain('run_command');
+    const taskList = tools.find((tool) => tool.name === 'task_list');
+    expect(taskList?.parameters.properties?.gate).toMatchObject({ enum: ['track'] });
+    expect(taskList?.description).not.toMatch(/approv/i);
+  });
+
   it('never exposes or re-pins submit_plan while the runner is in spec mode', () => {
     const base = makeArgs('glm-4.5-flash');
     const names = buildTools({
@@ -100,7 +126,7 @@ describe('buildTools — priority trim at a weak-model cap', () => {
       pinnedTools: new Set(['submit_plan']),
       toolContext: {
         ...base.toolContext,
-        runner: { specMode: true },
+        runner: { planMode: false, specMode: true },
       } as unknown as ToolContext,
     }).tools.map((tool) => tool.name);
 
@@ -108,13 +134,13 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     expect(names).toContain('submit_spec');
   });
 
-  it('caps at 32 for glm-4.5-flash, keeps NEVER_TRIM + hot core, drops cold tiers', () => {
+  it('caps at the focused 28-tool default, keeps NEVER_TRIM + hot core, drops cold tiers', () => {
     const res = buildTools(makeArgs('glm-4.5-flash'));
     const names = res.tools.map((t) => t.name);
 
     expect(res.capInfo).not.toBeNull();
-    expect(res.capInfo!.cap).toBe(32);
-    expect(names.length).toBeLessThanOrEqual(32);
+    expect(res.capInfo!.cap).toBe(28);
+    expect(names.length).toBeLessThanOrEqual(28);
 
     // Every NEVER_TRIM member present in the registry survives.
     for (const n of NEVER_TRIM) {
@@ -122,7 +148,7 @@ describe('buildTools — priority trim at a weak-model cap', () => {
       expect(names, `NEVER_TRIM tool ${n} must survive`).toContain(n);
     }
     // Regression: task_list is the ONE always-on task tool (todos+tasks merge);
-    // the cap must never drop it, even at the most aggressive 32-tool cap.
+    // the cap must never drop it, even at the most aggressive default cap.
     expect(names).toContain('task_list');
     // Both visible goal transitions are a lifecycle pair: create_goal must be
     // available before work, and update_goal must remain available at finish.
@@ -131,13 +157,13 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     // plan.txt requires decision_gate for genuine multi-option forks, so a
     // compact catalog must keep the direct interactive tool available.
     expect(names).toContain('decision_gate');
-    // Regression: self_review is floored in NEVER_TRIM — the Executing-node
-    // nudge tells the agent to call it by name before declaring done, so the
-    // cap must never drop it (else the agent must find_tools it back).
-    expect(names).toContain('self_review');
     // Hot working core survives; cold tiers die first.
     expect(names).toContain('write_file');
     expect(names).toContain('edit_file');
+    expect(names).toContain('run_command');
+    expect(NEVER_TRIM.has('write_file')).toBe(true);
+    expect(NEVER_TRIM.has('edit_file')).toBe(true);
+    expect(NEVER_TRIM.has('run_command')).toBe(true);
     expect(names).toContain('mcp__search');
     expect(names).not.toContain('cf__deploy_worker');
     // The minimal open→snapshot/interact→validate browser loop is protected
@@ -153,12 +179,12 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     expect(names).toEqual([...names].sort((a, b) => a.localeCompare(b)));
   });
 
-  it('perf W3: the default session cap (48) trims large-catalog models — cold tiers die first', () => {
+  it('keeps the focused 28-tool default and discovers cold capabilities on demand', () => {
     const res = buildTools(makeArgs('claude-opus-4-7'));
     const names = res.tools.map((t) => t.name);
     expect(res.capInfo).not.toBeNull();
-    expect(res.capInfo!.cap).toBe(48);
-    expect(names.length).toBeLessThanOrEqual(48);
+    expect(res.capInfo!.cap).toBe(28);
+    expect(names.length).toBeLessThanOrEqual(28);
     expect(names).not.toContain('cf__deploy_worker'); // custom tier dies first
     expect(names).not.toContain('git_commit'); // then admin-cold
     for (const n of NEVER_TRIM) {
@@ -167,6 +193,23 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     }
     expect(names).toContain('create_goal');
     expect(names).toContain('update_goal');
+  });
+
+  it('keeps the minimal edit pair when a large plugin catalog exhausts the cap', () => {
+    const args = makeArgs('glm-5.2');
+    const baseTools = args.registry.list();
+    const pluginNoise = Array.from({ length: 80 }, (_, index) => named(`plugin_noise_${index}`));
+    const result = buildTools({
+      ...args,
+      registry: { list: () => [...baseTools, ...pluginNoise] } as unknown as ToolRegistry,
+      activeTiers: new Set<ToolTier>(['bootstrap', 'navigate']),
+    });
+    const names = result.tools.map((tool) => tool.name);
+
+    expect(result.capInfo?.cap).toBe(28);
+    expect(names).toContain('edit_file');
+    expect(names).toContain('write_file');
+    expect(names).toContain('run_command');
   });
 
   it('CODER_TOOL_CAP_DEFAULT=0 restores the legacy model-cap-only behavior (capInfo null)', () => {
@@ -192,20 +235,30 @@ describe('buildTools — priority trim at a weak-model cap', () => {
   it('CODER_PRIORITY_TRIM_DISABLE=1 restores the legacy alphabetical tail-cut', () => {
     process.env.CODER_PRIORITY_TRIM_DISABLE = '1';
     const names = buildTools(makeArgs('glm-4.5-flash')).tools.map((t) => t.name);
-    // Legacy cut is alphabetical over the non-protected bucket: 'write_file'
-    // sits at the tail and dies, while alphabetically-early cold tools survive.
-    expect(names).not.toContain('write_file');
+    // Legacy cut remains alphabetical over the non-protected bucket, while
+    // the minimal write pair survives independently of the kill switch.
+    expect(names).toContain('write_file');
+    expect(names).not.toContain('todo_write');
     expect(names).toContain('create_file');
   });
 
-  it('keeps the complete master tier even when it exceeds the model cap', () => {
+  it('keeps a surgical Company loop instead of the complete master tier', () => {
+    const companyEssentials = [
+      'post_to_board',
+      'read_board',
+      'set_agent_status',
+      'write_shared_file',
+      'read_shared_file',
+      'list_shared_files',
+    ];
     const catalog = [
       ...BOOTSTRAP_SET,
       ...MASTER_TOOLS,
+      ...companyEssentials,
     ].map(named);
     const result = buildTools({
       registry: { list: () => catalog } as unknown as ToolRegistry,
-      activeTiers: new Set<ToolTier>(['bootstrap', 'master']),
+      activeTiers: new Set<ToolTier>(['bootstrap', 'company', 'master']),
       toolContext: {
         cwd: tmpdir(),
         projectName: 'master-test',
@@ -214,11 +267,72 @@ describe('buildTools — priority trim at a weak-model cap', () => {
       provider: { name: 'zai', model: 'glm-4.5-flash' } as unknown as ChatProvider,
     });
     const names = result.tools.map((tool) => tool.name);
-    for (const masterTool of MASTER_TOOLS) {
-      expect(names, `master tool ${masterTool} must survive`).toContain(masterTool);
-      expect(result.protectedToolNames.has(masterTool), masterTool).toBe(true);
+    for (const essential of [
+      'spawn_subordinate_agent',
+      'wait_for_subordinates',
+      'list_subordinates',
+      'kanban_plan_graph',
+      'kanban_list_cards',
+      'kanban_move_card',
+      'write_shared_file',
+      'read_shared_file',
+      'list_shared_files',
+    ]) {
+      expect(names, `essential Company tool ${essential} must survive`).toContain(essential);
+      expect(result.protectedToolNames.has(essential), essential).toBe(true);
     }
-    expect(names.length).toBeGreaterThan(32);
+    expect(names).toHaveLength(28);
+    expect(result.protectedToolNames.has('set_agent_status')).toBe(false);
+    expect(names).not.toContain('list_pipelines');
+    expect(names).not.toContain('start_pipeline');
+    expect(result.protectedToolNames.has('list_pipelines')).toBe(false);
+  });
+
+  it('keeps the shared Drive available to compact Company subordinates', () => {
+    const subordinateEssentials = [
+      'post_to_board',
+      'read_board',
+      'set_agent_status',
+      'write_shared_file',
+      'read_shared_file',
+      'list_shared_files',
+      'ask_master',
+      'submit_plan_to_master',
+      'submit_tasks_to_master',
+      'kanban_read_my_card',
+      'kanban_post_comment',
+      'kanban_update_objectives',
+      'kanban_move_to_review',
+    ];
+    const catalog = [
+      ...BOOTSTRAP_SET,
+      ...NAVIGATE_SET,
+      ...MASTER_TOOLS,
+      ...subordinateEssentials,
+    ].map(named);
+    const result = buildTools({
+      registry: { list: () => catalog } as unknown as ToolRegistry,
+      activeTiers: new Set<ToolTier>(['bootstrap', 'navigate', 'company']),
+      toolContext: {
+        cwd: tmpdir(),
+        projectName: 'architect-test',
+        companyContext: { isMaster: false },
+      } as unknown as ToolContext,
+      provider: { name: 'zai', model: 'glm-4.5' } as unknown as ChatProvider,
+    });
+    const names = result.tools.map((tool) => tool.name);
+    for (const essential of [
+      'post_to_board',
+      'read_board',
+      'write_shared_file',
+      'read_shared_file',
+      'list_shared_files',
+      'ask_master',
+    ]) {
+      expect(names, `essential subordinate tool ${essential} must survive`).toContain(essential);
+      expect(result.protectedToolNames.has(essential), essential).toBe(true);
+    }
+    expect(names).toHaveLength(28);
   });
 
   it('keeps complete active specialist capabilities instead of trimming role identity', () => {
@@ -254,7 +368,7 @@ describe('buildTools — pinned tools', () => {
   it('a pinned tool survives the model cap (protected bucket)', () => {
     const res = buildTools({ ...makeArgs('glm-4.5-flash'), pinnedTools: new Set(['git_commit']) });
     expect(res.tools.map((t) => t.name)).toContain('git_commit');
-    expect(res.tools.length).toBeLessThanOrEqual(33); // cap 32 + at most the pin overflow
+    expect(res.tools.length).toBeLessThanOrEqual(29); // cap 28 + at most the pin overflow
   });
 
   it('a disabled tool can never re-enter via a pin', () => {
@@ -330,12 +444,12 @@ describe('buildTools — session tool cap (task preflight)', () => {
     }
   });
 
-  it('perf W3: an effective cap ≤ 64 ships terse descriptions; NEVER_TRIM keeps full text', () => {
+  it('ships terse descriptions for every tool under an effective cap ≤ 64', () => {
     const tools = buildTools({ ...makeArgs('claude-opus-4-7'), sessionToolCap: 40 }).tools;
     const byName = new Map(tools.map((t) => [t.name, t.description]));
     expect(byName.get('mcp__search')).toBe('mcp__search description.');
-    expect(byName.get('read_file')).toBe(`read_file description. ${TAIL}`);
-    expect(byName.get('create_goal')).toBe(`create_goal description. ${TAIL}`);
+    expect(byName.get('read_file')).toBe('read_file description.');
+    expect(byName.get('create_goal')).toBe('create_goal description.');
   });
 
   it('an explicit session cap ABOVE 64 keeps full descriptions (not a compact catalog)', () => {
@@ -347,15 +461,14 @@ describe('buildTools — session tool cap (task preflight)', () => {
 });
 
 describe('buildTools — terse descriptions for compact-catalog models', () => {
-  it('compact model (cap ≤ 64): non-core tools terse, NEVER_TRIM core keeps full text', () => {
+  it('compact model (cap ≤ 64): all visible tools use the concise contract', () => {
     const tools = buildTools(makeArgs('glm-4.5-flash')).tools;
     const byName = new Map(tools.map((t) => [t.name, t.description]));
     // Hot survivor outside the core → first sentence only.
     expect(byName.get('mcp__search')).toBe('mcp__search description.');
-    // NEVER_TRIM core → full USE/DON'T text preserved.
-    expect(byName.get('read_file')).toBe(`read_file description. ${TAIL}`);
-    expect(byName.get('code_exec')).toBe(`code_exec description. ${TAIL}`);
-    expect(byName.get('create_goal')).toBe(`create_goal description. ${TAIL}`);
+    expect(byName.get('read_file')).toBe('read_file description.');
+    expect(byName.get('code_exec')).toBe('code_exec description.');
+    expect(byName.get('create_goal')).toBe('create_goal description.');
   });
 
   it('legacy mode (CODER_TOOL_CAP_DEFAULT=0): large-catalog model keeps full descriptions (byte parity)', () => {

@@ -73,7 +73,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
       project_id: {
         type: 'number',
         description:
-          'Project id to delegate to. OMIT when the role is bound to exactly one project in "PROJECTS AND THEIR AGENTS" — it auto-resolves. Required when the role is bound to multiple projects or has no binding. If provided and not in the role\'s binding, the tool rejects with the allowed ids.',
+          'Primary project id for native file/shell tools. OMIT for any bound role: one binding selects it; multiple bindings grant all and use the first as primary. Pass only to choose another bound project as primary. Required for unbound roles. Values outside the role binding are rejected.',
       },
       provider: {
         type: 'string',
@@ -88,7 +88,7 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
       tier: { type: 'string', enum: ['bootstrap', 'navigate', 'full'], description: 'Tool tier for the agent. IGNORED for template-locked roles (template tier wins). Default for untemplated: navigate.' },
       skills: { type: 'array', items: { type: 'string' }, description: 'Optional skill IDs. IGNORED for template-locked roles (template skills win).' },
       kanban_card_id: { type: 'string', description: 'Optional Kanban card UUID. When provided, the card\'s full context (description, checklist, comments) is prepended to the task, the agent is auto-assigned to the card, and the card moves to in_progress.' },
-      wait: { type: 'boolean', description: 'If true, block until the subordinate completes (default: false)' },
+      wait: { type: 'boolean', description: 'If true, block until this one subordinate completes. This serializes later tool calls; for parallel work spawn every role with false, then call wait_for_subordinates once. Default: false.' },
       forward_user_attachments: {
         type: 'boolean',
         description: 'When true, includes the images the user attached to their most recent message (e.g. design inspiration, screenshots) so the subordinate sees them natively. Set this whenever the user shared a visual that informs the task.',
@@ -103,51 +103,34 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
 
   return {
     name: 'spawn_subordinate_agent',
-    description: 'Delegate a task to a subordinate agent. The subordinate runs as a full coder session with write access, scoped to the project the role is bound to. The task MUST contain your synthesized research findings (specific file paths, functions, changes) — never copy-paste the user request. Think project-first: pick a role from the target project\'s "Agents working here" list; omit project_id when the role has a single binding. After calling this with wait=false, immediately call wait_for_subordinates.',
+    description: 'Delegate a task to a subordinate agent. The subordinate runs as a full coder session with write access to the role\'s configured project scope. The task MUST contain synthesized findings (specific relative paths, functions, changes), never a raw user-request copy. Omit project_id for bound roles. Parallel fan-out: spawn every independent role with wait=false, then call wait_for_subordinates once; wait=true is only for one blocking task.',
     parameters,
     source: 'native',
+    // `wait=true` has its own 30-minute deadline below. Keep the runner's
+    // generic 5-minute native-tool timeout from cutting that healthy wait off.
+    timeoutMs: Infinity,
     handler: async (args) => {
       try {
         const role = args.role as string;
         let kanbanCardId = args.kanban_card_id as string | undefined;
         let task = args.task as string;
+        const requestedWait = args.wait === true;
 
         // P16 — Auto-create a kanban card when the master forgot to
         // pass `kanban_card_id`. This keeps the board the single
         // source of truth for "what's in flight" even when the master
         // skips the discipline. We skip auto-create for trivially
         // short tasks (likely status checks) so the board doesn't
-        // pollute with one-liners. Auto-created cards carry a
-        // distinguishing first comment so the operator can spot them.
-        if (!kanbanCardId && task && task.trim().length >= 20) {
-          try {
-            const excerpt = task.replace(/\s+/g, ' ').trim().slice(0, 60);
-            const autoCard = orchestrator.kanbanCreateCard({
-              title: `${role}: ${excerpt}${task.length > 60 ? '…' : ''}`,
-              description: task.length > 200 ? task.slice(0, 200) + '…' : task,
-              column: 'in_progress',
-              tag: null,
-              created_by: 'master',
-            });
-            try {
-              orchestrator.kanbanAddComment(
-                autoCard.id,
-                'system',
-                null,
-                '[AUTO] Card created on spawn because the master did not pass `kanban_card_id`. ' +
-                  'Add detailed context comments BEFORE spawning next time so the subordinate has ' +
-                  'file paths / decisions / acceptance criteria embedded in its briefing.',
-              );
-            } catch { /* comment is a nice-to-have */ }
-            kanbanCardId = autoCard.id;
-          } catch {
-            // Auto-create failures must NOT block a spawn. The master
-            // continues without a card — same behavior as before P16.
-            kanbanCardId = undefined;
-          }
-        }
+        // pollute with one-liners. Creation is intentionally deferred until
+        // AFTER the runner is wired: otherwise a wait=true spawn leaves an
+        // unassigned in_progress card for the whole subordinate run and the
+        // reconciler falsely resets it as a dead worker.
+        const shouldAutoCreateCard =
+          !kanbanCardId && Boolean(task && task.trim().length >= 20);
+        const autoCardTask = task;
 
-        // Inject Kanban card context into task if card_id provided
+        // Inject context only for a card that already existed. An automatic
+        // card contains the same task and therefore has no extra briefing.
         if (kanbanCardId) {
           const cardContext = orchestrator.getCardContextForSubordinate(kanbanCardId);
           if (cardContext) {
@@ -174,10 +157,42 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           model: argModel,
           tier: argTier,
           skills: argSkills,
-          wait: args.wait as boolean | undefined,
+          // Always get the run id as soon as the runner is wired. We must
+          // assign its Kanban card before performing any long wait.
+          wait: false,
           attachments: attachments && attachments.length > 0 ? attachments : undefined,
           thinking: argThinking,
         });
+
+        if (shouldAutoCreateCard && result.agentRunId) {
+          try {
+            const excerpt = autoCardTask.replace(/\s+/g, ' ').trim().slice(0, 60);
+            const autoCard = orchestrator.kanbanCreateCard({
+              title: `${role}: ${excerpt}${autoCardTask.length > 60 ? '…' : ''}`,
+              description:
+                autoCardTask.length > 200
+                  ? autoCardTask.slice(0, 200) + '…'
+                  : autoCardTask,
+              column: 'in_progress',
+              tag: null,
+              created_by: 'master',
+            });
+            kanbanCardId = autoCard.id;
+            try {
+              orchestrator.kanbanAddComment(
+                autoCard.id,
+                'system',
+                null,
+                '[AUTO] Card created on spawn because the master did not pass `kanban_card_id`. ' +
+                  'Add detailed context comments BEFORE spawning next time so the subordinate has ' +
+                  'file paths / decisions / acceptance criteria embedded in its briefing.',
+              );
+            } catch { /* comment is a nice-to-have */ }
+          } catch {
+            // Auto-create failures must NOT block a successfully wired agent.
+            kanbanCardId = undefined;
+          }
+        }
 
         // Auto-assign agent to Kanban card and move to in_progress
         if (kanbanCardId && result.agentRunId) {
@@ -202,7 +217,25 @@ function spawnSubordinateAgent(orchestrator: CompanyOrchestrator): CoderTool {
           });
         }
 
-        return okStructured(result);
+        if (!requestedWait || !result.agentRunId) {
+          return okStructured(result);
+        }
+
+        const waitOutcome = await runAgentWaitLoop(orchestrator, {
+          targetIds: new Set([result.agentRunId]),
+          isMaster: true,
+          deadlineMs: Date.now() + 30 * 60_000,
+          heartbeatAgentRunId: orchestrator.getMasterAgentRunId() ?? undefined,
+        });
+        const statusAtReturn = orchestrator
+          .listSubordinates()
+          .find((sub) => sub.agentRunId === result.agentRunId)?.status;
+
+        return okStructured({
+          ...result,
+          statusAtReturn: statusAtReturn ?? result.status,
+          waitOutcome: waitOutcome.kind,
+        });
       } catch (e) {
         return err(`Failed to spawn subordinate: ${e instanceof Error ? e.message : String(e)}`);
       }
@@ -223,13 +256,38 @@ const FAILED_SUB_STATUSES = new Set<string>(['error', 'aborted', 'interrupted', 
  */
 export function summarizeSubordinates(orchestrator: CompanyOrchestrator): string {
   const subs = orchestrator.listSubordinates();
-  const lines = subs.map((s) => {
-    const hint = FAILED_SUB_STATUSES.has(s.status)
-      ? ' ⚠ recover with resume_subordinate (retry) or abort_subordinate_agent (discard)'
+  const latestByRole = new Map<string, { agentRunId: string; status: string; order: number }>();
+  subs.forEach((s, index) => {
+    const order = typeof s.seq === 'number' ? s.seq : index;
+    const current = latestByRole.get(s.role);
+    if (!current || order > current.order) {
+      latestByRole.set(s.role, { agentRunId: s.agentRunId, status: s.status, order });
+    }
+  });
+  const isSupersededFailure = (s: (typeof subs)[number], index: number): boolean => {
+    if (!FAILED_SUB_STATUSES.has(s.status)) return false;
+    const latest = latestByRole.get(s.role);
+    const order = typeof s.seq === 'number' ? s.seq : index;
+    return Boolean(
+      latest
+      && latest.agentRunId !== s.agentRunId
+      && latest.order > order
+      && !FAILED_SUB_STATUSES.has(latest.status),
+    );
+  };
+  const lines = subs.map((s, index) => {
+    const latest = latestByRole.get(s.role);
+    const superseded = isSupersededFailure(s, index);
+    const hint = superseded
+      ? ` (superseded by successful run=${latest?.agentRunId})`
+      : FAILED_SUB_STATUSES.has(s.status)
+        ? ' ⚠ recover with resume_subordinate (retry) or abort_subordinate_agent (discard)'
       : '';
     return `  - ${s.role} (run=${s.agentRunId}): ${s.status}${hint}`;
   });
-  const failedCount = subs.filter((s) => FAILED_SUB_STATUSES.has(s.status)).length;
+  const failedCount = subs.filter((s, index) =>
+    FAILED_SUB_STATUSES.has(s.status) && !isSupersededFailure(s, index),
+  ).length;
   const header =
     failedCount > 0
       ? `${failedCount} subordinate(s) ended in a failed state — review before synthesizing:`
@@ -261,6 +319,7 @@ function waitForSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
     // at 300000ms while subordinates are still running healthily, and the
     // master gets a false failure. Re-calling it just reconciles live state.
     repeatable: true,
+    timeoutMs: Infinity,
     handler: async (args) => {
       const timeoutMs = ((args.timeout_minutes as number | undefined) ?? 30) * 60 * 1000;
       const deadline = Date.now() + timeoutMs;
@@ -693,7 +752,7 @@ function finalizeSubordinates(orchestrator: CompanyOrchestrator): CoderTool {
       const isYes = userAnswer.startsWith('yes') || userAnswer === 'y' || userAnswer.includes('finalize');
 
       if (isYes) {
-        const results = orchestrator.finalizeAllSubordinates();
+        const results = await orchestrator.finalizeAllSubordinates();
         orchestrator.postToBoard('master', orchestrator.getMasterAgentRunId(), 'deliverable',
           `All ${results.finalized + results.alreadyStopped} subordinate agent(s) finalized. Session complete.\n\n${summary}`);
         // Mem C — distill the board (decisions/blockers/deliverables) into

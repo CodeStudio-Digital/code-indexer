@@ -49,8 +49,6 @@ export interface AgentDefinition {
   planMode: boolean;
   /** Spec mode: agent must submit_spec and get approval before mutating tools. */
   specMode?: boolean;
-  /** Optional max-turns override for this agent. */
-  maxTurns?: number;
   /**
    * Default sampling temperature for this agent. Resolver clamps to [0, 1].
    * Lower = more deterministic (good for code, admin); higher = more creative
@@ -79,7 +77,6 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Read-only investigation with the compact core catalog. Context-specific capabilities are injected only when this agent runs inside that surface.',
     profile: 'bootstrap',
     planMode: false,
-    maxTurns: 50,
     defaultTemperature: 0.2,
   },
   plan: {
@@ -118,7 +115,6 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     profile: 'navigate',
     planMode: false,
     specMode: true,
-    maxTurns: 120,
     defaultTemperature: 0.3,
   },
   research: {
@@ -128,7 +124,6 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Read-only source research with indexed docs, web search/fetch, and an isolated anonymous browser for JavaScript-driven public pages.',
     profile: 'bootstrap',
     planMode: false,
-    maxTurns: 50,
     defaultTemperature: 0.2,
   },
   app_orchestrator: {
@@ -137,7 +132,6 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     description: 'Persistent App Studio coordinator. Keeps scope, blueprint, adaptive Kanban workers and release evidence in one continuous session.',
     profile: 'navigate',
     planMode: false,
-    maxTurns: 180,
     defaultTemperature: 0.25,
   },
   app_db: {
@@ -147,7 +141,6 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Database specialist. Inspects registered connections, explains schemas and data, runs safe read-only analysis, and gates every mutation behind explicit approval.',
     profile: 'bootstrap',
     planMode: false,
-    maxTurns: 100,
     defaultTemperature: 0.2,
   },
   builder: {
@@ -168,7 +161,6 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'API verification. Imports an OpenAPI/Swagger spec, runs each endpoint against the LIVE dev server, fixes the request/spec to match real responses, and marks each request verified — building a non-LLM regression battery. Navigate tier + the `api` tool tier; edit_file patches the spec.',
     profile: 'navigate',
     planMode: false,
-    maxTurns: 120,
     // Verification, not creativity — keep it deterministic.
     defaultTemperature: 0.1,
   },
@@ -179,7 +171,6 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
       'Draw.io diagrams. Authors complex diagrams (flowchart, software/cloud architecture, network, ER, sequence, C4) as real .drawio files rendered in a live embedded editor. Navigate tier + the `diagram` tool tier (diagram_create/update/read/list/export). Use to design architecture and implementation solutions visually.',
     profile: 'navigate',
     planMode: false,
-    maxTurns: 120,
     // Visual design benefits from a little variation while staying coherent.
     defaultTemperature: 0.4,
   },

@@ -4,15 +4,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{Duration, Instant};
 
-use super::{AsyncEstablishedManagementActor, AsyncManagementActorError};
+use super::AsyncManagementActorError;
 use crate::framing::DelimitedFrameCodec;
 use crate::framing::asynchronous::AsyncDelimitedFrameChannel;
 use crate::generated::v1 as wire;
 use crate::identity::ConnectionId;
 use crate::management_channel::async_actor::scrub::{ScrubbedBytes, ScrubbedManagementPayload};
 use crate::management_channel::bootstrap::{
-    BootstrapSelection, SecretDigest, seal_nonce, seal_token, validate_host_hello,
-    validate_supervisor_hello, validate_wire_bootstrap,
+    BootstrapSelection, SecretDigest, seal_nonce, seal_token, validate_wire_bootstrap,
 };
 use crate::management_channel::clock::ManagementClockAuthority;
 use crate::management_channel::sender::encode_bootstrap;
@@ -21,6 +20,7 @@ use crate::management_channel::{ManagementChannelError, ManagementDirection, man
 const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(10);
 static NEXT_ASYNC_BOOTSTRAP_ID: AtomicU64 = AtomicU64::new(1);
 
+mod establish;
 mod handoff;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,65 +119,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> AsyncBootstrapManagemen
             channel_id,
             clock: ManagementClockAuthority::system()?,
         })
-    }
-
-    /// # Errors
-    ///
-    /// Fails closed on any physical or semantic Hello violation.
-    pub async fn establish_host(
-        mut self,
-        hello: &wire::HostSupervisorHello,
-    ) -> Result<AsyncEstablishedManagementActor, AsyncManagementActorError> {
-        if self.role != BootstrapRole::Host {
-            return Err(ManagementChannelError::WrongBootstrapOrder.into());
-        }
-        let selection = validate_host_hello(hello, &self.expected_connection, self.expected_token)?;
-        self.send_hello(
-            selection.protocol,
-            ManagementDirection::HostToSupervisor,
-            wire::management_payload::Body::HostSupervisorHello(hello.clone()),
-            Duration::from_millis(selection.policy.frame_limits().write_timeout_ms),
-        )
-        .await?;
-        let message_id = self
-            .receive_hello(
-                ManagementDirection::SupervisorToHost,
-                Some(&selection),
-                Duration::from_millis(selection.policy.frame_limits().read_timeout_ms),
-            )
-            .await?;
-        self.finish(selection, message_id)
-    }
-
-    /// # Errors
-    ///
-    /// Fails closed on any physical or semantic Hello violation.
-    pub async fn establish_supervisor(
-        mut self,
-        hello: &wire::SupervisorHello,
-    ) -> Result<AsyncEstablishedManagementActor, AsyncManagementActorError> {
-        if self.role != BootstrapRole::Supervisor {
-            return Err(ManagementChannelError::WrongBootstrapOrder.into());
-        }
-        let received = self
-            .receive_bootstrap(
-                ManagementDirection::HostToSupervisor,
-                None,
-                BOOTSTRAP_TIMEOUT,
-            )
-            .await?;
-        let selection = received
-            .selection
-            .ok_or(ManagementChannelError::WrongBootstrapOrder)?;
-        validate_supervisor_hello(hello, &selection, self.expected_nonce)?;
-        self.send_hello(
-            selection.protocol,
-            ManagementDirection::SupervisorToHost,
-            wire::management_payload::Body::SupervisorHello(hello.clone()),
-            Duration::from_millis(selection.policy.frame_limits().write_timeout_ms),
-        )
-        .await?;
-        self.finish(selection, received.message_id)
     }
 
     async fn receive_hello(

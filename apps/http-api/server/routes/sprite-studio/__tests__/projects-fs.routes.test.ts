@@ -72,9 +72,33 @@ describe('Sprite project filesystem routes', () => {
       { method: 'POST' },
     );
     expect(initialized.status).toBe(200);
-    const project = await initialized.json() as { id: string; name: string };
+    const project = await initialized.json() as {
+      id: string;
+      name: string;
+      settings: {
+        styleKeywords: string[];
+        negativeKeywords: string[];
+        palette: { colors: string[] };
+      };
+    };
     expect(project.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(project.name).toBe('Game');
+    expect(project.settings.styleKeywords).toEqual([]);
+    expect(project.settings.negativeKeywords).toEqual([]);
+    expect(project.settings.palette.colors).toEqual([]);
+
+    const loaded = await (
+      await app.request('/api/sprite-studio/projects/31')
+    ).json() as {
+      project: {
+        settings: {
+          styleKeywords: string[];
+          negativeKeywords: string[];
+        };
+      };
+    };
+    expect(loaded.project.settings.styleKeywords).toEqual([]);
+    expect(loaded.project.settings.negativeKeywords).toEqual([]);
     expect(
       await readFile(
         join(
@@ -98,7 +122,20 @@ describe('Sprite project filesystem routes', () => {
       },
     );
     expect(settings.status).toBe(200);
-    expect((await settings.json() as { id: string }).id).toBe(project.id);
+    const updated = await settings.json() as {
+      id: string;
+      settings: {
+        styleKeywords: string[];
+        negativeKeywords: string[];
+        antiAliasing: boolean;
+        palette: { colors: string[] };
+      };
+    };
+    expect(updated.id).toBe(project.id);
+    expect(updated.settings.styleKeywords).toEqual([]);
+    expect(updated.settings.negativeKeywords).toEqual([]);
+    expect(updated.settings.antiAliasing).toBe(false);
+    expect(updated.settings.palette.colors).toEqual([]);
 
     const deleted = await app.request('/api/sprite-studio/projects/31', {
       method: 'DELETE',

@@ -59,6 +59,7 @@ export class SessionContext {
   readonly capabilities: CompanySessionCapabilities;
 
   private _aborted = false;
+  private _finalized = false;
   private _projects: CompanySessionProject[];
 
   constructor(opts: SessionContextOpts) {
@@ -119,8 +120,16 @@ export class SessionContext {
     return this.metaBus.ended;
   }
 
+  get isFinalized(): boolean {
+    return this._finalized;
+  }
+
   markAborted(): void {
     this._aborted = true;
+  }
+
+  markFinalized(): void {
+    this._finalized = true;
   }
 
   /** Re-read projects from the DB (e.g., after an admin modified links). */

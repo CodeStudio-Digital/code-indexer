@@ -9,11 +9,15 @@ import type {
 describe('NativeHostBridgeConnections', () => {
   it('feeds native chunks into the existing length-delimited reader', async () => {
     const fixture = nativeFixture();
-    fixture.controlReads.push(Uint8Array.of(3, 11, 12, 13));
+    fixture.controlReads.push(
+      Uint8Array.of(3, 11),
+      Uint8Array.of(12, 13),
+    );
     const pair = connections(fixture.channels);
 
     await expect(pair.control.transport.receive())
       .resolves.toEqual(Uint8Array.of(11, 12, 13));
+    expect(fixture.channels.readControl).toHaveBeenCalledTimes(3);
     expect(fixture.channels.readControl).toHaveBeenCalledWith(64 * 1024);
     pair.control.transport.fail(undefined);
     await settled();
@@ -61,6 +65,18 @@ describe('NativeHostBridgeConnections', () => {
     await settled();
     expect(fixture.channels.close).toHaveBeenCalledOnce();
   });
+
+  it('runs explicit cleanup even after native I/O marks the owner closed', async () => {
+    const fixture = nativeFixture();
+    const pair = connections(fixture.channels);
+    fixture.markNativeClosed();
+
+    expect(pair.authority.beginCleanup()).toMatchObject({
+      kind: 'native_reaper',
+    });
+    await settled();
+    expect(fixture.channels.close).toHaveBeenCalledOnce();
+  });
 });
 
 function connections(channels: NativeHostAttemptChannels) {
@@ -74,6 +90,7 @@ function nativeFixture(): {
   channels: NativeHostAttemptChannels;
   controlReads: Uint8Array[];
   controlWrites: Uint8Array[];
+  markNativeClosed(): void;
 } {
   const controlReads: Uint8Array[] = [];
   const controlWrites: Uint8Array[] = [];
@@ -103,7 +120,12 @@ function nativeFixture(): {
       return 'closed' as const;
     }),
   };
-  return { channels, controlReads, controlWrites };
+  return {
+    channels,
+    controlReads,
+    controlWrites,
+    markNativeClosed() { closed = true; },
+  };
 }
 
 async function settled(): Promise<void> {

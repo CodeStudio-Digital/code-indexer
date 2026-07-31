@@ -16,5 +16,6 @@ pub mod management_frame;
 mod management_secrets;
 pub mod runner_bootstrap;
 pub mod semantic_hash;
+pub mod supervisor_bootstrap;
 pub mod version;
 pub mod wire_identity;

@@ -1,6 +1,6 @@
 use napi_derive::napi;
 
-pub const NATIVE_HOST_BRIDGE_API_VERSION: u32 = 1;
+pub const NATIVE_HOST_BRIDGE_API_VERSION: u32 = 2;
 pub const MINIMUM_NODE_API_VERSION: u32 = 8;
 
 #[derive(Debug)]

@@ -123,6 +123,10 @@ export class SessionSnapshotService<
 > {
   private readonly mutexes = new Map<RecordId, Promise<unknown>>();
   private readonly roundMutexes = new Map<RecordId, Promise<unknown>>();
+  private readonly listFilesInFlight = new Map<
+    string,
+    Promise<FileSummary<RecordId>[]>
+  >();
 
   constructor(
     private readonly store: SessionSnapshotStorePort<SessionKey, RecordId>,
@@ -148,53 +152,96 @@ export class SessionSnapshotService<
     sessionId: SessionKey,
     opts: { includeClosed?: boolean } = {},
   ): Promise<FileSummary<RecordId>[]> {
-    const baselines = await this.store.listBaselines(kind, sessionId, opts);
-    const summaries: FileSummary<RecordId>[] = [];
-    for (const b of baselines) {
-      // Resolve per baseline: a global session's files can live in different
-      // roots, so the diff must read each from its own project.
-      const projectRoot = await this.resolveProjectRoot(kind, sessionId, b.project_id);
-      let pendingHunks = 0;
-      let hunkCount = 0;
-      let addedLines = 0;
-      let removedLines = 0;
-      let resolved = false;
-      if (b.status === 'active' && !b.oversized && projectRoot) {
-        const abs = absoluteFor(projectRoot, b.file_path);
-        const current = await readCurrentContent(abs);
-        const hunks = computeHunks(b.content_before, current);
-        hunkCount = hunks.length;
-        const decisions = new Map(
-          (await this.store
-            .listHunkDecisions(b.id))
-            .map((d: HunkDecisionRow<RecordId>) => [d.hunk_fingerprint, d.decision] as const),
-        );
-        for (const h of hunks) {
-          const d = decisions.get(h.fingerprint);
-          if (!d) {
-            pendingHunks++;
-            addedLines += h.addedCount;
-            removedLines += h.removedCount;
-          }
-        }
-        resolved = hunks.length === 0;
+    const key = `${kind}:${String(sessionId)}:${opts.includeClosed === true ? 'closed' : 'active'}`;
+    const existing = this.listFilesInFlight.get(key);
+    if (existing) return existing;
+
+    const pending = this.listFilesOnce(kind, sessionId, opts);
+    this.listFilesInFlight.set(key, pending);
+    try {
+      return await pending;
+    } finally {
+      if (this.listFilesInFlight.get(key) === pending) {
+        this.listFilesInFlight.delete(key);
       }
-      summaries.push({
-        baselineId: b.id,
-        filePath: b.file_path,
-        status: b.status,
-        existedBefore: !!b.existed_before,
-        oversized: !!b.oversized,
-        firstSeenAt: b.first_seen_at,
-        lastEditedAt: b.last_edited_at,
-        closedAt: b.closed_at,
-        hunkCount,
-        pendingHunks,
-        addedLines,
-        removedLines,
-        resolved,
-      });
     }
+  }
+
+  private async listFilesOnce(
+    kind: SessionKind,
+    sessionId: SessionKey,
+    opts: { includeClosed?: boolean },
+  ): Promise<FileSummary<RecordId>[]> {
+    const baselines = await this.store.listBaselines(kind, sessionId, opts);
+    const rootByProject = new Map<string, Promise<string | null>>();
+    const resolveRoot = (projectId: number | null): Promise<string | null> => {
+      const key = projectId == null ? 'primary' : String(projectId);
+      let pending = rootByProject.get(key);
+      if (!pending) {
+        pending = Promise.resolve(
+          this.resolveProjectRoot(kind, sessionId, projectId),
+        );
+        rootByProject.set(key, pending);
+      }
+      return pending;
+    };
+
+    const summaries = new Array<FileSummary<RecordId>>(baselines.length);
+    let nextIndex = 0;
+    const workers = Array.from(
+      { length: Math.min(4, baselines.length) },
+      async () => {
+        while (nextIndex < baselines.length) {
+          const index = nextIndex++;
+          const b = baselines[index]!;
+          // Resolve per baseline: a global session's files can live in
+          // different roots, so the diff must read each from its own project.
+          const projectRoot = await resolveRoot(b.project_id);
+          let pendingHunks = 0;
+          let hunkCount = 0;
+          let addedLines = 0;
+          let removedLines = 0;
+          let resolved = false;
+          if (b.status === 'active' && !b.oversized && projectRoot) {
+            const abs = absoluteFor(projectRoot, b.file_path);
+            const current = await readCurrentContent(abs);
+            const hunks = computeHunks(b.content_before, current);
+            hunkCount = hunks.length;
+            const decisions = new Map(
+              (await this.store
+                .listHunkDecisions(b.id))
+                .map((d: HunkDecisionRow<RecordId>) =>
+                  [d.hunk_fingerprint, d.decision] as const),
+            );
+            for (const h of hunks) {
+              const d = decisions.get(h.fingerprint);
+              if (!d) {
+                pendingHunks++;
+                addedLines += h.addedCount;
+                removedLines += h.removedCount;
+              }
+            }
+            resolved = hunks.length === 0;
+          }
+          summaries[index] = {
+            baselineId: b.id,
+            filePath: b.file_path,
+            status: b.status,
+            existedBefore: !!b.existed_before,
+            oversized: !!b.oversized,
+            firstSeenAt: b.first_seen_at,
+            lastEditedAt: b.last_edited_at,
+            closedAt: b.closed_at,
+            hunkCount,
+            pendingHunks,
+            addedLines,
+            removedLines,
+            resolved,
+          };
+        }
+      },
+    );
+    await Promise.all(workers);
     return summaries;
   }
 

@@ -93,8 +93,6 @@
   "item.CODER_IMPLEMENT_MAX_TURNS.label": "Build mode max turns",
   "item.CODER_LOG_TOOLS_COUNT.description": "Emits `[coder] N tools registered` on every turn so you can verify tier promotion.",
   "item.CODER_LOG_TOOLS_COUNT.label": "Log tool count per turn",
-  "item.CODER_MAX_AUTO_CONTINUES.description": "How many extra max-turn batches a top-level run may receive without a new user message. Ephemeral subagents do not use auto-continue. The effective ceiling is maxTurns × (1 + this value); the recommended default is 3 and values above 3 are aggressive.",
-  "item.CODER_MAX_AUTO_CONTINUES.label": "Max auto-continues per run",
   "item.CODER_MODEL_CAPS.description": "JSON map of model id → capability flags. Advanced; see docs.",
   "item.CODER_MODEL_CAPS.label": "Model capability overrides",
   "item.CODER_NEW_COMPACTION.description": "Use the rolling-window compactor (vs the legacy summarizer).",
@@ -389,7 +387,5 @@
   "toast.saveFailed": "Save failed",
   "toast.saved": "Saved {{count}} setting(s)",
   "toast.savedApplied": "Changes applied immediately.",
-  "toast.savedRestart": "Some changes require a backend restart to take effect.",
-  "item.CODER_MAX_AUTO_CONTINUES.effective": "Effective limit: {{turns}} turns per run.",
-  "item.CODER_MAX_AUTO_CONTINUES.warning": "This is an aggressive value and may increase cost and runtime."
+  "toast.savedRestart": "Some changes require a backend restart to take effect."
 }

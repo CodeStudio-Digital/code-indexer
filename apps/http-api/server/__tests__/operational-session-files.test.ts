@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   FileSessionRepository,
   SessionCatalog,
@@ -47,7 +47,16 @@ async function harness() {
       getProject: (id) => projects.get(id) ?? null,
     },
   });
-  return { root, dataDir, projectA, projectB, files };
+  return {
+    root,
+    dataDir,
+    projectA,
+    projectB,
+    files,
+    locator,
+    repository,
+    catalog,
+  };
 }
 
 afterEach(async () => {
@@ -116,6 +125,59 @@ describe('OperationalSessionFiles', () => {
       expect(metadata.storage_scope.kind).toBe('global');
     }
     expect(app.runtime_kind).toBe('app_studio');
+  });
+
+  it('reads lifecycle changes written by an independent worker repository', async () => {
+    const { files, locator } = await harness();
+    const created = await files.createCompanySession({
+      name: 'Worker-owned lifecycle',
+      project_ids: [11],
+    });
+    expect((await files.getCompanySession(created.id))?.status).toBe('idle');
+
+    const workerRepository = new FileSessionRepository({ locator });
+    await workerRepository.updateState(
+      locator.locate({ kind: 'project', project_id: 11 }, created.id),
+      (state) => ({ ...state, status: 'completed' }),
+    );
+
+    expect((await files.getCompanySession(created.id))?.status).toBe('completed');
+    expect(
+      (await files.listCompanySessions()).find((row) => row.id === created.id)
+        ?.status,
+    ).toBe('completed');
+  });
+
+  it('reuses a catalog primed by another host consumer', async () => {
+    const { files, catalog } = await harness();
+    await catalog.ensureReady();
+    const refresh = vi.spyOn(catalog, 'refresh');
+
+    await expect(files.listCompanySessions()).resolves.toEqual([]);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('freshens only Company projections when listing mixed session kinds', async () => {
+    const { files, repository } = await harness();
+    const company = await files.createCompanySession({
+      name: 'Company only',
+      project_ids: [11],
+    });
+    for (let index = 0; index < 6; index += 1) {
+      await repository.createSession({
+        kind: 'coder',
+        scope: { kind: 'project', project_id: 11 },
+        title: `Coder ${index}`,
+      });
+    }
+    const readSession = vi.spyOn(repository, 'readSessionSync');
+    const readState = vi.spyOn(repository, 'readStateSync');
+
+    await expect(files.listCompanySessions()).resolves.toMatchObject([
+      { id: company.id, name: 'Company only' },
+    ]);
+    expect(readSession).toHaveBeenCalledTimes(1);
+    expect(readState).toHaveBeenCalledTimes(1);
   });
 
   it('persists the Sprite project and asset lifecycle under its project session bundle', async () => {

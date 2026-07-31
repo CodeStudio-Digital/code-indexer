@@ -788,6 +788,10 @@ function registerMcpProtocol(dispatch: BackendDispatch) {
         method: req.method,
         headers: req.headers,
         body: hasBody ? req.body : undefined,
+        // Preserve renderer cancellation/navigation. Without this bridge the
+        // custom protocol detached Hono work from the originating fetch, so a
+        // reload could leave expensive snapshot/session reads running in main.
+        signal: req.signal,
         // duplex: 'half' is required when streaming a Request body in
         // Node 18+'s undici impl. Hono routes consume the body eagerly
         // (await c.req.json()), so this is harmless but technically

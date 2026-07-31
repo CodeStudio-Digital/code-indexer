@@ -15,7 +15,14 @@ import {
  * provider that implements the OpenAI chat completions schema with function
  * calling and streaming).
  */
-export type OpenAICompatVendor = 'openai' | 'openrouter' | 'zai' | 'deepseek' | 'copilot' | 'fugu';
+export type OpenAICompatVendor =
+  | 'openai'
+  | 'openrouter'
+  | 'zai'
+  | 'deepseek'
+  | 'copilot'
+  | 'fugu'
+  | 'mistral';
 
 export class OpenAIChatProvider implements ChatProvider {
   readonly name: string;
@@ -126,13 +133,18 @@ export class OpenAIChatProvider implements ChatProvider {
         this.modelMaxOutputTokens?.[this.model] ?? getMaxOutputTokens(this.model);
     }
 
-    // DeepSeek-V4: only explicitly enable thinking when the runner requests it.
-    // Thinking is ON by default for V4 models — we never disable it via param
-    // because: (a) the default is fine, (b) disabling would suppress reasoning_content
-    // which we now pass back in multi-turn contexts (see toOpenAIMessages).
+    // DeepSeek V4 reasons by default and accepts high/max as discrete effort
+    // values. The product's xhigh alias maps to the wire's max value.
     const deepseekExtras: Record<string, unknown> = {};
-    if (this.vendor === 'deepseek' && req.thinking === true) {
-      deepseekExtras.thinking = { type: 'enabled' };
+    if (this.vendor === 'deepseek') {
+      const requestedEffort = req.reasoningEffort?.trim().toLowerCase();
+      if (req.thinking === false || requestedEffort === 'none') {
+        deepseekExtras.thinking = { type: 'disabled' };
+      } else if (req.thinking === true || requestedEffort) {
+        deepseekExtras.thinking = { type: 'enabled' };
+      }
+      const effort = normalizeDeepSeekEffort(req.reasoningEffort);
+      if (effort) deepseekExtras.reasoning_effort = effort;
     }
 
     // OpenRouter normalizes reasoning controls across providers via the
@@ -143,13 +155,32 @@ export class OpenAIChatProvider implements ChatProvider {
     const openrouterExtras: Record<string, unknown> = {};
     if (this.vendor === 'openrouter') {
       if (req.reasoningEffort) {
-        openrouterExtras.reasoning = { effort: req.reasoningEffort };
+        openrouterExtras.reasoning = { effort: req.reasoningEffort, exclude: false };
       } else if (req.thinking === true) {
         openrouterExtras.reasoning =
           typeof req.thinkingBudgetTokens === 'number' && req.thinkingBudgetTokens > 0
-            ? { max_tokens: req.thinkingBudgetTokens }
-            : { enabled: true };
+            ? { max_tokens: req.thinkingBudgetTokens, exclude: false }
+            : { enabled: true, exclude: false };
       }
+    }
+
+    // Mistral's current reasoning models return a structured ThinkChunk only
+    // when reasoning_effort is enabled. Default to high for the boolean toggle
+    // so the existing composer control has a visible effect.
+    const mistralExtras: Record<string, unknown> = {};
+    if (this.vendor === 'mistral') {
+      const effort = normalizeMistralEffort(req.reasoningEffort)
+        ?? (req.thinking === true ? 'high' : req.thinking === false ? 'none' : null);
+      if (effort) mistralExtras.reasoning_effort = effort;
+    }
+
+    // GitHub Copilot's chat endpoint follows the same reasoning_effort contract
+    // exposed by Copilot CLI. Forward only an explicit level/toggle.
+    const copilotExtras: Record<string, unknown> = {};
+    if (this.vendor === 'copilot') {
+      const effort = normalizeCopilotEffort(req.reasoningEffort)
+        ?? (req.thinking === true ? 'high' : null);
+      if (effort) copilotExtras.reasoning_effort = effort;
     }
 
     // Sakana Fugu reasons by default; its OpenAI-compatible Chat Completions takes
@@ -186,14 +217,14 @@ export class OpenAIChatProvider implements ChatProvider {
     // (`provider_configs.id='kimi-code', kind='openai'`). K3 rejects every
     // temperature except 1, so enforce the invariant here as well as in the
     // dedicated Kimi adapter. This is deliberately keyed to the exact model id.
-    const isKimiK3 = /^k3$/i.test(this.model);
+    const isKimiK3 = /^k3(?:-|$)/i.test(this.model);
     const temperature = isKimiK3
       ? 1
       : isReasoningModel ? undefined : req.inference?.temperature;
 
     const kimiK3Extras: Record<string, unknown> = {};
     if (isKimiK3 && req.reasoningEffort) {
-      kimiK3Extras.reasoning_effort = req.reasoningEffort;
+      kimiK3Extras.reasoning_effort = normalizeKimiK3Effort(req.reasoningEffort);
     }
 
     const attemptStartedAt = Date.now();
@@ -266,6 +297,8 @@ export class OpenAIChatProvider implements ChatProvider {
         ...zaiExtras,
         ...deepseekExtras,
         ...openrouterExtras,
+        ...mistralExtras,
+        ...copilotExtras,
         ...fuguExtras,
         ...kimiK3Extras,
         ...cacheKeyExtras,
@@ -307,8 +340,23 @@ export class OpenAIChatProvider implements ChatProvider {
         }
         const choice = chunk.choices[0];
         const delta = choice?.delta;
-        if (delta?.content) {
-          yield { type: 'text_delta', text: delta.content };
+        const content = (delta as { content?: unknown } | undefined)?.content;
+        if (typeof content === 'string' && content.length > 0) {
+          yield { type: 'text_delta', text: content };
+        } else if (Array.isArray(content)) {
+          // Mistral streams reasoning as a list of ThinkChunk/TextChunk values,
+          // then switches back to a plain string for the final answer.
+          for (const part of content) {
+            if (!part || typeof part !== 'object') continue;
+            const record = part as Record<string, unknown>;
+            if (record.type === 'thinking') {
+              for (const text of readMistralThinkingTexts(record.thinking)) {
+                yield { type: 'thinking_delta', text };
+              }
+            } else if (record.type === 'text' && typeof record.text === 'string' && record.text) {
+              yield { type: 'text_delta', text: record.text };
+            }
+          }
         }
       // GLM / DeepSeek-R1 expose chain-of-thought via reasoning_content on the
       // delta. Field is absent on vanilla OpenAI responses.
@@ -319,6 +367,20 @@ export class OpenAIChatProvider implements ChatProvider {
       const openrouterReasoning = (delta as { reasoning?: unknown })?.reasoning;
       if (typeof openrouterReasoning === 'string' && openrouterReasoning.length > 0) {
         yield { type: 'thinking_delta', text: openrouterReasoning };
+      } else {
+        // Some OpenRouter upstreams expose only the structured reasoning_details
+        // stream. Surface text details without duplicating the normalized
+        // `delta.reasoning` value when both are present.
+        const details = (delta as { reasoning_details?: unknown })?.reasoning_details;
+        if (Array.isArray(details)) {
+          for (const detail of details) {
+            if (!detail || typeof detail !== 'object') continue;
+            const text = (detail as { text?: unknown }).text;
+            if (typeof text === 'string' && text.length > 0) {
+              yield { type: 'thinking_delta', text };
+            }
+          }
+        }
       }
       // Declarative response mapping: a vendor exposing chain-of-thought under a
       // non-standard delta key (custom providers only).
@@ -567,9 +629,16 @@ export function toOpenAIMessages(system: string, messages: AgentMessage[], vendo
       // conversations that include tool calls — without it the API rejects the
       // request. Other vendors ignore unknown fields, so it's safe to include
       // for deepseek only to avoid polluting other providers' payloads.
+      const mistralContent =
+        vendor === 'mistral' && reasoning
+          ? [
+              { type: 'thinking', thinking: [{ type: 'text', text: reasoning }] },
+              ...(text ? [{ type: 'text', text }] : []),
+            ]
+          : null;
       const msg: Record<string, unknown> = {
         role: 'assistant',
-        content: text || "",
+        content: mistralContent ?? (text || ""),
         ...(vendor === 'deepseek' ? { reasoning_content: reasoning } : {}),
       };
       if (toolUses.length > 0) {
@@ -595,4 +664,48 @@ export function toOpenAIMessages(system: string, messages: AgentMessage[], vendo
   }
 
   return out;
+}
+
+function normalizeDeepSeekEffort(value: string | null | undefined): 'high' | 'max' | null {
+  const effort = value?.trim().toLowerCase();
+  if (!effort || effort === 'none') return null;
+  return effort === 'max' || effort === 'xhigh' || effort === 'ultra' ? 'max' : 'high';
+}
+
+function normalizeMistralEffort(value: string | null | undefined): 'none' | 'high' | null {
+  const effort = value?.trim().toLowerCase();
+  if (!effort) return null;
+  return effort === 'none' ? 'none' : 'high';
+}
+
+function normalizeCopilotEffort(
+  value: string | null | undefined,
+): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | null {
+  const effort = value?.trim().toLowerCase();
+  if (effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'xhigh' || effort === 'max') {
+    return effort;
+  }
+  return null;
+}
+
+function normalizeKimiK3Effort(value: string): 'none' | 'low' | 'high' | 'max' {
+  const effort = value.trim().toLowerCase();
+  if (effort === 'none') return 'none';
+  if (effort === 'low' || effort === 'minimal' || effort === 'minimum' || effort === 'light') {
+    return 'low';
+  }
+  if (effort === 'max' || effort === 'xhigh' || effort === 'ultra') return 'max';
+  return 'high';
+}
+
+function readMistralThinkingTexts(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((part) => (
+    part
+    && typeof part === 'object'
+    && (part as { type?: unknown }).type === 'text'
+    && typeof (part as { text?: unknown }).text === 'string'
+      ? [(part as { text: string }).text]
+      : []
+  ));
 }

@@ -13,6 +13,7 @@ dependencies = [
  "agent-platform",
  "agent-protocol",
  "prost",
+ "sha2",
  "tokio",
  "zeroize",
 ]

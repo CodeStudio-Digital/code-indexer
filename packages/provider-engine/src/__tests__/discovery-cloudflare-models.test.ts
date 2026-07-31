@@ -6,7 +6,17 @@ import { cloudflareSpec } from '../specs/openai-compat.js';
 const SAMPLE_RESPONSE = {
   success: true,
   result: [
-    { name: '@cf/meta/llama-3.1-8b-instruct-fp8', task: { name: 'Text Generation' } },
+    {
+      name: '@cf/moonshotai/kimi-k2.7-code',
+      display_name: 'Kimi K2.7 Code',
+      description: 'Agentic coding model',
+      task: { name: 'Text Generation' },
+      properties: [
+        { property_id: 'context_window', value: '262,144' },
+        { property_id: 'reasoning', value: true },
+        { property_id: 'vision', value: true },
+      ],
+    },
     { name: '@cf/baai/bge-m3', task: { name: 'Text Embeddings' } },
     { name: '@cf/black-forest-labs/flux-1-schnell', task: { name: 'Text-to-Image' } },
     { name: 'not-a-cf-model', task: { name: 'Text Generation' } },
@@ -52,11 +62,19 @@ describe('cloudflare-models discovery', () => {
     const b = await discoverCloudflareModels(cloudflareSpec, cfg);
 
     expect(b.map((m) => m.model_id)).toEqual([
-      '@cf/meta/llama-3.1-8b-instruct-fp8',
+      '@cf/moonshotai/kimi-k2.7-code',
       '@cf/baai/bge-m3',
     ]);
     expect(b[0]).toMatchObject({
-      name: '@cf/meta/llama-3.1-8b-instruct-fp8',
+      name: 'Kimi K2.7 Code',
+      display_name: 'Kimi K2.7 Code',
+      description: 'Agentic coding model',
+      context_window: 262_144,
+      can_reason: true,
+      supports_attachments: true,
+      input_modalities: ['text', 'image'],
+      visibility: 'list',
+      supported_in_api: true,
       source: 'live',
     });
   });

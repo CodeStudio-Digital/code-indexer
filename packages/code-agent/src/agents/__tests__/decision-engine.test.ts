@@ -93,6 +93,7 @@ describe('decide', () => {
     expect(d.recommendedAgent).toBe('plan');
     expect(d.phase).toBe('planning');
     expect(d.riskBudget).toBe('read');
+    expect(d.toolPolicy.preferred[0]).toBe('mcp__search');
   });
 
   it('flags git/admin work as requiring explicit user intent', () => {

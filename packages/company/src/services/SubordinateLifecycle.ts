@@ -57,6 +57,7 @@ import {
 } from '@mcp/company/services/subordinate/completion-handler.js';
 import {
   resolveSpawnProjectBinding,
+  resolveSpawnProjectScope,
   type SpawnSubordinateSpec,
 } from '@mcp/company/services/subordinate/spec.js';
 import { spawnSubordinate } from '@mcp/company/services/subordinate/spawn.js';
@@ -65,7 +66,7 @@ import { resolveBindingForProject } from '@mcp/company/services/subordinate/bind
 
 // Re-export so existing tests / call sites that import these from
 // `SubordinateLifecycle.js` keep working unchanged.
-export { resolveSpawnProjectBinding };
+export { resolveSpawnProjectBinding, resolveSpawnProjectScope };
 export type { SpawnSubordinateSpec };
 
 // `SpawnSubordinateSpec` + `resolveSpawnProjectBinding` moved to
@@ -159,6 +160,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
 
   list(): Array<{
     agentRunId: string;
+    seq: number;
     role: string;
     status: AgentRunStatus;
     statusMessage: string;
@@ -173,6 +175,7 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       .filter((r) => r.role !== 'master')
       .map((r) => ({
         agentRunId: r.id,
+        seq: r.seq,
         role: r.role,
         status: r.status as AgentRunStatus,
         statusMessage: r.status_message ?? '',
@@ -370,6 +373,8 @@ export class SubordinateLifecycle implements ISubordinateQuery {
       orchestratorRef: this.deps.orchestratorRef,
       runningIds: this.runningIds,
       notifyIdleChanged: () => this.notifyIdleChanged(),
+      isCurrentHandle: (agentRunId, handle) =>
+        this.subordinates.get(agentRunId)?.runner === handle.runner,
       resume: (id, message, roleOverride, attachments, thinking) =>
         this.resume(id, message, roleOverride, attachments, thinking),
       onSubordinateIdle: this.deps.onSubordinateIdle,

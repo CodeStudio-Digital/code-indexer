@@ -1066,6 +1066,18 @@ export const taskList: CoderTool = {
     }
     const gate = args.gate === 'approve' || args.gate === 'track' ? args.gate : inferGate(args.items);
     if (gate === 'approve') {
+      // Build mode is already authorized to execute. Letting it open another
+      // human approval gate turns autonomous/API runs into an indefinite wait
+      // (weak models reliably choose the most ceremonial-looking route).
+      // Plan mode remains the sole owner of approval; Build keeps the cheap
+      // track checklist and must execute the requested work directly.
+      const approvalMode = ctx.planMode === true || ctx.runner?.planMode === true;
+      if (!approvalMode) {
+        return err(
+          "task_list gate:'approve' is available only in Plan mode. " +
+          "This Build run is already authorized: use gate:'track' with checklist-shaped items and continue the work.",
+        );
+      }
       return submitTasks.handler({ summary: args.summary, tasks: args.items }, ctx);
     }
     // track → the todo_write flow (no pause).

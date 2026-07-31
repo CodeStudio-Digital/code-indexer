@@ -78,6 +78,7 @@ describe('FsSessionStore operational state', () => {
       store.setSessionReasoningEffort(session.id, 'high'),
       store.setSessionExecutionMode(session.id, 'ultra'),
       store.setSessionThinkingEnabled(session.id, true),
+      store.setSessionRunLimits(session.id, 80, 4),
       store.setSessionPlanDepth(session.id, 'deep'),
       store.setSessionResponseLanguage(session.id, 'pt-BR'),
       store.setSessionOutputStyle(session.id, 'compact'),
@@ -182,6 +183,8 @@ describe('FsSessionStore operational state', () => {
       reasoning_effort_override: 'high',
       execution_mode_override: 'ultra',
       thinking_enabled: true,
+      max_turns: 80,
+      max_auto_continues: 4,
       plan_depth_override: 'deep',
       response_language_override: 'pt-BR',
       output_style_override: 'compact',
@@ -308,6 +311,33 @@ describe('FsSessionStore operational state', () => {
       operation_id: 'goal:complete',
     });
     expect(replayedGoal).toEqual(completedGoal);
+
+    const goalNoopToolUseId = 'goal-complete-noop-1';
+    expect(await store.persistAssistantTurn({
+      session_id: session.id,
+      operation_id: 'assistant:goal-complete-noop-1',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: goalNoopToolUseId,
+          name: 'update_goal',
+          input: { status: 'complete' },
+        }],
+      },
+      usage: null,
+      tool_calls: [{
+        tool_use_id: goalNoopToolUseId,
+        tool_name: 'update_goal',
+        args: { status: 'complete' },
+        result_text: 'Goal is already complete; no state change was needed.',
+        is_error: false,
+        duration_ms: 1,
+      }],
+      goal_noop_tool_use_ids: [goalNoopToolUseId],
+    })).toBe(3);
+    expect(await store.getSessionGoal(session.id)).toEqual(completedGoal);
+
     await expect(
       store.upsertSessionGoal(session.id, {
         text: 'conflict',
@@ -611,16 +641,17 @@ describe('FsSessionStore operational state', () => {
     });
 
     const stats = await store.getToolCallStats(session.id);
-    expect(stats.totalCalls).toBe(2);
+    expect(stats.totalCalls).toBe(3);
     expect(stats.byName).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: 'create_goal', count: 1 }),
+        expect.objectContaining({ name: 'update_goal', count: 1 }),
         expect.objectContaining({ name: 'edit_file', count: 1 }),
       ]),
     );
     expect(stats.savings).toMatchObject({
-      totalRawChars: 107,
-      totalShapedChars: 32,
+      totalRawChars: 160,
+      totalShapedChars: 85,
       totalSavedChars: 75,
       semanticSavedChars: 75,
     });

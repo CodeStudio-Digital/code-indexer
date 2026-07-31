@@ -30,7 +30,10 @@ export function applySelfReviewDecline(ctx: RunContext, userText: string): void 
  * subagents/tests that don't provide signals.
  */
 export async function computeSelfReviewNudge(ctx: RunContext): Promise<boolean> {
-  if (process.env.CODER_SELF_REVIEW === '0') return false;
+  // Review is a costly second model pipeline, not a mandatory completion
+  // ceremony. Keep it opt-in; the self_review tool remains discoverable for
+  // security-sensitive work or when the user explicitly requests a review.
+  if (process.env.CODER_SELF_REVIEW !== '1') return false;
   const sr = ctx.injectionState.selfReview;
   if (sr.suppressed) return false;
   const signals = await ctx.opts.collectSelfReviewSignals?.() ?? null;

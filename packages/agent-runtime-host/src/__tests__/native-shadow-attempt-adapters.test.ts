@@ -88,6 +88,7 @@ describe('NativeShadowAttemptAdapters', () => {
     const binding: NativeHostBridgeBinding = {
       nativeHostBridgeAbi: vi.fn(),
       openHostAttemptBridge: vi.fn(async () => peer.channels),
+      openHostSupervisorBridge: vi.fn(),
     };
     const durable = durableSnapshot(now, hardDeadline, provenance);
     const adapters = createNativeShadowAttemptAdapters({
@@ -217,7 +218,7 @@ async function driveRunner(
     prepare.header!.messageId,
     'runner:instance',
     new Uint8Array(32),
-    BigInt(Date.now()),
+    prepare.header!.sentAtUnixMs,
     {
       loadedSnapshots: [...options.snapshots],
       validatedArtifacts: [...options.artifacts],
@@ -231,7 +232,7 @@ async function driveRunner(
     3n,
     activate.header!.messageId,
     framePayloadSha256(activate.encodedPayload),
-    BigInt(Date.now()),
+    activate.header!.sentAtUnixMs,
   ));
 }
 

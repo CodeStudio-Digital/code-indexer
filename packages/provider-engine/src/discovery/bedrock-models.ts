@@ -98,18 +98,88 @@ export async function discoverBedrockModels(
       // rows are embedding-only or marked for provisioned throughput only.
       .filter((m) => m.inferenceTypesSupported?.includes('ON_DEMAND') ?? true)
       .filter((m) => m.outputModalities?.includes('TEXT') ?? true)
-      .map(
-        (m): UpsertModelInput => ({
-          model_id: m.modelId ?? 'unknown',
-          name: `${m.providerName ?? ''} ${m.modelName ?? m.modelId ?? ''}`.trim(),
-          context_window: getRegistryContextWindow(m.modelId ?? ''),
+      .map((m): UpsertModelInput => {
+        const id = m.modelId ?? 'unknown';
+        const metadata = bedrockModelMetadata(id);
+        const name = `${m.providerName ?? ''} ${m.modelName ?? id}`.trim();
+        return {
+          model_id: id,
+          name,
+          display_name: name,
+          context_window: metadata.contextWindow ?? getRegistryContextWindow(id),
+          default_max_tokens: metadata.maxTokens,
+          can_reason: metadata.canReason,
+          supports_attachments:
+            metadata.supportsAttachments
+            || (m.inputModalities ?? []).some((modality) => modality !== 'TEXT'),
+          supported_reasoning_levels: metadata.supportedReasoningLevels,
+          default_reasoning_level: metadata.defaultReasoningLevel,
+          input_modalities: (m.inputModalities ?? ['TEXT']).map((value) => value.toLowerCase()),
+          visibility: 'list',
+          supported_in_api: true,
           source: 'live' as const,
-        })
-      );
+        };
+      });
   } catch (e) {
     throw new Error(
       `Bedrock model discovery failed. Install @aws-sdk/client-bedrock ` +
         `and verify credentials + region (${region}): ${(e as Error).message}`
     );
   }
+}
+
+export function bedrockModelMetadata(model: string): {
+  contextWindow: number | null;
+  maxTokens: number | null;
+  canReason: boolean;
+  supportsAttachments: boolean;
+  supportedReasoningLevels: string[] | null;
+  defaultReasoningLevel: string | null;
+} {
+  const id = model
+    .toLowerCase()
+    .replace(/^(?:global|us|eu|apac|au|ca|jp|kr|in|br)\./, '');
+  if (
+    /^anthropic\.claude-(?:fable|mythos|opus)-5/.test(id)
+    || /^anthropic\.claude-sonnet-5/.test(id)
+  ) {
+    return {
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultReasoningLevel: 'high',
+    };
+  }
+  if (/^anthropic\.claude-(?:opus-4-[678]|sonnet-4-6)/.test(id)) {
+    return {
+      contextWindow: id.includes('opus-4-8') || id.includes('opus-4-7')
+        ? 1_000_000
+        : 200_000,
+      maxTokens: 64_000,
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+      defaultReasoningLevel: 'high',
+    };
+  }
+  if (/^amazon\.nova-(?:2-|(?:pro|lite)-1-5)/.test(id)) {
+    return {
+      contextWindow: getRegistryContextWindow(id),
+      maxTokens: 50_000,
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: ['low', 'medium', 'high'],
+      defaultReasoningLevel: 'medium',
+    };
+  }
+  return {
+    contextWindow: getRegistryContextWindow(id),
+    maxTokens: null,
+    canReason: false,
+    supportsAttachments: false,
+    supportedReasoningLevels: null,
+    defaultReasoningLevel: null,
+  };
 }

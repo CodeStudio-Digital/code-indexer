@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
+import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { formatPlanResult } from '@mcp/code-agent/tools/plan.js';
 import {
   formatTasksApprovedResult,
@@ -18,6 +20,10 @@ import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
 import { withSessionLock } from './sessionLock.js';
+import {
+  authorizeQueuedAttachmentReferences,
+  prepareQueuedAttachments,
+} from './queued-attachments.js';
 
 interface AnswerBody {
   answer: string;
@@ -57,6 +63,14 @@ interface ToolApprovalBody {
   note?: string;
   always_allow?: boolean;
 }
+
+const queuedAttachmentBodyLimit = bodyLimit({
+  maxSize: MAX_ATTACHMENT_REQUEST_BYTES,
+  onError: (c) => c.json(
+    { error: 'request body is too large', code: 'ATTACHMENT_REQUEST_TOO_LARGE' },
+    413,
+  ),
+});
 
 export function mountCoderInteractionRoutes(
   app: Hono,
@@ -164,29 +178,63 @@ export function mountCoderInteractionRoutes(
    *   { waiting: true }     — runner is blocked on an interactive tool and
    *                           `interject` was not set (caller decides).
    */
-  app.post('/api/coder/sessions/:id/inject', async (c) => {
+  app.post('/api/coder/sessions/:id/inject', queuedAttachmentBodyLimit, async (c) => {
     const id = parseSessionIdParam(c);
-    const body = await c.req.json<{ content?: string; interject?: boolean; selected_skill_ids?: string[] }>();
-    const content = typeof body.content === 'string' ? body.content : '';
+    const body = await c.req.json<{
+      content?: string;
+      interject?: boolean;
+      attachments?: unknown;
+      describe_images?: boolean;
+      selected_skill_ids?: string[];
+    }>();
+    const prepared = await prepareQueuedAttachments(
+      deps,
+      id,
+      body.attachments,
+      body.describe_images === true,
+    );
+    if (!prepared.ok) {
+      return c.json(
+        { error: prepared.error, code: prepared.code },
+        prepared.status,
+      );
+    }
+    const attachments = prepared.value;
+    const content = typeof body.content === 'string' && body.content.trim()
+      ? body.content
+      : attachments?.length
+        ? DEFAULT_ATTACHMENT_PROMPT
+        : '';
     if (!content.trim()) return c.json({ error: 'content required' }, 400);
     const interject = !!body.interject;
     const skillIds = body.selected_skill_ids && body.selected_skill_ids.length > 0
       ? body.selected_skill_ids
       : undefined;
-    logRouteHit(id, '/inject', { content_preview: content.slice(0, 80), interject });
+    logRouteHit(id, '/inject', {
+      content_preview: content.slice(0, 80),
+      interject,
+      attachment_count: attachments?.length ?? 0,
+    });
     const bus = workerPool.getBus(id);
     if (!bus || bus.ended) return c.json({ noActiveRun: true });
+    const referenceError = await authorizeQueuedAttachmentReferences(deps, id, attachments);
+    if (referenceError) {
+      return c.json({
+        error: referenceError,
+        code: 'ATTACHMENT_REFERENCE_NOT_AUTHORIZED',
+      }, 409);
+    }
     const waiting = await workerPool.isWaitingForInput(id).catch(() => false);
     if (waiting) {
       if (!interject) return c.json({ waiting: true });
       await workerPool.interruptWait(id).catch(() => undefined);
     }
-    await workerPool.pushUserMessage(
-      id,
-      content,
-      skillIds,
-      `interaction:inject:${randomUUID()}`,
-    );
+    const operationId = `interaction:inject:${randomUUID()}`;
+    if (attachments?.length) {
+      await workerPool.pushUserMessage(id, content, skillIds, operationId, attachments);
+    } else {
+      await workerPool.pushUserMessage(id, content, skillIds, operationId);
+    }
     return c.json({ injected: true });
   });
 
@@ -564,6 +612,15 @@ export function mountCoderInteractionRoutes(
       return true;
     });
     if (!updated) return notFound(c);
+    void deps.coderPreferences
+      ?.setLastSelectedModel(body.provider, newProvider.model)
+      .catch((error) => {
+        console.warn(
+          `[coder-preferences] could not persist switched model: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
     return c.json({ ok: true, provider: body.provider, model: newProvider.model });
   });
 }

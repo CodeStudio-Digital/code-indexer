@@ -91,6 +91,12 @@ import {
   setCoderWorkerSessionWriterHandoff,
 } from '../sse/coderWorkerPoolSingleton.js';
 import {
+  setCompanyWorkerSessionRuntimeResolver,
+} from '../sse/workerPoolSingleton.js';
+import {
+  createCompanySessionRuntimeResolver,
+} from './company-session-runtime-resolver.js';
+import {
   setInvestigationSemanticIndex,
   type InvestigationSemanticIndexPort,
 } from '@mcp/code-agent/tools/investigation-embedder.js';
@@ -208,6 +214,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { OperationalSessionFiles } from './operational-session-files.js';
 import { SpriteFileStore } from './sprite-files.js';
+import { CoderPreferencesFile } from './coder-preferences-file.js';
 
 /**
  * Late-bound ChromeService reference shared with the doc indexer's
@@ -349,6 +356,8 @@ export interface ProjectServiceDeps {
 
 export interface CoderDeps {
   sessionStore: SessionStore;
+  /** Global file-backed provider/model choice used by the next coder session. */
+  coderPreferences: CoderPreferencesFile;
   /**
    * Durable control-plane store. Its command ledger is the always-on
    * idempotency authority; AgentRun and runtime-journal projections are
@@ -1075,6 +1084,7 @@ export function createDeps(): ServerDeps {
         : null;
     },
   });
+  const coderPreferences = CoderPreferencesFile.fromDataDir(mcpDataDir());
   filesystemPipelineTelemetrySink = new FsPipelineTelemetrySink(sessionStore);
   // Builder checkpoints — run-end hook deps (worker pool + in-process
   // stream both notify through the builder-checkpoint module global).
@@ -1111,6 +1121,18 @@ export function createDeps(): ServerDeps {
       bundlePath: location.bundle_path,
     };
   });
+  setCompanyWorkerSessionRuntimeResolver(
+    createCompanySessionRuntimeResolver(sessionStore, (projectId) => {
+      const project = db.getProject(projectId);
+      return project
+        ? {
+            id: project.id,
+            root_path: project.root_path,
+            is_synthetic: project.is_synthetic,
+          }
+        : null;
+    }),
+  );
   setCoderWorkerSessionWriterHandoff(async (context) => {
     const location = await sessionStore.getSessionLocation(context.sessionId);
     if (!location || location.bundle_path !== context.bundlePath) {
@@ -1133,6 +1155,7 @@ export function createDeps(): ServerDeps {
   });
   registerShutdownTask('filesystem-session-store', async () => {
     setCoderWorkerSessionRuntimeResolver(null);
+    setCompanyWorkerSessionRuntimeResolver(null);
     setCoderWorkerSessionWriterHandoff(null);
     setSandboxArchiveBundleResolver(null);
     await filesystemPipelineTelemetrySink?.flush();
@@ -1242,7 +1265,12 @@ export function createDeps(): ServerDeps {
         if (!db.getProjectMemoryEnabled(projectId)) return [];
         return db
           .listAgentMemoryIndex('project', projectId, 20)
-          .map((m) => ({ title: m.description || m.name, category: m.type, excerpt: m.excerpt }));
+          .map((m) => ({
+            title: m.description || m.name,
+            category: m.type,
+            source: m.source,
+            excerpt: m.excerpt,
+          }));
       } catch {
         return [];
       }
@@ -1924,6 +1952,7 @@ export function createDeps(): ServerDeps {
     projectMemory,
     recentFilesSource,
     sessionStore,
+    coderPreferences,
     operationalSessionFiles,
     spriteFileStore,
     controlPlaneStore,

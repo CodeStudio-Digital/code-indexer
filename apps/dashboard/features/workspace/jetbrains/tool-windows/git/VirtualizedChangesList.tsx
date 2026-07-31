@@ -7,8 +7,10 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNod
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Check, Minus, Plus, Trash2, Undo2 } from 'lucide-react';
+import { FileIcon } from '../../../../../components/FileIcon.js';
 import { cn } from '../../../../../lib/utils.js';
 import { CollapsibleSectionHeader } from './CollapsibleSection.js';
+import { changePathParts } from './change-path.js';
 import { fileKind } from './file-kind.js';
 import {
   changeSelectionState,
@@ -136,11 +138,11 @@ export function VirtualizedChangesList({
     getScrollElement: () => scrollRef.current,
     estimateSize: (index) => rows[index]?.kind === 'empty'
       ? 88
-      : rows[index]?.kind === 'warning'
-        ? 38
-        : rows[index]?.kind === 'section'
-          ? 32
-          : 28,
+        : rows[index]?.kind === 'warning'
+          ? 38
+          : rows[index]?.kind === 'section'
+            ? 32
+            : 36,
     getItemKey: (index) => rowKey(rows[index]!),
     overscan: 12,
   });
@@ -335,12 +337,13 @@ function FileRow({
 }) {
   const { t } = useTranslation('workspace');
   const kind = fileKind(file.state);
+  const { name, directory } = changePathParts(file.path);
   return (
     <div
       role={onClick ? 'button' : undefined}
       tabIndex={onClick ? 0 : undefined}
       className={cn(
-        'group flex items-center gap-2 border-b bg-background/70 py-1 pl-5 pr-2.5 text-[11.5px] transition-colors hover:bg-muted/40',
+        'group flex items-center gap-1.5 border-b bg-background/70 py-1 pl-5 pr-2.5 text-[11.5px] transition-colors hover:bg-muted/40',
         GROUP_VISUALS[group].row,
         onClick && 'cursor-pointer',
       )}
@@ -359,7 +362,11 @@ function FileRow({
         onToggle={selection.onToggle}
       />
       <span className={cn('w-3 shrink-0 text-center font-mono text-[10px]', kind.color)}>{kind.letter}</span>
-      <span className="flex-1 truncate">{file.path}</span>
+      <FileIcon path={file.path} className="h-3.5 w-3.5 opacity-90" />
+      <span className="min-w-0 flex-1 leading-tight">
+        <span className="block truncate font-medium text-foreground">{name}</span>
+        <span className="block truncate text-[9.5px] text-muted-foreground" title={directory}>{directory}</span>
+      </span>
       {file.outsideProject && <span className="text-[9px] text-amber-600">{t('git.outsideProject')}</span>}
       <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
         {actions}

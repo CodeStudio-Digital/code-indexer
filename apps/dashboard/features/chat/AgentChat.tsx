@@ -1,9 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { AgentPreset } from '@mcp/api-bus';
+import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/code-agent/sessions/run-limits.js';
 import { Panel, PanelGroup, PanelResizeHandle, type ImperativePanelHandle } from 'react-resizable-panels';
 import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import { useIndexBusy } from '../workspace/jetbrains/status-bar/useIndexStatus.js';
 import { IndexingOverlay } from './IndexingOverlay.js';
 import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
@@ -46,6 +45,8 @@ import {
   ultraManagesThinking,
 } from './execution-mode-state.js';
 import { useSessionExecutionMode } from './useSessionExecutionMode.js';
+import { isAgentPreset } from './agent-state.js';
+import { useSessionAgent } from './useSessionAgent.js';
 import { PROVIDERS } from './constants.js';
 import { EmptyChatState } from './EmptyChatState.js';
 import { LiveMessageList } from './messages/LiveMessageList.js';
@@ -117,7 +118,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     markRouteEvent('AgentChat:mounted', { projectId, tab: 'chat', mode });
   }, [mode, projectId]);
   const [view, setView] = useState<SessionView>('active');
-  const { data: sessions, refetch: refetchSessions } = useApi<CoderSession[]>(
+  const { data: sessions, refetch: refetchSessions, update: updateSessions } = useApi<CoderSession[]>(
     isGlobal
       ? `/coder/sessions/global?archived=${view === 'archived' ? '1' : '0'}`
       : `/coder/sessions?project_id=${projectId}&archived=${view === 'archived' ? '1' : '0'}`,
@@ -140,27 +141,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   const [activeProjectId, setActiveProjectId] = useState<number | null>(null);
   const [provider, setProvider] = useState('zai');
   const [model, setModel] = useState('');
-  const [agent, setAgent] = useState<AgentPreset>('explore');
-
-  // SSE-driven agent transitions (Plan→Build after submit_plan approval,
-  // Spec→Build after submit_spec, manual server-side switches). Backend
-  // emits `session_agent_changed` via the runner bus; the stream handler
-  // (`hooks/agent-stream/handlers.ts`) bridges to this DOM CustomEvent.
-  // Replaces the polling refetch fallback in onPlanResponse / onSpecResponse
-  // (which stays as a belt-and-suspenders safety net for slow or dropped
-  // SSE deliveries).
-  useEffect(() => {
-    const onAgentChanged = (e: Event): void => {
-      const detail = (e as CustomEvent).detail as { sessionId?: string; agent?: string };
-      if (!detail || detail.sessionId !== selectedId) return;
-      const next = detail.agent;
-      if (next && next !== agent && isAgentPreset(next)) {
-        setAgent(next);
-      }
-    };
-    window.addEventListener('coder:session_agent_changed', onAgentChanged);
-    return () => window.removeEventListener('coder:session_agent_changed', onAgentChanged);
-  }, [agent, selectedId]);
 
   // Live diagram updates: the draw.io agent's diagram_create/update emits
   // `diagram_changed` over SSE (bridged to a DOM event by handlers.ts). Feed
@@ -182,6 +162,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     return () => window.removeEventListener('coder:diagram_changed', onDiagramChanged);
   }, [selectedId]);
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
+  const [maxAutoContinues, setMaxAutoContinues] = useState(
+    DEFAULT_SESSION_MAX_AUTO_CONTINUES,
+  );
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
   const [fallbackModel, setFallbackModel] = useState<string | null>(null);
   const [sessionTemperature, setSessionTemperature] = useState<number | null>(null);
@@ -331,6 +314,19 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     () => sessionDataForSelection(sessionData, selectedId),
     [selectedId, sessionData],
   );
+  const {
+    agent,
+    setAgent: handleAgentChange,
+    awaitPendingAgentChange,
+    adoptAgent,
+    getAgent,
+  } = useSessionAgent({
+    selectedId,
+    sessionData: selectedSessionData,
+    updateSessionData,
+    updateSessions,
+    refetchSession,
+  });
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   const sessionDataRef = useRef(selectedSessionData);
@@ -341,17 +337,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     messagePageAbortControllersRef.current.clear();
   }, [selectedId]);
 
-  // Composer gate: block sending while the session's project is ACTIVELY indexing
-  // (the freshly-created global union's first pass). Once `structural_ready` the
-  // agent can search/symbol, so we only block the two in-progress phases — never
-  // 'none' (which would deadlock the composer if auto-index is off). Inert for a
-  // normal already-indexed project (phase ready) and guarded on selectedId.
+  // Indexing is background work. Keep the project's progress visible without
+  // coupling composer availability to structural/semantic readiness: the runner
+  // starts in degraded retrieval mode and promotes itself once the index is ready.
   const projectIndexId = selectedSessionData?.session.project_id ?? 0;
-  // Boolean selector: re-renders this heavy tree only when the busy flag flips,
-  // NOT on every progress frame. The live progress text lives in the isolated
-  // <IndexingOverlay> leaf so the per-frame stream can't drive a full re-render.
-  const indexBusy = useIndexBusy(projectIndexId);
-  const indexing = !!selectedId && indexBusy;
 
   // Global mode: root the right-rail file tree at the selected session's primary
   // linked project; re-derive whenever the session (or its payload) changes.
@@ -637,9 +626,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         ? 'standard'
         : (config.executionMode === undefined ? executionMode : config.executionMode);
       const selectedThinking = config.useLastModel ? false : (config.thinking ?? thinking);
-      const selectedMaxTurns = config.useLastModel
-        ? null
-        : (config.maxTurns === undefined ? maxTurns : config.maxTurns);
+      // Every new conversation starts unlimited unless its launch dialog
+      // explicitly enables a turn ceiling.
+      const selectedMaxTurns = config.maxTurns ?? null;
+      const selectedMaxAutoContinues =
+        config.maxAutoContinues ?? DEFAULT_SESSION_MAX_AUTO_CONTINUES;
       const selectedTemperature = config.useLastModel
         ? null
         : (config.temperature === undefined ? sessionTemperature : config.temperature);
@@ -654,17 +645,20 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         reasoning_effort: selectedReasoningEffort || null,
         execution_mode: selectedExecutionMode,
         thinking_enabled: selectedThinking,
+        max_turns: selectedMaxTurns,
+        max_auto_continues: selectedMaxAutoContinues,
       });
       if (selectedTemperature !== null) {
         await apiPatch(`/coder/sessions/${created.id}/temperature`, { temperature: selectedTemperature }).catch(() => {});
       }
       setProvider(created.provider);
       setModel(created.model);
-      setAgent(selectedAgent);
+      adoptAgent(selectedAgent, null);
       setReasoningEffort(selectedReasoningEffort);
       adoptExecutionMode(selectedExecutionMode);
       setThinking(selectedThinking);
       setMaxTurns(selectedMaxTurns);
+      setMaxAutoContinues(selectedMaxAutoContinues);
       setSessionTemperature(selectedTemperature);
       if (!explicitTitle) pendingAutoTitle.current.add(created.id);
       refetchSessions();
@@ -675,7 +669,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       creatingSessionRef.current = false;
       setCreatingSession(false);
     }
-  }, [projectId, provider, model, getModelsForProvider, agent, reasoningEffort, executionMode, adoptExecutionMode, thinking, maxTurns, sessionTemperature, refetchSessions]);
+  }, [projectId, provider, model, getModelsForProvider, agent, reasoningEffort, executionMode, adoptExecutionMode, adoptAgent, thinking, sessionTemperature, refetchSessions]);
 
   const createGlobalSession = async (opts: { title?: string; projectIds?: number[]; primaryProjectId?: number; reuseSessionId?: string }) => {
     const created = await apiPost<CoderSession>('/coder/sessions/global', {
@@ -719,9 +713,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
-    // Block sending while the project is still indexing — covers BOTH the click
-    // path and the Cmd/Ctrl+Enter keyboard path (the overlay only blocks mouse).
-    if (indexing) return;
     const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
     if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
     // Builder studio: prepend the selected-element block(s) and drain any
@@ -740,7 +731,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }));
     // The mode is baked into runner construction. Never let the send race the
     // preceding PATCH (including sends initiated outside the visible composer).
-    await awaitPendingExecutionMode();
+    await Promise.all([
+      awaitPendingExecutionMode(),
+      awaitPendingAgentChange(),
+    ]);
     await sendMessage(outgoing, async () => {
       refetchSession();
       if (shouldAutoTitle) {
@@ -756,8 +750,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: allAtts, maxTurns, thinking, describeImages, selectedSkillIds, freshSession: persistedMessageCount === 0 });
-  }, [selectedId, indexing, updateSessionData, awaitPendingExecutionMode, sendMessage, refetchSession, refetchSessions, maxTurns, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
+    }, { attachments: allAtts, agent: getAgent(), maxTurns, maxAutoContinues, thinking, describeImages, selectedSkillIds, freshSession: persistedMessageCount === 0 });
+  }, [selectedId, updateSessionData, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, refetchSessions, getAgent, maxTurns, maxAutoContinues, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Delivery is run-state-aware and serves BOTH queue modes:
@@ -767,31 +761,57 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   //     wipes the in-flight turn (the freeze bug) — so we never do that mid-run.
   //   • no run    → /inject returns { noActiveRun }; fall back to sendMessage,
   //     which opens a fresh streamed run (the end-of-session path).
-  const deliverQueued = useCallback<QueueDeliver>(async (text, { interject, skillIds }) => {
+  const deliverQueued = useCallback<QueueDeliver>(async (
+    text,
+    { interject, attachments, skillIds },
+  ) => {
     if (!selectedId) return;
     try {
       const r = await apiPost<{ injected?: boolean; noActiveRun?: boolean; waiting?: boolean }>(
         `/coder/sessions/${selectedId}/inject`,
-        { content: text, interject, selected_skill_ids: skillIds },
+        {
+          content: text,
+          interject,
+          attachments,
+          describe_images: describeImages,
+          selected_skill_ids: skillIds,
+        },
       );
       if (r?.injected) { refetchSession(); return; }
     } catch { /* fall through to a fresh streamed send */ }
-    await awaitPendingExecutionMode();
+    await Promise.all([
+      awaitPendingExecutionMode(),
+      awaitPendingAgentChange(),
+    ]);
     await sendMessage(text, async () => { refetchSession(); }, {
-      maxTurns, thinking, describeImages, selectedSkillIds: skillIds, interject,
+      attachments,
+      agent: getAgent(),
+      maxTurns,
+      maxAutoContinues,
+      thinking,
+      describeImages,
+      selectedSkillIds: skillIds,
+      interject,
     });
-  }, [selectedId, awaitPendingExecutionMode, sendMessage, refetchSession, maxTurns, thinking, describeImages]);
+  }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, getAgent, maxTurns, maxAutoContinues, thinking, describeImages]);
   const queue = useMessageQueue({ streaming, deliver: deliverQueued });
-  const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
+  const handleQueue = useCallback((
+    text: string,
+    mode: QueueMode,
+    attachments: AgentAttachment[],
+    skillIds?: string[],
+  ) => {
     if (!selectedId) return;
     const prefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
-    // Region screenshots can't ride the queue (the /inject path has no attachment
-    // channel), so DRAIN + DISCARD them here instead of letting them silently
-    // attach to a LATER immediate send. Refs (text) still go with the queued
-    // message via the prefix above. (Full carry-through would need attachments
-    // threaded through useMessageQueue + /inject.)
-    if (selectionPrefixSessionId) consumePendingAttachments(selectionPrefixSessionId);
-    queue.enqueue(prefix ? `${prefix}\n${text}` : text, mode, skillIds);
+    const shots = selectionPrefixSessionId
+      ? consumePendingAttachments(selectionPrefixSessionId)
+      : [];
+    queue.enqueue(
+      prefix ? `${prefix}\n${text}` : text,
+      mode,
+      shots.length > 0 ? [...attachments, ...shots] : attachments,
+      skillIds,
+    );
   }, [selectedId, selectionPrefixSessionId, queue]);
   // Discard the queue AND any staged region screenshot when switching sessions.
   // Both are ephemeral; the screenshot is keyed by the builder project (not the
@@ -813,11 +833,14 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (!message.trim() || !selectedId) return;
     setSnapshotsOpen(false);
     const reviewAgent = agent === 'explore' || agent === 'plan' ? 'build' : agent;
-    await awaitPendingExecutionMode();
+    await Promise.all([
+      awaitPendingExecutionMode(),
+      awaitPendingAgentChange(),
+    ]);
     await sendMessage(message, async () => {
       refetchSession();
-    }, { agent: reviewAgent, maxTurns, thinking, describeImages });
-  }, [selectedId, awaitPendingExecutionMode, sendMessage, refetchSession, agent, maxTurns, thinking, describeImages]);
+    }, { agent: reviewAgent, maxTurns, maxAutoContinues, thinking, describeImages });
+  }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, agent, maxTurns, maxAutoContinues, thinking, describeImages]);
 
   /**
    * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
@@ -911,6 +934,28 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     setSessionTemperature(typeof t === 'number' ? t : null);
   }, [sessionData?.session]);
 
+  // Run limits are filesystem session state. New/legacy sessions project null
+  // as unlimited and materialize the historical auto-continue value as 15.
+  useEffect(() => {
+    const session = sessionData?.session;
+    if (!session || session.id !== selectedId) {
+      setMaxTurns(null);
+      setMaxAutoContinues(DEFAULT_SESSION_MAX_AUTO_CONTINUES);
+      return;
+    }
+    setMaxTurns(
+      typeof session.max_turns === 'number' && session.max_turns > 0
+        ? session.max_turns
+        : null,
+    );
+    setMaxAutoContinues(
+      typeof session.max_auto_continues === 'number'
+      && session.max_auto_continues >= 0
+        ? session.max_auto_continues
+        : DEFAULT_SESSION_MAX_AUTO_CONTINUES,
+    );
+  }, [selectedId, sessionData?.session]);
+
   // Reasoning-effort override (migration 150). Same read pattern as temperature —
   // the column flows through the full session payload. Orthogonal to thinking.
   useEffect(() => {
@@ -972,27 +1017,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     setToolPermissionMode(sessionData.session.tool_permission_mode ?? 'auto');
   }, [sessionData?.session]);
 
-  // Agent/mode hydration. Keyed on the session ID (NOT the session object) so
-  // an end-of-run refetch — same id, new object — never clobbers a manual
-  // dropdown pick made mid-session; only a session switch / first load
-  // re-hydrates. Live transitions (plan→build) arrive via the
-  // `coder:session_agent_changed` handler above (disjoint trigger).
-  useEffect(() => {
-    const a = sessionData?.session?.agent;
-    if (isAgentPreset(a)) {
-      setAgent(a);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionData?.session?.id]);
-
-  // Persist a manual dropdown pick immediately so leaving WITHOUT sending still
-  // remembers it. Applies to the NEXT run (agent identity is baked into the
-  // runner at construction; mid-run transitions are runner-driven).
-  const handleAgentChange = useCallback((next: AgentPreset) => {
-    setAgent(next);
-    if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: next }).catch(() => {});
-  }, [selectedId]);
-
   const handleTemperatureChange = useCallback(async (next: number | null) => {
     setSessionTemperature(next);
     if (!selectedId) return;
@@ -1002,6 +1026,32 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       /* ignore — UI optimistic, server is the source of truth on next refetch */
     }
   }, [selectedId]);
+
+  const handleMaxTurnsChange = useCallback(async (next: number | null) => {
+    setMaxTurns(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/run-limits`, {
+        max_turns: next,
+        max_auto_continues: maxAutoContinues,
+      });
+    } catch {
+      /* optimistic; the session projection restores the durable value */
+    }
+  }, [maxAutoContinues, selectedId]);
+
+  const handleMaxAutoContinuesChange = useCallback(async (next: number) => {
+    setMaxAutoContinues(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/run-limits`, {
+        max_turns: maxTurns,
+        max_auto_continues: next,
+      });
+    } catch {
+      /* optimistic; the session projection restores the durable value */
+    }
+  }, [maxTurns, selectedId]);
 
   const handleReasoningEffortChange = useCallback(async (next: string | null) => {
     setReasoningEffort(next);
@@ -1355,7 +1405,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             if (r.ok) {
               const s = (await r.json()) as { agent?: string };
               if (s.agent && s.agent !== agent && isAgentPreset(s.agent)) {
-                setAgent(s.agent);
+                adoptAgent(s.agent, selectedId);
               }
             }
           } catch {
@@ -1375,7 +1425,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             if (r.ok) {
               const s = (await r.json()) as { agent?: string };
               if (s.agent && s.agent !== agent && isAgentPreset(s.agent)) {
-                setAgent(s.agent);
+                adoptAgent(s.agent, selectedId);
               }
             }
           } catch {
@@ -1393,7 +1443,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     }),
     // handleFork / handleRollback depend on selectedId — re-create on switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToSpec, respondToToolApproval, selectedId, agent, rollbackPendingSeq],
+    [answerQuestion, respondToPlan, decideGate, respondToTasks, respondToSpec, respondToToolApproval, selectedId, agent, adoptAgent, rollbackPendingSeq],
   );
 
   // Stable handlers for the memoized children (ChatHeader / ChatRightRail) and
@@ -1718,7 +1768,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 />
               </div>
               <div className="relative">
-              {indexing && <IndexingOverlay projectId={projectIndexId} />}
+              <IndexingOverlay projectId={projectIndexId} />
               <Composer
                 ref={composerRef}
                 filePicks={filePicks}
@@ -1740,7 +1790,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 providerOptions={providerOptions}
                 currentProviderModels={currentProviderModels}
                 maxTurns={maxTurns}
-                setMaxTurns={setMaxTurns}
+                setMaxTurns={handleMaxTurnsChange}
+                maxAutoContinues={maxAutoContinues}
+                setMaxAutoContinues={handleMaxAutoContinuesChange}
                 sessionId={selectedId}
                 thinking={thinking}
                 setThinking={handleThinkingChange}
@@ -1951,12 +2003,5 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
         </Dialog>
       )}
     </>
-  );
-}
-function isAgentPreset(value: unknown): value is AgentPreset {
-  return typeof value === 'string' && (
-    value === 'explore' || value === 'research' || value === 'plan' || value === 'build' || value === 'admin' ||
-    value === 'spec' || value === 'app_orchestrator' || value === 'app_db' || value === 'api' ||
-    value === 'diagram' || value === 'builder' || /^custom:[a-zA-Z0-9-]{8,80}$/.test(value)
   );
 }

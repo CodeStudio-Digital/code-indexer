@@ -12,7 +12,8 @@ import type { SearchMode } from '@mcp/shared/types.js';
  * decision the search layer can act on.
  *
  *   identifier-shape  → `fts`        (symbol name, function call)
- *   short token list  → `fts`        (1-3 CamelCase / snake_case)
+ *   short code list   → `fts`        (CamelCase / snake_case / paths)
+ *   concept keywords  → `hybrid`     (3+ ordinary words)
  *   natural language  → `hybrid`     (full sentence, contains stopwords)
  *   question form     → `hybrid`     (starts with how/why/what/where)
  *
@@ -30,12 +31,11 @@ const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/;
 const QUALIFIED_CALL_RE = /^[A-Za-z_$][\w$]*::[A-Za-z_$][\w$]*$/;
 const QUESTION_RE = /\?$|^(how|why|what|where|when|which|como|por\s*que|onde|quando|qual)\b/i;
 
-/**
- * Heuristic: tokens that look like CamelCase, snake_case, kebab-case or
- * dotted identifiers. If the query is mostly these it's a code lookup,
- * not a question.
- */
-const CODEY_TOKEN_RE = /^[A-Za-z_$][\w$.-]*$/;
+const CODE_MARKER_RE = /[_$./:\\-]|[a-z][A-Z]|(?:[A-Z][a-z0-9]+){2,}|^[A-Z][A-Z0-9_]*$/;
+
+function isCodeShapedToken(token: string): boolean {
+  return CODE_MARKER_RE.test(token);
+}
 
 const STOPWORDS = new Set([
   'the', 'a', 'an', 'is', 'are', 'do', 'does', 'of', 'to', 'in', 'on',
@@ -62,9 +62,15 @@ export function planQuery(rawQuery: string): RetrievalPlan {
 
   const tokens = query.split(/\s+/).filter(Boolean);
 
-  // Short token list of code-shaped words (e.g. "parseIdParam parseJsonBody")
-  // is still a code lookup — don't pay vector cost.
-  if (tokens.length > 0 && tokens.length <= 4 && tokens.every((t) => CODEY_TOKEN_RE.test(t))) {
+  // Short lists dominated by actual code markers (camelCase, snake_case,
+  // paths, qualified names) are code lookups. Ordinary words such as
+  // "session expiration token timeout" must not match this branch.
+  const codeShaped = tokens.filter(isCodeShapedToken).length;
+  if (
+    tokens.length > 0
+    && tokens.length <= 4
+    && codeShaped >= Math.ceil(tokens.length / 2)
+  ) {
     return { mode: 'fts', reason: 'short code-shaped tokens' };
   }
 
@@ -75,8 +81,13 @@ export function planQuery(rawQuery: string): RetrievalPlan {
     return { mode: 'hybrid', reason: 'natural-language query' };
   }
 
-  // Mixed bag — small number of words, no clear signal. Default to fts
-  // because the failure mode (missed paraphrase) is recoverable; the
-  // failure mode of paying for vector on every call is silent cost.
+  // Three or more ordinary words are a conceptual keyword query even when a
+  // model omitted sentence grammar. Hybrid protects semantic recall without
+  // taxing the common one/two-identifier lookup.
+  if (tokens.length >= 3) {
+    return { mode: 'hybrid', reason: 'concept keyword query' };
+  }
+
+  // One or two ordinary words remain cheap lexical lookups.
   return { mode: 'fts', reason: 'short mixed query' };
 }

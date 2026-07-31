@@ -26,7 +26,8 @@ runner Rust.
   `NativeHostAttemptBridgeRequest` produz o request Protobuf single-use
   consumido pelo core Rust e zera os bytes exatos após settlement.
 - `native/`: loader do addon a partir do pacote verificado, contrato ABI
-  Node-API 8 e transferência single-use do request para o owner Rust.
+  Node-API 8, transferência single-use do request para o owner Rust, adaptação
+  `Duplex` bounded e composition root Control/Data sem reopen.
 - `errors.ts`: erros tipados compartilhados pelas duas fronteiras.
 - `index.ts`: único ponto público de composição.
 
@@ -35,9 +36,15 @@ somente consome owners opacos já autenticados; não transforma PID, path ou
 token em prova física. O core `agent-host-bridge` cria esses owners e consulta
 o peer no mesmo HANDLE/FD; `agent-host-bridge-napi` já os mantém in-process,
 com I/O bounded, cancelamento compartilhado e cleanup explícito, e o loader só
-aceita seu artefato hasheado. Produção ainda requer adaptar esses canais ao
-framing/driver sem reopen e comprovar o E2E Prepare/Activate. Projectors,
-Provider Gateway e Tool Host entram em diretórios
+aceita seu artefato hasheado. O adapter já transfere os dois canais ao
+framing/driver existente e o teste integrado chega a `Active` com hidratação
+Data. O supervisor Rust já possui bootstrap/Hello/Shutdown process-real e reap
+físico. O launcher/owner Node-API do Host agora liga o package verificado ao
+Named Pipe management e ao Job do supervisor; um teste process-real comprova
+Ready, Hello, Shutdown/ACK, exit 0 e reap cooperativo. Produção ainda requer
+comprovar o percurso completo até Active com supervisor e runner empacotados.
+Projectors, Provider Gateway e Tool Host
+entram em diretórios
 próprios sem mover autoridade de persistência para o runtime. O coordinator
 permanece interno até existirem o E2E físico, loop multi-launch, crash recovery,
 rehydration durável, reaper nativo e dispatch atômico de efeitos em produção.

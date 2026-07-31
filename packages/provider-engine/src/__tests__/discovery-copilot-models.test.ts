@@ -28,13 +28,22 @@ function fakeStore(): ProviderStore {
   } as unknown as ProviderStore;
 }
 
-// Representative /models payload: id + optional name. `gpt-4o` is in the
-// capability registry (non-null context_window); `mystery-model` is absent
-// (null) — pinning both branches of `getRegistryContextWindow`.
+// Representative current /models payload with Copilot capability limits.
 const API_RESPONSE = {
   data: [
-    { id: 'gpt-4o', name: 'GPT-4o' },
-    { id: 'mystery-model' },
+    {
+      id: 'gpt-5.6-terra',
+      name: 'GPT-5.6 Terra',
+      model_picker_enabled: true,
+      capabilities: {
+        limits: {
+          max_context_window_tokens: 1_050_000,
+          max_output_tokens: 128_000,
+        },
+        supports: { vision: true, reasoning: true },
+      },
+    },
+    { id: 'mystery-model', model_picker_enabled: false },
   ],
 };
 
@@ -70,15 +79,33 @@ describe('sdk:copilot discovery', () => {
 
     expect(b).toEqual([
       {
-        model_id: 'gpt-4o',
-        name: 'GPT-4o',
-        context_window: expect.anything(),
+        model_id: 'gpt-5.6-terra',
+        name: 'GPT-5.6 Terra',
+        display_name: 'GPT-5.6 Terra',
+        context_window: 1_050_000,
+        default_max_tokens: 128_000,
+        can_reason: true,
+        supports_attachments: true,
+        supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'],
+        default_reasoning_level: 'medium',
+        input_modalities: ['text', 'image'],
+        visibility: 'list',
+        supported_in_api: true,
         source: 'live',
       },
       {
         model_id: 'mystery-model',
         name: 'mystery-model',
+        display_name: 'mystery-model',
         context_window: null,
+        default_max_tokens: null,
+        can_reason: false,
+        supports_attachments: false,
+        supported_reasoning_levels: null,
+        default_reasoning_level: null,
+        input_modalities: ['text'],
+        visibility: 'hidden',
+        supported_in_api: true,
         source: 'live',
       },
     ]);

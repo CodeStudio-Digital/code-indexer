@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package codestudio.agent.v1;
+
+import "codestudio/agent/v1/common.proto";
+import "codestudio/agent/v1/supervisor.proto";
+
+// Single-use request accepted by the in-process native Host bridge. Endpoint
+// address, Host PID, supervisor PID and runtime instance are minted natively
+// after package verification and are therefore absent from this request.
+message HostSupervisorBridgeOpenRequest {
+  uint32 schema_version = 1;
+  string management_endpoint_name = 2;
+  string management_connection_id = 3;
+  bytes management_session_token = 4;
+  bytes supervisor_launch_nonce = 5;
+  ExpectedRuntimeProvenance trusted_supervisor_provenance = 6;
+  ExpectedRuntimeProvenance trusted_runner_provenance = 7;
+  ProtocolVersion selected_protocol = 8;
+  string supervisor_executable = 9;
+  string runner_executable = 10;
+  uint64 startup_timeout_ms = 11;
+}
+
+// Private, single-use handoff delivered through inherited OS handles before
+// the permanent management channel can accept protocol frames.
+message SupervisorProcessHandoff {
+  uint32 schema_version = 1;
+  uint32 host_process_id = 2;
+  string management_connection_id = 3;
+  string management_endpoint_address = 4;
+  bytes management_session_token = 5;
+  bytes supervisor_launch_nonce = 6;
+  RuntimeProvenance supervisor_provenance = 7;
+  ProtocolVersionRange supported_protocols = 8;
+  ContainmentCapabilities containment = 9;
+  uint64 supported_feature_bits = 10;
+  string runner_executable = 11;
+  string runner_working_directory = 12;
+  repeated SupervisorProcessEnvironmentEntry runner_environment = 13;
+  ExpectedRuntimeProvenance trusted_runner_provenance = 14;
+}
+
+message SupervisorProcessEnvironmentEntry {
+  string key = 1;
+  string value = 2;
+}
+
+// Returned through the inherited response handle only after the supervisor
+// connected the exact protected management endpoint and verified the Host PID.
+message SupervisorProcessReady {
+  uint32 schema_version = 1;
+  uint32 supervisor_process_id = 2;
+  string management_connection_id = 3;
+  string management_endpoint_address = 4;
+}

@@ -18,6 +18,7 @@ import type { DupCallEntry } from '../../machine/types.js';
 import type { FailureStreakState } from '../failure-streak.js';
 import { NoProgressTracker } from '../no-progress.js';
 import { ToolCallLedger } from '../../../tool-call-ledger.js';
+import { nestedToolCallUseId } from '../../../tool.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../nested-observer.js';
 
 function deps(over?: Partial<Parameters<typeof buildNestedToolObserver>[0]>) {
@@ -31,6 +32,7 @@ function deps(over?: Partial<Parameters<typeof buildNestedToolObserver>[0]>) {
 }
 
 const afterArgs = (name: string, isError: boolean, preview = isError ? 'err' : 'ok') => ({
+  invocationId: `ce_parent_1#fixture-${name}`,
   name,
   args: { x: 1 },
   isError,
@@ -252,6 +254,33 @@ describe('observer robustness + telemetry sink', () => {
     expect(seen).toHaveLength(2);
     expect(seen[0]).toMatchObject({ seq: 1, name: 'read_file', parentToolUseId: 'ce_parent_1' });
     expect(seen[1]).toMatchObject({ seq: 2, name: 'glob' });
+  });
+
+  it('keeps invocation ids unique when a blocked sibling finishes first', () => {
+    const seen: Parameters<typeof nestedToolCallUseId>[0][] = [];
+    const obs = buildNestedToolObserver(deps({ onNestedCall: (e) => seen.push(e) }));
+
+    obs.afterNestedCall({
+      ...afterArgs('run_command', true, 'blocked'),
+      invocationId: 'ce_parent_1#2',
+      refusalKind: 'dedup',
+      guardVerdict: {
+        action: 'block',
+        reason: 'cross-turn-no-progress',
+        refusalKind: 'dedup',
+        shouldReflect: true,
+        affectsFailureStreak: false,
+        originToolUseId: 'ce_parent_1#2',
+      },
+    });
+    obs.afterNestedCall({
+      ...afterArgs('run_command', true, 'slow failure'),
+      invocationId: 'ce_parent_1#1',
+    });
+
+    const ids = seen.map(nestedToolCallUseId);
+    expect(ids).toEqual(['ce_parent_1#2', 'ce_parent_1#1']);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 
   it('caps the telemetry preview at 2000 chars', () => {

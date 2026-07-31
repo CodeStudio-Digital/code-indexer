@@ -36,7 +36,15 @@ interface ConverseStreamEvent {
   };
   contentBlockDelta?: {
     contentBlockIndex: number;
-    delta?: { text?: string; toolUse?: { input?: string } };
+    delta?: {
+      text?: string;
+      toolUse?: { input?: string };
+      reasoningContent?: {
+        text?: string;
+        signature?: string;
+        redactedContent?: Uint8Array;
+      };
+    };
   };
   contentBlockStop?: { contentBlockIndex: number };
   messageStop?: { stopReason: string };
@@ -73,9 +81,7 @@ export class BedrockChatProvider implements ChatProvider {
     secretAccessKey?: string;
     sessionToken?: string;
   }) {
-    // Default to Claude 3.5 Sonnet v2 — widely available and matches the
-    // indexer's pricing tier. Caller can override per-session via /switch.
-    this.model = opts.model ?? 'anthropic.claude-3-5-sonnet-20241022-v2:0';
+    this.model = opts.model ?? 'anthropic.claude-sonnet-5';
     this.region = opts.region ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-1';
     if (opts.accessKeyId && opts.secretAccessKey) {
       this.credentials = {
@@ -139,13 +145,10 @@ export class BedrockChatProvider implements ChatProvider {
 
     let stream;
     try {
-      console.log('\n--- Bedrock Request Debug ---');
-      console.log('Model ID sendo enviado:', this.model);
-      console.log('Ferramentas carregadas:', toolConfig?.tools?.length ?? 0);
-      console.log('Tem System Prompt?', !!system);
-      console.log('-----------------------------\n');
-
-      const temperature = req.inference?.temperature;
+      const reasoningFields = resolveBedrockReasoningRequest(this.model, req);
+      const temperature = reasoningFields
+        ? undefined
+        : req.inference?.temperature;
       const cmd = new sdk.ConverseStreamCommand({
         modelId: this.model,
         messages,
@@ -153,6 +156,9 @@ export class BedrockChatProvider implements ChatProvider {
         toolConfig,
         ...(typeof temperature === 'number'
           ? { inferenceConfig: { temperature } }
+          : {}),
+        ...(reasoningFields
+          ? { additionalModelRequestFields: reasoningFields }
           : {}),
       });
       const resp = await client.send(cmd);
@@ -185,6 +191,9 @@ export class BedrockChatProvider implements ChatProvider {
           const delta = event.contentBlockDelta.delta;
           if (delta?.text) {
             yield { type: 'text_delta', text: delta.text };
+          }
+          if (delta?.reasoningContent?.text) {
+            yield { type: 'thinking_delta', text: delta.reasoningContent.text };
           }
           if (delta?.toolUse?.input) {
             const acc = toolAcc.get(idx);
@@ -358,9 +367,6 @@ function base64ToBytes(b64: string): Uint8Array {
 // ─── Error humanizer ───────────────────────────────────────────
 
 function humanizeBedrockError(e: unknown, model: string): string {
-  // Dump raw trace to terminal for deep-debugging (e.g. AWS requestId, HTTP status)
-  console.error('\n[Bedrock Raw Trace]:', e, '\n');
-
   if (!(e instanceof Error)) return String(e);
   const msg = e.message;
   const name = e.name;
@@ -388,4 +394,62 @@ function humanizeBedrockError(e: unknown, model: string): string {
     return `Bedrock model "${model}" not found in the current region. Details: ${msg}`;
   }
   return `Bedrock error (${name || 'unknown'}): ${msg}`;
+}
+
+export function resolveBedrockReasoningRequest(
+  model: string,
+  req: Pick<ChatRequest, 'thinking' | 'reasoningEffort'>,
+): Record<string, unknown> | null {
+  const id = bareBedrockModelId(model);
+  const effort = req.reasoningEffort?.trim().toLowerCase();
+
+  if (/^anthropic\.claude-/.test(id)) {
+    const adaptive =
+      /claude-(?:fable|mythos|opus)-5/.test(id)
+      || /claude-sonnet-5/.test(id)
+      || /claude-(?:opus-4-[678]|sonnet-4-6)/.test(id);
+    const alwaysAdaptive =
+      /claude-(?:fable|mythos|opus)-5/.test(id)
+      || /claude-sonnet-5/.test(id);
+    if (!adaptive || (!alwaysAdaptive && req.thinking !== true && !effort)) return null;
+    const normalizedEffort = normalizeAnthropicBedrockEffort(effort);
+    return {
+      thinking: { type: 'adaptive', display: 'summarized' },
+      ...(normalizedEffort ? { output_config: { effort: normalizedEffort } } : {}),
+    };
+  }
+
+  if (/^amazon\.nova-(?:2-|(?:pro|lite)-1-5)/.test(id)) {
+    if (req.thinking === undefined && !effort) return null;
+    const enabled = req.thinking !== false && effort !== 'none';
+    return {
+      reasoningConfig: {
+        type: enabled ? 'enabled' : 'disabled',
+        ...(enabled ? { maxReasoningEffort: normalizeNovaEffort(effort) } : {}),
+      },
+    };
+  }
+
+  return null;
+}
+
+function bareBedrockModelId(model: string): string {
+  return model
+    .toLowerCase()
+    .replace(/^(?:global|us|eu|apac|au|ca|jp|kr|in|br)\./, '');
+}
+
+function normalizeAnthropicBedrockEffort(
+  effort: string | undefined,
+): 'low' | 'medium' | 'high' | 'max' | null {
+  if (effort === 'low' || effort === 'medium' || effort === 'high' || effort === 'max') {
+    return effort;
+  }
+  if (effort === 'xhigh' || effort === 'ultra') return 'max';
+  return null;
+}
+
+function normalizeNovaEffort(effort: string | undefined): 'low' | 'medium' | 'high' {
+  if (effort === 'low' || effort === 'medium') return effort;
+  return 'high';
 }

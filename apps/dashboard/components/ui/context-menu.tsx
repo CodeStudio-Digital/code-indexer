@@ -33,6 +33,8 @@ interface UseContextMenuResult {
   triggerProps: {
     onContextMenu: (e: React.MouseEvent) => void;
   };
+  /** Open from a visible affordance (for example an ellipsis button). */
+  openAt: (x: number, y: number) => void;
   /** Render this near the root; it portals itself. */
   Menu: React.ReactElement | null;
 }
@@ -40,15 +42,17 @@ interface UseContextMenuResult {
 export function useContextMenu(items: ContextMenuItem[]): UseContextMenuResult {
   const [open, setOpen] = useState<{ x: number; y: number } | null>(null);
   const close = useCallback(() => setOpen(null), []);
+  const openAt = useCallback((x: number, y: number) => setOpen({ x, y }), []);
 
   return {
     triggerProps: {
       onContextMenu: (e) => {
         e.preventDefault();
         e.stopPropagation();
-        setOpen({ x: e.clientX, y: e.clientY });
+        openAt(e.clientX, e.clientY);
       },
     },
+    openAt,
     Menu: open ? <ContextMenuView pos={open} items={items} onClose={close} /> : null,
   };
 }

@@ -151,6 +151,65 @@ export function buildIframeInjection(
   ].join('\n');
 }
 
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+/**
+ * Stamp the packaged renderer's per-launch nonce onto inline scripts only.
+ * Script bodies are skipped as opaque text so strings containing `<script>`
+ * cannot be rewritten accidentally. External scripts remain governed by the
+ * normal source allowlist.
+ */
+export function applyInlineScriptNonce(html: string, scriptNonce?: string): string {
+  if (!scriptNonce) return html;
+  const escapedNonce = escapeHtmlAttribute(scriptNonce);
+  const openScript = /<script\b([^>]*)>/gi;
+  const closeScript = /<\/script\s*>/gi;
+  const nonceAttribute = /(^|\s)nonce\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/i;
+  const srcAttribute = /(^|\s)src\s*=/i;
+  let cursor = 0;
+  let output = '';
+
+  while (cursor < html.length) {
+    openScript.lastIndex = cursor;
+    const opening = openScript.exec(html);
+    if (!opening) {
+      output += html.slice(cursor);
+      break;
+    }
+
+    output += html.slice(cursor, opening.index);
+    const attributes = opening[1] ?? '';
+    if (srcAttribute.test(attributes)) {
+      output += opening[0];
+    } else if (nonceAttribute.test(attributes)) {
+      output += `<script${attributes.replace(
+        nonceAttribute,
+        `$1nonce="${escapedNonce}"`,
+      )}>`;
+    } else {
+      output += `<script nonce="${escapedNonce}"${attributes}>`;
+    }
+
+    const bodyStart = openScript.lastIndex;
+    closeScript.lastIndex = bodyStart;
+    const closing = closeScript.exec(html);
+    if (!closing) {
+      output += html.slice(bodyStart);
+      break;
+    }
+    output += html.slice(bodyStart, closeScript.lastIndex);
+    cursor = closeScript.lastIndex;
+  }
+
+  return output;
+}
+
 /**
  * Splice the kit + injection into a plugin's HTML. Placement is deliberate:
  * the UI kit goes right AFTER `<head>` opens so the author's own <style>
@@ -164,6 +223,7 @@ export function injectIntoHtml(
   html: string,
   context: { namespace: string; projectId?: number; locale?: string },
   themeTokens: Record<string, string>,
+  scriptNonce?: string,
 ): string {
   const kit = `<style id="mcp-ui-kit">${PLUGIN_UI_KIT_CSS}</style>`;
   const injection = buildIframeInjection(context, themeTokens);
@@ -172,6 +232,8 @@ export function injectIntoHtml(
   const withKit = headOpen
     ? `${html.slice(0, at)}\n${kit}${html.slice(at)}`
     : `${kit}\n${html}`;
-  if (/<\/head>/i.test(withKit)) return withKit.replace(/<\/head>/i, `${injection}\n</head>`);
-  return `${injection}\n${withKit}`;
+  const injected = /<\/head>/i.test(withKit)
+    ? withKit.replace(/<\/head>/i, `${injection}\n</head>`)
+    : `${injection}\n${withKit}`;
+  return applyInlineScriptNonce(injected, scriptNonce);
 }

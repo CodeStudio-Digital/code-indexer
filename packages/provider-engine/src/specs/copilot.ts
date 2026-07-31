@@ -12,15 +12,21 @@ export const copilotSpec: ProviderSpec = {
   visual: { icon: 'Code2', fg: 'text-purple-500', bg: 'bg-purple-500/15' },
   credKind: 'oauth',
   envVars: [],
-  defaultModels: ['gpt-4o', 'gpt-4o-mini', 'claude-3.5-sonnet', 'o1-mini'],
-  pricing: {
-    'gpt-4o': { inputPer1M: 0.0, outputPer1M: 0.0 },
-    'gpt-4o-mini': { inputPer1M: 0.0, outputPer1M: 0.0 },
-    'claude-3.5-sonnet': { inputPer1M: 0.0, outputPer1M: 0.0 },
-    'o1-mini': { inputPer1M: 0.0, outputPer1M: 0.0 },
-  },
+  defaultModel: 'gpt-5.6-terra',
+  defaultModels: [
+    'gpt-5.6-terra',
+    'gpt-5.6-sol',
+    'gpt-5.6-luna',
+    'claude-sonnet-5',
+    'claude-opus-5',
+    'claude-fable-5',
+    'gemini-3.6-flash',
+    'kimi-k2.7',
+  ],
+  pricing: {},
+  capabilities: { supportsThinking: true, supportsVision: true },
   wire: 'openai-compat',
-  wireOpts: { indexerDefaultModel: 'gpt-4o' },
+  wireOpts: { vendor: 'copilot', indexerDefaultModel: 'gpt-5.6-luna' },
   discovery: { from: 'sdk:copilot' },
   test: { from: 'openai-models', fallbackBaseURL: 'https://api.githubcopilot.com' },
   // Declarative OAuth (pat-exchange: GitHub device-code → long-lived PAT, then the
@@ -36,6 +42,35 @@ export const copilotSpec: ProviderSpec = {
     tokenUrl: 'https://github.com/login/oauth/access_token',
     hooks: 'copilot',
   },
+  models: {
+    'gpt-5.6-terra': copilotReasoningModel(),
+    'gpt-5.6-sol': copilotReasoningModel(),
+    'gpt-5.6-luna': copilotReasoningModel(),
+    'claude-sonnet-5': copilotReasoningModel(),
+    'claude-opus-5': copilotReasoningModel(),
+    'claude-fable-5': copilotReasoningModel(),
+    'gemini-3.6-flash': {
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: null,
+      defaultReasoningLevel: null,
+    },
+    'kimi-k2.7': {
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: null,
+      defaultReasoningLevel: null,
+    },
+  },
 };
 
 export const COPILOT_SPECS: ProviderSpec[] = [copilotSpec];
+
+function copilotReasoningModel() {
+  return {
+    canReason: true,
+    supportsAttachments: true,
+    supportedReasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+    defaultReasoningLevel: 'medium',
+  };
+}

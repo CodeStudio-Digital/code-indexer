@@ -6,6 +6,7 @@ import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { nestedToolCallUseId } from '@mcp/code-agent/core/tool.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { FsTurnTelemetryRepository } from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
 import { createPolicyShadowPort } from '@mcp/code-agent/core/policy-shadow-adapter.js';
@@ -537,7 +538,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (agentDef) {
     if (opts.profile === undefined) opts = { ...opts, profile: agentDef.profile };
     if (opts.planMode === undefined) opts = { ...opts, planMode: agentDef.planMode };
-    if (opts.maxTurns === undefined && agentDef.maxTurns) opts = { ...opts, maxTurns: agentDef.maxTurns };
     // Stay-in-Build invariant: on a RESUME, the persisted agent is authoritative
     // for plan mode. A non-plan agent (e.g. `build`, after a plan→build approval)
     // must NOT re-enter plan mode even if the client forwarded a stale
@@ -1084,6 +1084,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     /* table may not exist yet — no-op */
   }
   const sessionDisabledTools = await store.getSessionDisabledTools(session.id);
+  // Do not advertise a cross-session recall path that is guaranteed to fail.
+  // The control arm of the live memory benchmark showed models spending calls
+  // retrying recall_memory when the project toggle was off.
+  if (!anyMemoryEnabled) sessionDisabledTools.add('recall_memory');
 
   // Subagent deps — built AFTER MCP tools so it captures the full tool list
   // for filtering. Disabled via CODER_DISABLE_SUBAGENTS=1. Also DISABLED for
@@ -1966,7 +1970,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // visible membership instead of dropping the cut and re-flipping the array.
   const preflightCapRaw = Number.parseInt(process.env.CODER_PREFLIGHT_VISIBLE_CAP ?? '', 10);
   const seededToolCap = preflightSeed
-    ? (Number.isFinite(preflightCapRaw) && preflightCapRaw > 0 ? preflightCapRaw : 48)
+    ? (Number.isFinite(preflightCapRaw) && preflightCapRaw > 0 ? preflightCapRaw : 28)
     : undefined;
   const sessionToolCap = seededToolCap ?? persistedToolset?.visibleCap ?? undefined;
   if (stickyToolset && seededToolCap != null) {
@@ -3030,7 +3034,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // (assignment below) — keeps recorder in sync with runner.turn
     // even though the runner is constructed after recorder. The recorder
     // reads `runnerRef?.turn` lazily, so this assignment closes the loop.
-    maxTurns: opts.maxTurns ?? 50,
+    maxTurns: opts.maxTurns ?? session.max_turns ?? undefined,
+    maxAutoContinues:
+      opts.maxAutoContinues ?? session.max_auto_continues,
     planMode: opts.planMode,
     // Fase 2.5 — shadow port (absent when flags off → zero behavior change).
     ...(policyShadowComposition ? { policyShadow: policyShadowComposition.port } : {}),
@@ -3442,6 +3448,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     const stagedGoalMutationsForTurn = stagedGoalMutationsReferencedByTurn.filter(
       (staged) => appliedGoalToolUseIds.has(staged.mutation.tool_use_id),
     );
+    const goalNoopToolUseIdsForTurn = durableCalls
+      .filter(
+        (tc) =>
+          (tc.tool_name === 'create_goal' || tc.tool_name === 'update_goal')
+          && goalNoopToolUseIds.has(tc.tool_use_id),
+      )
+      .map((tc) => tc.tool_use_id);
     // The no-op claims are turn-scoped evidence, not durable state: drop the
     // ones this turn carries so the set cannot grow across a long run.
     for (const tc of durableCalls) goalNoopToolUseIds.delete(tc.tool_use_id);
@@ -3502,6 +3515,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       nested_tool_calls: turn.nestedToolCalls.length > 0 ? turn.nestedToolCalls : undefined,
       subagent_usage: hasSubUsage ? turn.subagentUsage : undefined,
       goal_mutations: goalMutations.length > 0 ? goalMutations : undefined,
+      // A successful idempotent create/update has no state mutation by
+      // definition. Preserve that turn-scoped evidence through the second
+      // (filesystem writer) invariant check instead of misclassifying the
+      // successful no-op as a dropped mutation.
+      goal_noop_tool_use_ids:
+        goalNoopToolUseIdsForTurn.length > 0
+          ? goalNoopToolUseIdsForTurn
+          : undefined,
       // Reuse the checkpointed assistant row (if the write succeeded) so the
       // tool rows + paired tool message attach to it rather than a duplicate.
       existing_message_seq: turn.checkpoint?.messageId ?? undefined,
@@ -3634,15 +3655,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try {
         if (!pendingTurn) return;
         pendingTurn.nestedToolCalls.push({
-          // Blocking nested calls carry their invocation-order id explicitly.
-          // Prefer it over completion-order `seq` so a propagated parent row
-          // can point at the exact root-cause audit row under concurrency.
-          // Reuse/shadow rows keep a unique completion id and store their
-          // cause separately in guard_origin_tool_use_id.
-          tool_use_id:
-            e.guardVerdict?.action === 'block' && e.guardVerdict.originToolUseId
-              ? e.guardVerdict.originToolUseId
-              : `${e.parentToolUseId}#${e.seq}`,
+          // Every nested row uses the invocation-order identity captured
+          // before concurrent work starts. Completion order can invert (for
+          // example, a fast guard refusal beside a slow shell call), so mixing
+          // it with guard origin ids can produce duplicate tool_use_id values.
+          tool_use_id: nestedToolCallUseId(e),
           tool_name: e.name,
           args: e.args,
           result_text: e.resultPreview,

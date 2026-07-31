@@ -35,6 +35,8 @@ import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
 
 export interface ScanOptions {
   maxFiles?: number;
+  /** Yield background disk work while an interactive operation has priority. */
+  waitForInteractivePriority?: () => Promise<void>;
   /**
    * Liveness callback for the (otherwise silent) walk. `scanned` is files seen
    * so far; `total` is 0 until the candidate list is known (glob phase), then
@@ -44,8 +46,10 @@ export interface ScanOptions {
   onScanProgress?: (scanned: number, total: number) => void;
 }
 
-/** Files between cooperative yields / progress emits during the stat walk. */
+/** Files between progress emits during the stat walk. */
 const SCAN_STEP = 500;
+/** Bound how long an interactive operation waits for the synchronous stat loop. */
+const PRIORITY_YIELD_STEP = 100;
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -73,6 +77,7 @@ export class FileScanner {
     const validFiles: Array<{ absolutePath: string; relativePath: string }> = [];
     let ignoredCount = 0;
     for (const source of sources) {
+      await opts.waitForInteractivePriority?.();
       const sourceStat = statSync(source.rootPath, { throwIfNoEntry: false });
       if (!sourceStat?.isDirectory()) continue;
       // Synthetic projects are scanned as an explicit list of real roots from
@@ -108,7 +113,12 @@ export class FileScanner {
         });
         // Discovery liveness — total unknown (0) until the walk finishes. The
         // for-await already yields to the loop on each async tick.
-        if (validFiles.length % SCAN_STEP === 0) opts.onScanProgress?.(validFiles.length, 0);
+        if (validFiles.length % PRIORITY_YIELD_STEP === 0) {
+          if (validFiles.length % SCAN_STEP === 0) {
+            opts.onScanProgress?.(validFiles.length, 0);
+          }
+          await opts.waitForInteractivePriority?.();
+        }
         if (opts.maxFiles && validFiles.length > opts.maxFiles) {
           return {
             toIndex: [],
@@ -140,11 +150,14 @@ export class FileScanner {
       // Cooperative yield: this loop is fully synchronous (statSync/readFileSync)
       // and, in the in-process fallback, runs on the Electron MAIN thread — a
       // large project would block it solid (frozen UI that "never recovers").
-      // Yielding every SCAN_STEP files keeps IPC alive; the worker path pays a
-      // negligible cost. Doubles as the throttled "scanning" progress emit.
-      if (processed > 0 && processed % SCAN_STEP === 0) {
-        opts.onScanProgress?.(processed, validFiles.length);
+      // Yielding every PRIORITY_YIELD_STEP files keeps IPC/foreground-priority
+      // signals live; progress itself remains throttled to SCAN_STEP.
+      if (processed > 0 && processed % PRIORITY_YIELD_STEP === 0) {
+        if (processed % SCAN_STEP === 0) {
+          opts.onScanProgress?.(processed, validFiles.length);
+        }
         await yieldToEventLoop();
+        await opts.waitForInteractivePriority?.();
       }
       processed++;
 

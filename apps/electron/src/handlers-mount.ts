@@ -36,12 +36,67 @@ import {
   serializeError,
   walkHandlers,
 } from '@apps/http-api/server/handler-tree.js';
+import { raceWithAbort } from './invoke-lifecycle.js';
 
 const activeInvokes = new Map<string, AbortController>();
+const activeRequestsBySender = new Map<number, Set<AbortController>>();
+const senderLifecycleMounted = new WeakSet<Electron.WebContents>();
 let cancelInvokeMounted = false;
 
 function invokeKey(senderId: number, requestId: string): string {
   return `${senderId}:${requestId}`;
+}
+
+function abortSenderRequests(senderId: number, reason: string): void {
+  const controllers = activeRequestsBySender.get(senderId);
+  if (!controllers) return;
+  activeRequestsBySender.delete(senderId);
+  for (const controller of controllers) {
+    controller.abort(new Error(reason));
+  }
+  for (const [key, controller] of activeInvokes) {
+    if (controllers.has(controller)) activeInvokes.delete(key);
+  }
+}
+
+function ensureSenderLifecycle(sender: Electron.WebContents): void {
+  if (senderLifecycleMounted.has(sender)) return;
+  senderLifecycleMounted.add(sender);
+  const senderId = sender.id;
+  sender.on(
+    'did-start-navigation',
+    (_event, _url, _isInPlace, isMainFrame) => {
+      if (isMainFrame) {
+        abortSenderRequests(senderId, 'renderer navigated');
+      }
+    },
+  );
+  sender.once('render-process-gone', () => {
+    abortSenderRequests(senderId, 'renderer process exited');
+  });
+  sender.once('destroyed', () => {
+    abortSenderRequests(senderId, 'renderer closed');
+  });
+}
+
+function trackSenderRequest(
+  sender: Electron.WebContents,
+  controller: AbortController,
+): () => void {
+  ensureSenderLifecycle(sender);
+  const senderId = sender.id;
+  let requests = activeRequestsBySender.get(senderId);
+  if (!requests) {
+    requests = new Set();
+    activeRequestsBySender.set(senderId, requests);
+  }
+  requests.add(controller);
+  return () => {
+    requests.delete(controller);
+    if (requests.size === 0 && activeRequestsBySender.get(senderId) === requests) {
+      activeRequestsBySender.delete(senderId);
+    }
+  };
 }
 
 async function runInvoke(
@@ -51,15 +106,23 @@ async function runInvoke(
 ): Promise<unknown> {
   const decoded = decodeInvoke(input);
   const controller = new AbortController();
-  const key = decoded.requestId ? invokeKey(event.sender.id, decoded.requestId) : null;
-  const onDestroyed = () => controller.abort(new Error('renderer closed'));
-  if (key) activeInvokes.set(key, controller);
-  event.sender.once('destroyed', onDestroyed);
+  const senderId = event.sender.id;
+  const key = decoded.requestId ? invokeKey(senderId, decoded.requestId) : null;
+  const untrack = trackSenderRequest(event.sender, controller);
+  if (key) {
+    activeInvokes.get(key)?.abort(new Error('request superseded'));
+    activeInvokes.set(key, controller);
+  }
   try {
-    return await run(decoded.payload, controller.signal);
+    return await raceWithAbort(
+      controller.signal,
+      () => run(decoded.payload, controller.signal),
+    );
   } finally {
-    event.sender.removeListener('destroyed', onDestroyed);
-    if (key) activeInvokes.delete(key);
+    untrack();
+    if (key && activeInvokes.get(key) === controller) {
+      activeInvokes.delete(key);
+    }
   }
 }
 
@@ -95,27 +158,53 @@ function mountStream(channel: string, fn: AnyFn) {
   ipcMain.on(`stream:${channel}`, (event: IpcMainEvent, msg: { requestId: string; payload: unknown }) => {
     const { requestId, payload } = msg;
     const { port1, port2 } = new MessageChannelMain();
+    const controller = new AbortController();
+    const untrack = trackSenderRequest(event.sender, controller);
     // Hand port1 to the renderer; renderer's preload is listening for
     // the same `stream-port:<requestId>` event name.
     event.sender.postMessage(`stream-port:${requestId}`, null, [port1]);
-    void pumpStream(port2, fn, payload, channel);
+    void pumpStream(
+      port2,
+      fn,
+      payload,
+      channel,
+      controller.signal,
+    ).finally(untrack);
   });
 }
 
-async function pumpStream(port: Electron.MessagePortMain, fn: AnyFn, payload: unknown, channel: string) {
+async function pumpStream(
+  port: Electron.MessagePortMain,
+  fn: AnyFn,
+  payload: unknown,
+  channel: string,
+  signal: AbortSignal,
+) {
+  let iterator: AsyncIterator<unknown> | undefined;
   try {
     const iterable = fn(
       payload as never,
-      createContext({ clientInfo: { sourceType: 'electron', origin: channel } }),
+      createContext({
+        signal,
+        clientInfo: { sourceType: 'electron', origin: channel },
+      }),
     ) as AsyncIterable<unknown>;
+    iterator = iterable[Symbol.asyncIterator]();
     port.start();
-    for await (const value of iterable) {
-      port.postMessage({ type: 'value', value });
+    while (true) {
+      const step = await raceWithAbort(signal, () => iterator!.next());
+      if (step.done) break;
+      port.postMessage({ type: 'value', value: step.value });
     }
     port.postMessage({ type: 'done' });
   } catch (err) {
-    port.postMessage({ type: 'error', error: serializeError(err) });
+    if (!signal.aborted) {
+      port.postMessage({ type: 'error', error: serializeError(err) });
+    }
   } finally {
+    if (signal.aborted && iterator?.return) {
+      void Promise.resolve(iterator.return()).catch(() => undefined);
+    }
     port.close();
   }
 }
@@ -181,8 +270,16 @@ function mountHonoStream(channel: string, methodPath: string, app: Hono) {
   ipcMain.on(`stream:${channel}`, (event: IpcMainEvent, msg: { requestId: string; payload: unknown }) => {
     const { requestId, payload } = msg;
     const { port1, port2 } = new MessageChannelMain();
+    const controller = new AbortController();
+    const untrack = trackSenderRequest(event.sender, controller);
     event.sender.postMessage(`stream-port:${requestId}`, null, [port1]);
-    void pumpHonoStream(port2, methodPath, payload, app);
+    void pumpHonoStream(
+      port2,
+      methodPath,
+      payload,
+      app,
+      controller.signal,
+    ).finally(untrack);
   });
 }
 
@@ -191,15 +288,23 @@ async function pumpHonoStream(
   methodPath: string,
   payload: unknown,
   app: Hono,
+  signal: AbortSignal,
 ) {
   try {
     port.start();
-    for await (const value of dispatchStreaming(app, methodPath, payload)) {
+    for await (const value of dispatchStreaming(
+      app,
+      methodPath,
+      payload,
+      signal,
+    )) {
       port.postMessage({ type: 'value', value });
     }
     port.postMessage({ type: 'done' });
   } catch (err) {
-    port.postMessage({ type: 'error', error: serializeError(err) });
+    if (!signal.aborted) {
+      port.postMessage({ type: 'error', error: serializeError(err) });
+    }
   } finally {
     port.close();
   }

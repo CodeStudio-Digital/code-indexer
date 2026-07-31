@@ -12,7 +12,10 @@ export const moonshotSpec: ProviderSpec = {
   credKind: 'api-key',
   envVars: ['MOONSHOT_API_KEY', 'KIMI_API_KEY'],
   defaultBaseURL: 'https://api.moonshot.ai/v1',
+  defaultModel: 'kimi-k2.6',
   defaultModels: [
+    'kimi-k2.6',
+    'kimi-k2.5',
     'kimi-k2-0711-preview',
     'kimi-k2-turbo-preview',
     'kimi-k2-thinking-turbo',
@@ -53,6 +56,24 @@ export const moonshotSpec: ProviderSpec = {
       },
     ],
   },
+  models: {
+    'kimi-k2.6': moonshotThinkingModel(),
+    'kimi-k2.5': moonshotThinkingModel(),
+    'kimi-k2-turbo-preview': moonshotThinkingModel(),
+    'kimi-k2-thinking-turbo': moonshotThinkingModel(),
+  },
 };
 
 export const MOONSHOT_SPECS: ProviderSpec[] = [moonshotSpec];
+
+function moonshotThinkingModel() {
+  return {
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+    canReason: true,
+    supportsAttachments: true,
+    supportedReasoningLevels: null,
+    defaultReasoningLevel: null,
+    inputModalities: ['text', 'image', 'video'],
+  };
+}

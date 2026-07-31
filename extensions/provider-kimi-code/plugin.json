@@ -1,6 +1,6 @@
 {
   "name": "provider-kimi-code",
-  "version": "0.1.2",
+  "version": "0.1.2+codex.local-20260731004500",
   "description": "Kimi Code API-key provider as a bundled first-party plugin",
   "author": { "name": "mcp" },
   "apps": ".app.json",

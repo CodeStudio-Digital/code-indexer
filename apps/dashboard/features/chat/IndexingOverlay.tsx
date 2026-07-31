@@ -1,10 +1,10 @@
 /**
- * Composer indexing overlay — a tiny isolated leaf.
+ * Non-blocking composer indexing status — a tiny isolated leaf.
  *
  * It owns the FULL `useIndexStatus` subscription (re-renders ~6×/s during a
- * pass) so the heavy AgentChat tree doesn't have to: AgentChat gates on the
- * boolean `useIndexBusy` (flips twice per pass) while THIS ~20px overlay is the
- * only thing that re-renders on every progress frame.
+ * pass) so the heavy AgentChat tree doesn't have to. This leaf is the only
+ * thing that re-renders on every progress frame, and it stays in normal layout
+ * flow so indexing can never cover or disable the composer.
  */
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -32,9 +32,9 @@ function IndexingOverlayImpl({ projectId }: { projectId: number }) {
     <div
       role="status"
       aria-busy="true"
-      className="absolute inset-0 z-20 flex items-center justify-center gap-2 bg-card/85 backdrop-blur-sm text-sm text-muted-foreground"
+      className="flex min-h-7 items-center justify-end gap-2 bg-card/45 px-3 py-1 text-xs text-muted-foreground"
     >
-      <Loader2 className="h-4 w-4 animate-spin" />
+      <Loader2 className="h-3.5 w-3.5 animate-spin" />
       <span className="tabular-nums">
         {t('global.indexing')}
         {detail}

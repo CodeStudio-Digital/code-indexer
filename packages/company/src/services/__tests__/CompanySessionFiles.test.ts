@@ -93,7 +93,12 @@ describe('CompanySessionFiles', () => {
     }));
 
     expect(run.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect((await files.getAgentRun(run.id))?.status_message).toBe('booted');
+    expect(run.seq).toBeGreaterThan(0);
+    expect(run.board_watermark_seq).toBe(0);
+    expect(await files.getAgentRun(run.id)).toMatchObject({
+      seq: run.seq,
+      status_message: 'booted',
+    });
     expect(files.getAgentRunSync(run.id)?.status_message).toBe('booted');
     expect(files.listAgentRunsSync().map((candidate) => candidate.id)).toEqual([
       run.id,
@@ -111,6 +116,7 @@ describe('CompanySessionFiles', () => {
       model: 'gpt-5',
       status: 'running',
     });
+    expect(subordinate.seq).toBeGreaterThan(run.seq);
     expect(files.countActiveSubordinatesAcrossCatalog()).toBe(1);
     await files.updateAgentRunStatus(subordinate.id, 'completed');
     expect(files.countActiveSubordinatesAcrossCatalog()).toBe(0);

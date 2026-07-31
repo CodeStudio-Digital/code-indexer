@@ -14,7 +14,7 @@ import { initProjectManifest, readProjectManifest, writeProjectManifest } from '
 import { DEFAULT_SPRITE_STYLE, type SpriteStyleConfig } from '@mcp/store/sprite-studio/types.js';
 import type { ServerDeps } from '../../deps.js';
 import type { SpriteProjectFileRow } from '../../operational-session-files.js';
-import { studioSettingsToStyle } from './settings-map.js';
+import { studioSettingsToStyle, styleToStudioSettings } from './settings-map.js';
 
 function projectRoot(deps: ServerDeps, ideProjectId: number): string | null {
   const project = deps.db.getProject(ideProjectId);
@@ -24,19 +24,21 @@ function projectRoot(deps: ServerDeps, ideProjectId: number): string | null {
 export function mountSpriteProjectRoutes(app: Hono, deps: ServerDeps): void {
   const store = deps.operationalSessionFiles;
 
-  const toProjectInfo = (row: SpriteProjectFileRow): Record<string, unknown> => ({
-    id: row.id,
-    projectId: row.project_id,
-    name: row.name,
-    settings:
-      Object.keys(row.settings).length > 0
-        ? row.settings
-        : row.style,
-    styleVersion: 1,
-    exportDir: row.export_dir,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  });
+  const toProjectInfo = (row: SpriteProjectFileRow): Record<string, unknown> => {
+    const style = Object.keys(row.settings).length > 0
+      ? studioSettingsToStyle(row.settings)
+      : row.style as unknown as SpriteStyleConfig;
+    return {
+      id: row.id,
+      projectId: row.project_id,
+      name: row.name,
+      settings: styleToStudioSettings(style),
+      styleVersion: 1,
+      exportDir: row.export_dir,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  };
 
   // GET — returns { initialized, project }. Not initialized until /init ran.
   app.get('/api/sprite-studio/projects/:projectId', async (c) => {

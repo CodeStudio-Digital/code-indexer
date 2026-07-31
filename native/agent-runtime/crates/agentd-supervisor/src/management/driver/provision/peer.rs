@@ -33,6 +33,13 @@ pub struct ProtectedLaunchPeerAuthority {
     )
 )]
 impl ProtectedLaunchPeerAuthority {
+    #[cfg(windows)]
+    pub(crate) fn from_authenticated_windows_host(
+        host_process_id: u32,
+    ) -> Result<Self, ProtectedLaunchPeerAuthorityError> {
+        Self::new(host_process_id, std::process::id(), None, None)
+    }
+
     /// Creates explicit peer authority for tests on the current target platform.
     ///
     /// Unix requires both user IDs. Windows rejects both user IDs.
@@ -43,6 +50,20 @@ impl ProtectedLaunchPeerAuthority {
     /// process, and platform-incompatible Unix identity.
     #[cfg(test)]
     pub(crate) fn new_for_test(
+        host_process_id: u32,
+        supervisor_process_id: u32,
+        host_unix_user_id: Option<u32>,
+        supervisor_unix_user_id: Option<u32>,
+    ) -> Result<Self, ProtectedLaunchPeerAuthorityError> {
+        Self::new(
+            host_process_id,
+            supervisor_process_id,
+            host_unix_user_id,
+            supervisor_unix_user_id,
+        )
+    }
+
+    fn new(
         host_process_id: u32,
         supervisor_process_id: u32,
         host_unix_user_id: Option<u32>,

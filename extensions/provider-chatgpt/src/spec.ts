@@ -15,16 +15,28 @@ export const chatgptSpec: ProviderSpec = {
   visual: { icon: 'MessagesSquare', fg: 'text-emerald-400', bg: 'bg-emerald-400/15' },
   credKind: 'oauth',
   envVars: [],
-  defaultModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.3-codex', 'gpt-5-codex', 'gpt-4o'],
+  defaultModels: [
+    'gpt-5.6-sol',
+    'gpt-5.6-terra',
+    'gpt-5.6-luna',
+    'gpt-5.5',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.3-codex-spark',
+  ],
   pricing: {
     // Codex OAuth models are subscription-billed → 0 marginal token cost.
     'gpt-5.6-sol': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'gpt-5.6-terra': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'gpt-5.6-luna': { inputPer1M: 0.0, outputPer1M: 0.0 },
-    'gpt-5.3-codex': { inputPer1M: 0.0, outputPer1M: 0.0 },
-    'gpt-5-codex': { inputPer1M: 0.0, outputPer1M: 0.0 },
-    'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10.0 },
+    'gpt-5.5': { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'gpt-5.4': { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'gpt-5.4-mini': { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'gpt-5.3-codex-spark': { inputPer1M: 0.0, outputPer1M: 0.0 },
   },
+  // The host owns the actual image client; this flag makes the provider-engine
+  // attach that client when it builds the plugin's proxy definition.
+  capabilities: { supportsImageGen: true, supportsVision: true, fileInput: 'native' },
   wire: 'codex',
   discovery: { from: 'chatgpt-models' },
   test: { from: 'codex-health' },

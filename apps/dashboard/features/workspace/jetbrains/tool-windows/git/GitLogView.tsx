@@ -120,8 +120,28 @@ export function GitLogView({ tab }: { tab: OpenGitLog }) {
 
   const switchTo = async () => {
     try {
-      const name = await checkoutBranch(projectId, branch, isRemote, repoPath);
-      toast.success(t('git.branchSwitched', { branch: name }));
+      const result = await checkoutBranch(projectId, branch, isRemote, repoPath, {
+        confirmSmartCheckout: (blocker) => confirm({
+          title: t('git.smartCheckoutTitle'),
+          description: t(blocker === 'untracked'
+            ? 'git.smartCheckoutUntrackedDescription'
+            : 'git.smartCheckoutDescription', { branch }),
+          confirmLabel: t('git.smartCheckoutConfirm'),
+        }),
+      });
+      if (!result) return;
+      if (result.restoreConflicts) {
+        toast.warning(t('git.smartCheckoutConflicts'), {
+          description: t('git.smartCheckoutConflictsDescription', {
+            branch: result.name,
+            stash: result.stashRef ?? t('git.smartCheckoutUnknownStash'),
+          }),
+          duration: 10_000,
+        });
+        requestGitReload();
+      } else {
+        toast.success(t('git.branchSwitched', { branch: result.name }));
+      }
       await reload();
     } catch (e) {
       toast.error(t('git.checkoutFailed'), { description: e instanceof Error ? e.message : String(e) });

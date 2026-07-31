@@ -12,6 +12,7 @@
  */
 import { apiBaseUrl } from '../../lib/api-client.js';
 import { dedupeInflight } from '../../lib/api-cache.js';
+import { normalizeStudioSettings } from './settings-normalization.js';
 import type {
   AssetVersion, GetProjectResult, SpriteAsset, SpriteCategory,
   SpriteProjectInfo, StudioSettings,
@@ -55,19 +56,32 @@ async function reqForm<T>(path: string, init: RequestInit): Promise<T> {
 
 const root = (projectId: number) => `/api/sprite-studio/projects/${projectId}`;
 const j = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) });
+const normalizeProjectInfo = (project: SpriteProjectInfo): SpriteProjectInfo => ({
+  ...project,
+  settings: normalizeStudioSettings(project.settings),
+});
 
 // ─── Project (get-or-init + settings + resync) ──────────────────────────
 /** GET the sprite project; `initialized:false` when `.sprite-studio/` is absent. */
-export const getProject = (p: number): Promise<GetProjectResult> =>
-  MOCK ? mock.mockGetProject(p) : req<GetProjectResult>(root(p));
+export const getProject = async (p: number): Promise<GetProjectResult> => {
+  const result = MOCK ? await mock.mockGetProject(p) : await req<GetProjectResult>(root(p));
+  return result.project
+    ? { ...result, project: normalizeProjectInfo(result.project) }
+    : result;
+};
 
 /** Create `.sprite-studio/` + project row for this IDE project. */
-export const initProject = (p: number): Promise<SpriteProjectInfo> =>
-  MOCK ? mock.mockInitProject(p) : req<SpriteProjectInfo>(`${root(p)}/init`, j({}));
+export const initProject = async (p: number): Promise<SpriteProjectInfo> =>
+  normalizeProjectInfo(
+    MOCK ? await mock.mockInitProject(p) : await req<SpriteProjectInfo>(`${root(p)}/init`, j({})),
+  );
 
-export const putSettings = (p: number, settings: StudioSettings): Promise<SpriteProjectInfo> =>
-  MOCK ? mock.mockPutSettings(p, settings)
-    : req<SpriteProjectInfo>(`${root(p)}/settings`, { method: 'PUT', body: JSON.stringify(settings) });
+export const putSettings = async (p: number, settings: StudioSettings): Promise<SpriteProjectInfo> =>
+  normalizeProjectInfo(
+    MOCK
+      ? await mock.mockPutSettings(p, settings)
+      : await req<SpriteProjectInfo>(`${root(p)}/settings`, { method: 'PUT', body: JSON.stringify(settings) }),
+  );
 
 /** Rebuild the DB mirror from the files in the repo (manifest wins). */
 export const resync = (p: number): Promise<{ ok: true }> =>

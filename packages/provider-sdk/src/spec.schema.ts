@@ -35,7 +35,7 @@ const wireOptsSchema = z
     // Shared by both the full and third-party schemas: a third party may author
     // `vendor:'fugu'` — harmless (the flag only tweaks requests against their own
     // configured baseURL, same profile as the already-allowed 'zai'/'openrouter').
-    vendor: z.enum(['openai', 'openrouter', 'zai', 'deepseek', 'copilot', 'fugu']).optional(),
+    vendor: z.enum(['openai', 'openrouter', 'zai', 'deepseek', 'copilot', 'fugu', 'mistral']).optional(),
     baseUrlTemplate: z.string().optional(),
     baseUrlVars: z.record(z.string(), templateVarSchema).optional(),
     modelModes: z
@@ -72,6 +72,10 @@ const wireOptsSchema = z
     claudeCode: z.boolean().optional(),
     geminiOAuth: z.boolean().optional(),
     responsesApi: z.boolean().optional(),
+    responsesStateless: z.boolean().optional(),
+    responsesReasoningSummaryModels: z.array(z.string()).optional(),
+    responsesReasoningFromThinking: z.boolean().optional(),
+    responsesIncludeOrchestrationUsage: z.boolean().optional(),
     summaryModelDefault: z.string().optional(),
     indexerDefaultModel: z.string().optional(),
   })
@@ -139,6 +143,9 @@ const providerModelMetaSchema = z
   .object({
     contextWindow: z.number().optional(),
     maxTokens: z.number().optional(),
+    canReason: z.boolean().optional(),
+    supportsAttachments: z.boolean().optional(),
+    inputModalities: z.array(z.string()).optional(),
     supportedReasoningLevels: z.array(z.string()).nullable().optional(),
     defaultReasoningLevel: z.string().nullable().optional(),
     applyPatchToolType: z.string().nullable().optional(),

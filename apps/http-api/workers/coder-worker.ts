@@ -52,6 +52,7 @@ import {
 } from '../../../packages/code-agent/src/index.js';
 import type { AgentId } from '../../../packages/code-agent/src/agents/index.js';
 import type { CoderRunner } from '../../../packages/code-agent/src/core/runner.js';
+import { attachmentsToBlocks } from '../../../packages/code-agent/src/core/messages.js';
 import { resolveAgentRuntimeEnv } from '../../../packages/api-handlers/src/runtime/runtime-resolve.js';
 import { hydrateWorkerCapabilities } from './worker-capabilities.js';
 import {
@@ -844,6 +845,7 @@ interface RunFreshPayload {
   userMessage: string;
   attachments?: CoderAttachment[];
   maxTurns?: number;
+  maxAutoContinues?: number;
   planMode?: boolean;
   agent?: AgentId;
   agentSelectionId?: string;
@@ -914,6 +916,7 @@ bridge.handle('runFresh', async (payload) => {
       userMessage: opts.userMessage,
       attachments: opts.attachments,
       maxTurns: opts.maxTurns,
+      maxAutoContinues: opts.maxAutoContinues,
       planMode: opts.planMode,
       agent: opts.agent,
       agentSelectionId: opts.agentSelectionId,
@@ -1030,25 +1033,37 @@ bridge.handle('interruptWait', () => {
 
 bridge.handle('pushUserMessage', async (payload) => {
   recordRpc('pushUserMessage');
-  const { content, selectedSkillIds, operationId } = payload as {
+  const { content, selectedSkillIds, operationId, attachments } = payload as {
     content: string;
     selectedSkillIds?: string[];
     operationId: string;
+    attachments?: CoderAttachment[];
   };
   const runner = activeRun?.runner;
   if (!runner) throw new Error('coder-worker: no runner — call runFresh first');
-  const roundMessageId = await getSharedSessionStore(dbPath).appendMessage({
+  const store = getSharedSessionStore(dbPath);
+  if (attachments?.some((attachment) => attachment.path)) {
+    const roots = await store.listSessionFilesystemRoots(sessionId);
+    runner.refreshExternalFilesystemRoots(roots.map((root) => ({
+      id: root.id,
+      seq: root.seq,
+      rootPath: root.root_path,
+      access: root.access,
+    })));
+  }
+  const blocks = attachmentsToBlocks(content, attachments);
+  const roundMessageId = await store.appendMessage({
     session_id: sessionId,
     operation_id: operationId,
     message: {
       role: 'user',
-      content: [{ type: 'text', text: content }],
+      content: blocks,
       ...(selectedSkillIds && selectedSkillIds.length > 0
         ? { selectedSkillIds }
         : {}),
     },
   });
-  runner.pushUserMessage(content, { selectedSkillIds, roundMessageId });
+  runner.pushPendingUserContent(blocks, { selectedSkillIds, roundMessageId });
   return { ok: true, roundMessageId };
 });
 
@@ -1104,13 +1119,57 @@ bridge.handle('setThinking', (payload) => {
   return { ok: true };
 });
 
-bridge.handle('setToolPermissionMode', (payload) => {
-  recordRpc('setToolPermissionMode');
-  const { mode } = payload as { mode: 'ask' | 'auto' | 'unrestricted' };
-  const runner = activeRun?.runner;
-  if (!runner) return { ok: false, reason: 'no_runner' };
-  runner.setToolPermissionMode(mode);
+bridge.handle('stageManualAgentTransition', async (payload) => {
+  recordRpc('stageManualAgentTransition');
+  const { agent } = payload as { agent: string | null };
+  await getSharedSessionStore(
+    dbPath,
+    sessionContext.writerOwnerId,
+  ).stageManualAgentTransition(sessionId, agent);
   return { ok: true };
+});
+
+bridge.handle('setToolPermissionMode', async (payload) => {
+  recordRpc('setToolPermissionMode');
+  const { mode } = payload as {
+    mode: 'ask' | 'auto' | 'unrestricted' | null;
+  };
+  await getSharedSessionStore(
+    dbPath,
+    sessionContext.writerOwnerId,
+  ).setSessionToolPermissionMode(sessionId, mode);
+  const runner = activeRun?.runner;
+  if (runner) runner.setToolPermissionMode(mode ?? 'auto');
+  return { ok: true, activeRunner: Boolean(runner) };
+});
+
+bridge.handle('setToolOutputCapLevel', async (payload) => {
+  recordRpc('setToolOutputCapLevel');
+  const { level } = payload as {
+    level: 'economic' | 'medium' | 'high' | 'extra' | 'max' | 'ultra' | null;
+  };
+  await getSharedSessionStore(
+    dbPath,
+    sessionContext.writerOwnerId,
+  ).setSessionToolOutputCapLevel(sessionId, level);
+  const runner = activeRun?.runner;
+  if (runner) runner.setToolOutputCapLevel(level ?? 'economic');
+  return { ok: true, activeRunner: Boolean(runner) };
+});
+
+bridge.handle('setRunLimits', async (payload) => {
+  recordRpc('setRunLimits');
+  const { maxTurns, maxAutoContinues } = payload as {
+    maxTurns: number | null;
+    maxAutoContinues: number;
+  };
+  await getSharedSessionStore(
+    dbPath,
+    sessionContext.writerOwnerId,
+  ).setSessionRunLimits(sessionId, maxTurns, maxAutoContinues);
+  const runner = activeRun?.runner;
+  if (runner) runner.setRunLimits(maxTurns, maxAutoContinues);
+  return { ok: true, activeRunner: Boolean(runner) };
 });
 
 /**

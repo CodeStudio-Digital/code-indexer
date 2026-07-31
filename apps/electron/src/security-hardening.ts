@@ -1,9 +1,10 @@
 /**
  * Production security hardening for the desktop shell.
  *
- * Everything here is gated on `app.isPackaged` — in dev (`electron:dev`) none
- * of it applies, so DevTools, the menu, and an open CSP stay available for
- * debugging. In a packaged build we:
+ * The visible hardening is gated on `app.isPackaged` — in dev
+ * (`electron:dev`) DevTools, the menu, and an open CSP stay available for
+ * debugging. The preload nonce bridge is registered in both modes, but returns
+ * no nonce in dev. In a packaged build we:
  *   - never let DevTools open (programmatically or via keyboard shortcut),
  *   - strip the application menu (kills the View→Toggle DevTools / reload roles),
  *   - swallow the right-click "Inspect Element" context menu,
@@ -16,9 +17,14 @@
  * The `mcp://` scheme is registered bypassCSP (see main.ts), so the in-process
  * backend is unaffected; the CSP only governs what the file:// document loads.
  */
-import { app, Menu, session, type BrowserWindow } from 'electron';
+import { app, ipcMain, Menu, session, type BrowserWindow } from 'electron';
+import { randomBytes } from 'node:crypto';
+import { buildRendererCsp } from './security-csp.js';
 
 const DEVTOOLS_DEBUG = process.env.CODESTUDIO_DEBUG_DEVTOOLS === '1';
+const RENDERER_CSP_NONCE = randomBytes(18).toString('base64');
+const CSP_NONCE_CHANNEL = 'security:getRendererCspNonce';
+let nonceBridgeInstalled = false;
 
 /** DevTools locks are on only in a shipped build (unless the debug hatch is set). */
 function devtoolsLocked(): boolean {
@@ -33,23 +39,25 @@ function devtoolsLocked(): boolean {
 //   - blob: workers/img       Monaco editor web workers, generated images
 //   - localhost/127.0.0.1      the builder's local dev-server previews (iframe + HMR ws)
 //   - mcp://app                in-process backend (also bypassCSP; listed for clarity)
-const CSP = [
-  "default-src 'self' mcp://app",
-  "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  "font-src 'self' data:",
-  "img-src 'self' data: blob: mcp://app",
-  "connect-src 'self' mcp://app http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*",
-  "worker-src 'self' blob:",
-  "frame-src 'self' mcp://app http://localhost:* http://127.0.0.1:*",
-].join('; ');
+const CSP = buildRendererCsp(RENDERER_CSP_NONCE);
+
+function installRendererNonceBridge(): void {
+  if (nonceBridgeInstalled) return;
+  nonceBridgeInstalled = true;
+  ipcMain.on(CSP_NONCE_CHANNEL, (event) => {
+    // Dev has no renderer CSP, so no nonce should be stamped into its plugin
+    // documents. The packaged renderer receives only this launch's value.
+    event.returnValue = app.isPackaged ? RENDERER_CSP_NONCE : null;
+  });
+}
 
 /**
  * App-wide hardening — call once after `app.whenReady()` and before the first
  * window loads. Strips the menu and installs the CSP header on the default
- * session. No-op in dev.
+ * session. In dev this only registers the nonce bridge, which returns null.
  */
 export function installGlobalHardening(): void {
+  installRendererNonceBridge();
   if (!app.isPackaged) return; // menu + CSP always off in dev
   Menu.setApplicationMenu(null);
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {

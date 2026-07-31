@@ -953,6 +953,34 @@ CI mantém golden binary fixtures por versão suportada e testes de unknown fiel
 
 O canal permanente do supervisor é separado dos canais de attempts.
 
+### Bootstrap físico do processo supervisor
+
+Antes de qualquer frame management, o Host entrega exatamente um
+`SupervisorProcessHandoff` length-delimited, limitado a 64 KiB, por handles
+privados herdados e allowlisted. O request herdado DEVE terminar em EOF logo
+após esse frame; bytes extras, PID físico divergente, campo ausente, path
+inválido ou segredo fora de 16..512 bytes falham fechado. Nonce, token, address
+ou valores de HANDLE nunca entram em argv/env.
+
+O handoff nomeia um endpoint management protegido distinto. O supervisor
+conecta esse endpoint e verifica, no mesmo handle, o PID criador dos pipes
+herdados. O Host aceita a conexão conferindo o PID do processo lançado. Somente
+depois dessa prova bilateral o supervisor grava `SupervisorProcessReady`
+limitado a 4 KiB no response handle herdado, fecha o bootstrap físico e inicia
+`HostSupervisorHello ↔ SupervisorHello` no Named Pipe permanente. O Ready não
+substitui Hello, nonce, token ou validação de proveniência; ele apenas confirma
+que o transporte exato foi materializado.
+
+No Windows, o `agentd-supervisor` process-real já consome esse handoff,
+materializa o management assíncrono e compõe `SupervisorAsyncService` com
+containment, provisioner, lifecycle clock e reaper. Execução direta sem os
+handles protegidos continua falhando com exit `78`. A autoridade Host que cria
+endpoint, processo, handoff e owner Node-API agora existe: o request é
+single-use, liga os hashes do package à policy, os segredos não transitam por
+argv/env e o owner retém Job + stream até close/reap explícito. Isso não libera
+cutover enquanto o mesmo percurso não alcançar `Active` com o runner de
+produção. O stdio do bootstrap não pode ser reutilizado como canal permanente.
+
 Host → Supervisor:
 
 | Mensagem | Semântica |
@@ -1320,11 +1348,13 @@ A execução física de `prepare`, spawn contido e `complete_after_spawn` já fo
 movida para um worker OS dedicado, owned e joinable por launch pendente, fora do
 loop Tokio de management/lifecycle. Canais bounded e ownership preservado sob
 cancelamento permitem que watchdog de siblings e shutdown continuem avançando
-mesmo quando o efeito físico bloqueia. A composição produtiva ainda DEVE ligar
-esse serviço ao processo real. Permanecem pendentes
+mesmo quando o efeito físico bloqueia. O entrypoint Windows já liga esse serviço
+ao processo real depois do handoff privado, peer check bilateral, Ready e Hello;
+um smoke multiprocesso cobre `Host → supervisor → Shutdown/ACK → reap`. Permanecem pendentes
 `UpdateAttemptAuthority`, `QuerySupervisorState`, outbox e ACK durável de
-`AttemptProcessExited`/`AttemptProcessReaped`; os `main` permanecem scaffolds
-fail-closed e o E2E com o Host TypeScript real ainda não existe.
+`AttemptProcessExited`/`AttemptProcessReaped`, o backend Unix e o E2E
+process-real completo até `Prepare/Activate`. O launcher/owner Node-API do Host
+já percorre fisicamente Ready, Hello, Shutdown/ACK, exit 0 e reap cooperativo.
 
 ## 19. Invariantes cross-cutting
 

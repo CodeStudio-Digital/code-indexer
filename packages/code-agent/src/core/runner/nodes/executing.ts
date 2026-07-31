@@ -70,6 +70,7 @@ import { maybePlanNudge, scheduleGoalCompletionAdvisory } from './executing-plan
 import {
   buildGoalCompletionAdvisory,
   evaluateVerificationReadinessAtFinish,
+  maybeVerificationNudge,
 } from './executing-verification-gate.js';
 import { consumeStream, thinkingOnlyBudgetMs } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
@@ -1205,9 +1206,23 @@ export class ExecutingNode implements BehaviorNode {
         ctx.messages.push({ role: 'user', content: [{ type: 'text', text: planNudge }] });
         return events.turnSucceeded({ hasToolCalls: false });
       }
-      // Text-only assistant turn ends the run — no tool_use means the
-      // model is delivering its final reply. Goal state and verification
-      // freshness are telemetry, not execution authority.
+      // A successful current-run write needs one chance to collect objective
+      // validation before a text-only finish. This is deliberately bounded to
+      // one short nudge: agents can still finish by accurately reporting why
+      // validation was unavailable, but cannot silently claim it already ran.
+      if (ctx.opts.verificationEvidenceEnabled) {
+        const readiness = await evaluateVerificationReadinessAtFinish(ctx);
+        const verificationNudge = maybeVerificationNudge(ctx, readiness);
+        if (verificationNudge) {
+          ctx.messages.push({
+            role: 'user',
+            content: [{ type: 'text', text: verificationNudge }],
+          });
+          return events.turnSucceeded({ hasToolCalls: false });
+        }
+      }
+      // Text-only assistant turn ends the run — no tool_use means the model is
+      // delivering its final reply.
       runPersistTelemetry([]);
       // Telemetry accuracy: if plan mode is active and no plan was ever
       // approved (the one-shot nudge was already spent), the run finished
@@ -1223,6 +1238,7 @@ export class ExecutingNode implements BehaviorNode {
     const effectiveToolNames = new Set(toolsForModel.map((tool) => tool.name));
     const dispatch = await dispatchTools({
       toolUses: result.toolUses,
+      retrievalBatch: { taskText: memoryTaskText ?? undefined },
       registry: ctx.opts.registry,
       toolContext: ctx.opts.toolContext,
       turn: ctx.turn,

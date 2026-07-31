@@ -21,9 +21,9 @@ describe('system prompt structural readiness', () => {
   it('keeps index tools recoverable while the automatic baseline is building', () => {
     const prompt = buildSystemPrompt(BASE);
 
-    expect(prompt).toContain('Every navigation/search tool remains registered');
+    expect(prompt).toContain('The structural index is building');
     expect(prompt).toContain('INDEX_NOT_READY');
-    expect(prompt).toContain('Retry semantic/graph calls on a later turn');
+    expect(prompt).toContain('retry semantic/graph navigation later');
     expect(prompt).not.toContain('Tools that strictly need the symbol DB were stripped');
     expect(prompt).not.toContain('ask the user to index the project via the admin panel');
   });
@@ -43,7 +43,7 @@ describe('system prompt structural readiness', () => {
     });
 
     expect(ready).not.toContain('INDEX_NOT_READY');
-    expect(ready).toContain('# Tool strategy — token economy');
+    expect(ready).toContain('# Code retrieval');
     expect(ready).toContain(repoMap);
     expect(retried).toBe(ready);
   });

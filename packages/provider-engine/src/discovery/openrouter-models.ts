@@ -26,10 +26,17 @@ interface OpenRouterModel {
     max_completion_tokens?: number | null;
   } | null;
   supported_parameters?: string[];
+  reasoning?: {
+    supported_efforts?: string[] | null;
+    default_effort?: string | null;
+    default_enabled?: boolean | null;
+    supports_max_tokens?: boolean | null;
+    mandatory?: boolean | null;
+  } | null;
   expiration_date?: string | null;
 }
 
-const REASONING_LEVELS = ['minimal', 'low', 'medium', 'high'] as const;
+const REASONING_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 
 export async function discoverOpenrouterModels(
   spec: ProviderSpec,
@@ -53,7 +60,15 @@ export async function discoverOpenrouterModels(
     if (outputModalities.length > 0 && !outputModalities.includes('text')) continue;
 
     const supported = new Set(m.supported_parameters ?? []);
-    const canReason = supported.has('reasoning') || supported.has('include_reasoning');
+    const canReason =
+      m.reasoning != null
+      || supported.has('reasoning')
+      || supported.has('include_reasoning');
+    const reasoningLevels = canReason ? openrouterReasoningLevels(m.reasoning) : null;
+    const defaultReasoningLevel = canReason
+      ? normalizeReasoningLevel(m.reasoning?.default_effort)
+        ?? (m.reasoning?.default_enabled === false ? 'none' : null)
+      : null;
     const supportsAttachments = inputModalities.some((modality) => modality !== 'text');
     const contextWindow = validPositiveInt(m.context_length)
       ?? validPositiveInt(m.top_provider?.context_length);
@@ -67,7 +82,8 @@ export async function discoverOpenrouterModels(
       default_max_tokens: validPositiveInt(m.top_provider?.max_completion_tokens),
       can_reason: canReason,
       supports_attachments: supportsAttachments,
-      supported_reasoning_levels: canReason ? [...REASONING_LEVELS] : null,
+      supported_reasoning_levels: reasoningLevels,
+      default_reasoning_level: defaultReasoningLevel,
       supported_in_api: true,
       visibility: m.expiration_date ? 'deprecated' : 'list',
       input_modalities: inputModalities,
@@ -75,6 +91,29 @@ export async function discoverOpenrouterModels(
     });
   }
   return out;
+}
+
+function openrouterReasoningLevels(
+  reasoning: OpenRouterModel['reasoning'],
+): string[] {
+  const advertised = reasoning?.supported_efforts;
+  const levels = Array.isArray(advertised)
+    ? advertised
+        .map(normalizeReasoningLevel)
+        .filter((value): value is string => value != null)
+    : [...REASONING_LEVELS];
+  const unique = [...new Set(levels)];
+  return reasoning?.mandatory === true
+    ? unique.filter((level) => level !== 'none')
+    : unique;
+}
+
+function normalizeReasoningLevel(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return REASONING_LEVELS.includes(normalized as (typeof REASONING_LEVELS)[number])
+    ? normalized
+    : null;
 }
 
 function validPositiveInt(value: unknown): number | null {

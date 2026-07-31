@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '../../context.js';
-import { searchTools } from '../search.js';
+import { searchTools, smallSemanticFilePreview } from '../search.js';
 
 const tool = searchTools.find((candidate) => candidate.name === 'search')!;
 const project = { id: 7, name: 'demo', root_path: 'D:/demo' };
@@ -47,6 +47,21 @@ function context(remoteOk: boolean) {
 }
 
 describe('mcp search semantic delegation', () => {
+  it('adds a bounded preview only for safe small semantic file hits', () => {
+    const read = vi.fn(() => 'export const SECURITY = { sessionTtlMs: 1800000 };\n');
+    expect(smallSemanticFilePreview('D:/demo', 'src/security.ts', 2, read))
+      .toContain('sessionTtlMs');
+    expect(smallSemanticFilePreview('D:/demo', 'src/large.ts', 41, read)).toBeNull();
+    expect(smallSemanticFilePreview('D:/demo', '../secret.ts', 2, read)).toBeNull();
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the compact contract focused on natural-language semantic queries', () => {
+    expect(tool.description).toContain('natural-language question');
+    expect(tool.description).toContain('grep_code for exact identifiers');
+    expect(tool.description.length).toBeLessThanOrEqual(150);
+  });
+
   it('uses the HTTP owner for hybrid/vector/auto queries', async () => {
     const h = context(true);
     const output = await tool.handler({ project_name: 'demo', query: 'vector routing', mode: 'hybrid' }, h.ctx);
@@ -61,6 +76,8 @@ describe('mcp search semantic delegation', () => {
     });
     expect(h.searchWithDiag).not.toHaveBeenCalled();
     expect(output).toContain('src/router.ts');
+    expect(output).toContain('vector 0.800');
+    expect(output).not.toContain('score: 0.800');
   });
 
   it('forwards the hidden bridge session scope to the semantic owner', async () => {
@@ -96,8 +113,10 @@ describe('mcp search semantic delegation', () => {
 
   it('keeps explicit FTS local and never calls the semantic owner', async () => {
     const h = context(true);
-    await tool.handler({ project_name: 'demo', query: 'LocalVectorRouter', mode: 'fts' }, h.ctx);
+    const output = await tool.handler({ project_name: 'demo', query: 'LocalVectorRouter', mode: 'fts' }, h.ctx);
     expect(h.searchProject).not.toHaveBeenCalled();
     expect(h.searchWithDiag).toHaveBeenCalled();
+    expect(output).toContain('FTS #1');
+    expect(output).not.toContain('score: 0.000');
   });
 });

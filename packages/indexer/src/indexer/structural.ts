@@ -51,6 +51,8 @@ export interface StructuralIndexOptions {
   ) => void | Promise<void>;
   /** Cooperative abort — remaining files are skipped, run finishes as failed. */
   signal?: AbortSignal;
+  /** Cooperative foreground-I/O priority checkpoint. */
+  waitForInteractivePriority?: () => Promise<void>;
   /** Candidate-count gate: above this the run bails with `aborted: 'too_large'` (project untouched). */
   maxFiles?: number;
   /**
@@ -103,6 +105,7 @@ export async function runStructuralIndex(
   };
   const project = db.getProject(projectId);
   if (!project) throw new Error(`project ${projectId} not found`);
+  await opts.waitForInteractivePriority?.();
 
   // Tiered-hybrid split (plan §8): lazily migrate this project's INDEX tables
   // into its own DB before indexing. No-op unless the split flags are on and the
@@ -121,6 +124,7 @@ export async function runStructuralIndex(
   const scanStarted = Date.now();
   const scan = await scanner.scan(db, projectId, {
     maxFiles: opts.maxFiles,
+    waitForInteractivePriority: opts.waitForInteractivePriority,
     // Keep the "Scanning…" chip alive during the walk (total unknown → 0).
     onScanProgress: (scanned, total) =>
       opts.onProgress?.({ phase: 'scanning', current: scanned, total, currentFile: '' }),
@@ -160,6 +164,7 @@ export async function runStructuralIndex(
   // the user-facing activity history with a fake 0/N execution.
   if (scan.toIndex.length === 0 && scan.toRemove.length === 0) {
     let coverageErrors = 0;
+    await opts.waitForInteractivePriority?.();
     const sweepStarted = Date.now();
     try {
       const sweep = sweepContentCoverage(db, projectId, project.root_path);
@@ -204,6 +209,7 @@ export async function runStructuralIndex(
     ...scan.toIndex.map((file) => ({ path: file.relativePath, kind: 'upsert' as const })),
   ];
   await opts.onChanges?.(exactChanges);
+  await opts.waitForInteractivePriority?.();
 
   const pipelineSchedule = resolveStructuralPipelineSchedule(
     db.useProjectDb(projectId),
@@ -212,6 +218,7 @@ export async function runStructuralIndex(
 
   let removed = 0;
   for (let offset = 0; offset < scan.toRemove.length; offset += pipelineSchedule.writeBatchSize) {
+    await opts.waitForInteractivePriority?.();
     const chunk = scan.toRemove.slice(offset, offset + pipelineSchedule.writeBatchSize);
     const writeStarted = Date.now();
     db.indexTransaction(projectId, () => {
@@ -235,6 +242,7 @@ export async function runStructuralIndex(
         offset < scan.toIndex.length && !opts.signal?.aborted;
         offset += pipelineSchedule.writeBatchSize
       ) {
+        await opts.waitForInteractivePriority?.();
         const wave = scan.toIndex.slice(offset, offset + pipelineSchedule.writeBatchSize);
         const outcomes: Array<{
           file: (typeof wave)[number];
@@ -314,6 +322,7 @@ export async function runStructuralIndex(
     }
   }
 
+  await opts.waitForInteractivePriority?.();
   const sweepStarted = Date.now();
   try {
     const sweep = sweepContentCoverage(db, projectId, project.root_path);

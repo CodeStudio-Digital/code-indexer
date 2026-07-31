@@ -24,16 +24,16 @@ describe('system prompt — tool visibility (cap) block', () => {
   it('renders below the dynamic boundary when the cap is smaller than the catalog', () => {
     const prompt = buildSystemPrompt(baseCtx({ toolCap: { maxTools: 32, approxCatalog: 90 } }));
     const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
-    expect(suffix).toContain('# Tool visibility (model-adapted)');
-    expect(suffix).toContain('at most 32 high-priority tools');
+    expect(suffix).toContain('# Tool visibility');
+    expect(suffix).toContain('capped at 32 of ~90 tools');
     expect(suffix).toContain('find_tools');
-    expect(suffix).toContain('pinned into your visible list');
-    expect(prefix).not.toContain('Tool visibility (model-adapted)');
+    expect(suffix).toContain('discovered tools are pinned');
+    expect(prefix).not.toContain('# Tool visibility');
   });
 
   it('is absent when the cap covers the catalog', () => {
     const prompt = buildSystemPrompt(baseCtx({ toolCap: { maxTools: 200, approxCatalog: 90 } }));
-    expect(prompt).not.toContain('# Tool visibility (model-adapted)');
+    expect(prompt).not.toContain('# Tool visibility');
   });
 
   it('does not change the static prefix (prompt-cache safety)', () => {

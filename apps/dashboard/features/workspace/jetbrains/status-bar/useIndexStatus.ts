@@ -14,7 +14,7 @@ import type { ProjectIndexStatus } from '@mcp/api-bus';
 export type { ProjectIndexStatus };
 
 /**
- * Shared per-project descriptor — the status bar, the chat composer gate and
+ * Shared per-project descriptor — the status bar, the chat indexing indicator and
  * any other consumer of the SAME projectId ride ONE stream instead of opening
  * N. `replay: 'last'` re-delivers the current snapshot to a late joiner, so a
  * second consumer is up to date instantly (no wait for the next transition).
@@ -56,30 +56,4 @@ export function useIndexStatus(projectId: number): ProjectIndexStatus | null {
   }, [projectId]);
 
   return status;
-}
-
-/**
- * Boolean selector: true while the project is ACTIVELY indexing (scanning or
- * structural pass). Unlike {@link useIndexStatus}, it re-renders the caller
- * ONLY when the boolean flips — NOT on every ~150ms progress frame. Heavy,
- * always-mounted consumers (the chat surface) use this so the per-frame index
- * stream can't drive a full-subtree re-render storm during a large-project
- * open. The live progress text lives in a tiny isolated leaf instead.
- */
-export function useIndexBusy(projectId: number): boolean {
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    setBusy(false);
-    if (!validProject(projectId)) return;
-
-    return subscribeShared<ProjectIndexStatus>(indexStatusDescriptor(projectId), (frame) => {
-      const next = frame.phase === 'scanning' || frame.phase === 'structural_indexing';
-      // Bail unless the boolean actually changed — keeps the heavy consumer off
-      // React's render path for the hundreds of progress frames in between.
-      setBusy((prev) => (prev === next ? prev : next));
-    });
-  }, [projectId]);
-
-  return busy;
 }

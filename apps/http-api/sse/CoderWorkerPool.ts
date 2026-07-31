@@ -33,6 +33,7 @@ import {
 } from '../coder-bus.js';
 import type { CoderAttachment } from '@mcp/code-agent/index.js';
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
+import type { ToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { getGlobalPreviewDevtools, type PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
 import { getGlobalResearchBrowser, type ResearchBrowserInvoke } from '@mcp/code-agent/tools/browser/index.js';
@@ -385,6 +386,7 @@ export interface RunFreshOpts {
   userMessage: string;
   attachments?: CoderAttachment[];
   maxTurns?: number;
+  maxAutoContinues?: number;
   planMode?: boolean;
   agent?: AgentId;
   /** Sticky picker id. Differs from `agent` when a custom agent inherits a built-in preset. */
@@ -636,6 +638,7 @@ export class CoderWorkerPool {
     content: string,
     selectedSkillIds?: string[],
     operationId = `message:${randomUUID()}`,
+    attachments?: CoderAttachment[],
   ): Promise<number> {
     const entry = this.entries.get(sessionId);
     if (!entry) throw new Error(`coder-pool: no active run for session ${sessionId}`);
@@ -651,6 +654,7 @@ export class CoderWorkerPool {
       content,
       selectedSkillIds,
       operationId,
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
     });
     if (!result.ok || !Number.isSafeInteger(result.roundMessageId)) {
       throw new Error(`coder-pool: worker did not persist follow-up message for ${sessionId}`);
@@ -894,11 +898,66 @@ export class CoderWorkerPool {
     await entry.host.requireBridge().request('setThinking', { thinking });
   }
 
-  /** Push a mid-run tool-permission-mode change into the live runner. */
-  async setToolPermissionMode(sessionId: SessionId, mode: 'ask' | 'auto' | 'unrestricted'): Promise<void> {
+  /**
+   * Persist a manual picker change through the worker that currently owns the
+   * filesystem writer. This deliberately does not mutate the warm runner: a
+   * manual selection applies to the next run and is materialized there as one
+   * coalesced transition reminder.
+   */
+  async stageManualAgentTransition(
+    sessionId: SessionId,
+    agent: string | null,
+  ): Promise<boolean> {
     const entry = this.entries.get(sessionId);
-    if (!entry) return;
-    await entry.host.requireBridge().request('setToolPermissionMode', { mode });
+    if (!entry) return false;
+    const result = await entry.host.requireBridge().request(
+      'stageManualAgentTransition',
+      { agent },
+    ) as { ok?: boolean };
+    return result.ok === true;
+  }
+
+  /** Persist and push a tool-permission change through the active writer. */
+  async setToolPermissionMode(
+    sessionId: SessionId,
+    mode: 'ask' | 'auto' | 'unrestricted' | null,
+  ): Promise<boolean> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return false;
+    const result = await entry.host.requireBridge().request(
+      'setToolPermissionMode',
+      { mode },
+    ) as { ok?: boolean };
+    return result.ok === true;
+  }
+
+  /** Persist and apply the output cap to subsequent calls in a warm runner. */
+  async setToolOutputCapLevel(
+    sessionId: SessionId,
+    level: ToolOutputCapLevel | null,
+  ): Promise<boolean> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return false;
+    const result = await entry.host.requireBridge().request(
+      'setToolOutputCapLevel',
+      { level },
+    ) as { ok?: boolean };
+    return result.ok === true;
+  }
+
+  /** Persist session run limits and apply them to an active behavior tree. */
+  async setRunLimits(
+    sessionId: SessionId,
+    maxTurns: number | null,
+    maxAutoContinues: number,
+  ): Promise<boolean> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return false;
+    const result = await entry.host.requireBridge().request(
+      'setRunLimits',
+      { maxTurns, maxAutoContinues },
+    ) as { ok?: boolean };
+    return result.ok === true;
   }
 
   /** Abort ONE running ephemeral subagent (dashboard row cancel). */

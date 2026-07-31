@@ -188,7 +188,7 @@ const get_project_pulse = defineTool({
   name: 'get_project_pulse',
   tier: 'bootstrap',
   ...mcpAccess('read'),
-  description: 'Ultra-compact project overview (~250 tokens). Use this as the FIRST contextualization tool. Pass format="json" for a structured response.',
+  description: 'Ultra-compact index-health and project-shape overview (~250 tokens). For code questions, start with mcp__search; use this only when index readiness or the broad project shape is unknown. Pass format="json" for a structured response.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -225,7 +225,7 @@ const get_repo_map = defineTool({
   name: 'get_repo_map',
   tier: 'navigate',
   ...mcpAccess('read'),
-  description: 'Structural map of the repository. Shows dependency hubs, entrypoint-like files and symbol-rich files with their top symbols. Returns the complete map by default; pass max_tokens only when an explicit compact budget is required. Use after get_project_pulse for a mental model of the codebase architecture.',
+  description: 'Architecture map for broad or unfamiliar repositories; skip it after search has already localized the relevant files. Shows dependency hubs, entrypoint-like files and symbol-rich files with their top symbols. Returns the complete map by default; pass max_tokens only when an explicit compact budget is required.',
   inputSchema: {
     type: 'object',
     properties: {

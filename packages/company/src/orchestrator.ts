@@ -627,7 +627,15 @@ export class CompanyOrchestrator {
     }
     this.publisher.markEnded('done', { reason: 'aborted' });
   }
-  finalizeAllSubordinates(): { finalized: number; alreadyStopped: number } { return this.subordinates.finalizeAll(); }
+  async finalizeAllSubordinates(): Promise<{ finalized: number; alreadyStopped: number }> {
+    // Fence idle/subordinate-change observers before finalizeAll emits any
+    // status transitions. Otherwise an observer can enqueue `paused` while
+    // this explicit terminal decision is still being persisted.
+    this.ctx.markFinalized();
+    const result = this.subordinates.finalizeAll();
+    await this.ctx.companyFiles.updateSessionStatus('completed');
+    return result;
+  }
   /** Mem C — distill board decisions/blockers/deliverables into per-project
    *  memory snapshots. Fired (fire-and-forget) by `finalize_subordinates`;
    *  best-effort and semantically deduped, so a double call is harmless. */

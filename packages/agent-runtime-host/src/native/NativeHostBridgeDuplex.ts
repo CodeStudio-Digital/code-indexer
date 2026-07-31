@@ -13,6 +13,7 @@ export class NativeHostBridgeDuplex extends Duplex {
   readonly #kind: NativeChannelKind;
   readonly #authority: NativeHostBridgeCloseAuthority;
   #reading = false;
+  #continueReading = false;
 
   constructor(
     kind: NativeChannelKind,
@@ -39,6 +40,10 @@ export class NativeHostBridgeDuplex extends Duplex {
       (cause) => this.destroy(asError(cause)),
     ).finally(() => {
       this.#reading = false;
+      if (this.#continueReading && !this.destroyed) {
+        this.#continueReading = false;
+        queueMicrotask(() => this._read());
+      }
     });
   }
 
@@ -97,7 +102,7 @@ export class NativeHostBridgeDuplex extends Duplex {
       isolated.fill(0);
       return;
     }
-    this.push(isolated);
+    this.#continueReading = this.push(isolated);
   }
 }
 

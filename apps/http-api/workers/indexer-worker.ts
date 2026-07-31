@@ -26,6 +26,7 @@ import {
 } from '../../../packages/orchestrator-host/src/index.js';
 import { CodeIndexDB } from '../../../packages/store/src/db.js';
 import { runStructuralIndex } from '../../../packages/indexer/src/indexer/structural.js';
+import { InteractivePriorityGate } from '../../../packages/indexer/src/indexer/interactive-priority-gate.js';
 import {
   indexFilesStructural,
   removeFilesStructural,
@@ -45,6 +46,7 @@ if (!port) throw new Error('indexer-worker.ts: not running inside a worker_threa
 const { dbPath, ignorePatterns, maxFileSizeKB, concurrency } = workerData as IndexerWorkerData;
 
 const db = new CodeIndexDB(dbPath);
+const priorityGate = new InteractivePriorityGate();
 
 const bridge = new MessageBridge({
   port: port as unknown as MessageBridgeOpts['port'],
@@ -55,6 +57,11 @@ const bridge = new MessageBridge({
 
 // Per-isolate heap stats for the admin perf monitor (best-effort RPC).
 registerPerfStatsHandler(bridge);
+
+bridge.on('interactivePriority', (payload) => {
+  const { projectId, busy } = payload as { projectId: number; busy: boolean };
+  priorityGate.setBusy(projectId, busy);
+});
 
 bridge.handle('structuralIndex', async (payload) => {
   const { projectId, maxFiles, allowEmptyWipe, reportChanges } = payload as {
@@ -70,6 +77,7 @@ bridge.handle('structuralIndex', async (payload) => {
     concurrency,
     maxFiles,
     allowEmptyWipe,
+    waitForInteractivePriority: () => priorityGate.wait(projectId),
     onChanges: reportChanges
       ? async (events) => {
           await bridge.request(

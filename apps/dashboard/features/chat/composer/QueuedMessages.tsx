@@ -5,7 +5,7 @@
  * parked item can be sent now (promote) or removed.
  */
 import { useTranslation } from 'react-i18next';
-import { ArrowRightToLine, Check, ListEnd, Send, X } from 'lucide-react';
+import { ArrowRightToLine, Check, ListEnd, Paperclip, Send, X } from 'lucide-react';
 import type { QueuedMessage } from './useMessageQueue.js';
 
 interface Props {
@@ -44,6 +44,15 @@ export function QueuedMessages({ items, onPromote, onRemove }: Props) {
             <span className="flex-1 min-w-0 truncate" title={it.text}>
               {it.text}
             </span>
+            {!!it.attachments?.length && (
+              <span
+                className="shrink-0 inline-flex items-center gap-0.5 text-[10px] text-muted-foreground"
+                title={it.attachments.map((attachment) => attachment.name).join(', ')}
+              >
+                <Paperclip className="h-2.5 w-2.5" />
+                {it.attachments.length}
+              </span>
+            )}
             <span className="shrink-0 text-[10px] text-muted-foreground">
               {sent
                 ? t('composer.queue.sentNextTurn', { defaultValue: '→ próximo turno' })

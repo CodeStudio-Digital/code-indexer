@@ -124,17 +124,20 @@ export const cloudflareSpec: ProviderSpec = {
   credKind: 'api-key',
   envVars: ['CLOUDFLARE_API_TOKEN', 'CF_API_TOKEN'],
   defaultBaseURL: CF_BASE_URL_TEMPLATE,
+  defaultModel: '@cf/moonshotai/kimi-k2.7-code',
   defaultModels: [
+    '@cf/moonshotai/kimi-k2.7-code',
+    '@cf/zai-org/glm-5.2',
+    '@cf/openai/gpt-oss-120b',
     '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-    '@cf/meta/llama-3.1-8b-instruct-fp8',
     '@cf/google/gemma-4-26b-a4b-it',
     '@cf/zai-org/glm-4.7-flash',
-    '@cf/moonshotai/kimi-k2.6',
-    '@cf/mistral/mistral-7b-instruct-v0.1',
     '@cf/baai/bge-m3',
     '@cf/qwen/qwen3-embedding-0.6b',
   ],
   pricing: {
+    '@cf/moonshotai/kimi-k2.7-code': { inputPer1M: 0.95, outputPer1M: 4.0 },
+    '@cf/zai-org/glm-5.2': { inputPer1M: 1.4, outputPer1M: 4.4 },
     '@cf/meta/llama-3.3-70b-instruct-fp8-fast': { inputPer1M: 0.293, outputPer1M: 2.253 },
     '@cf/meta/llama-3.1-70b-instruct-fp8-fast': { inputPer1M: 0.293, outputPer1M: 2.253 },
     '@cf/meta/llama-3.1-8b-instruct-fp8': { inputPer1M: 0.152, outputPer1M: 0.287 },
@@ -206,6 +209,23 @@ export const cloudflareSpec: ProviderSpec = {
         helpText: 'From your Cloudflare dashboard. Fills {account_id} in the base URL.',
       },
     ],
+  },
+  models: {
+    '@cf/moonshotai/kimi-k2.7-code': {
+      contextWindow: 262_144,
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: null,
+      defaultReasoningLevel: null,
+      inputModalities: ['text', 'image'],
+    },
+    '@cf/zai-org/glm-5.2': {
+      contextWindow: 262_144,
+      canReason: true,
+      supportedReasoningLevels: null,
+      defaultReasoningLevel: null,
+      inputModalities: ['text'],
+    },
   },
 };
 

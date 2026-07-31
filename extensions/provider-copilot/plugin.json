@@ -1,6 +1,6 @@
 {
   "name": "provider-copilot",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.local-20260731004500",
   "description": "GitHub Copilot (OAuth) as a bundled first-party provider plugin",
   "author": { "name": "mcp" },
   "apps": ".app.json",

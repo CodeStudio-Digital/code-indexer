@@ -24,7 +24,7 @@
     "dev:dashboard": "vite dev apps/dashboard",
     "better-sqlite3": "npm rebuild better-sqlite3",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
-    "electron:dev": "concurrently --kill-others \"npm run dev:dashboard\" \"tsx apps/electron/dev.ts\"",
+    "electron:dev": "tsx apps/electron/dev.ts",
     "profile": "electron --js-flags=\"--prof\" .",
     "electron:build": "node scripts/build-electron.mjs",
     "release": "node scripts/release.mjs",

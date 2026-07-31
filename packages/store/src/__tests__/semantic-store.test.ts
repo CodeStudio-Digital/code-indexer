@@ -50,6 +50,54 @@ describe('SemanticStore', () => {
     }
   });
 
+  it('filters listJobs by status and kind sets in SQL', () => {
+    const { db, store } = harness();
+    try {
+      const embedding: EmbeddingTarget = {
+        kind: 'local_http', baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'nomic-embed-text', protocol: 'openai-embeddings',
+      };
+      const generation = store.createGeneration({
+        purpose: 'code', fingerprint: 'fp-job-filter', embedding_target: embedding,
+        dimension: 768, expected_items: 1,
+      });
+      const pendingDelta = store.createJob({
+        generation_id: generation.id,
+        namespace: 'code:p1',
+        kind: 'delta',
+        expected_items: 1,
+      });
+      const pausedBackfill = store.createJob({
+        generation_id: generation.id,
+        namespace: 'code:p2',
+        kind: 'backfill',
+        expected_items: 1,
+      });
+      store.updateJob(pausedBackfill.id, { status: 'paused' });
+      const completedBackfill = store.createJob({
+        generation_id: generation.id,
+        namespace: 'code:p3',
+        kind: 'backfill',
+        expected_items: 1,
+      });
+      store.updateJob(completedBackfill.id, { status: 'completed' });
+
+      expect(store.listJobs({
+        statuses: ['pending', 'paused'],
+        kinds: ['backfill'],
+      }).map((job) => job.id)).toEqual([pausedBackfill.id]);
+      expect(store.listJobs({ statuses: [] })).toEqual([]);
+      expect(store.listJobs({ kinds: [] })).toEqual([]);
+      expect(store.listJobs({
+        status: 'pending',
+        kinds: ['delta'],
+      }).map((job) => job.id)).toEqual([pendingDelta.id]);
+    } finally {
+      store.close();
+      db.close();
+    }
+  });
+
   it('temporarily overrides and restores the SQLite busy timeout', () => {
     const { db, store } = harness();
     try {

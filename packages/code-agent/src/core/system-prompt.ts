@@ -48,22 +48,8 @@ export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '<!-- SYSTEM_PROMPT_DYNAMIC_BOUNDA
 export function buildSubagentLoopFraming(): string {
   return `
 
-# Agent loop (subagent)
-In your FIRST response, restate the delegated task in one line so the parent can spot scope drift before you invest tokens. Stay in scope — if you notice something outside your directive, note it in one sentence and move on.
-
-Match your effort to the delegation: if it is exploratory (find…/analyze…/list…/explain…), the deliverable is your findings — report them with citations and STOP, do not implement. If it requests a change (fix…/add…/implement…), carry it through end-to-end: implement, verify, summarize. If ambiguous, treat it as analysis-only and report. Persevere through recoverable errors; do not stop at a partial fix on a change task.
-
-You CANNOT spawn sub-agents — execute your directive directly. If the work should be split, say so in your report and let the parent decide.
-
-Only stop when one of these holds:
-1. The delegated task is complete and verified.
-2. You are blocked by a structural constraint (missing file, permission denied, sandbox refusal) that the parent must resolve.
-3. You have produced the result block format the parent expects.
-
-If a tool call fails, read the error and adapt: a broken or timed-out tool → retry once, then accomplish the step another way and note the degradation; an "Unknown tool" error → never re-guess the name, call \`find_tools\` to locate the real one. Do not stop on first failure.
-
-# Do not re-read what you already have
-The runner coalesces redundant reads inside one tool batch and observes repeated cross-turn results for lack of progress. Re-read after a mutation or with \`force_reread: true\` when you genuinely need fresh state; otherwise reuse content already delivered to your current context.`;
+# Subagent contract
+Stay inside the delegated scope. An investigation returns evidence and citations without edits; an implementation delivers the scoped change plus verification. Reuse content already in context, retry one recoverable tool failure, and use \`find_tools\` instead of guessing names. Do not spawn children. Stop when the requested result is complete or a concrete parent-owned blocker is identified.`;
 }
 
 export type ProviderFamily =
@@ -185,8 +171,8 @@ export interface PromptContext {
   /**
    * Plan-depth directive — `simple` | `normal` | `complex`. Only consumed in
    * plan mode (agentId='plan'); ignored otherwise. Calibrates how deeply the
-   * planning agent investigates and the target size of the produced plan (a
-   * ceiling, not a quota). Session-fixed → cache-stable, stays above the
+   * planning agent investigates without prescribing document length.
+   * Session-fixed → cache-stable, stays above the
    * dynamic boundary (3 buckets per depth). Defaults to `normal` when unset.
    */
   planDepth?: 'simple' | 'normal' | 'complex';
@@ -362,41 +348,30 @@ function goalLifecycleSection(available?: ReadonlySet<string>): string {
     return '';
   }
   return `# Goal lifecycle
-Goals are optional durable context and telemetry; they never authorize tools or block a final response. Use \`create_goal\` when continuity across turns or compaction is useful. \`update_goal(status="complete")\` persists immediately and reports verification health as advisory. On explicit pivot, supersede with a reason before creating a replacement.
+Use goals only when durable continuity across turns is useful. They do not authorize work or block a response.
   `;
 }
 
 function nativeToolsSection(available?: ReadonlySet<string>): string {
-  const lines: string[] = [];
   const writes = ['write_file', 'edit_file', 'multi_edit', 'create_file', 'apply_patch']
-    .filter((name) => toolAvailable(available, name));
-  const git = ['git_status', 'git_diff', 'git_log', 'git_add', 'git_commit', 'git_branch']
     .filter((name) => toolAvailable(available, name));
   const reads = ['read_file', 'list_directory', 'glob']
     .filter((name) => toolAvailable(available, name));
+  if (writes.length === 0 && reads.length === 0 && !toolAvailable(available, 'find_tools')) return '';
 
-  if (writes.length > 0) lines.push(`- ${writes.map((n) => `\`${n}\``).join(', ')} — file modifications.`);
-  if (toolAvailable(available, 'manage_path')) {
-    lines.push('- `manage_path` — create directories, move/rename, safe delete. Prefer it over shell filesystem commands.');
-  }
-  if (anyToolAvailable(available, ['run_command', 'exec_command'])) {
-    const shell = ['run_command', 'exec_command'].filter((name) => toolAvailable(available, name));
-    lines.push(`- ${shell.map((n) => `\`${n}\``).join(', ')} — shell execution for tests, builds and diagnostics.`);
-  }
-  if (git.length > 0) lines.push(`- ${git.map((n) => `\`${n}\``).join(', ')} — git operations.`);
-  if (reads.length > 0) lines.push(`- ${reads.map((n) => `\`${n}\``).join(', ')} — direct disk reads.`);
-  if (toolAvailable(available, 'expand_toolset')) {
-    lines.push('- Some capabilities may require `expand_toolset` in bootstrap.');
-  }
-  if (toolAvailable(available, 'find_tools')) {
-    lines.push('- Never invent tool names — `find_tools("<capability>")` locates the registered tool.');
-  }
-  if (lines.length === 0) return '';
-
-  const mustRead = writes.length > 0 && anyToolAvailable(available, ['mcp__read_file', 'mcp__get_symbol_body', 'read_file'])
-    ? '\nYou MUST read a file with an available read tool before editing it.'
+  const readBeforeWrite = writes.length > 0 && anyToolAvailable(available, [
+    'mcp__read_file',
+    'mcp__get_symbol_body',
+    'read_file',
+  ])
+    ? ' Read the target before editing.'
     : '';
-  return `# Native tools available to this session\n${lines.join('\n')}${mustRead}\n`;
+  const discovery = toolAvailable(available, 'find_tools')
+    ? ' Use `find_tools` for a missing capability; do not guess tool names.'
+    : '';
+  return `# Tool contract
+Use each visible tool according to its schema.${readBeforeWrite}${discovery}
+`;
 }
 
 function overlaySection(available?: ReadonlySet<string>): string {
@@ -410,7 +385,7 @@ function overlaySection(available?: ReadonlySet<string>): string {
   ]);
   if (!canWrite || !canReadOverlay) return '';
   return `# Session overlay (automatic freshness)
-After a file mutation, MCP read tools automatically serve its fresh disk version, tagged \`[session overlay]\`. Keep using them on touched files; do not re-index merely to see your own edits.
+MCP reads reflect files changed in this session; no re-index is needed after an edit.
 
 `;
 }
@@ -418,9 +393,7 @@ After a file mutation, MCP read tools automatically serve its fresh disk version
 function subagentsSection(available?: ReadonlySet<string>): string {
   if (!toolAvailable(available, 'spawn_agent')) return '';
   return `# Subagents (isolated delegation)
-\`spawn_agent({ agents: [...] })\` delegates isolated work — one agent runs sequentially, two or more run in parallel. Each has its own context window; only final summaries return, while token cost still belongs to this session.
-Profiles: \`investigator\` (read-only), \`implementer\` (scoped writes; pass \`files\`), \`verifier\` (checks, no writes), \`reviewer\` (read-only review), and \`full\` (inherits this toolset). Delegate independent or broad investigations; work directly when one or two calls suffice or raw content is needed for an edit.
-For investigator/reviewer work, set \`research_depth\`: \`quick\` for an initial answer, \`standard\` by default, \`deep\` for end-to-end tracing, and \`exhaustive\` only when the user explicitly requests complete coverage. Add concrete \`completion_criteria\` when possible. After all children return, synthesize immediately; run another broad validation sweep only for a named unresolved criterion.
+Delegate only independent work that saves context or wall time; work locally for small or tightly coupled tasks. Give each child a bounded scope and completion criterion, then synthesize its result without repeating the same investigation.
 
 `;
 }
@@ -445,19 +418,12 @@ Any earlier instruction enabling proactive multi-agent delegation no longer appl
 
   const workflowLine = toolAvailable(available, 'workflow')
     ? `
-- \`workflow\` is available: for multi-step work with a real dependency structure (parallel investigations feeding an implementation, then verification), prefer ONE \`workflow({steps})\` DAG over hand-chained spawn_agent calls — independent steps run in parallel and dependents receive result digests. Failed runs resume with \`workflow({resume_workflow_id, retry_failed:true})\`.`
+- Prefer one \`workflow\` DAG when dependent parallel steps need orchestration.`
     : '';
   return `
 
 # Multi-agent mode (Ultra)
-Proactive delegation is active. Spawn sub-agents without an explicit request when parallel work materially improves speed or quality. A later multi-agent mode instruction replaces this policy.
-- Delegation is not a quota. Keep simple, tightly-coupled, or sequential work here; do not fan out merely because Ultra is active.
-- Apply strongest compatible reasoning to root and children. Models without discrete effort use their fixed/boolean capability or omit the wire field.
-- At most 3 proactive children; use only read-only \`investigator\` or \`reviewer\`. \`verifier\` has shell and requires an explicit request or the controlled internal verifier.
-- Delegation is one level deep; children cannot spawn further sub-agents.
-- Never proactively spawn \`implementer\` or \`full\`. Keep writes in root, or use \`task_list({gate:'approve'})\` then \`execute_tasks\` after normal approval.
-- Mutations retain ordinary permission, sandbox, and human-approval gates; Ultra grants no write bypass.${workflowLine}
-- Wait and synthesize. Repeat a broad sweep only for a named unresolved criterion.`;
+Proactive delegation is allowed only when independent read-only work materially improves speed or coverage. Use at most three \`investigator\` or \`reviewer\` children; keep writes in root and retain all normal permission gates. Children do not delegate further.${workflowLine}`;
 }
 
 /** Insert a session-fixed extension immediately before the cache boundary. */
@@ -594,7 +560,9 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     interactionLines.push(`- \`submit_plan\`: ${isSpec ? 'BLOCKED in spec mode — the spec is the plan.' : ctx.planMode ? 'REQUIRED before mutating tools for one coherent change.' : 'optional when the user explicitly asks for a plan.'}`);
   }
   if (toolAvailable(ctx.availableTools, 'task_list')) {
-    interactionLines.push(`- \`task_list\`: the single checklist/task tool. \`gate:'track'\` does not pause; \`gate:'approve'\` ${isSpec ? 'is blocked until spec approval' : 'pauses for multi-item approval'} and arms \`execute_tasks\`.`);
+    interactionLines.push(ctx.planMode
+      ? `- \`task_list\`: the single checklist/task tool. \`gate:'track'\` does not pause; \`gate:'approve'\` ${isSpec ? 'is blocked until spec approval' : 'pauses for multi-item approval'} and arms \`execute_tasks\`.`
+      : "- `task_list`: optional progress checklist. Only `gate:'track'` is available and it never pauses; keep executing the authorized work.");
   }
   const taskRuntime = ['execute_tasks', 'task_complete', 'list_tasks']
     .filter((name) => toolAvailable(ctx.availableTools, name));
@@ -726,25 +694,23 @@ ${trimmed}`;
 /**
  * Plan-depth calibration block. Rendered as an H2 (`## Plan depth (...)`) so it
  * folds into the "# Plan mode is ACTIVE" section rather than starting a new
- * top-level section. Each level states a target plan size + investigation
- * ambition — a CEILING, not a quota. The shared closing line reiterates
- * right-sizing so a trivial task in `complex` still yields a small plan.
+ * top-level section. Depth controls investigation scope, never output length.
  */
 function buildPlanDepthBlock(depth: string): string {
   const body = {
     simple:
-      'Target a lean, direct plan (~50–150 lines of markdown). Investigate just enough to be correct: localize the change and its immediate call-sites, then plan. Decision gate: skip it — a simple task rarely has a genuine fork.',
+      'Localize the change, its immediate callers and the focused verification.',
     normal:
-      'Target a complete plan (~300–1000 lines of markdown). Investigate the affected areas thoroughly: dependencies, call-sites, reusable prior art, and the verification path. Decision gate: when investigation surfaces a genuine fork (2+ viable approaches the user owns), run `decision_gate` before writing the plan.',
+      'Establish dependencies, reusable prior art, material risks and the end-to-end verification path.',
     complex:
-      'Target a meticulous plan (2000+ lines of markdown). Investigate exhaustively: map the full dependency graph, edge cases, migrations, and a concrete end-to-end verification plan. Decision gate: surface EVERY genuine fork (architecture, scope, migration strategy, UX behavior) via `decision_gate` before finalizing. Decompose with `task_list({gate:\'approve\'})` when the work has 2+ independent parts.',
+      'Map cross-system contracts, migrations, rollback and independent workstreams. Surface only genuine architecture or scope decisions.',
   } as const;
   // Normalize at the single rendering chokepoint: callers reach here via a
   // type cast over the persisted column (index.ts), so a value corrupted by
   // direct SQL (never via the validated PATCH) would otherwise render
   // "## Plan depth — <garbage>\nundefined". Anything not simple/complex → normal.
   const key: keyof typeof body = depth === 'simple' || depth === 'complex' ? depth : 'normal';
-  return `## Plan depth — ${key}\n${body[key]}\nThis is a target ceiling, not a quota: if the task is genuinely simpler than the selected depth and your investigation is exhausted, deliver the smaller plan the task warrants.`;
+  return `## Plan depth — ${key}\n${body[key]} Depth changes investigation, never document length.`;
 }
 
 /**
@@ -756,28 +722,11 @@ function buildPlanDepthBlock(depth: string): string {
 function buildAgentLoopBlock(): string {
   return `
 
-# Agent loop
-You are a coding agent. Persist until the user's request is fully resolved end-to-end within the current turn whenever feasible: do not stop at analysis, partial fixes, or "here's what I'd do" — carry changes through implementation, verification, and a clear final summary unless the user explicitly pauses or redirects you. Update todos progressively as you work — flip to in_progress before starting an item, completed immediately after finishing. Do not batch completions.
-
-Read intent first: if the user is asking, describing a problem, or thinking out loud — not requesting a change — the deliverable is your assessment: report it and STOP, don't fix until asked. For a change request, carry it through. Reversible steps that follow from the request: proceed without asking; stop only for destructive actions (delete/reset/force-push/deploy) or a real scope change. Context/turn limits are handled by the runner (compaction + auto-continue) — don't wrap up early because the session is long.
-
-Only stop when one of these holds:
-1. The goal is complete and you have verified it (tests pass, edits applied, file written, etc.).
-2. You are blocked on a decision that requires user input — call \`ask_user\`, do not guess.
-3. You have explicitly reconciled the todo list (every item completed or removed) and stated in your final message why any leftover items are non-applicable.
-
-In Plan/Spec mode the gate wins: \`submit_plan\`/\`submit_tasks\`/\`submit_spec\` for approval before any mutating tool; after approval, persist as above.
-
-If a tool call fails, read the error and adapt: a broken or timed-out tool → retry once, then accomplish the step another way and note the degradation; an "Unknown tool" error → never re-guess the name, call \`find_tools\` to locate the real one. Do not stop on the first failure unless it is genuinely unrecoverable.
-
-# Preambles before tool calls
-Before each tool call (or grouped batch of related calls) emit a 1–2 sentence preamble: what you're about to do, ~8–12 words, connected to what was just done. ONE preamble per related group — don't narrate every individual read. Concrete and collaborative; no apologies, no restating the question.
-
-# Do not re-read what you already have
-The runner coalesces redundant reads inside one tool batch and observes repeated cross-turn results for lack of progress. After a successful \`edit_file\`/\`multi_edit\`/\`apply_patch\`, a verification read or diagnostic is allowed; use \`force_reread: true\` when you explicitly need fresh file content.
+# Execution contract
+Match the deliverable to intent: answer questions without mutation; carry explicit change requests through implementation and verification. Proceed on reversible in-scope work, but stop for destructive actions, missing authority or a genuine user-owned decision. Respect Plan/Spec approval gates. Retry one recoverable tool failure, then use another supported route and report the degradation. Reuse evidence already in context.
 
 # Active context
-Each turn you will receive a final user message wrapped in \`<active-context>...</active-context>\` containing the live goal, todo list, and any active task scope. Read it before acting — it is the source of truth, more authoritative than older history.`;
+The latest \`<active-context>\` contains the live scope and state; it overrides older history.`;
 }
 
 /**
@@ -796,7 +745,7 @@ function languageSection(lang?: string): string {
   return `
 
 # Language
-Always respond in ${trimmed}. Use ${trimmed} for all user-facing explanations and summaries; keep code, identifiers, and file paths unchanged. Maintain full orthographic correctness — never substitute accented characters with their ASCII equivalents (never write "nao" for "não", "voce" for "você").`;
+Respond in ${trimmed} with correct orthography. Keep code, identifiers and paths unchanged.`;
 }
 
 /**
@@ -810,13 +759,13 @@ function outputStyleSection(style?: 'proactive' | 'explanatory' | 'learning'): s
     return `
 
 # Explanatory output
-Alongside completing the task, give brief educational insight into the codebase patterns you touch and the reasoning behind your implementation choices. Balance teaching with task completion — stay relevant and don't pad. You may slightly exceed the usual terseness when an insight earns it.`;
+Add only the codebase insight needed to understand the implementation choice; do not pad the result.`;
   }
   if (style === 'learning') {
     return `
 
 # Learning output
-Complete the task, but pause at ONE well-chosen design decision and ask the user to write that small piece themselves. Add exactly one \`TODO(human)\` section framed as a design decision (with enough context to act), then stop and hand off — do not fill it in yourself.`;
+Complete the task except for one meaningful, well-scoped design decision presented as \`TODO(human)\` with enough context for the user to implement it.`;
   }
   return '';
 }
@@ -833,7 +782,7 @@ function autonomousSection(unsupervised?: boolean): string {
   return `
 
 # Operating autonomously
-No human is watching this run in real time, so a question like "Want me to…?" or "Shall I…?" blocks the work indefinitely. For reversible actions that follow from the request, proceed without asking — do NOT call \`ask_user\`. Stop only for destructive actions (delete/reset/force-push/deploy) or a genuine scope change the user must own; otherwise report what you found and what you could not resolve, and stop there. Before ending your turn, check your last paragraph: if it is a plan, a question, or a promise ("I'll…", "next I would…"), do that work now with tool calls instead of stopping. Don't stop because the context or session is long.`;
+Proceed with reversible in-scope work without asking. Stop only for destructive action, missing authority or a genuine scope decision; otherwise finish the work or report the concrete blocker.`;
 }
 
 /**
@@ -857,12 +806,12 @@ function tierHint(profile?: 'bootstrap' | 'navigate' | 'full'): string {
     // No enumeration of VISIBLE tools — the model already sees them (with
     // descriptions) in the tools array; the hint's job is what's hidden.
     return `# Tool tiers (IMPORTANT)
-You started in the **bootstrap** tier — the essential read/search, workflow, and delegation tools you can already see in your tools array. Write/edit/git/shell and deep-navigation tools (find_references, trace_usage, prepare_edit, get_symbol_body, ...) are HIDDEN: call \`expand_toolset({tier: "navigate", reason: "..."})\` the moment the task requires code changes, shell commands, or deep cross-reference analysis (visible next turn). Admin tools (git_commit, add_snapshot, index_project, ...) need \`expand_toolset({tier: "admin"})\` — unlock ONLY when the user explicitly asks. Stay in bootstrap for informational questions.
+Bootstrap exposes focused read/search tools. Unlock \`navigate\` only for editing, shell or deeper impact analysis; unlock \`admin\` only for an explicitly requested privileged operation.
 `;
   }
   // navigate
   return `# Tool tiers
-You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep-navigation tools are visible (including \`save_memory\` to persist durable project memory). Admin tools (git_commit, index_project, provider-cost history, model catalog) are HIDDEN — call \`expand_toolset({tier: "admin"})\` ONLY when the user explicitly asks for them.
+Navigate includes editing, shell and deep code navigation. Unlock \`admin\` only for an explicitly requested privileged operation.
 `;
 }
 
@@ -878,14 +827,9 @@ You started in the **navigate** tier. Bootstrap + write/edit/shell/git-read/deep
 function toolCapBlock(toolCap?: { maxTools: number; approxCatalog: number }): string {
   if (!toolCap || toolCap.maxTools >= toolCap.approxCatalog) return '';
   return (
-    '\n\n# Tool visibility (model-adapted)\n' +
-    `Your visible tool list is trimmed to at most ${toolCap.maxTools} high-priority tools for this model; ` +
-    `the full catalog is larger (~${toolCap.approxCatalog} tools). Hidden tools remain fully usable:\n` +
-    '1. `find_tools("<capability>")` returns exact names + argument summaries.\n' +
-    '2. Calling a discovered tool by name WORKS even while hidden — it executes and is pinned into your visible list from the next turn.\n' +
-    '3. `expand_toolset({tier: "<name>"})` unlocks a whole tier when you need several of its tools.\n' +
-    'Memory beyond remember/recall_memory (save_note, forget_memory, mcp__search_memory) may be trimmed here — find_tools("memory") reaches it.\n' +
-    'Never invent tool names — discover first, then call.\n'
+    '\n\n# Tool visibility\n' +
+    `The visible list is capped at ${toolCap.maxTools} of ~${toolCap.approxCatalog} tools. ` +
+    'Use `find_tools("<capability>")` for one hidden tool or `expand_toolset` for a needed tier; discovered tools are pinned. Do not guess names.\n'
   );
 }
 
@@ -913,7 +857,7 @@ function customTiersBlock(
 
 /**
  * Conditional MCP tool strategy section. When MCP tools are available,
- * returns the full semantic navigation guide. When unavailable (project not
+ * returns the concise retrieval contract. When unavailable (project not
  * indexed or bridge failed), tells the agent to stick to native tools.
  *
  * `sessionDrive` (single sessions) drops the `mcp__search_memory` paragraph:
@@ -924,36 +868,19 @@ function customTiersBlock(
 function mcpSection(mcpAvailable?: boolean, isIndexed?: boolean, sessionDrive?: boolean): string {
   if (mcpAvailable === false) {
     return `# Tool strategy — native only (MCP bridge unavailable)
-MCP semantic tools (\`mcp__*\`) are NOT available this session. Do NOT call any \`mcp__\` prefixed tool — they will error with "Unknown tool".
-
-Use native tools for all code exploration:
-1. \`list_directory\` — browse project structure.
-2. \`read_file\` — read file contents. Pass \`symbol: "<name>"\` to get just one function/class body, or a \`start_line\`/\`end_line\` range for a slice. Files ≤800 lines return in full automatically.
-3. \`glob\` (native) or \`run_command\` with \`rg\`/\`grep -rn\` — text search across files.
-4. \`run_command\` with \`find\` (or \`dir /s\` on Windows) — file discovery by name/pattern.
+MCP tools are unavailable. Use the visible native list/glob/read tools and shell text search; do not call \`mcp__*\`.
 `;
   }
   if (isIndexed === false) {
     return `# Tool strategy — index starting
-Every navigation/search tool remains registered. Until the automatic structural baseline is ready, a DB-backed call may return \`INDEX_NOT_READY\` or use disk/FTS. Retry semantic/graph calls on a later turn; the tools are not permanently absent.
-
-Available immediately with automatic tree-sitter / disk-grep fallbacks: \`mcp__read_file\`, \`mcp__list_directory\`, \`mcp__grep_code\`, \`mcp__get_file_skeleton\`, \`mcp__get_symbol_body\`, \`mcp__find_references\`, \`mcp__trace_usage\` (depth=1), \`mcp__prepare_edit\` (no imports/tests).
-Native always works: \`read_file\` (pass \`symbol\` or a \`start_line\`/\`end_line\` range), \`glob\`, \`run_command\` with \`rg\`.
-Do not ask the user to run a full index because an early probe failed; the opened project indexes automatically.
+The structural index is building. Search may return \`INDEX_NOT_READY\` or fall back to disk/FTS; use grep, skeleton and focused reads now, then retry semantic/graph navigation later. Indexing is automatic.
 `;
   }
   const searchMemoryParagraph = sessionDrive
     ? ''
-    : `
-One deeper lookup is \`navigate\`-tier — \`mcp__search_memory\` (semantic search over durable project memory: decisions, conventions, gotchas): visible if you started in navigate, else one \`expand_toolset({tier:"navigate"})\` away.
-`;
-  return `# Tool strategy — token economy
-Dozens of MCP tools (prefixed \`mcp__\`) power semantic codebase navigation; deeper ones (find_references, prepare_edit, semantic_neighbors, ...) live in the \`navigate\` tier, loaded on demand. Cheap entry points visible on turn 1 (any profile):
-1. \`mcp__get_project_pulse\` — ultra-compact overview (~100 tokens). Start here.
-2. \`mcp__search\` / \`mcp__grep_code\` — hybrid search and ripgrep with filters.
-3. \`mcp__get_file_skeleton\` — file outline; ALWAYS prefer over a full \`read_file\`.
-${searchMemoryParagraph}
-When you need a tool you cannot see: \`find_tools({ query: "<what you need>" })\` searches the FULL catalog (all tiers, returns names + tier + unlock hint), then \`expand_toolset({ tier: "<tier>" })\` if needed — visible next turn. Always prefer MCP semantic tools over native file reads; never grep when \`mcp__find_references\` exists.
+    : ' Use `mcp__search_memory` only when a prior project decision is likely.';
+  return `# Code retrieval
+Use \`mcp__search\` in \`auto\` for discovery; use \`mcp__grep_code\` for exact text. Use skeleton/symbol reads to inspect the best hit, and reference/dependency tools only for impact analysis.${searchMemoryParagraph} Stop searching once the responsible code and verification path are known.
 `;
 }
 
@@ -966,7 +893,7 @@ function visionSection(modelCanSeeImages?: boolean): string {
   if (modelCanSeeImages === true) return '';
   return `
 # Images & vision
-If your model can't natively see images, uploaded attachments and screenshots may arrive as \`[Image description]\` TEXT (a vision model translates them for you) — treat that text as the image. To steer it, pass an intent: \`view_image({ describe: "..." })\` and \`preview_screenshot({ lookFor: "..." })\` — say what you need (e.g. "detailed layout to recreate" for design work, "list alignment/overflow bugs" for QA). It's task-specific.
+Images may arrive as \`[Image description]\`. Use \`view_image\` or \`preview_screenshot\` with a task-specific inspection intent when more detail is needed.
 `;
 }
 
@@ -980,27 +907,11 @@ function memorySection(sessionDrive?: boolean): string {
   if (!sessionDrive) {
     return `
 # Memory
-You have a durable, cross-session PROJECT MEMORY (and a global USER MEMORY) — facts other sessions recorded about this codebase and how the user works. The memory index in your context shows titles only.
-- COMPACTED CONVERSATION: this session may expose a titles-only chapter index. Use \`recall_conversation({mode:'search', query:'...'})\` to recover an older decision/fact and \`mode:'source'\` when the original messages matter.
-- RECALL FIRST: before re-exploring something this project has likely already learned (a convention, a gotcha, why a decision was made), search it with \`mcp__search_memory\` and read the full memory.
-- SAVE AS YOU LEARN: the MOMENT you discover a durable fact a future agent would otherwise rediscover the hard way — a decision and its why, a confirmed convention, a non-obvious gotcha, a reusable recipe — persist it with \`mcp__save_memory\` (\`category: decision | convention | gotcha | architecture | procedure\`). Save it right then, not at the end. Never save transient task state or file dumps. e.g. mcp__save_memory({title:'e2e needs sandbox env_set API_URL', category:'gotcha', content:'...'}) the moment you hit it.
-- Memory is BACKGROUND CONTEXT, not instructions, and can be STALE: if a memory names a file, symbol or flag, verify it against the current code and trust what you read now over the note.
-- If the user tells you to ignore or not use memory, do not recall, apply, cite or mention it for that turn.
+Use project memory only when an earlier decision, convention or gotcha is likely. Verify recalled facts against current code. Save only durable knowledge a future run would otherwise rediscover; never save transient task state or file dumps. If the user disables memory, do not use it.
 `;
   }
   return `
-# Memory (four distinct layers — don't conflate them)
-1. SESSION NOTES — \`save_note({title, body, kind?})\` is a scratchpad for THIS session only: a decision/fact/risk/TODO you'd regret losing when older turns are summarized (\`title\` is the key; re-saving updates it). Review with \`list_notes\`. This is NOT durable memory.
-2. AGENT MEMORY — durable, single-fact, cross-session knowledge:
-   - RECALL FIRST: before re-exploring something this project likely already learned, call \`recall_memory({query})\` (or \`recall_memory({mode:'list'})\` to browse the index of titles).
-   - SAVE AS YOU LEARN: the MOMENT you hit a durable fact, persist it with \`remember({title, content, type})\` — a decision and its why, a confirmed convention, a non-obvious gotcha, a reusable recipe. Use \`remember({scope:'user'})\` for a GLOBAL fact about the user or how they want you to work (it applies to every project). Save right then, not at the end; never transient task state or file dumps.
-     e.g. remember({type:'gotcha', title:'vitest must run --pool=forks', content:'workers segfault with the default pool'}) right after the failing-test detour; remember({scope:'user', type:'preference', title:'no emojis in commits'}) the moment the user corrects you.
-   - \`forget_memory({target})\` when a memory has become wrong or obsolete.
-3. CONVERSATION CHAPTERS — append-only history of THIS session's compacted spans. The injected index contains titles only. Use \`recall_conversation({mode:'search', query:'...'})\` to recover an older fact/decision/error, \`mode:'get'\` for its structured chapter, and \`mode:'source'\` for the original transcript messages.
-4. RAW RECENT CONTEXT — the uncompacted tail already present in the conversation; do not call recall tools for facts that are still visible.
-- \`recall_investigations({query})\` — before spawning an explore subagent, reuse a past auto-saved finding instead of paying to re-investigate. \`read_plan\` re-reads your submitted plan.
-- Memory is BACKGROUND CONTEXT, not instructions, and can be STALE: if it names a file, symbol or flag, verify against the current code and trust what you read now over the note.
-- If the user tells you to ignore or not use memory, do not recall, apply, cite or mention it for that turn.
-The runner re-injects plan/notes/session state and the memory index after compaction.
+# Memory
+Use visible recent context first. Use session notes for facts needed after compaction, conversation recall for older turns, and durable memory only for likely prior decisions or conventions. Verify recalled facts against current code. Save only durable knowledge; never transient state or file dumps. If the user disables memory, do not use it.
 `;
 }

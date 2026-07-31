@@ -13,6 +13,7 @@ import { ResultSchema, ToolSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import type { ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 import { mcpAuthClientErrorMessage } from '@mcp/services/mcp-client/auth/domain/errors.js';
@@ -66,6 +67,21 @@ function looksLikeNetworkError(e: unknown): boolean {
 }
 
 type ListedTool = Awaited<ReturnType<Client['listTools']>>['tools'][number];
+
+interface ExternalMcpContent {
+  type?: string;
+  text?: string;
+  data?: string;
+  mimeType?: string;
+  uri?: string;
+  name?: string;
+  resource?: {
+    uri?: string;
+    mimeType?: string;
+    text?: string;
+    blob?: string;
+  };
+}
 
 interface ValidationIssueLike {
   path?: unknown;
@@ -293,6 +309,11 @@ export class McpServerManager {
           // Server authors can opt non-conventional names in through future
           // MCP metadata without changing guard code.
           const repeatable = /^(?:wait_for|await|poll|tail|monitor)_/.test(t.name);
+          const annotations = t.annotations as {
+            readOnlyHint?: boolean;
+          } | undefined;
+          const hasReadOnlyHint = typeof annotations?.readOnlyHint === 'boolean';
+          const readOnly = annotations?.readOnlyHint === true;
 
           allTools.push({
             name: prefixedName,
@@ -301,6 +322,11 @@ export class McpServerManager {
             source: 'mcp_external',
             handler: this.createHandler(serverId, t.name),
             repeatPolicy: repeatable ? 'pollable' : 'stable',
+            ...(hasReadOnlyHint ? {
+              mutates: !readOnly,
+              parallelSafe: readOnly,
+              riskLevel: readOnly ? 'read' as const : 'write' as const,
+            } : {}),
           });
         }
       } catch (e) {
@@ -475,12 +501,93 @@ export class McpServerManager {
     args: Record<string, unknown>,
   ): Promise<ToolResult> {
     const result = await conn.client.callTool({ name: toolName, arguments: args });
-    const text = (result.content as Array<{ type: string; text?: string }> | undefined)
-      ?.filter((c) => c.type === 'text' && typeof c.text === 'string')
-      .map((c) => c.text!)
-      .join('\n') ?? '';
-    if (result.isError) return err(text || 'External MCP tool returned error');
-    return ok(text);
+    const blocks = (result.content ?? []) as ExternalMcpContent[];
+    const textParts: string[] = [];
+    const extraUserBlocks: ContentBlock[] = [];
+
+    for (const block of blocks) {
+      if (block.type === 'text' && typeof block.text === 'string') {
+        textParts.push(block.text);
+        continue;
+      }
+      if (block.type === 'image' && typeof block.data === 'string') {
+        extraUserBlocks.push({
+          type: 'image',
+          mediaType: block.mimeType || 'image/png',
+          base64: block.data,
+        });
+        continue;
+      }
+      if (block.type === 'audio' && typeof block.data === 'string') {
+        extraUserBlocks.push({
+          type: 'document',
+          name: `${toolName}-audio`,
+          mediaType: block.mimeType || 'audio/mpeg',
+          base64: block.data,
+        });
+        continue;
+      }
+      if (block.type === 'resource' && block.resource) {
+        const resource = block.resource;
+        const mediaType = resource.mimeType || 'application/octet-stream';
+        if (typeof resource.blob === 'string' && mediaType.startsWith('image/')) {
+          extraUserBlocks.push({ type: 'image', mediaType, base64: resource.blob });
+        } else {
+          extraUserBlocks.push({
+            type: 'document',
+            name: resource.uri || `${toolName}-resource`,
+            mediaType,
+            text: resource.text,
+            base64: resource.blob,
+          });
+        }
+        continue;
+      }
+      if (block.type === 'resource_link' && typeof block.uri === 'string') {
+        textParts.push(`[resource] ${block.name ? `${block.name}: ` : ''}${block.uri}`);
+      }
+    }
+
+    const structuredData = result.structuredContent;
+    if (textParts.length === 0 && structuredData !== undefined) {
+      textParts.push(JSON.stringify(structuredData));
+    }
+    if (textParts.length === 0 && extraUserBlocks.length > 0) {
+      textParts.push(
+        `External MCP tool returned ${extraUserBlocks.length} attachment` +
+        `${extraUserBlocks.length === 1 ? '' : 's'}.`,
+      );
+    }
+    const text = textParts.join('\n') || 'External MCP tool returned no content.';
+    const base = result.isError ? err(text) : ok(text);
+    return {
+      ...base,
+      ...(structuredData !== undefined ? { structuredData } : {}),
+      ...(extraUserBlocks.length > 0 ? { extraUserBlocks } : {}),
+      ...(textParts.length === 1 && structuredData !== undefined && blocks.length === 0
+        ? { contentFormat: 'json' as const }
+        : {}),
+    };
+  }
+
+  /**
+   * Call a raw tool on an already connected server. Used by control-plane
+   * health checks that must distinguish catalogue discovery from a usable
+   * downstream route.
+   */
+  async callServerTool(
+    serverId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolResult> {
+    const conn = this.connections.get(serverId);
+    if (!conn || conn.state !== 'connected') {
+      throw new Error(
+        `External MCP server "${serverId}" is ${conn?.state ?? 'not connected'}: ` +
+        `${conn?.error ?? 'no active connection'}`,
+      );
+    }
+    return this.callToolOnce(conn, toolName, args);
   }
 
   /** Close and re-open the connection for a server (used on OAuth auth error). */

@@ -93,8 +93,6 @@
   "item.CODER_IMPLEMENT_MAX_TURNS.label": "Máx. de turnos no modo build",
   "item.CODER_LOG_TOOLS_COUNT.description": "Emite `[coder] N tools registered` a cada turno para você verificar a promoção de tier.",
   "item.CODER_LOG_TOOLS_COUNT.label": "Logar contagem de tools por turno",
-  "item.CODER_MAX_AUTO_CONTINUES.description": "Lotes extras de turnos para execuções principais. Subagentes efêmeros não usam auto-continue. Recomendado: 3; valores maiores são agressivos.",
-  "item.CODER_MAX_AUTO_CONTINUES.label": "Máx. de auto-continues por execução",
   "item.CODER_MODEL_CAPS.description": "Mapa JSON de id de modelo → flags de capacidade. Avançado; veja a doc.",
   "item.CODER_MODEL_CAPS.label": "Overrides de capacidade de modelo",
   "item.CODER_NEW_COMPACTION.description": "Usa o compactador de janela móvel (vs o sumarizador legado).",
@@ -389,7 +387,5 @@
   "toast.saveFailed": "Falha ao salvar",
   "toast.saved": "{{count}} configuração(ões) salva(s)",
   "toast.savedApplied": "Mudanças aplicadas imediatamente.",
-  "toast.savedRestart": "Algumas mudanças exigem reinício do backend para fazer efeito.",
-  "item.CODER_MAX_AUTO_CONTINUES.effective": "Limite efetivo: {{turns}} turnos por execução.",
-  "item.CODER_MAX_AUTO_CONTINUES.warning": "Este valor é agressivo e pode aumentar o custo e a duração."
+  "toast.savedRestart": "Algumas mudanças exigem reinício do backend para fazer efeito."
 }

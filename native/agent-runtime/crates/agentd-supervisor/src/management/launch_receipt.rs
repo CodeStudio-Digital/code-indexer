@@ -2,12 +2,12 @@ use std::fmt::{self, Debug, Formatter};
 
 use agent_protocol::generated::v1 as wire;
 use agent_protocol::management_channel::{ManagementChannelError, ManagementSessionPolicy};
+#[cfg(windows)]
+use agent_protocol::supervisor_bootstrap::ValidatedSupervisorProcessHandoff;
 use zeroize::Zeroize;
 
-#[cfg(test)]
-const MIN_LAUNCH_NONCE_BYTES: usize = 16;
-#[cfg(test)]
-const MAX_LAUNCH_NONCE_BYTES: usize = 256;
+#[cfg(any(test, windows))]
+use agent_protocol::bootstrap_limits::{BOOTSTRAP_SECRET_MIN_BYTES, LAUNCH_NONCE_MAX_BYTES};
 
 struct SecretBytes(Vec<u8>);
 
@@ -24,9 +24,9 @@ impl Drop for SecretBytes {
 }
 
 impl SecretBytes {
-    #[cfg(test)]
+    #[cfg(any(test, windows))]
     fn new(mut value: Vec<u8>) -> Result<Self, ManagementChannelError> {
-        if !(MIN_LAUNCH_NONCE_BYTES..=MAX_LAUNCH_NONCE_BYTES).contains(&value.len()) {
+        if !(BOOTSTRAP_SECRET_MIN_BYTES..=LAUNCH_NONCE_MAX_BYTES).contains(&value.len()) {
             value.as_mut_slice().zeroize();
             return Err(ManagementChannelError::InvalidLaunchNonce);
         }
@@ -103,7 +103,27 @@ impl SupervisorLaunchReceipt {
         })
     }
 
-    pub(super) fn take_supervisor_hello(
+    #[cfg(windows)]
+    pub(crate) fn from_process_handoff(
+        handoff: &ValidatedSupervisorProcessHandoff,
+        launch_nonce: Vec<u8>,
+    ) -> Result<Self, ManagementChannelError> {
+        let provenance = handoff.supervisor_provenance();
+        Ok(Self {
+            supported_protocols: *handoff.supported_protocols(),
+            build_id: provenance.build_id.clone(),
+            source_commit: provenance.source_commit.clone(),
+            binary_sha256: provenance.binary_sha256.clone(),
+            runtime_instance_id: provenance.runtime_instance_id.clone(),
+            operating_system: provenance.operating_system.clone(),
+            architecture: provenance.architecture.clone(),
+            containment: handoff.containment(),
+            supported_feature_bits: handoff.supported_feature_bits(),
+            launch_nonce: Some(SecretBytes::new(launch_nonce)?),
+        })
+    }
+
+    pub(crate) fn take_supervisor_hello(
         &mut self,
         policy: &ManagementSessionPolicy,
     ) -> Result<wire::SupervisorHello, ManagementChannelError> {

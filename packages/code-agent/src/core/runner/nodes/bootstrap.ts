@@ -23,7 +23,9 @@ export class BootstrapNode implements BehaviorNode {
       model: ctx.opts.provider.model,
       profile: ctx.opts.profile ?? null,
       planMode: !!ctx.opts.planMode,
-      maxTurns: ctx.opts.maxTurns ?? 50,
+      maxTurns: ctx.opts.maxTurns && ctx.opts.maxTurns > 0
+        ? ctx.opts.maxTurns
+        : null,
       ...(ctx.opts.executionUltra ? { ultra: ctx.opts.executionUltra } : {}),
     });
 

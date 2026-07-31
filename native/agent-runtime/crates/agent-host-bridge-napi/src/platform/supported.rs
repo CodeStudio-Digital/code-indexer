@@ -6,9 +6,11 @@ use crate::error;
 
 mod authority;
 mod duplex;
+mod supervisor;
 
 use authority::CloseAuthority;
 use duplex::NativeDuplex;
+pub use supervisor::NativeSupervisorSet;
 
 pub const MAX_TRANSPORT_CHUNK_BYTES: u32 = 64 * 1024;
 

@@ -65,8 +65,28 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
     const switchTo = async (b: GitBranch) => {
       if (b.isCurrent) return;
       try {
-        const name = await checkoutBranch(projectId, b.name, b.isRemote, repoPath);
-        toast.success(t('git.branchSwitched', { branch: name }));
+        const result = await checkoutBranch(projectId, b.name, b.isRemote, repoPath, {
+          confirmSmartCheckout: (blocker) => confirm({
+            title: t('git.smartCheckoutTitle'),
+            description: t(blocker === 'untracked'
+              ? 'git.smartCheckoutUntrackedDescription'
+              : 'git.smartCheckoutDescription', { branch: b.name }),
+            confirmLabel: t('git.smartCheckoutConfirm'),
+          }),
+        });
+        if (!result) return;
+        if (result.restoreConflicts) {
+          toast.warning(t('git.smartCheckoutConflicts'), {
+            description: t('git.smartCheckoutConflictsDescription', {
+              branch: result.name,
+              stash: result.stashRef ?? t('git.smartCheckoutUnknownStash'),
+            }),
+            duration: 10_000,
+          });
+          requestGitReload();
+        } else {
+          toast.success(t('git.branchSwitched', { branch: result.name }));
+        }
         await after();
         onClose?.();
       } catch (e) {

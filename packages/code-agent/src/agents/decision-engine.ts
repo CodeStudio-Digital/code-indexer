@@ -64,7 +64,6 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
         'mcp__get_project_pulse',
         'mcp__search',
         'mcp__grep_code',
-        'mcp__get_file_skeleton',
         'mcp__read_file',
       ],
       discouraged: ['write_file', 'edit_file', 'multi_edit', 'run_command', 'git_commit'],
@@ -77,7 +76,7 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
     cost: 'low',
     requiresExplicitUserIntent: false,
     toolPolicy: {
-      preferred: ['mcp__search', 'mcp__grep_code', 'glob', 'mcp__get_file_skeleton', 'mcp__find_references'],
+      preferred: ['mcp__search', 'mcp__grep_code', 'mcp__read_file', 'glob', 'mcp__find_references'],
       discouraged: ['write_file', 'edit_file', 'multi_edit', 'run_command'],
     },
   },
@@ -91,6 +90,7 @@ const INTENT_PROFILES: Record<TaskIntent, IntentProfile> = {
     requiresExplicitUserIntent: false,
     toolPolicy: {
       preferred: [
+        'mcp__search',
         'mcp__grep_code',
         'mcp__get_symbol_body',
         'mcp__prepare_edit',

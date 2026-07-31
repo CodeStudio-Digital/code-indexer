@@ -269,14 +269,10 @@ export const openrouterSpec: ProviderSpec = {
 };
 
 /**
- * Sakana AI Fugu — a multi-agent frontier model exposed over the OpenAI API
- * (https://api.sakana.ai/v1, chat/completions + /models). Its one distinctive
- * control is reasoning effort: Chat Completions takes the STRING field
- * `reasoning_effort` with `high`/`xhigh`/`max` (xhigh==max aliases; server
- * default xhigh) — forwarded per-request by the `vendor:'fugu'` branch in the
- * openai-compat adapter. The bare `/models` endpoint returns only ids, so the
- * reasoning levels + context window are declared as DATA via `models` (gap-filled
- * onto the live discovery result by `discoverOpenAIModels`).
+ * Sakana AI Fugu — a stateless OpenAI-compatible Responses provider. Sakana
+ * recommends Responses for reasoning + tool-call management. The bare /models
+ * endpoint returns only ids, so the documented reasoning levels, 1M context and
+ * freeform apply_patch support are gap-filled from this declarative catalog.
  */
 export const fuguSpec: ProviderSpec = {
   kind: 'fugu',
@@ -285,35 +281,87 @@ export const fuguSpec: ProviderSpec = {
   credKind: 'api-key',
   envVars: ['FUGU_API_KEY'],
   defaultBaseURL: 'https://api.sakana.ai/v1',
-  defaultModels: ['fugu', 'fugu-ultra', 'fugu-ultra-20260615'],
+  defaultModels: [
+    'fugu',
+    'fugu-ultra',
+    'fugu-ultra-v1.1',
+    'fugu-ultra-v1.0',
+    'fugu-ultra-20260615',
+    'fugu-cyber',
+    'fugu-cyber-v1.0',
+  ],
   defaultModel: 'fugu',
   pricing: {
-    // fugu-ultra: $5/1M in, $30/1M out (flat tier; the >272K-context and cached
-    // tiers aren't representable in PricingEntry). Base `fugu` bills at the
-    // underlying model's standard rate — no fixed public number, so omitted.
+    // Standard tier only: >272K and cached-input prices are not representable
+    // in PricingEntry. Base `fugu` has route-dependent pricing, so it is omitted.
     'fugu-ultra': { inputPer1M: 5.0, outputPer1M: 30.0 },
+    'fugu-ultra-v1.1': { inputPer1M: 5.0, outputPer1M: 30.0 },
+    'fugu-ultra-v1.0': { inputPer1M: 5.0, outputPer1M: 30.0 },
     'fugu-ultra-20260615': { inputPer1M: 5.0, outputPer1M: 30.0 },
+    'fugu-cyber': { inputPer1M: 6.0, outputPer1M: 36.0 },
+    'fugu-cyber-v1.0': { inputPer1M: 6.0, outputPer1M: 36.0 },
   },
-  capabilities: { supportsThinking: true, supportsVision: true },
+  capabilities: { supportsThinking: false, supportsVision: true },
   wire: 'openai-compat',
-  wireOpts: { vendor: 'fugu', summaryModelDefault: 'fugu' },
+  wireOpts: {
+    vendor: 'fugu',
+    responsesApi: true,
+    responsesStateless: true,
+    responsesReasoningSummaryModels: [
+      'fugu-ultra',
+      'fugu-ultra-v1.1',
+      'fugu-ultra-v1.0',
+      'fugu-ultra-20260615',
+      'fugu-cyber',
+      'fugu-cyber-v1.0',
+    ],
+    responsesIncludeOrchestrationUsage: true,
+    summaryModelDefault: 'fugu',
+  },
   discovery: { from: 'openai-models' },
   test: { from: 'openai-models', fallbackBaseURL: 'https://api.sakana.ai/v1' },
   models: {
     fugu: {
-      supportedReasoningLevels: ['high', 'xhigh', 'max'],
-      defaultReasoningLevel: 'xhigh',
-      contextWindow: 272_000,
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'high',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
     },
     'fugu-ultra': {
       supportedReasoningLevels: ['high', 'xhigh', 'max'],
       defaultReasoningLevel: 'xhigh',
-      contextWindow: 272_000,
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
     },
-    'fugu-ultra-20260615': {
+    'fugu-ultra-v1.1': {
       supportedReasoningLevels: ['high', 'xhigh', 'max'],
       defaultReasoningLevel: 'xhigh',
-      contextWindow: 272_000,
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
+    },
+    'fugu-ultra-v1.0': {
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'xhigh',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
+    },
+    'fugu-ultra-20260615': {
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'xhigh',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
+    },
+    'fugu-cyber': {
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'high',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
+    },
+    'fugu-cyber-v1.0': {
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'high',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
     },
   },
 };

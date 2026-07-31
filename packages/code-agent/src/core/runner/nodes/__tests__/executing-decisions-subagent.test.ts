@@ -27,10 +27,27 @@ describe('decideTerminal subagent policy', () => {
   });
 
   it('keeps parent auto-continue behavior unchanged', () => {
-    vi.stubEnv('CODER_MAX_AUTO_CONTINUES', '1');
     const ctx = context(50, 50, false);
+    ctx.opts.maxAutoContinues = 1;
     expect(decideTerminal(ctx).kind).toBe('TurnSucceeded');
     expect(ctx.autoContinues).toBe(1);
-    vi.unstubAllEnvs();
+  });
+
+  it('treats plan mode as an exact ceiling without auto-continue', () => {
+    const ctx = context(12, 12, false);
+    ctx.opts.planMode = true;
+    ctx.opts.maxAutoContinues = 3;
+    expect(decideTerminal(ctx)).toEqual({ kind: 'MaxTurnsReached', autoContinueLeft: 0 });
+    expect(ctx.stopReason).toBe('max_turns');
+    expect(ctx.autoContinues).toBe(0);
+  });
+
+  it('lets an unlimited top-level session run past the former default ceiling', () => {
+    const ctx = context(10_000, 0, false);
+    expect(decideTerminal(ctx)).toEqual({
+      kind: 'TurnSucceeded',
+      hasToolCalls: true,
+    });
+    expect(ctx.autoContinues).toBe(0);
   });
 });

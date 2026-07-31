@@ -3,11 +3,11 @@ use super::{ProtectedLaunchPeerAuthority, ProtectedLaunchPeerAuthorityError};
 #[test]
 fn peer_authority_rejects_non_physical_process_identity() {
     assert_eq!(
-        ProtectedLaunchPeerAuthority::new_for_test(0, 2, unix_user_id(), unix_user_id()),
+        ProtectedLaunchPeerAuthority::new_for_test(0, 2, UNIX_USER_ID, UNIX_USER_ID),
         Err(ProtectedLaunchPeerAuthorityError::ZeroProcessId)
     );
     assert_eq!(
-        ProtectedLaunchPeerAuthority::new_for_test(7, 7, unix_user_id(), unix_user_id()),
+        ProtectedLaunchPeerAuthority::new_for_test(7, 7, UNIX_USER_ID, UNIX_USER_ID),
         Err(ProtectedLaunchPeerAuthorityError::DuplicateProcessId)
     );
 }
@@ -43,8 +43,8 @@ fn peer_authority_requires_the_physical_supervisor_process() {
         ProtectedLaunchPeerAuthority::new_for_test(
             host_process_id,
             wrong_supervisor_process_id,
-            unix_user_id(),
-            unix_user_id(),
+            UNIX_USER_ID,
+            UNIX_USER_ID,
         ),
         Err(ProtectedLaunchPeerAuthorityError::SupervisorProcessIdMismatch)
     );
@@ -57,8 +57,8 @@ fn peer_authority_keeps_expected_peers_explicit_but_redacts_debug() {
     let authority = ProtectedLaunchPeerAuthority::new_for_test(
         host_process_id,
         supervisor_process_id,
-        unix_user_id(),
-        unix_user_id(),
+        UNIX_USER_ID,
+        UNIX_USER_ID,
     )
     .expect("valid");
 
@@ -80,11 +80,7 @@ fn distinct_process_id(excluded: &[u32]) -> u32 {
 }
 
 #[cfg(windows)]
-const fn unix_user_id() -> Option<u32> {
-    None
-}
+const UNIX_USER_ID: Option<u32> = None;
 
 #[cfg(unix)]
-const fn unix_user_id() -> Option<u32> {
-    Some(1_000)
-}
+const UNIX_USER_ID: Option<u32> = Some(1_000);

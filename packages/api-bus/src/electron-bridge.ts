@@ -14,6 +14,9 @@
 import type { Api } from './index.js';
 
 export interface ElectronAPI {
+  /** Per-launch packaged CSP nonce used only for sandboxed plugin scripts. */
+  rendererCspNonce?: string | null;
+
   /** Full backend RPC surface — same shape Hono mounts at /api/*. */
   api: Api;
 

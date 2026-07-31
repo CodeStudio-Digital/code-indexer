@@ -255,6 +255,7 @@ export async function* dispatchStreaming(
   app: Hono,
   methodPath: string,
   input: unknown,
+  signal?: AbortSignal,
 ): AsyncGenerator<unknown, void, unknown> {
   const spec = DISPATCH_TABLE[methodPath];
   if (!spec) {
@@ -269,6 +270,7 @@ export async function* dispatchStreaming(
     method: spec.method,
     headers,
     body: spec.body ? JSON.stringify(spec.body(inputObj)) : undefined,
+    ...(signal ? { signal } : {}),
   });
 
   const res = await app.fetch(req, IN_PROCESS_ENV);
@@ -307,6 +309,9 @@ export async function* dispatchStreaming(
       if (frame !== undefined) yield frame;
     }
   } finally {
+    if (signal?.aborted) {
+      await reader.cancel(signal.reason).catch(() => undefined);
+    }
     reader.releaseLock();
   }
 }

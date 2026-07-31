@@ -1,4 +1,5 @@
 import { apiPatch, apiPost } from '../../hooks/useApi.js';
+import { dedupeInflight } from '../../lib/api-cache.js';
 import type {
   SessionScope,
   SnapshotFileDiff,
@@ -34,9 +35,12 @@ export async function fetchSnapshotList(
   opts: { includeClosed?: boolean } = {},
 ): Promise<{ files: SnapshotFileSummary[] }> {
   const qs = opts.includeClosed ? '?includeClosed=1' : '';
-  const r = await fetch(`/api${base(scope, sessionId)}${qs}`);
-  if (!r.ok) throw await readError(r, 'Could not load snapshots');
-  return (await r.json()) as { files: SnapshotFileSummary[] };
+  const url = `/api${base(scope, sessionId)}${qs}`;
+  return dedupeInflight(`snapshot-list:${url}`, async () => {
+    const r = await fetch(url);
+    if (!r.ok) throw await readError(r, 'Could not load snapshots');
+    return (await r.json()) as { files: SnapshotFileSummary[] };
+  });
 }
 
 export async function fetchFileDiff(

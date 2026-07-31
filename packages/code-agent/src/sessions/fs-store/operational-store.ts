@@ -84,6 +84,15 @@ export class FsOperationalSessionStore {
       self.advanced.setThinkingEnabled(id, value),
     this,
   );
+  setSessionRunLimits = thisCall(
+    (
+      self,
+      id: SessionId | string,
+      maxTurns: number | null,
+      maxAutoContinues: number,
+    ) => self.advanced.setRunLimits(id, maxTurns, maxAutoContinues),
+    this,
+  );
   setSessionPlanDepth = thisCall(
     (self, id: SessionId | string, value: string | null) =>
       self.advanced.setPlanDepth(id, value),

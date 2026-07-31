@@ -28,7 +28,7 @@ function makeRun(
     Pick<CompanyAgentRunFileRow, 'id' | 'role'>,
 ): CompanyAgentRunFileRow {
   return {
-    id: over.id, company_session_id: SID, role: over.role, coder_session_id: CODER_SESSION_ID,
+    id: over.id, seq: over.seq ?? 1, company_session_id: SID, role: over.role, coder_session_id: CODER_SESSION_ID,
     project_ids_json: '[]', status: over.status ?? 'waiting', status_message: '',
     provider: '', model: '', configured_provider: '', configured_model: '',
     dispatch_source: 'company', fallback_reason: null, created_at: '2026-05-25T10:00:00Z',

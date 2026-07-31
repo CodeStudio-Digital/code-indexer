@@ -89,7 +89,12 @@ export function WebviewWindow({
   const doc =
     html === null
       ? null
-      : injectIntoHtml(html, { namespace, projectId, locale }, currentThemeTokens());
+      : injectIntoHtml(
+          html,
+          { namespace, projectId, locale },
+          currentThemeTokens(),
+          window.electronAPI?.rendererCspNonce ?? undefined,
+        );
 
   return (
     <div className="flex h-full flex-col">

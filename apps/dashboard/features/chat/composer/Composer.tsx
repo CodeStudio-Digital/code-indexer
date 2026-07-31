@@ -88,6 +88,8 @@ interface ComposerProps {
   currentProviderModels: EnrichedProviderModel[];
   maxTurns: number | null;
   setMaxTurns: (v: number | null) => void;
+  maxAutoContinues: number;
+  setMaxAutoContinues: (v: number) => void;
   /** Per-session temperature override. `null` = inherit from role/agent/default. */
   temperature: number | null;
   setTemperature: (v: number | null) => void;
@@ -171,7 +173,12 @@ interface ComposerProps {
    * `queuedStrip` is the rendered queue list, shown above the input.
    */
   queueable?: boolean;
-  onQueue?: (text: string, mode: QueueMode, skillIds?: string[]) => void;
+  onQueue?: (
+    text: string,
+    mode: QueueMode,
+    attachments: AgentAttachment[],
+    skillIds?: string[],
+  ) => void;
   queuedStrip?: React.ReactNode;
 }
 
@@ -261,7 +268,10 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       }
     }, [attachments, props.sessionId, t]);
 
-    const { isDragging, dropHandlers } = useFileDrop({ onFiles: handleFiles, disabled: streaming });
+    const { isDragging, dropHandlers } = useFileDrop({
+      onFiles: handleFiles,
+      disabled: streaming && !props.queueable,
+    });
 
     // Auto-resize textarea based on content
     useEffect(() => {
@@ -352,7 +362,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
           props.onClearPicks?.();
           props.onClearSkillPicks?.();
           const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
-          props.onSend(text, [], merged);
+          props.onSend(text, attachments, merged);
           return;
         }
       }
@@ -371,14 +381,16 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
 
     // Enqueue the composed message while the agent is streaming. Same
     // file_refs prefixing + clears as `handleSend`, but the delivery timing
-    // (next turn vs end of session) is decided by the queue. Text-only —
-    // attachments can't be added mid-run (the attach button is disabled), and
-    // the backend rejects mid-run attachments anyway.
+    // (next turn vs end of session) is decided by the queue. Attachments travel
+    // with the queued item so they cannot bleed into a later immediate send.
     const handleQueue = useCallback((mode: QueueMode) => {
-      if (!input.trim() || !props.onQueue) return;
-      const text = input;
+      if ((!input.trim() && attachments.length === 0) || !props.onQueue) return;
+      const text = input.trim()
+        ? input
+        : t('composer.analyzeAttachments', { defaultValue: 'Analyze the attached files.' });
       const picks = props.filePicks ?? [];
       const skillIds = props.skillPicks ?? [];
+      const atts = attachments;
       // Slash command: same interception as handleSend — the typed `/cmd`
       // stays as the message, the matched skill rides as a pick (no file_refs
       // prefix), so a queued slash command behaves like a sent one.
@@ -388,11 +400,12 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
         const match = slashCommands.find((c) => c.command.toLowerCase() === cmd.toLowerCase());
         if (match) {
           setInput('');
+          setAttachments([]);
           clearDraft();
           props.onClearPicks?.();
           props.onClearSkillPicks?.();
           const merged = [match.id, ...skillIds.filter((s) => s !== match.id)];
-          props.onQueue(text, mode, merged);
+          props.onQueue(text, mode, atts, merged);
           return;
         }
       }
@@ -400,11 +413,12 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
         ? `<file_refs>\n${picks.map((p) => `- ${p}`).join('\n')}\n</file_refs>\n\n${text}`
         : text;
       setInput('');
+      setAttachments([]);
       clearDraft();
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
-      props.onQueue(finalText, mode, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, slashCommands, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, clearDraft]);
+      props.onQueue(finalText, mode, atts, skillIds.length > 0 ? skillIds : undefined);
+    }, [input, attachments, slashCommands, props.sessionId, props.filePicks, props.skillPicks, props.onClearPicks, props.onClearSkillPicks, props.onQueue, clearDraft, t]);
 
     const filePicks = props.filePicks ?? [];
     const PICKS_VISIBLE = 3;
@@ -626,6 +640,8 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               currentProviderModels={props.currentProviderModels}
               maxTurns={props.maxTurns}
               setMaxTurns={props.setMaxTurns}
+              maxAutoContinues={props.maxAutoContinues}
+              setMaxAutoContinues={props.setMaxAutoContinues}
               temperature={props.temperature}
               setTemperature={props.setTemperature}
               reasoningEffort={props.reasoningEffort ?? null}
@@ -672,6 +688,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
           <div className="flex items-center justify-start gap-0.5 px-2 py-0.5 border-t border-dashed border-border/40">
             <ComposerActionIcons
               streaming={streaming}
+              allowAttachmentsWhileStreaming={!!props.queueable}
               handleFiles={handleFiles}
               thinking={props.thinking}
               setThinking={props.setThinking}
@@ -748,6 +765,8 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             currentProviderModels={props.currentProviderModels}
             maxTurns={props.maxTurns}
             setMaxTurns={props.setMaxTurns}
+            maxAutoContinues={props.maxAutoContinues}
+            setMaxAutoContinues={props.setMaxAutoContinues}
             temperature={props.temperature}
             setTemperature={props.setTemperature}
             reasoningEffort={props.reasoningEffort ?? null}

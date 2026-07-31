@@ -126,6 +126,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
         profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
         /** Override max turns for this run. null/undefined = use default. */
         maxTurns?: number | null;
+        maxAutoContinues?: number;
         /** Enable thinking/reasoning mode. */
         thinking?: boolean;
         /** Force the vision fallback (image → text via the configured vision
@@ -181,6 +182,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
             agent: extras?.agent,
             profile: extras?.profile,
             max_turns: extras?.maxTurns ?? undefined,
+            max_auto_continues: extras?.maxAutoContinues,
             thinking: extras?.thinking || undefined,
             describe_images: extras?.describeImages || undefined,
             interject: extras?.interject || undefined,

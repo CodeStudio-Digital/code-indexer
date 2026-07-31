@@ -106,6 +106,8 @@ export class ProjectIndexService {
   private fallbackPollTimer: ReturnType<typeof setInterval> | null = null;
   /** projectId → relPath → last observed mtime (fallback poll baseline). */
   private fallbackMtimes = new Map<number, Map<string, number>>();
+  /** Nested foreground filesystem operations per project (Git stage/commit). */
+  private interactivePriorityDepth = new Map<number, number>();
 
   constructor(
     private db: CodeIndexDB,
@@ -119,7 +121,13 @@ export class ProjectIndexService {
 
   /** Late-bound upgrade: in-process fallback → indexer worker client. */
   setExecutor(executor: StructuralExecutor): void {
+    for (const projectId of this.interactivePriorityDepth.keys()) {
+      this.setInteractivePriority(projectId, false);
+    }
     this.executor = executor;
+    for (const projectId of this.interactivePriorityDepth.keys()) {
+      this.setInteractivePriority(projectId, true);
+    }
   }
 
   /**
@@ -322,7 +330,8 @@ export class ProjectIndexService {
     if (reason !== 'manual' && reason !== 'branch' && reason !== 'workspace'
       && this.reconciledLifecycle.has(projectId)) return;
 
-    // Expose global busy state before create-session lets the composer send.
+    // Expose synthetic-global work immediately so the non-blocking status
+    // indicator reflects the scheduled pass before the session starts.
     if (this.db.getProject(projectId)?.is_synthetic) {
       this.status.setPhase(projectId, 'scanning');
     }
@@ -718,6 +727,31 @@ export class ProjectIndexService {
     return this.mutex.withLock(projectId, fn);
   }
 
+  /**
+   * Give a user-triggered filesystem mutation priority over background
+   * structural scanning/writes. Nested/concurrent operations share one lease;
+   * the indexer resumes only after the final lease settles.
+   */
+  async withInteractiveFilesystemPriority<T>(
+    projectId: number,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const depth = this.interactivePriorityDepth.get(projectId) ?? 0;
+    this.interactivePriorityDepth.set(projectId, depth + 1);
+    if (depth === 0) this.setInteractivePriority(projectId, true);
+    try {
+      return await fn();
+    } finally {
+      const remaining = (this.interactivePriorityDepth.get(projectId) ?? 1) - 1;
+      if (remaining > 0) {
+        this.interactivePriorityDepth.set(projectId, remaining);
+      } else {
+        this.interactivePriorityDepth.delete(projectId);
+        this.setInteractivePriority(projectId, false);
+      }
+    }
+  }
+
   /** Full-index wrapper: lock + semantic_indexing phase + DB-derived settle. */
   withSemanticRun<T>(projectId: number, fn: () => Promise<T>): Promise<T> {
     return this.mutex.withLock(projectId, async () => {
@@ -732,6 +766,10 @@ export class ProjectIndexService {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    for (const projectId of this.interactivePriorityDepth.keys()) {
+      this.setInteractivePriority(projectId, false);
+    }
+    this.interactivePriorityDepth.clear();
     if (this.fallbackPollTimer) {
       clearInterval(this.fallbackPollTimer);
       this.fallbackPollTimer = null;
@@ -773,6 +811,17 @@ export class ProjectIndexService {
       return false;
     }
     return true;
+  }
+
+  private setInteractivePriority(projectId: number, busy: boolean): void {
+    try {
+      this.executor.setInteractivePriority?.(projectId, busy);
+    } catch (error) {
+      // Priority is a performance contract, never a correctness gate for Git.
+      console.warn(
+        `[project-index] failed to ${busy ? 'pause' : 'resume'} background indexing for project ${projectId}: ${msg(error)}`,
+      );
+    }
   }
 
   private onWatcherEvents(projectId: number, rootPath: string, events: WatcherFileEvent[]): void {

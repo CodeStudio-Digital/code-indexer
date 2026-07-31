@@ -14,6 +14,7 @@
  * template before binding resolution was moved into the resume path.
  */
 import { runCoder, type CoderAttachment, type RunCoderOptions } from '@mcp/code-agent/index.js';
+import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { createBus } from '@apps/http-api/coder-bus.js';
 import { buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
 import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
@@ -36,6 +37,7 @@ import {
   type SubordinateCompletionDeps,
 } from '@mcp/company/services/subordinate/completion-handler.js';
 import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/subordinate/runner-wiring.js';
+import { wireSupervisorToRunner } from '@mcp/company/services/supervisor/wire-runner-events.js';
 import { tryAcquireResume, releaseResume } from '@mcp/company/services/subordinate/resume-guard.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
@@ -231,13 +233,14 @@ async function resumeSubordinateInner(
 
   let subordinateBlock = buildSubordinateCompanyBlock({
     role: agentRun.role,
-    projects: [
-      {
-        id: projectId,
-        name: project?.name ?? `project-${projectId}`,
-        rootPath: project?.root_path ?? '',
-      },
-    ],
+    projects: projectIds.map((allowedProjectId) => {
+      const allowedProject = ctx.db.getProject(allowedProjectId);
+      return {
+        id: allowedProjectId,
+        name: allowedProject?.name ?? `project-${allowedProjectId}`,
+        rootPath: allowedProject?.root_path ?? '',
+      };
+    }),
     projectMemory: [projectMemory, userMemory].filter(Boolean).join('\n') || undefined,
     builder: resumeBinding
       ? {
@@ -278,6 +281,7 @@ async function resumeSubordinateInner(
   // Mem C — same bridge-backed ports as spawn: per-turn injection + run-end
   // distillation for the resumed run.
   const memoryPorts = getCompanyMemoryPorts();
+  let supervisorUnsubscribe: () => void = () => { /* no-op */ };
 
   let handle: Awaited<ReturnType<typeof runCoder>>;
   try {
@@ -297,8 +301,11 @@ async function resumeSubordinateInner(
       thinkingBudgetTokens: configuredRole?.thinkingBudgetTokens,
       reasoningEffort: configuredRole?.reasoningEffort,
       initialPinnedTools: configuredRole?.initialTools,
-      onRunnerReady: (runner) =>
-        wireSubordinateInterceptionsForRunner(runner, agentRun.id, agentRun.role, deps.wireDeps),
+      onRunnerReady: (runner) => {
+        wireSubordinateInterceptionsForRunner(runner, agentRun.id, agentRun.role, deps.wireDeps);
+        installDocsDeepResearch(runner);
+        supervisorUnsubscribe = wireSupervisorToRunner(runner, agentRun.id);
+      },
     } as RunCoderOptions & { companyPromptBlock: string });
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
@@ -336,6 +343,9 @@ async function resumeSubordinateInner(
     true,
     deps.completionDeps,
   );
+  handle.done.finally(() => {
+    try { supervisorUnsubscribe(); } catch { /* best-effort */ }
+  });
 
   return {
     agentRunId: agentRun.id,

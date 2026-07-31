@@ -400,6 +400,13 @@ export interface BehaviorNode {
  * through to its default (e.g. no skills block, allow all tool calls).
  */
 export interface BridgeCallbacks {
+  /**
+   * Terminal abort requested by the host runner. The behavior-tree runtime
+   * owns its own RunContext, so it must explicitly consult this bridge at
+   * node boundaries; otherwise `CoderRunner.abort()` only releases pending
+   * interactive waits and the tree keeps issuing provider/tool turns.
+   */
+  isAbortRequested?: () => boolean;
   /** Pending semantic lifecycle milestone awaiting the next real size compaction. */
   peekMilestoneCompaction?: () => string | null;
   /** Clear the milestone only after Executing actually emits its trigger. */

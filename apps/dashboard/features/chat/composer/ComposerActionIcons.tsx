@@ -20,6 +20,8 @@ import { SessionFilesystemRootsControl } from './SessionFilesystemRootsControl.j
 
 interface ComposerActionIconsProps {
   streaming: boolean;
+  /** Queue-capable composers may stage attachments while a run is active. */
+  allowAttachmentsWhileStreaming?: boolean;
   handleFiles: (files: FileList | null) => Promise<void>;
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
@@ -45,6 +47,7 @@ interface ComposerActionIconsProps {
 
 export const ComposerActionIcons = memo(function ComposerActionIcons({
   streaming,
+  allowAttachmentsWhileStreaming = false,
   handleFiles,
   thinking,
   setThinking,
@@ -63,6 +66,7 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
   showMic = true,
 }: ComposerActionIconsProps) {
   const { t } = useTranslation('chat');
+  const attachmentsDisabled = streaming && !allowAttachmentsWhileStreaming;
   // Transient "applied to the running session" pulse: the permission-mode
   // PATCH already pushes into the live runner mid-run, but that change is
   // invisible. Flash a ring on the shield when toggled while streaming so the
@@ -91,12 +95,12 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
             handleFiles(e.target.files);
             e.target.value = '';
           }}
-          disabled={streaming}
+          disabled={attachmentsDisabled}
         />
         <span
           aria-label={t('composer.attach', { defaultValue: 'Anexar arquivos' })}
           className={`inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors ${
-            streaming
+            attachmentsDisabled
               ? 'text-muted-foreground/40 cursor-not-allowed'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted'
           }`}

@@ -96,6 +96,7 @@ describe('NativeHostAttemptBridgeRequest', () => {
         retained = encoded;
         return channels;
       }),
+      openHostSupervisorBridge: vi.fn(),
     } as NativeHostBridgeBinding;
 
     const bridgeOwner = await openNativeHostAttemptBridge(binding, owner);

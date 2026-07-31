@@ -16,6 +16,8 @@ declare module 'monaco-editor/esm/vs/editor/standalone/browser/standaloneService
  */
 declare global {
   interface ElectronAPI {
+    /** Per-launch packaged CSP nonce used only for sandboxed plugin scripts. */
+    rendererCspNonce?: string | null;
     /**
      * One-shot IPC call. `methodPath` is dotted (`coder.sessions.list`);
      * the bridge translates to the colon channel internally. Returns the

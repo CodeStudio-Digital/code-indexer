@@ -23,16 +23,11 @@ describe('system prompt — multi-agent execution mode', () => {
     const [prefix, suffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
 
     expect(prefix).toContain('# Multi-agent mode (Ultra)');
-    expect(prefix).toContain('when parallel work materially improves speed or quality');
-    expect(prefix).toContain('Delegation is not a quota');
-    expect(prefix).toContain('reasoning to root and children');
-    expect(prefix).toContain('At most 3 proactive children');
-    expect(prefix).toContain('only read-only `investigator` or `reviewer`');
-    expect(prefix).toContain('`verifier` has shell');
-    expect(prefix).toContain('children cannot spawn further sub-agents');
-    expect(prefix).toContain('Never proactively spawn `implementer` or `full`');
-    expect(prefix).toContain("`task_list({gate:'approve'})` then `execute_tasks`");
-    expect(prefix).toContain('Ultra grants no write bypass.');
+    expect(prefix).toContain('only when independent read-only work materially improves speed or coverage');
+    expect(prefix).toContain('at most three `investigator` or `reviewer` children');
+    expect(prefix).toContain('keep writes in root');
+    expect(prefix).toContain('retain all normal permission gates');
+    expect(prefix).toContain('Children do not delegate further');
     expect(suffix).not.toContain('Multi-agent mode');
   });
 

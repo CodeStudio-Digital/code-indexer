@@ -141,7 +141,12 @@ import {
   coderRuntimeJournalShadowEnabled,
 } from './control-plane-shadow.js';
 import { startPerfSampler, stopPerfSampler } from './server/perf/perf-sampler.js';
-import { startFreezeWatchdog, stopFreezeWatchdog } from './server/perf/freeze-log.js';
+import {
+  enterBackgroundActivity,
+  exitBackgroundActivity,
+  startFreezeWatchdog,
+  stopFreezeWatchdog,
+} from './server/perf/freeze-log.js';
 import { startPersistentPerfDiagnostics } from './server/perf/persistent-diagnostics.js';
 import { getMemoryLedger } from './server/perf/memory-ledger.js';
 import { mountPerfRoutes } from './server/routes/admin/perf.js';
@@ -695,6 +700,9 @@ export function createApp() {
         db: deps.db,
         runEndMemory: deps.runEndMemory,
         agentMemoryService: deps.agentMemoryService,
+        isSessionActive: (sessionId) => getCoderWorkerPool().has(sessionId),
+        enterBackgroundActivity,
+        exitBackgroundActivity,
       });
       registerShutdownTask('memory-sweeper-stop', () => memorySweeper.stop());
     } catch (e) {
@@ -919,19 +927,23 @@ export function createApp() {
       return c.json({ error: 'unsupported semantic namespace' }, 400);
     }
     const state = deps.semanticStore.listNamespaceGenerations({ namespace })[0];
-    if (!state?.active_generation_id && !state?.building_generation_id) {
-      return c.json({
-        ok: true,
-        namespace,
-        scheduled: false,
-        reason: 'first_generation_requires_explicit_reindex',
-      }, 202);
-    }
+    const firstGeneration = !state?.active_generation_id && !state?.building_generation_id;
     queueMicrotask(() => {
-      void deps.semanticCoordinator.catchUpMemoryNamespace(namespace).catch((error) =>
+      // This route is already the operator's explicit remote-provider action.
+      // Let it create the first generation for this one namespace instead of
+      // forcing the global profile reindex to fan out over every project.
+      const reconcile = firstGeneration
+        ? deps.semanticCoordinator.ensureMemoryNamespace(namespace)
+        : deps.semanticCoordinator.catchUpMemoryNamespace(namespace);
+      void reconcile.catch((error) =>
         console.warn(`[semantic] targeted reconcile paused for ${namespace}: ${error instanceof Error ? error.message : String(error)}`));
     });
-    return c.json({ ok: true, namespace, scheduled: true }, 202);
+    return c.json({
+      ok: true,
+      namespace,
+      scheduled: true,
+      first_generation: firstGeneration,
+    }, 202);
   });
   app.route('/api/admin', createAdminRouter(deps.providerStore, {
     store: deps.semanticStore,

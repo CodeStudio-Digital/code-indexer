@@ -36,6 +36,7 @@ describe('McpServerManager tool catalogue isolation', () => {
           name: 'read_scene',
           description: 'Read the active scene.',
           inputSchema: { type: 'object', properties: {} },
+          annotations: { readOnlyHint: true },
         },
         {
           name: 'broken_tool',
@@ -70,6 +71,11 @@ describe('McpServerManager tool catalogue isolation', () => {
         'ext_unity__read_scene',
       ]);
       expect(manager.connectedCount).toBe(1);
+      expect(first.tools.find((tool) => tool.name === 'ext_unity__read_scene')).toMatchObject({
+        mutates: false,
+        parallelSafe: true,
+        riskLevel: 'read',
+      });
       expect(request).toHaveBeenCalledWith(
         { method: 'tools/list' },
         expect.anything(),
@@ -84,6 +90,48 @@ describe('McpServerManager tool catalogue isolation', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it('preserves structured data and multimodal MCP result blocks', async () => {
+    const manager = new McpServerManager();
+    const callTool = vi.fn().mockResolvedValue({
+      content: [
+        { type: 'text', text: 'captured game view' },
+        { type: 'image', mimeType: 'image/png', data: 'aW1hZ2U=' },
+        {
+          type: 'resource',
+          resource: {
+            uri: 'unity://report.json',
+            mimeType: 'application/json',
+            text: '{"fps":60}',
+          },
+        },
+      ],
+      structuredContent: { width: 1280, height: 720 },
+      isError: false,
+    });
+    (manager as unknown as {
+      connections: Map<string, unknown>;
+    }).connections.set('unity', {
+      client: { callTool },
+      config: serverConfig(),
+      state: 'connected',
+    });
+
+    const result = await manager.callServerTool('unity', 'screenshot_game_view', {});
+
+    expect(result.content).toBe('captured game view');
+    expect(result.structuredData).toEqual({ width: 1280, height: 720 });
+    expect(result.extraUserBlocks).toEqual([
+      { type: 'image', mediaType: 'image/png', base64: 'aW1hZ2U=' },
+      {
+        type: 'document',
+        name: 'unity://report.json',
+        mediaType: 'application/json',
+        text: '{"fps":60}',
+        base64: undefined,
+      },
+    ]);
   });
 
   it('still marks the server unhealthy for non-schema list failures', async () => {

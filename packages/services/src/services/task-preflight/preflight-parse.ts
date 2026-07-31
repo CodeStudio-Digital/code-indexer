@@ -14,6 +14,18 @@ import type {
 const TASK_KINDS = new Set(['bugfix', 'feature', 'refactor', 'explore', 'docs', 'config', 'test', 'other']);
 const PROFILES = new Set(['bootstrap', 'navigate', 'full']);
 const MAX_REASON_CHARS = 120;
+const OVERLAPPING_CODE_READ_TOOLS = new Set([
+  'mcp__read_file',
+  'read_file',
+  'mcp__get_symbol_body',
+  'mcp__get_file_skeleton',
+]);
+const CODE_READ_TOOL_PREFERENCE = [
+  'mcp__read_file',
+  'read_file',
+  'mcp__get_symbol_body',
+  'mcp__get_file_skeleton',
+] as const;
 const AUTOMATIC_SESSION_TITLES = new Set([
   'nova sessao',
   'nova sessao global',
@@ -82,6 +94,29 @@ function extractJson(raw: string): unknown {
   }
 }
 
+function coalesceToolPins(pins: readonly string[]): string[] {
+  const selectedRead = CODE_READ_TOOL_PREFERENCE.find((name) => pins.includes(name));
+  let emittedRead = false;
+  const result: string[] = [];
+  for (const pin of pins) {
+    if (
+      pins.includes('mcp__search')
+      && (pin === 'mcp__get_repo_map' || pin === 'mcp__get_project_overview')
+    ) {
+      continue;
+    }
+    if (!OVERLAPPING_CODE_READ_TOOLS.has(pin)) {
+      result.push(pin);
+      continue;
+    }
+    if (selectedRead && !emittedRead) {
+      result.push(selectedRead);
+      emittedRead = true;
+    }
+  }
+  return result;
+}
+
 export interface PreflightParseContext {
   toolNames: ReadonlySet<string>;
   memoryTitles: readonly string[];
@@ -125,15 +160,15 @@ export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): P
   }
 
   if (Array.isArray(parsed.tools)) {
-    const pins: string[] = [];
+    const validPins: string[] = [];
     for (const item of parsed.tools) {
       const name = typeof item === 'string' ? item : (item as { name?: unknown } | null)?.name;
       if (typeof name !== 'string') continue;
       const trimmed = name.trim();
-      if (!ctx.toolNames.has(trimmed) || pins.includes(trimmed)) continue;
-      pins.push(trimmed);
-      if (pins.length >= ctx.maxTools) break;
+      if (!ctx.toolNames.has(trimmed) || validPins.includes(trimmed)) continue;
+      validPins.push(trimmed);
     }
+    const pins = coalesceToolPins(validPins).slice(0, ctx.maxTools);
     if (pins.length > 0) seed.pinTools = pins;
   }
 
@@ -200,6 +235,13 @@ export function parsePreflightOutput(raw: string, ctx: PreflightParseContext): P
       if (memories.length >= ctx.maxMemories) break;
     }
     if (memories.length > 0) seed.memories = memories;
+  }
+
+  if (!seed.memories?.length && seed.pinTools) {
+    seed.pinTools = seed.pinTools.filter(
+      (name) => name !== 'recall_memory' && name !== 'mcp__search_memory',
+    );
+    if (seed.pinTools.length === 0) delete seed.pinTools;
   }
 
   const usable = seed.sessionTitle !== undefined

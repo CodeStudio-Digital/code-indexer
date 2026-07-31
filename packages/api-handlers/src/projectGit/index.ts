@@ -585,6 +585,10 @@ function commandPreview(operation: GitPlanOperation): string {
 export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
   const { db } = deps;
   const managedGit = deps.managedGit;
+  const withInteractiveGitPriority = <T>(
+    projectId: number,
+    fn: () => Promise<T>,
+  ): Promise<T> => deps.projectIndexService?.withInteractiveFilesystemPriority(projectId, fn) ?? fn();
   const statusInflight = new Map<string, Promise<GitStatus>>();
   const STATUS_SNAPSHOT_TTL_MS = Number(process.env.MCP_GIT_STATUS_SNAPSHOT_TTL_MS ?? 30_000);
   const statusSnapshots = new Map<string, {
@@ -1171,10 +1175,12 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       }
       const patch = selectHunks(diffRes.stdout, newStart, newEnd);
       if (!patch) throw new ApiError('stage_hunk_empty', 409, 'no stageable changes in this block');
-      const applyRes = await runGit(cwd, ['apply', '--cached', '--recount', '--whitespace=nowarn'], {
-        stdin: patch,
-        timeoutMs: GIT_READ_TIMEOUT_MS,
-      });
+      const applyRes = await withInteractiveGitPriority(projectId, () =>
+        runGit(cwd, ['apply', '--cached', '--recount', '--whitespace=nowarn'], {
+          stdin: patch,
+          timeoutMs: GIT_READ_TIMEOUT_MS,
+          profile: 'mutation',
+        }));
       if (applyRes.code !== 0) {
         throw new ApiError('stage_hunk_failed', 409, applyRes.stderr.trim() || 'git apply failed');
       }
@@ -1342,31 +1348,35 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
 
     async stage({ projectId, paths, repoPath }) {
       if (paths.length === 0) return { ok: true as const };
-      // Explicit repo (Git window) → paths are repo-relative, one call. No
-      // repoPath (explorer) → project-relative paths grouped by containing repo.
-      const groups = repoPath
-        ? new Map([[await resolveCwd(projectId, repoPath), paths]])
-        : await groupPathsByRepo(projectId, paths);
-      for (const [cwd, gitPaths] of groups) {
-        const r = await runGitPathspec(cwd, ['add'], gitPaths, { profile: 'mutation' });
-        if (r.code !== 0) throw new ApiError('git_stage_failed', 500, r.stderr.trim() || 'git add failed');
-      }
-      return { ok: true as const };
+      return withInteractiveGitPriority(projectId, async () => {
+        // Explicit repo (Git window) → paths are repo-relative, one call. No
+        // repoPath (explorer) → project-relative paths grouped by containing repo.
+        const groups = repoPath
+          ? new Map([[await resolveCwd(projectId, repoPath), paths]])
+          : await groupPathsByRepo(projectId, paths);
+        for (const [cwd, gitPaths] of groups) {
+          const r = await runGitPathspec(cwd, ['add'], gitPaths, { profile: 'mutation' });
+          if (r.code !== 0) throw new ApiError('git_stage_failed', 500, r.stderr.trim() || 'git add failed');
+        }
+        return { ok: true as const };
+      });
     },
 
     async unstage({ projectId, paths, repoPath }) {
       if (paths.length === 0) return { ok: true as const };
-      const groups = repoPath
-        ? new Map([[await resolveCwd(projectId, repoPath), paths]])
-        : await groupPathsByRepo(projectId, paths);
-      for (const [cwd, gitPaths] of groups) {
-        const hasHead = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { profile: 'read' });
-        const r = hasHead.code === 0
-          ? await runGitPathspec(cwd, ['restore', '--staged'], gitPaths, { profile: 'mutation' })
-          : await runGitPathspec(cwd, ['rm', '--cached', '--ignore-unmatch'], gitPaths, { profile: 'mutation' });
-        if (r.code !== 0) throw new ApiError('git_unstage_failed', 500, r.stderr.trim() || 'git restore --staged failed');
-      }
-      return { ok: true as const };
+      return withInteractiveGitPriority(projectId, async () => {
+        const groups = repoPath
+          ? new Map([[await resolveCwd(projectId, repoPath), paths]])
+          : await groupPathsByRepo(projectId, paths);
+        for (const [cwd, gitPaths] of groups) {
+          const hasHead = await runGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { profile: 'read' });
+          const r = hasHead.code === 0
+            ? await runGitPathspec(cwd, ['restore', '--staged'], gitPaths, { profile: 'mutation' })
+            : await runGitPathspec(cwd, ['rm', '--cached', '--ignore-unmatch'], gitPaths, { profile: 'mutation' });
+          if (r.code !== 0) throw new ApiError('git_unstage_failed', 500, r.stderr.trim() || 'git restore --staged failed');
+        }
+        return { ok: true as const };
+      });
     },
 
     async discard({ projectId, paths, repoPath }) {
@@ -1423,28 +1433,30 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
     },
 
     async commit({ projectId, message, amend, repoPath }) {
-      const root = await resolveCwd(projectId, repoPath);
-      const args = ['commit'];
-      if (amend) args.push('--amend');
-      args.push('-F', '-');
-      const r = await runGit(root, args, message);
-      if (r.code !== 0) {
-        throw new ApiError('git_commit_failed', 500, r.stderr.trim() || 'git commit failed');
-      }
-      const sha = (await runGit(root, ['rev-parse', 'HEAD'])).stdout.trim();
-      return {
-        sha,
-        command: 'git',
-        args,
-        ok: true,
-        code: r.code,
-        stdout: r.stdout,
-        stderr: r.stderr,
-        errorCode: r.errorCode,
-        durationMs: r.durationMs,
-        timedOut: r.timedOut,
-        truncated: r.truncated,
-      };
+      return withInteractiveGitPriority(projectId, async () => {
+        const root = await resolveCwd(projectId, repoPath);
+        const args = ['commit'];
+        if (amend) args.push('--amend');
+        args.push('-F', '-');
+        const r = await runGit(root, args, { stdin: message, profile: 'mutation' });
+        if (r.code !== 0) {
+          throw new ApiError('git_commit_failed', 500, r.stderr.trim() || 'git commit failed');
+        }
+        const sha = (await runGit(root, ['rev-parse', 'HEAD'], { profile: 'read' })).stdout.trim();
+        return {
+          sha,
+          command: 'git',
+          args,
+          ok: true,
+          code: r.code,
+          stdout: r.stdout,
+          stderr: r.stderr,
+          errorCode: r.errorCode,
+          durationMs: r.durationMs,
+          timedOut: r.timedOut,
+          truncated: r.truncated,
+        };
+      });
     },
 
     async branchList({ projectId, repoPath }) {
@@ -1485,9 +1497,27 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
           ? ['checkout', name]
           : ['checkout', '--track', '-b', name, from];
       }
-      const r = await runGit(root, args);
+      // Keep checkout diagnostics machine-classifiable regardless of the
+      // user's Git locale; the renderer maps these codes to translated UX.
+      const r = await runGit(root, args, {
+        profile: 'mutation',
+        env: { LC_ALL: 'C', LANG: 'C' },
+      });
       if (r.code !== 0) {
-        throw new ApiError('git_checkout_failed', 500, r.stderr.trim() || 'git checkout failed');
+        const message = r.stderr.trim() || 'git checkout failed';
+        const untrackedWouldBeOverwritten = /untracked working tree files would be overwritten by checkout/i.test(message);
+        const localChangesWouldBeOverwritten =
+          /local changes to the following files would be overwritten by checkout/i.test(message)
+          || /commit your changes or stash them before you switch branches/i.test(message);
+        throw new ApiError(
+          untrackedWouldBeOverwritten
+            ? 'git_checkout_untracked_files'
+            : localChangesWouldBeOverwritten
+              ? 'git_checkout_local_changes'
+              : 'git_checkout_failed',
+          untrackedWouldBeOverwritten || localChangesWouldBeOverwritten ? 409 : 500,
+          message,
+        );
       }
       return { ok: true as const };
     },
@@ -1922,13 +1952,13 @@ export function createProjectGitHandlers(deps: HandlerDeps): ProjectGitApi {
       return runAsResult(root, 'git', args);
     },
 
-    async stashPop({ projectId, ref, repoPath }) {
+    async stashPop({ projectId, ref, restoreIndex, repoPath }) {
       if (!ref) {
         throw new ApiError('bad_input', 400, 'ref required (e.g. stash@{0})');
       }
       const root = await resolveCwd(projectId, repoPath);
       await ensureStash(root, ref);
-      return runAsResult(root, 'git', ['stash', 'pop', ref]);
+      return runAsResult(root, 'git', ['stash', 'pop', ...(restoreIndex ? ['--index'] : []), ref]);
     },
 
     async stashApply({ projectId, ref, repoPath }) {

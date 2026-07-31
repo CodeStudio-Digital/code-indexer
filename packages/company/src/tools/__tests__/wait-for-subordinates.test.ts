@@ -5,7 +5,8 @@
  * hide inside a flat status list.
  *
  * The root bug was orthogonal (the runner's 5-min NORMAL timeout killed the
- * wait — fixed via `repeatable: true`, covered by dispatch-timeout.test.ts).
+ * wait — fixed via `timeoutMs: Infinity`, since repeatability alone does not
+ * change invocation timeout semantics).
  * This file pins the tool's OWN return-shape contract.
  */
 import { describe, it, expect } from 'vitest';
@@ -16,7 +17,7 @@ const FRONTEND_RUN_ID = '00000000-0000-4000-8000-000000000001';
 const BACKEND_RUN_ID = '00000000-0000-4000-8000-000000000002';
 const QA_RUN_ID = '00000000-0000-4000-8000-000000000003';
 
-type SubInfo = { agentRunId: string; role: string; status: string };
+type SubInfo = { agentRunId: string; seq?: number; role: string; status: string };
 
 /** Minimal orchestrator stub: a Proxy so `buildMasterTools` can construct every
  *  sibling tool, while we control only the three methods the wait handler uses. */
@@ -39,8 +40,10 @@ function waitTool(orch: CompanyOrchestrator) {
 }
 
 describe('wait_for_subordinates — return-shape contract', () => {
-  it('is exempt from the runner timeout (repeatable)', () => {
-    expect(waitTool(fakeOrchestrator({})).repeatable).toBe(true);
+  it('is repeatable and exempt from the runner timeout', () => {
+    const tool = waitTool(fakeOrchestrator({}));
+    expect(tool.repeatable).toBe(true);
+    expect(tool.timeoutMs).toBe(Infinity);
   });
 
   it('returns a soft continuation (NOT an error) when its own deadline elapses', async () => {
@@ -167,5 +170,34 @@ describe('summarizeSubordinates — failed runs surface a recovery hint', () => 
       }],
     });
     expect(summarizeSubordinates(orch)).toContain('All subordinates finished:');
+  });
+
+  it('keeps an old aborted run visible without treating it as active failure after a successful replacement', () => {
+    const replacementRunId = '00000000-0000-4000-8000-000000000004';
+    const orch = fakeOrchestrator({
+      listSubordinates: (): SubInfo[] => [
+        { agentRunId: QA_RUN_ID, seq: 3, role: 'qa', status: 'aborted' },
+        { agentRunId: replacementRunId, seq: 7, role: 'qa', status: 'waiting' },
+      ],
+    });
+
+    const out = summarizeSubordinates(orch);
+    expect(out).toContain('All subordinates finished:');
+    expect(out).toContain(`qa (run=${QA_RUN_ID}): aborted (superseded by successful run=${replacementRunId})`);
+    expect(out).not.toContain('recover with resume_subordinate');
+  });
+
+  it('still flags a newer failed retry even when an older run was clean', () => {
+    const replacementRunId = '00000000-0000-4000-8000-000000000004';
+    const orch = fakeOrchestrator({
+      listSubordinates: (): SubInfo[] => [
+        { agentRunId: QA_RUN_ID, seq: 3, role: 'qa', status: 'completed' },
+        { agentRunId: replacementRunId, seq: 7, role: 'qa', status: 'error' },
+      ],
+    });
+
+    const out = summarizeSubordinates(orch);
+    expect(out).toContain('1 subordinate(s) ended in a failed state');
+    expect(out).toContain(`qa (run=${replacementRunId}): error ⚠ recover`);
   });
 });

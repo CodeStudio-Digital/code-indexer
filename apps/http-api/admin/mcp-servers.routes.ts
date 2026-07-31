@@ -20,6 +20,28 @@ export interface ExternalToolInfo {
   tier: string;
 }
 
+export function brokerRouteReadiness(status: unknown): {
+  ready: boolean;
+  error?: string;
+} {
+  if (!status || typeof status !== 'object') {
+    return { ready: false, error: 'Unity broker returned an invalid status payload.' };
+  }
+  const value = status as Record<string, unknown>;
+  if (value.bridgeConnected !== true) {
+    return { ready: false, error: 'Unity broker is online, but no Unity bridge is connected.' };
+  }
+  if (value.routeReady === false) {
+    return {
+      ready: false,
+      error: typeof value.routeError === 'string' && value.routeError
+        ? value.routeError
+        : 'Unity broker has no ready active project route.',
+    };
+  }
+  return { ready: true };
+}
+
 /**
  * Read cached external tools from the DB. No server connections needed —
  * tools are cached when the user clicks "Test" on a server.
@@ -223,7 +245,6 @@ export function mcpServersRouter(): Hono {
       try {
         await manager.connectServer(server);
         const { tools } = await manager.listAllTools();
-        const latencyMs = Date.now() - start;
         // Strip the ext_<id>__ prefix for raw tool names
         const prefix = `ext_${server.id}__`;
         const toolList = tools.map((t) => ({
@@ -232,8 +253,30 @@ export function mcpServersRouter(): Hono {
         }));
         // Cache discovered tools in the DB for instant access by tools/session panels
         store.replaceServerTools(server.id, toolList);
+        if (toolList.some((tool) => tool.name === 'broker_get_status')) {
+          const statusResult = await manager.callServerTool(server.id, 'broker_get_status', {});
+          const readiness = statusResult.isError
+            ? { ready: false, error: statusResult.content }
+            : brokerRouteReadiness(statusResult.structuredData);
+          if (!readiness.ready) {
+            await manager.closeAll();
+            return c.json({
+              ok: false,
+              toolCount: tools.length,
+              latencyMs: Date.now() - start,
+              tools: toolList,
+              error: readiness.error,
+            });
+          }
+        }
         await manager.closeAll();
-        return c.json({ ok: true, toolCount: tools.length, latencyMs, tools: toolList });
+        return c.json({
+          ok: true,
+          transportReady: true,
+          toolCount: tools.length,
+          latencyMs: Date.now() - start,
+          tools: toolList,
+        });
       } catch (e) {
         await manager.closeAll();
         return c.json({

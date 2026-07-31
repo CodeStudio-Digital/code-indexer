@@ -181,6 +181,31 @@ describe('project git premium safety and snapshots', () => {
     expect((await git(root, ['diff', '--cached', '--name-only'])).stdout.trim()).toBe('');
   });
 
+  it('gives bulk stage and commit foreground priority over background indexing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'mcp-git-priority-'));
+    dirs.push(root);
+    await init(root);
+    writeFileSync(join(root, 'foreground.txt'), 'foreground\n');
+    const leases: string[] = [];
+    const h = createProjectGitHandlers({
+      db: { getProjectRootPath: () => root },
+      projectIndexService: {
+        async withInteractiveFilesystemPriority<T>(_projectId: number, fn: () => Promise<T>) {
+          leases.push('begin');
+          try {
+            return await fn();
+          } finally {
+            leases.push('end');
+          }
+        },
+      },
+    } as never);
+
+    await h.stage({ projectId: 1, repoPath: root, paths: ['foreground.txt'] }, {} as never);
+    await h.commit({ projectId: 1, repoPath: root, message: 'foreground', amend: false }, {} as never);
+    expect(leases).toEqual(['begin', 'end', 'begin', 'end']);
+  });
+
   it('pins history pages to the original HEAD when new commits arrive', async () => {
     const root = mkdtempSync(join(tmpdir(), 'mcp-git-history-'));
     dirs.push(root);

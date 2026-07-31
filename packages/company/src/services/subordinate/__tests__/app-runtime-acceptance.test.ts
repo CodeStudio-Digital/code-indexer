@@ -15,8 +15,14 @@ import {
   spawnSubordinate,
   type SpawnSubordinateDeps,
 } from '@mcp/company/services/subordinate/spawn.js';
+import {
+  resumeSubordinate,
+  type ResumeSubordinateDeps,
+} from '@mcp/company/services/subordinate/resume.js';
 
 const mocks = vi.hoisted(() => ({
+  installDocsDeepResearch: vi.fn(),
+  wireSupervisorToRunner: vi.fn(() => () => undefined),
   runCoder: vi.fn(async (options: {
     session: { id: string };
     profile?: string;
@@ -35,7 +41,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@mcp/code-agent/index.js', () => ({ runCoder: mocks.runCoder }));
 vi.mock('@mcp/docs-agent/bridges/docs-bridge.js', () => ({
-  installDocsDeepResearch: vi.fn(),
+  installDocsDeepResearch: mocks.installDocsDeepResearch,
 }));
 vi.mock('@mcp/company/services/subordinate/completion-handler.js', () => ({
   attachSubordinateCompletionHandler: vi.fn(),
@@ -44,7 +50,7 @@ vi.mock('@mcp/company/services/subordinate/runner-wiring.js', () => ({
   wireSubordinateInterceptionsForRunner: vi.fn(),
 }));
 vi.mock('@mcp/company/services/supervisor/wire-runner-events.js', () => ({
-  wireSupervisorToRunner: vi.fn(() => () => undefined),
+  wireSupervisorToRunner: mocks.wireSupervisorToRunner,
 }));
 vi.mock('@mcp/company/services/supervisor/global.js', () => ({
   getGlobalAgentSupervisor: vi.fn(() => null),
@@ -64,6 +70,8 @@ describe('App Studio authoritative role runtime acceptance', () => {
 
   beforeEach(async () => {
     mocks.runCoder.mockClear();
+    mocks.installDocsDeepResearch.mockClear();
+    mocks.wireSupervisorToRunner.mockClear();
     dir = mkdtempSync(join(tmpdir(), 'mcp-app-role-runtime-'));
     const dataDir = join(dir, 'data');
     const projectRoot = join(dir, 'app');
@@ -192,7 +200,7 @@ describe('App Studio authoritative role runtime acceptance', () => {
       status: { publishStatus: vi.fn() },
       kanban: {},
       master: { handle: null },
-      humanInLoop: {},
+      humanInLoop: { clearForAgent: vi.fn() },
       wirer: { wire: vi.fn() },
       attention: {},
       orchestratorRef: {},
@@ -255,5 +263,71 @@ describe('App Studio authoritative role runtime acceptance', () => {
     ]);
     expect(specialists.some((run) => run.model === 'gpt-5.4-mini')).toBe(false);
     expect(mocks.runCoder.mock.calls.map(([options]) => options.profile)).toEqual(['full', 'full']);
+  });
+
+  it('reinstalls supervisor and docs observers when resuming the same subordinate', async () => {
+    const coder = await companyFiles.sessionStore.createSession({
+      project_id: project.id,
+      title: 'Admin specialist',
+      provider: 'openai-chatgpt',
+      model: 'gpt-5.6-sol',
+      agent: 'build',
+      metadata: {
+        company_session_id: companyFiles.companySessionId,
+        companySessionId: companyFiles.companySessionId,
+      },
+    });
+    const run = await companyFiles.createAgentRun({
+      role: 'backend',
+      coder_session_id: coder.id,
+      project_ids: [project.id],
+      provider: 'openai-chatgpt',
+      model: 'gpt-5.6-sol',
+      configured_provider: 'openai-chatgpt',
+      configured_model: 'gpt-5.6-sol',
+      dispatch_source: 'app_studio',
+    });
+    await companyFiles.updateAgentRunStatus(run.id, 'waiting');
+    const ctx = new SessionContext({
+      companySessionId: companyFiles.companySessionId,
+      companyFiles,
+      companyStore: {} as never,
+      db: {
+        getProject: (projectId: number) =>
+          projectId === project.id ? project : null,
+      } as never,
+      metaBus: { ended: false } as never,
+      runtimeKind: 'app_studio',
+      appStudioSessionId: '00000000-0000-4000-8000-000000000077',
+    });
+    const deps = {
+      ctx,
+      board: { post: vi.fn() },
+      status: { setStatus: vi.fn() },
+      master: { notify: vi.fn() },
+      humanInLoop: { clearForAgent: vi.fn() },
+      wirer: { wire: vi.fn() },
+      orchestratorRef: {},
+      subordinates: new Map(),
+      runningIds: new Set(),
+      notifyIdleChanged: vi.fn(),
+      wireDeps: { humanInLoop: {}, wirer: { wire: vi.fn() } },
+      completionDeps: {},
+    } as unknown as ResumeSubordinateDeps;
+
+    await resumeSubordinate(
+      run.id,
+      'Continue the admin task',
+      undefined,
+      undefined,
+      undefined,
+      deps,
+    );
+
+    expect(mocks.installDocsDeepResearch).toHaveBeenCalledOnce();
+    expect(mocks.wireSupervisorToRunner).toHaveBeenCalledWith(
+      expect.anything(),
+      run.id,
+    );
   });
 });

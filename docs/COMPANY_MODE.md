@@ -498,7 +498,7 @@ provider/modelo configurado e efetivo, origem do despacho e motivo de fallback.
 | `MCP_COMPANY_INBOX_MAX_PENDING` | `3` | Máx. de mensagens pendentes por destinatário. |
 | `MCP_COMPANY_INBOX_STALE_IDLE_MS` | `300000` (5 min) | Limite de inatividade para considerar a inbox "stale". |
 | `MCP_COMPANY_INBOX_WAIT_TIMEOUT_MS` | `1200000` (20 min) | Timeout de espera de uma mensagem de inbox. |
-| `CODER_SELF_REVIEW` | *on* | Liga/desliga o nudge de auto-revisão. |
+| `CODER_SELF_REVIEW` | *off* | Liga/desliga o nudge de auto-revisão opt-in. |
 
 ### 8.1 Flags de autonomia (C2 — organismo ligado por padrão)
 
@@ -1050,7 +1050,7 @@ carry configured/effective provider and model, dispatch source, and fallback rea
 | `MCP_COMPANY_INBOX_MAX_PENDING` | `3` | Max pending messages per recipient. |
 | `MCP_COMPANY_INBOX_STALE_IDLE_MS` | `300000` (5 min) | Idle threshold for marking the inbox "stale". |
 | `MCP_COMPANY_INBOX_WAIT_TIMEOUT_MS` | `1200000` (20 min) | Wait timeout for an inbox message. |
-| `CODER_SELF_REVIEW` | *on* | Enables/disables the self-review nudge. |
+| `CODER_SELF_REVIEW` | *off* | Enables/disables the opt-in self-review nudge. |
 
 ### 8.1 Autonomy flags (C2 — the organism ships ON by default)
 

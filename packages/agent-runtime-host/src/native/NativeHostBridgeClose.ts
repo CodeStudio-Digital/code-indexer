@@ -62,8 +62,7 @@ export class NativeHostBridgeCloseAuthority {
   }
 
   beginCleanup(): AttemptEndpointCleanupDisposition {
-    if (this.#settled || (!this.#closing && this.#channels?.isClosed)) {
-      this.#channels = undefined;
+    if (this.#settled) {
       return { kind: 'closed' };
     }
     void this.close().catch(() => undefined);

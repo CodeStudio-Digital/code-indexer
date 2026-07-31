@@ -66,6 +66,13 @@ export interface SubordinateCompletionDeps {
   orchestratorRef: unknown;
   runningIds: Set<string>;
   notifyIdleChanged: () => void;
+  /**
+   * Fences completion callbacks from an older runner after the same
+   * agent_run has already been resumed with a new runner. Without this,
+   * the old abort can overwrite the resumed run to `error` and remove its
+   * id from `runningIds`.
+   */
+  isCurrentHandle?: (agentRunId: string, handle: RunCoderHandle) => boolean;
   resume: ResumeSubordinateFn;
   onSubordinateIdle?: (agentRunId: string, role: string) => void;
 }
@@ -301,6 +308,12 @@ export function attachSubordinateCompletionHandler(
 
   handle.done
     .then(async ({ reason, error }) => {
+      // A pause followed immediately by resume leaves the aborted runner's
+      // `done` promise in flight. Its eventual completion belongs to an older
+      // generation and must not mutate the replacement run.
+      if (deps.isCurrentHandle && !deps.isCurrentHandle(agentRunId, handle)) {
+        return;
+      }
       if (reason === 'completed') {
         deps.retryPolicy.clear(agentRunId);
         await deps.ctx.companyFiles
@@ -422,6 +435,9 @@ export function attachSubordinateCompletionHandler(
       }
     })
     .catch(async (err: unknown) => {
+      if (deps.isCurrentHandle && !deps.isCurrentHandle(agentRunId, handle)) {
+        return;
+      }
       if (isUserStoppedRun(deps, agentRunId)) {
         // See the `.then` branch — a user-initiated stop must not be
         // reported as a failure.
@@ -452,6 +468,9 @@ export function attachSubordinateCompletionHandler(
       }
     })
     .finally(() => {
+      if (deps.isCurrentHandle && !deps.isCurrentHandle(agentRunId, handle)) {
+        return;
+      }
       deps.runningIds.delete(agentRunId);
       deps.notifyIdleChanged();
     });

@@ -361,10 +361,10 @@ const CONTEXT_WINDOW_PREFIX_FALLBACKS: Array<[string, number]> = [
   ['gemini-1.5-pro',       2_097_152],
   ['gemini-1.5-flash',     1_048_576],
   ['gemini',               1_048_576],
-  // Sakana AI Fugu (api.sakana.ai) — the ">272K context" pricing tier implies a
-  // 272K base window. `fugu-ultra` is more specific, so it precedes `fugu`.
-  ['fugu-ultra',             272_000],
-  ['fugu',                   272_000],
+  // Sakana AI's official Codex catalog declares a 1M context window for every
+  // Fugu, Fugu Ultra and Fugu Cyber model. The >272K boundary is a price tier,
+  // not the model's context limit.
+  ['fugu',                 1_000_000],
 ];
 
 /**

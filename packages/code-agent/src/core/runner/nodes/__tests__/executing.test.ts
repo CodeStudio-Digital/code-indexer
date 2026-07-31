@@ -331,7 +331,7 @@ describe('ExecutingNode', () => {
     }
   });
 
-  it('clean-finishes without a verification nudge when writes lack fresh evidence', async () => {
+  it('gives an unverified write one bounded chance to run validation', async () => {
     const registry = new ToolRegistry();
     registry.register({
       name: 'edit_file',
@@ -344,14 +344,6 @@ describe('ExecutingNode', () => {
       handler: async () => ({ content: 'edited' }),
     });
     const ledger = new ToolCallLedger();
-    ledger.record({
-      name: 'edit_file',
-      args: { path: 'src/a.ts' },
-      content: 'edited',
-      isError: false,
-      mutates: true,
-      executionClass: 'write',
-    });
     const { ctx } = makeTestContext({
       provider: makeStreamingProvider([
         { type: 'text_delta', text: 'all done' },
@@ -362,6 +354,14 @@ describe('ExecutingNode', () => {
         ...emptyToolContext(),
         toolCallLedger: ledger,
       },
+    });
+    ledger.record({
+      name: 'edit_file',
+      args: { path: 'src/a.ts' },
+      content: 'edited',
+      isError: false,
+      mutates: true,
+      executionClass: 'write',
     });
     ctx.opts.verificationEvidenceEnabled = true;
     ctx.bridge = {
@@ -375,11 +375,18 @@ describe('ExecutingNode', () => {
       }),
     };
 
-    const first = await new ExecutingNode().execute(ctx, null);
-    expect(first.kind).toBe('CleanFinish');
+    const node = new ExecutingNode();
+    const first = await node.execute(ctx, null);
+    expect(first.kind).toBe('TurnSucceeded');
+    expect(ctx.messages.at(-1)?.role).toBe('user');
+    expect(JSON.stringify(ctx.messages.at(-1)?.content)).toContain('[verification-required]');
+    expect(ctx.verification.nudges).toBe(1);
+
+    const second = await node.execute(ctx, null);
+    expect(second.kind).toBe('CleanFinish');
     expect(ctx.stopReason).toBe('completed');
     expect(ctx.messages.at(-1)?.role).toBe('assistant');
-    expect(ctx.verification.nudges).toBe(0);
+    expect(ctx.verification.nudges).toBe(1);
   });
 
   it('clean-finishes substantive work without requiring a goal', async () => {

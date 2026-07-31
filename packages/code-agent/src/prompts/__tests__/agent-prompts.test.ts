@@ -169,7 +169,47 @@ describe('capability-aligned composition', () => {
       availableTools: new Set(['create_goal', 'update_goal']),
     });
     expect(withGoalTools).toContain('# Goal lifecycle');
-    expect(withGoalTools).toContain('optional durable context and telemetry');
-    expect(withGoalTools).toContain('never authorize tools or block a final response');
+    expect(withGoalTools).toContain('only when durable continuity across turns is useful');
+    expect(withGoalTools).toContain('do not authorize work or block a response');
+  });
+});
+
+describe('lean execution contracts', () => {
+  const BASE_CTX: PromptContext = {
+    projectName: 'PromptTestProj',
+    projectRoot: 'D:/nonexistent-prompt-test',
+    os: 'win32',
+    providerFamily: 'zai',
+    profile: 'navigate',
+    mcpAvailable: true,
+    isIndexed: true,
+    sessionDrive: true,
+    agentLoopV2: true,
+  };
+
+  it('routes retrieval by intent and stops once the responsible seam is known', () => {
+    const prompt = buildSystemPrompt(BASE_CTX);
+    expect(prompt).toContain('`mcp__search` in `auto` for discovery');
+    expect(prompt).toContain('`mcp__grep_code` for exact text');
+    expect(prompt).toContain('Stop searching once the responsible code and verification path are known');
+    expect(prompt).not.toContain('Always prefer MCP semantic tools');
+    expect(prompt).not.toContain('never grep');
+  });
+
+  it('uses plan depth for investigation rather than arbitrary output quotas', () => {
+    const prompt = buildSystemPrompt({
+      ...BASE_CTX,
+      agentId: 'plan',
+      planMode: true,
+      planDepth: 'complex',
+    });
+    expect(prompt).toContain('Depth changes investigation, never document length');
+    expect(prompt).not.toMatch(/\d[\d,.]*\+?\s+lines of markdown/i);
+  });
+
+  it('uses prepare_edit only when the change blast radius warrants it', () => {
+    const prompt = buildSystemPrompt({ ...BASE_CTX, agentId: 'build' });
+    expect(prompt).toContain('Use `mcp__prepare_edit` when callers/tests or a shared contract matter');
+    expect(prompt).not.toContain('Before editing an existing symbol: call `mcp__prepare_edit` first');
   });
 });

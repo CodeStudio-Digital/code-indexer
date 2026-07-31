@@ -10,7 +10,14 @@
  * main process to spawn a window, so we drop the item rather than show
  * a broken affordance.
  */
-import { Copy, ExternalLink, FolderOpen, FolderSymlink, Pencil } from 'lucide-react';
+import {
+  Copy,
+  ExternalLink,
+  FolderOpen,
+  FolderSymlink,
+  Pencil,
+  RefreshCw,
+} from 'lucide-react';
 import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { toast } from '../../../components/ui/prompt-dialog.js';
 import type { ProjectCardData } from './ProjectCard.js';
@@ -21,6 +28,8 @@ export interface BuildProjectMenuArgs {
   project: Pick<ProjectCardData, 'id' | 'name' | 'root_path'>;
   onSelect: () => void;
   onEdit: () => void;
+  onIndex?: () => void;
+  indexing?: boolean;
   /**
    * Labels (i18n-resolved). Passed in so the builder stays a pure
    * helper without pulling react-i18next.
@@ -32,6 +41,7 @@ export interface BuildProjectMenuArgs {
     copyPath: string;
     edit: string;
     copied: string;
+    index?: string;
   };
 }
 
@@ -39,6 +49,8 @@ export function buildProjectContextMenuItems({
   project,
   onSelect,
   onEdit,
+  onIndex,
+  indexing = false,
   labels,
 }: BuildProjectMenuArgs): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
@@ -90,6 +102,16 @@ export function buildProjectContextMenuItems({
         });
     },
   });
+
+  if (onIndex && labels.index) {
+    items.push({
+      id: 'index',
+      label: labels.index,
+      icon: RefreshCw,
+      disabled: indexing,
+      onSelect: onIndex,
+    });
+  }
 
   items.push({
     id: 'edit',

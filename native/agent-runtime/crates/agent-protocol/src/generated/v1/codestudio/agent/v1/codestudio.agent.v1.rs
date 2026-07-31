@@ -2734,4 +2734,85 @@ impl SessionStoreFailureCode {
         }
     }
 }
+/// Single-use request accepted by the in-process native Host bridge. Endpoint
+/// address, Host PID, supervisor PID and runtime instance are minted natively
+/// after package verification and are therefore absent from this request.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HostSupervisorBridgeOpenRequest {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub management_endpoint_name: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub management_connection_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="4")]
+    pub management_session_token: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="5")]
+    pub supervisor_launch_nonce: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="6")]
+    pub trusted_supervisor_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
+    #[prost(message, optional, tag="7")]
+    pub trusted_runner_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
+    #[prost(message, optional, tag="8")]
+    pub selected_protocol: ::core::option::Option<ProtocolVersion>,
+    #[prost(string, tag="9")]
+    pub supervisor_executable: ::prost::alloc::string::String,
+    #[prost(string, tag="10")]
+    pub runner_executable: ::prost::alloc::string::String,
+    #[prost(uint64, tag="11")]
+    pub startup_timeout_ms: u64,
+}
+/// Private, single-use handoff delivered through inherited OS handles before
+/// the permanent management channel can accept protocol frames.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SupervisorProcessHandoff {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(uint32, tag="2")]
+    pub host_process_id: u32,
+    #[prost(string, tag="3")]
+    pub management_connection_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub management_endpoint_address: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="5")]
+    pub management_session_token: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="6")]
+    pub supervisor_launch_nonce: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="7")]
+    pub supervisor_provenance: ::core::option::Option<RuntimeProvenance>,
+    #[prost(message, optional, tag="8")]
+    pub supported_protocols: ::core::option::Option<ProtocolVersionRange>,
+    #[prost(message, optional, tag="9")]
+    pub containment: ::core::option::Option<ContainmentCapabilities>,
+    #[prost(uint64, tag="10")]
+    pub supported_feature_bits: u64,
+    #[prost(string, tag="11")]
+    pub runner_executable: ::prost::alloc::string::String,
+    #[prost(string, tag="12")]
+    pub runner_working_directory: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="13")]
+    pub runner_environment: ::prost::alloc::vec::Vec<SupervisorProcessEnvironmentEntry>,
+    #[prost(message, optional, tag="14")]
+    pub trusted_runner_provenance: ::core::option::Option<ExpectedRuntimeProvenance>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SupervisorProcessEnvironmentEntry {
+    #[prost(string, tag="1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub value: ::prost::alloc::string::String,
+}
+/// Returned through the inherited response handle only after the supervisor
+/// connected the exact protected management endpoint and verified the Host PID.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SupervisorProcessReady {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(uint32, tag="2")]
+    pub supervisor_process_id: u32,
+    #[prost(string, tag="3")]
+    pub management_connection_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub management_endpoint_address: ::prost::alloc::string::String,
+}
 // @@protoc_insertion_point(module)

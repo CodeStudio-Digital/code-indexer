@@ -103,6 +103,18 @@ export class FsAdvancedStateRepository {
     })).then(() => undefined);
   }
 
+  setRunLimits(
+    id: SessionId | string,
+    maxTurns: number | null,
+    maxAutoContinues: number,
+  ): Promise<void> {
+    return this.mutate(id, (current) => ({
+      ...current,
+      max_turns: maxTurns,
+      max_auto_continues: maxAutoContinues,
+    })).then(() => undefined);
+  }
+
   private setNullableString(
     id: SessionId | string,
     key:

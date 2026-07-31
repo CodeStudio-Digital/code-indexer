@@ -4,7 +4,11 @@ import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { AgentMemoryRow } from '@mcp/shared/types.js';
 import type { VectorSearchOptions, VectorStore } from '@mcp/store/vectors.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker-types.js';
-import { AgentMemoryService } from '../agent-memory-service.js';
+import {
+  AgentMemoryService,
+  dedupeAgentMemoryHits,
+  type AgentMemoryHit,
+} from '../agent-memory-service.js';
 
 function embedding(overrides: Partial<EmbeddingService> = {}): EmbeddingService {
   return {
@@ -40,6 +44,104 @@ function memoryRow(id: number): AgentMemoryRow {
 }
 
 describe('AgentMemoryService active-generation queries', () => {
+  it('collapses automatic paraphrases in favor of an explicit canonical memory', () => {
+    const content =
+      'On disconnect, roll back pending optimistic mutations in reverse insertion order and preserve authoritative events.';
+    const automatic = {
+      ...memoryRow(1),
+      name: 'automatic disconnect summary',
+      source: 'session',
+      content,
+      score: 0.95,
+    } as AgentMemoryHit;
+    const canonical = {
+      ...memoryRow(2),
+      name: 'canonical disconnect decision',
+      source: 'agent',
+      content:
+        'Pending optimistic mutations roll back in reverse insertion order on disconnect, preserving authoritative events.',
+      score: 0.8,
+    } as AgentMemoryHit;
+    const distinct = {
+      ...memoryRow(3),
+      name: 'revision ordering',
+      source: 'agent',
+      content: 'Ignore incoming events whose revision is not newer than the applied revision.',
+      score: 0.7,
+    } as AgentMemoryHit;
+
+    const results = dedupeAgentMemoryHits([automatic, canonical, distinct]);
+
+    expect(results.map((row) => row.id)).toEqual([2, 3]);
+    expect(results[0]!.score).toBe(0.95);
+  });
+
+  it('does not collapse two explicit memories even when their content overlaps', () => {
+    const content = 'Preserve the six-field event contract for realtime mutations.';
+    const user = {
+      ...memoryRow(1),
+      source: 'user',
+      content,
+      score: 0.9,
+    } as AgentMemoryHit;
+    const agent = {
+      ...memoryRow(2),
+      source: 'agent',
+      content,
+      score: 0.8,
+    } as AgentMemoryHit;
+
+    expect(dedupeAgentMemoryHits([user, agent]).map((row) => row.id)).toEqual([1, 2]);
+  });
+
+  it('collapses automatic symptom paraphrases by normalized title concepts', () => {
+    const first = {
+      ...memoryRow(1),
+      name: 'optimistic-mutation-persistence-on-disconnect',
+      source: 'session',
+      content: 'The board stays changed.',
+      score: 0.9,
+    } as AgentMemoryHit;
+    const richer = {
+      ...memoryRow(2),
+      name: 'optimistic-mutation-state-leak-on-connection-failure',
+      source: 'session',
+      content:
+        'Pending callbacks must settle and the optimistic snapshot must be restored deterministically.',
+      score: 0.7,
+    } as AgentMemoryHit;
+
+    const results = dedupeAgentMemoryHits([first, richer]);
+
+    expect(results.map((row) => row.id)).toEqual([2]);
+    expect(results[0]!.score).toBe(0.9);
+  });
+
+  it('deduplicates the FTS-only fallback before applying the result limit', async () => {
+    const duplicate = {
+      ...memoryRow(1),
+      source: 'session',
+      content: 'Disconnect rolls back every pending optimistic mutation in reverse insertion order.',
+    } as AgentMemoryRow;
+    const canonical = {
+      ...memoryRow(2),
+      source: 'agent',
+      content: 'On disconnect, pending optimistic mutations roll back in reverse insertion order.',
+    } as AgentMemoryRow;
+    const distinct = {
+      ...memoryRow(3),
+      source: 'agent',
+      content: 'Incoming realtime events use a monotonically increasing revision.',
+    } as AgentMemoryRow;
+    const service = new AgentMemoryService({
+      searchAgentMemoryFts: vi.fn(() => [duplicate, canonical, distinct]),
+    } as unknown as CodeIndexDB);
+
+    const results = await service.search('project', 7, 'disconnect rollback', 5);
+
+    expect(results.map((row) => row.id)).toEqual([2, 3]);
+  });
+
   it('uses the Memory profile reranker after RRF and preserves descending scores', async () => {
     const first = memoryRow(1);
     const second = { ...memoryRow(2), name: 'preferred result' };

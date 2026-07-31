@@ -37,6 +37,18 @@ const MEMORY_WINDOW_CHARS = 2000;
 const MEMORY_OVERLAP_CHARS = 200;
 const MAX_MEMORY_CHUNKS = 4;
 const RRF_K = 60;
+const AUTO_MEMORY_SOURCES = new Set(['session', 'distill', 'migrated-snapshot']);
+const MEMORY_TEXT_STOPWORDS = new Set([
+  'after', 'before', 'from', 'into', 'must', 'rather', 'than', 'that', 'then',
+  'this', 'when', 'with', 'após', 'como', 'deve', 'esse', 'esta', 'isso',
+  'para', 'pela', 'pelo', 'porque', 'sem', 'uma',
+]);
+const MEMORY_TITLE_STOPWORDS = new Set([
+  'after', 'fix', 'for', 'gaps', 'in', 'limitation', 'must', 'on', 'requirement',
+  'rule', 'the', 'with',
+]);
+const MEMORY_DUPLICATE_CONTENT_THRESHOLD = 0.5;
+const MEMORY_DUPLICATE_TITLE_THRESHOLD = 0.75;
 
 interface MemoryMutationBatch {
   /** One identity-discovery fence covers every INSERT in this namespace. */
@@ -92,6 +104,125 @@ export function agentMemoryEmbeddingTexts(
 export interface AgentMemoryHit extends AgentMemoryRow {
   /** Blended retrieval score (RRF fusion of FTS + vector ranks). */
   score: number;
+}
+
+function memoryContentTokens(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length > 3 && !MEMORY_TEXT_STOPWORDS.has(token)),
+  );
+}
+
+/** Containment overlap works better than union-Jaccard here: an automatic
+ * distillation commonly repeats a short canonical fact inside a longer note. */
+function memoryContentSimilarity(a: string, b: string): number {
+  const left = memoryContentTokens(a);
+  const right = memoryContentTokens(b);
+  if (left.size === 0 || right.size === 0) return 0;
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  return shared / Math.min(left.size, right.size);
+}
+
+function memoryTitleConcepts(value: string): Set<string> {
+  const concepts = value
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 2 && !MEMORY_TITLE_STOPWORDS.has(token))
+    .map((token) => {
+      if (
+        token.startsWith('disconnect')
+        || token.startsWith('connection')
+        || token === 'socket'
+      ) return 'disconnect';
+      if (
+        token.startsWith('persist')
+        || token === 'leak'
+        || token === 'stuck'
+        || token === 'indefinitely'
+      ) return 'unsettled';
+      if (token.startsWith('mutat')) return 'mutation';
+      if (token.startsWith('optim')) return 'optimistic';
+      if (
+        token.startsWith('rollback')
+        || token.startsWith('restor')
+        || token.startsWith('revert')
+      ) return 'rollback';
+      if (token.startsWith('callback')) return 'callback';
+      if (token.startsWith('event')) return 'event';
+      return token;
+    });
+  return new Set(concepts);
+}
+
+function memoryTitleSimilarity(a: string, b: string): number {
+  const left = memoryTitleConcepts(a);
+  const right = memoryTitleConcepts(b);
+  if (left.size === 0 || right.size === 0) return 0;
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  if (shared < 2) return 0;
+  return shared / Math.min(left.size, right.size);
+}
+
+function memorySourceAuthority(source: string): number {
+  if (source === 'user') return 3;
+  if (source === 'agent') return 2;
+  if (source === 'migrated-snapshot') return 1.5;
+  if (source === 'session' || source === 'distill') return 1;
+  return 2;
+}
+
+/**
+ * Collapse automatic paraphrases before they reach either recall_memory or the
+ * MCP search bridge. Explicit user/agent memories are never collapsed against
+ * each other. When an automatic note overlaps an explicit canonical fact, keep
+ * the explicit content while retaining the best retrieval score of the group.
+ */
+export function dedupeAgentMemoryHits(hits: AgentMemoryHit[]): AgentMemoryHit[] {
+  const kept: AgentMemoryHit[] = [];
+  for (const candidate of hits) {
+    const duplicateIndex = kept.findIndex((existing) => {
+      if (
+        !AUTO_MEMORY_SOURCES.has(existing.source)
+        && !AUTO_MEMORY_SOURCES.has(candidate.source)
+      ) {
+        return false;
+      }
+      return (
+        memoryContentSimilarity(existing.content, candidate.content)
+          >= MEMORY_DUPLICATE_CONTENT_THRESHOLD
+        || memoryTitleSimilarity(existing.name, candidate.name)
+          >= MEMORY_DUPLICATE_TITLE_THRESHOLD
+      );
+    });
+    if (duplicateIndex < 0) {
+      kept.push(candidate);
+      continue;
+    }
+
+    const existing = kept[duplicateIndex]!;
+    const candidateAuthority = memorySourceAuthority(candidate.source);
+    const existingAuthority = memorySourceAuthority(existing.source);
+    const candidateIsRicherAutomatic =
+      candidateAuthority === existingAuthority
+      && AUTO_MEMORY_SOURCES.has(candidate.source)
+      && memoryContentTokens(candidate.content).size
+        > memoryContentTokens(existing.content).size;
+    if (candidateAuthority > existingAuthority || candidateIsRicherAutomatic) {
+      kept[duplicateIndex] = {
+        ...candidate,
+        score: Math.max(existing.score, candidate.score),
+      };
+    }
+  }
+  return kept;
 }
 
 export class AgentMemoryService {
@@ -578,7 +709,9 @@ export class AgentMemoryService {
     }
 
     if (vectorRows.length === 0) {
-      return ftsFiltered.slice(0, limit).map((r) => ({ ...r, score: 0 }));
+      return dedupeAgentMemoryHits(
+        ftsFiltered.map((r) => ({ ...r, score: 0 })),
+      ).slice(0, limit);
     }
 
     // RRF merge — rank is position within each list.
@@ -595,7 +728,11 @@ export class AgentMemoryService {
       else scoreMap.set(r.id, { row: r, score: delta });
     }
 
-    const fused = Array.from(scoreMap.values()).sort((a, b) => b.score - a.score);
+    const fused = dedupeAgentMemoryHits(
+      Array.from(scoreMap.values())
+        .sort((a, b) => b.score - a.score)
+        .map(({ row, score }) => ({ ...row, score })),
+    );
     if (this.reranker && this.reranker.name !== 'null' && fused.length > 0) {
       const depth = Math.min(
         fused.length,
@@ -605,14 +742,14 @@ export class AgentMemoryService {
       try {
         const reranked = await this.reranker.rerank(
           q,
-          candidates.map(({ row, score }) => ({
+          candidates.map((row) => ({
             id: String(row.id),
             text: `${row.name}\n${row.description}\n${row.content}`,
-            originalScore: score,
+            originalScore: row.score,
           })),
           Math.min(limit, candidates.length),
         );
-        const byId = new Map(candidates.map((entry) => [String(entry.row.id), entry]));
+        const byId = new Map(candidates.map((entry) => [String(entry.id), entry]));
         const seen = new Set<string>();
         if (reranked.length !== Math.min(limit, candidates.length) || reranked.some((row) => {
           if (!byId.has(row.id) || seen.has(row.id) || !Number.isFinite(row.score)) return true;
@@ -620,7 +757,7 @@ export class AgentMemoryService {
           return false;
         })) throw new Error(`${this.reranker.name} returned an incomplete memory result set`);
         return reranked
-          .map((result) => ({ ...byId.get(result.id)!.row, score: result.score }))
+          .map((result) => ({ ...byId.get(result.id)!, score: result.score }))
           .sort((a, b) => b.score - a.score);
       } catch (err) {
         console.warn(`[agent-memory-search] ${this.reranker.name} rerank unavailable; preserving RRF order: ${
@@ -629,7 +766,7 @@ export class AgentMemoryService {
       }
     }
 
-    return fused.slice(0, limit).map((entry) => ({ ...entry.row, score: entry.score }));
+    return fused.slice(0, limit);
   }
 
   /** Backfill: embed every memory missing a vector (one pass, best-effort). */

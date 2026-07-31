@@ -13,11 +13,19 @@ import { mountCoderSessionsRoutes } from '../sessions.js';
 import type { ServerDeps } from '../../../deps.js';
 import type { CoderRuntime } from '../state.js';
 
+const worker = vi.hoisted(() => ({
+  stageManualAgentTransition: vi.fn(async (
+    _id: SessionId,
+    _agent: string | null,
+  ) => false),
+}));
+
 vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({
   getCoderWorkerPool: () => ({
     abort: vi.fn(),
     isRunning: () => false,
     getBus: () => null,
+    stageManualAgentTransition: worker.stageManualAgentTransition,
   }),
 }));
 
@@ -25,6 +33,8 @@ const SESSION_ID = asSessionId('66666666-6666-4666-8666-666666666666');
 const MISSING_SESSION_ID = asSessionId('66666666-6666-4666-8666-666666666667');
 
 function setup() {
+  worker.stageManualAgentTransition.mockReset();
+  worker.stageManualAgentTransition.mockResolvedValue(false);
   const calls: Array<{ id: SessionId; agent: string | null }> = [];
   const messages: Array<{ id: SessionId; message: Record<string, unknown> }> = [];
   const inputs: Array<Record<string, unknown>> = [];
@@ -53,6 +63,7 @@ function setup() {
       return pending;
     },
     getSession: (id: SessionId) => sessions.get(id) ?? null,
+    refreshSession: (id: SessionId) => sessions.get(id) ?? null,
     appendMessage: (id: SessionId, message: Record<string, unknown>) => {
       messages.push({ id, message });
       return messages.length;
@@ -90,7 +101,16 @@ function setup() {
       body: JSON.stringify({ agent }),
     });
 
-  return { app, calls, messages, inputs, pendingTransitions, patchAgent, customAgent };
+  return {
+    app,
+    calls,
+    messages,
+    inputs,
+    pendingTransitions,
+    patchAgent,
+    customAgent,
+    sessions,
+  };
 }
 
 describe('coder PATCH /sessions/:id/agent', () => {
@@ -108,6 +128,26 @@ describe('coder PATCH /sessions/:id/agent', () => {
     });
     expect(messages).toEqual([]);
     expect(inputs).toEqual([]);
+  });
+
+  it('routes the transition through the worker that owns an active session', async () => {
+    const harness = setup();
+    worker.stageManualAgentTransition.mockImplementationOnce(async (id, agent) => {
+      const session = harness.sessions.get(id);
+      if (!session) return false;
+      session.agent = agent;
+      return true;
+    });
+
+    const response = await harness.patchAgent(SESSION_ID, 'build');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ agent: 'build' });
+    expect(worker.stageManualAgentTransition).toHaveBeenCalledWith(
+      SESSION_ID,
+      'build',
+    );
+    expect(harness.calls).toEqual([]);
   });
 
   it('accepts null to clear the column', async () => {

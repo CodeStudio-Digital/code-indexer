@@ -7,6 +7,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@google/genai', () => ({
+  ThinkingLevel: {
+    MINIMAL: 'MINIMAL',
+    LOW: 'LOW',
+    MEDIUM: 'MEDIUM',
+    HIGH: 'HIGH',
+  },
   GoogleGenAI: class FakeGoogleGenAI {
     models = { generateContentStream: mocks.geminiGenerate };
   },
@@ -71,6 +77,34 @@ describe('provider native terminal-marker contract', () => {
 
     await expect(consumeStream({ stream: provider.chat(request()) }))
       .rejects.toMatchObject(truncatedError());
+  });
+
+  it('forwards the current Gemini thinking level through the CloudCode OAuth path', async () => {
+    mocks.cloudCodeStream.mockReturnValueOnce((async function* () {
+      yield { text: 'ok', finishReason: 'STOP' };
+    })());
+
+    const provider = new GeminiChatProvider({
+      accessToken: 'test-token',
+      projectId: 'test-project',
+      model: 'gemini-3.6-flash',
+    });
+    for await (const _delta of provider.chat({
+      ...request(),
+      thinking: true,
+      reasoningEffort: 'max',
+    })) {
+      // Drain.
+    }
+
+    const payload = mocks.cloudCodeStream.mock.calls.at(-1)![3] as {
+      generationConfig?: { thinkingConfig?: unknown };
+    };
+    expect(payload.generationConfig?.thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: 'HIGH',
+    });
+    expect(mocks.cloudCodeStream.mock.calls.at(-1)![6]).toBeUndefined();
   });
 
   it('treats Bedrock iterator EOF without messageStop as truncated', async () => {

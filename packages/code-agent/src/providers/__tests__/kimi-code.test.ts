@@ -438,7 +438,7 @@ describe('Kimi Code K3 model metadata', () => {
       model_id: 'k3',
       can_reason: true,
       context_window: 1_048_576,
-      default_reasoning_level: 'max',
+      default_reasoning_level: 'high',
       supported_reasoning_levels: ['low', 'high', 'max'],
     });
   });
@@ -447,7 +447,7 @@ describe('Kimi Code K3 model metadata', () => {
     const model = kimiCodeSeedUpsertModels().find((candidate) => candidate.model_id === 'k3');
 
     expect(model).toMatchObject({
-      default_reasoning_level: 'max',
+      default_reasoning_level: 'high',
       supported_reasoning_levels: ['low', 'high', 'max'],
     });
   });
@@ -457,5 +457,28 @@ describe('Kimi Code K3 model metadata', () => {
 
     expect(model.supported_reasoning_levels).toEqual(['low', 'medium', 'high']);
     expect(model.default_reasoning_level).toBe('high');
+  });
+
+  it('keeps the current coding aliases on a boolean thinking control', () => {
+    const [model] = mapKimiCodeModels([{ id: 'kimi-for-coding' }]);
+
+    expect(model).toMatchObject({
+      context_window: 262_144,
+      can_reason: true,
+      supported_reasoning_levels: null,
+      default_reasoning_level: null,
+      input_modalities: ['text', 'image', 'video'],
+    });
+  });
+
+  it('marks k3-256k as image-only and keeps the K3 effort levels', () => {
+    const [model] = mapKimiCodeModels([{ id: 'k3-256k' }]);
+
+    expect(model).toMatchObject({
+      context_window: 262_144,
+      supported_reasoning_levels: ['low', 'high', 'max'],
+      default_reasoning_level: 'high',
+      input_modalities: ['text', 'image'],
+    });
   });
 });

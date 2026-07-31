@@ -40,6 +40,11 @@ function sampleResponse(): Response {
             max_completion_tokens: 64000,
           },
           supported_parameters: ['tools', 'reasoning', 'temperature'],
+          reasoning: {
+            supported_efforts: ['low', 'high', 'max'],
+            default_effort: 'high',
+            mandatory: true,
+          },
         },
         {
           id: 'black-forest-labs/flux',
@@ -77,7 +82,8 @@ describe('openrouter-models discovery', () => {
       default_max_tokens: 64000,
       can_reason: true,
       supports_attachments: true,
-      supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'],
+      supported_reasoning_levels: ['low', 'high', 'max'],
+      default_reasoning_level: 'high',
       supported_in_api: true,
       visibility: 'list',
       input_modalities: ['text', 'image'],

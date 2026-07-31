@@ -34,6 +34,18 @@ pub fn bridge(source: &agent_host_bridge::HostBridgeError) -> Error {
     Error::new(Status::GenericFailure, source.to_string())
 }
 
+pub fn supervisor(source: &agent_host_bridge::HostSupervisorBridgeError) -> Error {
+    Error::new(Status::GenericFailure, source.to_string())
+}
+
+#[cfg(windows)]
+pub fn supervisor_cleanup(message: &str) -> Error {
+    Error::new(
+        Status::GenericFailure,
+        format!("native Host supervisor cleanup failed: {message}"),
+    )
+}
+
 #[cfg(windows)]
 pub fn io(operation: &'static str, source: &std::io::Error) -> Error {
     Error::new(

@@ -110,7 +110,7 @@ impl NativeDuplex {
         let _activity = Activity::acquire(&self.writing, "write", &self.close)?;
         self.close.ensure_open()?;
         let mut cancellation = self.close.subscribe();
-        let result = {
+        {
             let mut owner = self.writer.lock().await;
             let writer = owner.as_mut().ok_or_else(error::closed)?;
             let result = tokio::select! {
@@ -128,8 +128,7 @@ impl NativeDuplex {
             };
             drop(owner);
             result
-        };
-        result
+        }
     }
 
     pub(super) async fn close(&self) {

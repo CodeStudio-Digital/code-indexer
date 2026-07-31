@@ -78,11 +78,15 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-targets --locked
 ```
 
-Os `main` permanecem scaffolds fail-closed com exit code `78`. As bibliotecas já
-implementam bootstrap, containment e handshake físicos, mas os binários ainda
-não compõem o loop management permanente, o adapter Host autenticado, recovery
-e rehydration. Nenhum binário deve aceitar trabalho antes desses gates e do E2E
-Host TS↔processos.
+No Windows, `agent-runner` e `agentd-supervisor` já possuem entrypoints
+process-real protegidos. O supervisor exige um `SupervisorProcessHandoff`
+single-use por handles herdados, conecta um Named Pipe management separado com
+peer PID verificado, responde `SupervisorProcessReady` e compõe o loop
+`SupervisorAsyncService` permanente. Invocação direta, handoff inválido e
+targets ainda sem backend retornam fail-closed com exit code `78`. O launcher
+Node-API do Host já cria e autentica esse processo, retém Job + management
+stream e comprova Hello/Shutdown/reap process-real. Recovery/rehydration e o E2E
+TS↔supervisor↔runner até Active continuam bloqueando produção.
 
 O coordenador atual valida lifecycle, ownership e containment sobre portas
 tipadas/injetadas. Os adapters one-shot de Named Pipe/Unix socket já possuem
@@ -183,8 +187,8 @@ respawnar, inclusive após reap enquanto o snapshot redigido e bounded estiver
 retido. Cancel/Fence/Reap continuam compartilhando o mesmo planner; write
 failure fecha admission sem perder schedule ou ownership. ACK tardio depois de
 reap confirmado não recria cleanup para owner ausente; a mesma ausência sem
-prova no ledger continua sendo erro fail-closed. Essa composição ainda não é o
-entrypoint process-real.
+prova no ledger continua sendo erro fail-closed. Essa composição agora é usada
+pelo entrypoint Windows depois do bootstrap físico autenticado.
 
 `ShutdownSupervisor` também é executável no serviço async. `Drain` fecha
 admission sem encurtar os schedules das attempts e instala um ceiling global;
@@ -235,14 +239,15 @@ fechado. O `agent-host-bridge-napi` já carrega esse core no mesmo processo
 Node/Electron, retém os dois transports em um owner Rust, oferece operações
 async bounded com cancelamento compartilhado e fecha ambos explicitamente. O
 package manifest liga o `.node` aos executáveis e o loader TS só aceita o
-artefato verificado. Ainda falta adaptar esse owner ao framing/driver Host e
-provar o percurso process-real; até lá o fluxo não produz `AttemptPrepared`
-nem instala `ActiveAuthority`.
+artefato verificado. O adapter Host já transforma os reads/writes nativos em
+`DelimitedByteChannel`, transfere Control/Data sem reopen e compartilha cleanup
+explícito. O teste integrado TS chega a `AttemptPrepared` e `ActiveAuthority`;
+ainda falta provar o mesmo percurso com supervisor e runner de produção em
+processos distintos.
 
-Permanecem pendentes o adapter do owner N-API ao driver, o E2E process-real
-Prepare/Activate, o pump control pós-Active, ownership
-funcional de control/data/pulse por todo o lifetime e a ligação do
-`SupervisorAsyncService` ao `main` process-real. `prepare`, o spawn contido e
+Permanecem pendentes o E2E process-real Prepare/Activate, o pump control
+pós-Active, ownership
+funcional de control/data/pulse por todo o lifetime. `prepare`, o spawn contido e
 `complete_after_spawn` já executam fora do loop Tokio de management/lifecycle,
 em um worker OS dedicado, owned e joinable por launch pendente. O worker usa
 stack explícita de 1 MiB e canais de estágio/cleanup bounded com capacidade 1.

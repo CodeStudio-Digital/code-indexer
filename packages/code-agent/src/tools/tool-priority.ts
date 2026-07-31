@@ -31,7 +31,7 @@ import {
 
 /**
  * Tools that must NEVER be trimmed by the model cap. The discovery core
- * (find_tools/expand_toolset/code_exec), the minimal read pair, the
+ * (find_tools/expand_toolset/code_exec), the minimal read/write pairs, the
  * interaction/lifecycle tools a session cannot function without, and both
  * optional goal-state transitions. Keeping create/update together preserves a
  * coherent telemetry surface under small model catalog caps.
@@ -52,6 +52,12 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   'expand_toolset',
   'code_exec',
   'read_file',
+  // Tier filtering runs first: these remain hidden in read-only/bootstrap
+  // sessions, but a navigate/build session must never lose its basic mutation
+  // and verification route merely because plugins made the catalog large.
+  'edit_file',
+  'write_file',
+  'run_command',
   'glob',
   'ask_user',
   // plan.txt requires this for genuine multi-option forks. If the catalog cap
@@ -74,14 +80,6 @@ export const NEVER_TRIM: ReadonlySet<string> = new Set([
   // Session-local append-only history. The chapter index explicitly points
   // the model here after compaction, so the tool must survive small catalogs.
   'recall_conversation',
-  // self_review — the Executing-node nudge (dynamic-injection.ts) tells the
-  // agent to call `self_review` by NAME before declaring done whenever the
-  // session has pending changes. As a bootstrap-tier tool that is NOT in
-  // HOT_RANK it otherwise lands in the "bootstrap-cold" survival group and the
-  // model cap can drop it — forcing the agent to find_tools its way back to a
-  // tool the prompt just told it to call. Floor it so the nudge is always
-  // actionable. (The CODER_SELF_REVIEW toggle governs only the reminder.)
-  'self_review',
   // workflow — registered ONLY under the Ultra posture, and the Ultra prompt
   // block tells the model to prefer it by NAME. If the catalog cap trimmed it
   // the prompt would reference an uncallable tool — same trap as self_review.

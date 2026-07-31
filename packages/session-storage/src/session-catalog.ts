@@ -43,6 +43,8 @@ export class SessionCatalog {
   readonly #duplicateIds = new Set<string>();
   #issues: CatalogScanIssue[] = [];
   #unsubscribe: (() => void) | null = null;
+  #ready = false;
+  #refreshing: Promise<CatalogScanResult> | null = null;
 
   constructor(options: SessionCatalogOptions) {
     this.#locator = options.locator;
@@ -67,7 +69,41 @@ export class SessionCatalog {
     return this.#issues.slice();
   }
 
+  /**
+   * Prime the shared catalog once. Multiple host services receive the same
+   * SessionCatalog instance, so readiness belongs here rather than in each
+   * consumer; otherwise the first Coder, Company and App Studio requests each
+   * repeat the full cross-project filesystem scan.
+   */
+  async ensureReady(): Promise<void> {
+    if (this.#ready) return;
+    await this.refresh();
+  }
+
   async refresh(options: { readonly strict?: boolean } = {}): Promise<CatalogScanResult> {
+    const pending =
+      this.#refreshing ??
+      (this.#refreshing = this.#scan().then((result) => {
+        this.#ready = true;
+        return result;
+      }));
+    let result: CatalogScanResult;
+    try {
+      result = await pending;
+    } finally {
+      if (this.#refreshing === pending) this.#refreshing = null;
+    }
+
+    if (options.strict && result.issues.length > 0) {
+      throw new AggregateError(
+        result.issues.map((issue) => new Error(`${issue.root_path}: ${issue.message}`)),
+        'One or more session roots could not be scanned',
+      );
+    }
+    return result;
+  }
+
+  async #scan(): Promise<CatalogScanResult> {
     const entries = new Map<string, CatalogEntry>();
     const duplicateIds = new Set<string>();
     const issues: CatalogScanIssue[] = [];
@@ -85,13 +121,6 @@ export class SessionCatalog {
     this.#duplicateIds.clear();
     for (const key of duplicateIds) this.#duplicateIds.add(key);
     this.#issues = issues;
-
-    if (options.strict && issues.length > 0) {
-      throw new AggregateError(
-        issues.map((issue) => new Error(`${issue.root_path}: ${issue.message}`)),
-        'One or more session roots could not be scanned',
-      );
-    }
     return { entries: this.list(), issues: this.issues };
   }
 
@@ -219,5 +248,7 @@ export class SessionCatalog {
     this.#entries.clear();
     this.#duplicateIds.clear();
     this.#issues = [];
+    this.#ready = false;
+    this.#refreshing = null;
   }
 }

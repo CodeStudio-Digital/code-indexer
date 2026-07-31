@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { resolveReasoningLevels } from '../composer/provider-caps.js';
+import {
+  providerSupportsThinking,
+  resolveReasoningLevels,
+} from '../composer/provider-caps.js';
 import {
   DEFAULT_NEW_EXECUTION_MODE,
   createSerializedAsyncQueue,
@@ -101,6 +104,25 @@ describe('execution-mode dashboard state', () => {
   it('filters stale Ultra, blanks, and duplicate native reasoning levels', () => {
     expect(resolveReasoningLevels('test', providers, 'reasoner')).toEqual(['low', 'HIGH']);
     expect(resolveReasoningLevels('test', providers, 'missing')).toEqual([]);
+  });
+
+  it('uses Fugu native effort levels without showing the legacy thinking toggle', () => {
+    const fuguProviders: ProviderOption[] = [{
+      id: 'sakana',
+      kind: 'fugu',
+      label: 'Sakana AI Fugu',
+      capabilities: { supportsThinking: false, supportsVision: true },
+      models: [{
+        id: 'fugu-ultra-v1.1',
+        name: 'Fugu Ultra v1.1',
+        mode: null,
+        supported_reasoning_levels: ['high', 'xhigh', 'max'],
+      }],
+    }];
+
+    expect(providerSupportsThinking('sakana', fuguProviders, 'fugu-ultra-v1.1')).toBe(false);
+    expect(resolveReasoningLevels('sakana', fuguProviders, 'fugu-ultra-v1.1'))
+      .toEqual(['high', 'xhigh', 'max']);
   });
 
   it('derives can-reason without treating an Ultra-only stale catalog as native support', () => {

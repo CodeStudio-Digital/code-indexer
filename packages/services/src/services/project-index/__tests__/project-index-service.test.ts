@@ -58,6 +58,10 @@ class FakeExecutor implements StructuralExecutor {
   ];
   /** Frames emitted via onProgress during the run (scan/index liveness). */
   progressFrames: StructuralProgressFrame[] = [];
+  priorityEvents: Array<{ projectId: number; busy: boolean }> = [];
+  setInteractivePriority(projectId: number, busy: boolean): void {
+    this.priorityEvents.push({ projectId, busy });
+  }
   async runStructuralIndex(
     projectId: number,
     opts: {
@@ -848,6 +852,37 @@ describe('ProjectIndexService', () => {
     exec.onRun = () => order.push('structural');
     await svc.withSemanticRun(1, async () => { order.push('full'); });
     expect(order).toEqual(['structural', 'full']);
+    await svc.dispose();
+  });
+
+  it('coalesces nested interactive priority leases and always resumes after failure', async () => {
+    const exec = new FakeExecutor();
+    const svc = makeService(exec);
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const first = svc.withInteractiveFilesystemPriority(1, () =>
+      new Promise<void>((resolve) => { releaseFirst = resolve; }));
+    const second = svc.withInteractiveFilesystemPriority(1, () =>
+      new Promise<void>((resolve) => { releaseSecond = resolve; }));
+
+    expect(exec.priorityEvents).toEqual([{ projectId: 1, busy: true }]);
+    releaseFirst();
+    await first;
+    expect(exec.priorityEvents).toEqual([{ projectId: 1, busy: true }]);
+    releaseSecond();
+    await second;
+    expect(exec.priorityEvents).toEqual([
+      { projectId: 1, busy: true },
+      { projectId: 1, busy: false },
+    ]);
+
+    await expect(svc.withInteractiveFilesystemPriority(1, async () => {
+      throw new Error('mutation failed');
+    })).rejects.toThrow('mutation failed');
+    expect(exec.priorityEvents.slice(-2)).toEqual([
+      { projectId: 1, busy: true },
+      { projectId: 1, busy: false },
+    ]);
     await svc.dispose();
   });
 

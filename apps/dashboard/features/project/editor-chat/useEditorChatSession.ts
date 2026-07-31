@@ -33,6 +33,7 @@ import {
   modelCanReason,
   ultraManagesThinking,
 } from '../../chat/execution-mode-state.js';
+import { useSessionAgent } from '../../chat/useSessionAgent.js';
 import type { SessionLaunchConfig } from '../../chat/SessionLaunchDialog.js';
 import { fetchSnapshotList } from '../../snapshots/api.js';
 import type { SnapshotFileSummary } from '../../snapshots/types.js';
@@ -55,14 +56,13 @@ import { readActiveSelection } from '../../workspace/editor/chat-actions.js';
 import { useEditorSessionSettings } from './useEditorSessionSettings.js';
 import type { NotificationSourceContext } from '../../notifications/index.js';
 import type { AgentPreset } from '@mcp/api-bus';
+import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/code-agent/sessions/run-limits.js';
 import {
   consumePendingAttachments,
   consumeSelectionPrefix,
   onStudioSend,
   usePublishAgentBusy,
 } from '../../builder/studio/studio-context-store.js';
-
-type AgentId = AgentPreset;
 
 type PendingAutoTitleSessions = Set<string> & {
   creationInFlight?: boolean;
@@ -81,12 +81,7 @@ interface EditorChatSessionOptions {
   initialReasoningEffort?: string | null;
 }
 
-const VALID_AGENT_IDS = new Set<AgentId>(['explore', 'research', 'plan', 'build', 'admin', 'spec', 'app_orchestrator', 'app_db', 'api', 'diagram', 'builder']);
-
-function isValidAgentId(agent: unknown): agent is AgentId {
-  return typeof agent === 'string'
-    && (VALID_AGENT_IDS.has(agent as AgentId) || /^custom:[a-zA-Z0-9-]{8,80}$/.test(agent));
-}
+type AgentId = AgentPreset;
 
 export function useEditorChatSession(projectId: number, options: EditorChatSessionOptions = {}) {
   const {
@@ -114,8 +109,10 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const [provider, setProvider] = useState(initialProvider ?? 'zai');
   const [model, setModel] = useState(initialModel ?? '');
-  const [agent, setAgent] = useState<AgentId>(() => agentLock ?? initialAgent ?? 'explore');
   const [maxTurns, setMaxTurns] = useState<number | null>(null);
+  const [maxAutoContinues, setMaxAutoContinues] = useState(
+    DEFAULT_SESSION_MAX_AUTO_CONTINUES,
+  );
   const [temperature, setTemperature] = useState<number | null>(null);
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(initialReasoningEffort ?? null);
   const [planDepth, setPlanDepth] = useState<string | null>(null);
@@ -132,6 +129,28 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     () => sessionDataForSelection(sessionData, selectedId),
     [selectedId, sessionData],
   );
+  const {
+    agent,
+    setAgent: setSessionAgent,
+    changeAgentAndWait,
+    awaitPendingAgentChange,
+    adoptAgent,
+    getAgent,
+  } = useSessionAgent({
+    selectedId,
+    sessionData: selectedSessionData,
+    updateSessionData,
+    updateSessions,
+    refetchSession,
+    initialAgent: agentLock ?? initialAgent ?? 'explore',
+  });
+  const handleAgentChange = useCallback((next: AgentId): void => {
+    if (agentLock) {
+      void changeAgentAndWait(agentLock);
+      return;
+    }
+    setSessionAgent(next);
+  }, [agentLock, changeAgentAndWait, setSessionAgent]);
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
   const messagePageAbortControllersRef = useRef<Set<AbortController>>(new Set());
@@ -221,30 +240,16 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   }, [refetchSessions, refetchGroups]);
 
   useEffect(() => {
-    if (agentLock) setAgent(agentLock);
-  }, [agentLock]);
-
-  const syncSelectedSessionAgent = useCallback((next: AgentId) => {
-    if (!selectedId) return;
-    updateSessionData((prev) => ({
-      ...prev,
-      session: {
-        ...prev.session,
-        agent: next,
-      },
-    }));
-    updateSessions((prev) => prev.map((session) => (
-      session.id === selectedId ? { ...session, agent: next } : session
-    )));
-  }, [selectedId, updateSessionData, updateSessions]);
+    if (agentLock && selectedId == null) adoptAgent(agentLock, null);
+  }, [agentLock, selectedId, adoptAgent]);
 
   // Guided surfaces can choose the starting agent without locking the
   // conversation. Apply only before a session is selected; once a session is
   // open, its persisted agent and any manual picker changes take precedence.
   useEffect(() => {
     if (agentLock || selectedId != null || !initialAgent) return;
-    setAgent(initialAgent);
-  }, [agentLock, initialAgent, selectedId]);
+    adoptAgent(initialAgent, null);
+  }, [agentLock, initialAgent, selectedId, adoptAgent]);
 
   // Guided surfaces can configure the session before it exists (App Studio's
   // spec specialist launcher). Apply those defaults only while no session is
@@ -301,37 +306,11 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     return () => { cancelled = true; };
   }, [doneReason, selectedId, refetchSession, refetchSessions]);
 
-  // Agent/mode hydration — reflect the session's persisted mode on open,
-  // session switch, and backend-driven agent changes. Manual picker changes
-  // optimistically update sessionData first, so this remains DB-aligned without
-  // clobbering the user's current choice.
-  useEffect(() => {
-    if (agentLock) {
-      setAgent(agentLock);
-      return;
-    }
-    const next = selectedSessionData?.session?.agent;
-    if (isValidAgentId(next)) setAgent(next);
-  }, [selectedSessionData?.session?.agent, agentLock]);
-
-  useEffect(() => {
-    const onAgentChanged = (e: Event): void => {
-      const detail = (e as CustomEvent).detail as { sessionId?: string; agent?: string };
-      if (!detail || detail.sessionId !== selectedId || !isValidAgentId(detail.agent)) return;
-      setAgent(detail.agent);
-      syncSelectedSessionAgent(detail.agent);
-    };
-    window.addEventListener('coder:session_agent_changed', onAgentChanged);
-    return () => window.removeEventListener('coder:session_agent_changed', onAgentChanged);
-  }, [selectedId, syncSelectedSessionAgent]);
-
   // Hydrate the persisted model-settings overrides from the session row so the
   // settings dialog opens reflecting the OPEN session instead of blank defaults
   // (the bug where temperature/effort/plan-depth always reset). Same read
-  // pattern AgentChat uses — these columns flow through the full session
-  // payload (migrations 150/151 + temperature_override). `null`/empty → the
-  // model default. maxTurns is intentionally NOT hydrated: it has no persisted
-  // column, it's a per-send param, so the "50" placeholder is correct.
+  // pattern AgentChat uses — these values flow through the filesystem session
+  // projection. A null turn limit is intentional and means unlimited.
   useEffect(() => {
     const s = selectedSessionData?.session;
     if (!s) return;
@@ -342,41 +321,23 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     const dep = s?.plan_depth_override;
     setPlanDepth(typeof dep === 'string' && dep.length > 0 ? dep : null);
     setThinking(s.thinking_enabled === true);
+    setMaxTurns(
+      typeof s.max_turns === 'number' && s.max_turns > 0
+        ? s.max_turns
+        : null,
+    );
+    setMaxAutoContinues(
+      typeof s.max_auto_continues === 'number' && s.max_auto_continues >= 0
+        ? s.max_auto_continues
+        : DEFAULT_SESSION_MAX_AUTO_CONTINUES,
+    );
   }, [selectedId, selectedSessionData?.session]);
-
-  // Persist a manual dropdown pick immediately (applies to the next run).
-  const handleAgentChange = useCallback((next: AgentId) => {
-    if (agentLock) {
-      setAgent(agentLock);
-      syncSelectedSessionAgent(agentLock);
-      if (selectedId) apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: agentLock }).catch(() => {});
-      return;
-    }
-    setAgent(next);
-    syncSelectedSessionAgent(next);
-    if (selectedId) {
-      apiPatch<CoderSession>(`/coder/sessions/${selectedId}/agent`, { agent: next })
-        .then((session) => {
-          if (isValidAgentId(session.agent)) {
-            setAgent(session.agent);
-            syncSelectedSessionAgent(session.agent);
-          }
-        })
-        .catch(() => {});
-    }
-  }, [agentLock, selectedId, syncSelectedSessionAgent]);
 
   const ensureAgentLock = useCallback(async () => {
     if (!agentLock || !selectedId) return;
     if (selectedSessionData?.session.agent === agentLock) return;
-    setAgent(agentLock);
-    try {
-      await apiPatch(`/coder/sessions/${selectedId}/agent`, { agent: agentLock });
-      await Promise.resolve(refetchSession());
-    } catch {
-      /* best-effort; handleSend carries a locked-agent override if needed */
-    }
-  }, [agentLock, selectedId, selectedSessionData?.session.agent, refetchSession]);
+    await changeAgentAndWait(agentLock);
+  }, [agentLock, selectedId, selectedSessionData?.session.agent, changeAgentAndWait]);
 
   useEffect(() => {
     if (!agentLock || !selectedId) return;
@@ -442,9 +403,9 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
         ? 'standard'
         : (config.executionMode === undefined ? settings.executionMode : config.executionMode);
       const selectedThinking = config.useLastModel ? false : (config.thinking ?? thinking);
-      const selectedMaxTurns = config.useLastModel
-        ? null
-        : (config.maxTurns === undefined ? maxTurns : config.maxTurns);
+      const selectedMaxTurns = config.maxTurns ?? null;
+      const selectedMaxAutoContinues =
+        config.maxAutoContinues ?? DEFAULT_SESSION_MAX_AUTO_CONTINUES;
       const selectedTemperature = config.useLastModel
         ? null
         : (config.temperature === undefined ? temperature : config.temperature);
@@ -460,17 +421,20 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
         execution_mode: selectedExecutionMode,
         reasoning_effort: selectedReasoningEffort || null,
         thinking_enabled: selectedThinking,
+        max_turns: selectedMaxTurns,
+        max_auto_continues: selectedMaxAutoContinues,
       });
       if (selectedTemperature !== null) {
         await apiPatch(`/coder/sessions/${created.id}/temperature`, { temperature: selectedTemperature }).catch(() => {});
       }
       setProvider(created.provider);
       setModel(created.model);
-      setAgent(selectedAgent);
+      adoptAgent(selectedAgent, null);
       setReasoningEffort(selectedReasoningEffort);
       settings.adoptExecutionMode(selectedExecutionMode);
       setThinking(selectedThinking);
       setMaxTurns(selectedMaxTurns);
+      setMaxAutoContinues(selectedMaxAutoContinues);
       setTemperature(selectedTemperature);
       if (!explicitTitle) pendingAutoTitle.current.add(created.id);
       updateSessions((prev) => [created, ...prev.filter((session) => session.id !== created.id)]);
@@ -482,7 +446,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       pendingAutoTitle.current.creationInFlight = false;
       setCreating(false);
     }
-  }, [projectId, newSessionTitle, provider, model, getModelsForProvider, agentLock, agent, reasoningEffort, settings.executionMode, settings.adoptExecutionMode, thinking, maxTurns, temperature, updateSessions, refetchSessions]);
+  }, [projectId, newSessionTitle, provider, model, getModelsForProvider, agentLock, agent, reasoningEffort, settings.executionMode, settings.adoptExecutionMode, adoptAgent, thinking, temperature, updateSessions, refetchSessions]);
 
   const archiveSession = useCallback(async (id: string, archived = true) => {
     await apiPatch(`/coder/sessions/${id}/archive`, { archived });
@@ -569,7 +533,6 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     const prefix = [editorPrefix, studioPrefix].filter(Boolean).join('\n');
     const outgoing = prefix ? `${prefix}\n\n${text}` : text;
     const allAtts = shots.length ? [...atts, ...shots] : atts;
-    const lockedAgentOverride = agentLock && selectedSessionData?.session.agent !== agentLock ? agentLock : undefined;
     const optimisticMessageId = allocateOptimisticMessageId();
     updateSessionData((previous) => appendOptimisticUserMessage(previous, {
       sessionId: selectedId,
@@ -580,6 +543,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     }));
     await settings.awaitPendingExecutionMode();
     await ensureAgentLock();
+    await awaitPendingAgentChange();
     await sendMessage(outgoing, async () => {
       refetchSession();
       if (shouldAutoTitle) {
@@ -587,31 +551,52 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
           .then(() => { refetchSessions(); window.dispatchEvent(new CustomEvent('coder:sessions-changed')); })
           .catch((err) => console.warn('[editor-chat] generate-title failed:', err));
       }
-    }, { attachments: allAtts, agent: lockedAgentOverride, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds });
-  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, projectId, updateSessionData, sendMessage, refetchSession, refetchSessions, ensureAgentLock, agentLock, selectedSessionData?.session.agent, maxTurns, thinking, settings.describeImages]);
+    }, { attachments: allAtts, agent: getAgent(), maxTurns, maxAutoContinues, thinking, describeImages: settings.describeImages, selectedSkillIds });
+  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, projectId, updateSessionData, sendMessage, refetchSession, refetchSessions, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Live run → POST /inject (no new stream; the open SSE renders the injected
   // turn). No run → fall back to sendMessage (fresh streamed run). See the
   // AgentChat copy for the full rationale (avoids the mid-run stream-abort freeze).
-  const deliverQueued = useCallback<QueueDeliver>(async (text, { interject, skillIds }) => {
+  const deliverQueued = useCallback<QueueDeliver>(async (
+    text,
+    { interject, attachments, skillIds },
+  ) => {
     if (!selectedId) return;
     try {
       const r = await apiPost<{ injected?: boolean; noActiveRun?: boolean }>(
         `/coder/sessions/${selectedId}/inject`,
-        { content: text, interject, selected_skill_ids: skillIds },
+        {
+          content: text,
+          interject,
+          attachments,
+          describe_images: settings.describeImages,
+          selected_skill_ids: skillIds,
+        },
       );
       if (r?.injected) { refetchSession(); return; }
     } catch { /* fall through to a fresh streamed send */ }
     await settings.awaitPendingExecutionMode();
-    const lockedAgentOverride = agentLock && selectedSessionData?.session.agent !== agentLock ? agentLock : undefined;
     await ensureAgentLock();
+    await awaitPendingAgentChange();
     await sendMessage(text, async () => { refetchSession(); }, {
-      agent: lockedAgentOverride, maxTurns, thinking, describeImages: settings.describeImages, selectedSkillIds: skillIds, interject,
+      attachments,
+      agent: getAgent(),
+      maxTurns,
+      maxAutoContinues,
+      thinking,
+      describeImages: settings.describeImages,
+      selectedSkillIds: skillIds,
+      interject,
     });
-  }, [selectedId, settings.awaitPendingExecutionMode, sendMessage, refetchSession, ensureAgentLock, agentLock, selectedSessionData?.session.agent, maxTurns, thinking, settings.describeImages]);
+  }, [selectedId, settings.awaitPendingExecutionMode, sendMessage, refetchSession, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages]);
   const queue = useMessageQueue({ streaming, deliver: deliverQueued });
-  const handleQueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
+  const handleQueue = useCallback((
+    text: string,
+    mode: QueueMode,
+    attachments: AgentAttachment[],
+    skillIds?: string[],
+  ) => {
     if (!selectedId) return;
     // Mirror handleSend's staged-context prefixing (selected-code), then clear.
     let editorPrefix = '';
@@ -626,9 +611,16 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       st.clear(projectId);
     }
     const studioPrefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
-    if (selectionPrefixSessionId) consumePendingAttachments(selectionPrefixSessionId);
+    const shots = selectionPrefixSessionId
+      ? consumePendingAttachments(selectionPrefixSessionId)
+      : [];
     const prefix = [editorPrefix, studioPrefix].filter(Boolean).join('\n');
-    queue.enqueue(prefix ? `${prefix}\n\n${text}` : text, mode, skillIds);
+    queue.enqueue(
+      prefix ? `${prefix}\n\n${text}` : text,
+      mode,
+      shots.length > 0 ? [...attachments, ...shots] : attachments,
+      skillIds,
+    );
   }, [selectedId, includeEditorContext, selectionPrefixSessionId, selections, projectId, queue]);
   useEffect(() => { queue.clear(); }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -651,6 +643,28 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     if (!selectedId) return;
     try { await apiPatch(`/coder/sessions/${selectedId}/temperature`, { temperature: next }); } catch { /* optimistic */ }
   }, [selectedId]);
+
+  const handleMaxTurnsChange = useCallback(async (next: number | null) => {
+    setMaxTurns(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/run-limits`, {
+        max_turns: next,
+        max_auto_continues: maxAutoContinues,
+      });
+    } catch { /* optimistic */ }
+  }, [maxAutoContinues, selectedId]);
+
+  const handleMaxAutoContinuesChange = useCallback(async (next: number) => {
+    setMaxAutoContinues(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/run-limits`, {
+        max_turns: maxTurns,
+        max_auto_continues: next,
+      });
+    } catch { /* optimistic */ }
+  }, [maxTurns, selectedId]);
 
   const handleReasoningEffortChange = useCallback(async (next: string | null) => {
     setReasoningEffort(next);
@@ -713,7 +727,10 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     liveReconciliation, liveTurnDuplicatedInHistory, persistedToolUseIds, tasksState, handlers, loadEarlierMessages, abort, handleSend,
     snapshotActions, snapshotFiles,
     queue, handleQueue,
-    provider, model, setModel, agent, setAgent: handleAgentChange, maxTurns, setMaxTurns,
+    provider, model, setModel, agent, setAgent: handleAgentChange,
+    maxTurns, setMaxTurns: handleMaxTurnsChange,
+    maxAutoContinues,
+    setMaxAutoContinues: handleMaxAutoContinuesChange,
     temperature, setTemperature: handleTemperatureChange, onSwitchProvider,
     reasoningEffort, setReasoningEffort: handleReasoningEffortChange,
     planDepth, setPlanDepth: handlePlanDepthChange,

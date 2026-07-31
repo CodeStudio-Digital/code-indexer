@@ -36,6 +36,7 @@ pub use event::{
 pub use policy::AsyncManagementPolicy;
 
 use crate::framing::asynchronous::AsyncFrameReader;
+use crate::management_channel::ManagementSessionPolicy;
 use actor::ManagementActor;
 use command::CommandQueues;
 use event::EventQueue;
@@ -104,6 +105,11 @@ impl AsyncEstablishedManagementActor {
     #[must_use]
     pub const fn policy(&self) -> &AsyncManagementPolicy {
         &self.policy
+    }
+
+    #[must_use]
+    pub const fn session_policy(&self) -> &ManagementSessionPolicy {
+        self.policy.session_policy()
     }
 
     #[cfg(test)]

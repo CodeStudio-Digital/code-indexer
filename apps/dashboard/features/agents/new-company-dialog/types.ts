@@ -12,6 +12,8 @@ export interface Template {
     skills?: string[];
     initialTools?: string[];
     systemPromptOverride?: string;
+    projectHints?: string[];
+    projectIds?: number[];
   }>;
 }
 

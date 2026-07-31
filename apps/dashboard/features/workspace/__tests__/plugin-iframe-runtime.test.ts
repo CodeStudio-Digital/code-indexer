@@ -46,6 +46,23 @@ describe('injectIntoHtml', () => {
     expect(ctxAt).toBeLessThan(kitAt);
     expect(kitAt).toBeLessThan(bodyAt);
   });
+
+  it('stamps the packaged CSP nonce onto inline scripts without rewriting script bodies or external sources', () => {
+    const html = [
+      '<html><head>',
+      '<script nonce="stale">window.first = true;</script>',
+      '</head><body>',
+      '<script>window.template = "<script>not markup</script>";</script>',
+      '<script src="https://example.com/external.js"></script>',
+      '</body></html>',
+    ].join('');
+    const out = injectIntoHtml(html, CTX, TOKENS, 'launch-nonce');
+
+    expect(out).not.toContain('nonce="stale"');
+    expect(out.match(/<script nonce="launch-nonce"/g)).toHaveLength(4);
+    expect(out).toContain('window.template = "<script>not markup</script>";');
+    expect(out).toContain('<script src="https://example.com/external.js"></script>');
+  });
 });
 
 /** Collect top-level CSS selectors (at-rules included; nested blocks skipped). */

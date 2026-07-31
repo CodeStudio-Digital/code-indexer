@@ -13,11 +13,9 @@ export const KIMI_CODE_BASE_URL = 'https://api.kimi.com/coding/v1';
 
 const KIMI_CODE_SEED_MODEL_IDS = [
   'k3',
-  'kimi-k2.6',
-  'kimi-k2.5',
-  'kimi-k2-thinking',
-  'kimi-k2-thinking-turbo',
-  'kimi-k2-turbo-preview',
+  'k3-256k',
+  'kimi-for-coding',
+  'kimi-for-coding-highspeed',
 ];
 
 export const kimiCodeSpec: ProviderSpec = {
@@ -27,10 +25,13 @@ export const kimiCodeSpec: ProviderSpec = {
   credKind: 'api-key',
   envVars: ['KIMI_CODE_API_KEY'],
   defaultBaseURL: KIMI_CODE_BASE_URL,
-  defaultModel: 'kimi-k2.6',
+  defaultModel: 'kimi-for-coding',
   defaultModels: KIMI_CODE_SEED_MODEL_IDS,
   pricing: {
     'k3': { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'k3-256k': { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'kimi-for-coding': { inputPer1M: 0.0, outputPer1M: 0.0 },
+    'kimi-for-coding-highspeed': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'kimi-k2.6': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'kimi-k2.5': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'kimi-k2-thinking': { inputPer1M: 0.0, outputPer1M: 0.0 },
@@ -67,6 +68,36 @@ export const kimiCodeSpec: ProviderSpec = {
       },
     ],
   },
+  models: {
+    k3: kimiK3Model(1_048_576, true),
+    'k3-256k': kimiK3Model(262_144, false),
+    'kimi-for-coding': kimiCodingAliasModel(),
+    'kimi-for-coding-highspeed': kimiCodingAliasModel(),
+  },
 };
 
 export const KIMI_SPECS: ProviderSpec[] = [kimiCodeSpec];
+
+function kimiK3Model(contextWindow: number, supportsVideo: boolean) {
+  return {
+    contextWindow,
+    maxTokens: 32_000,
+    canReason: true,
+    supportsAttachments: true,
+    supportedReasoningLevels: ['low', 'high', 'max'],
+    defaultReasoningLevel: 'high',
+    inputModalities: supportsVideo ? ['text', 'image', 'video'] : ['text', 'image'],
+  };
+}
+
+function kimiCodingAliasModel() {
+  return {
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+    canReason: true,
+    supportsAttachments: true,
+    supportedReasoningLevels: null,
+    defaultReasoningLevel: null,
+    inputModalities: ['text', 'image', 'video'],
+  };
+}

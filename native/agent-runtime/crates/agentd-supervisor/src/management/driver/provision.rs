@@ -14,6 +14,7 @@ mod staged;
 #[cfg(windows)]
 mod windows;
 
+#[cfg(any(test, windows))]
 pub(in crate::management::driver) use facts::ProtectedLaunchHandoffFacts;
 pub use peer::{ProtectedLaunchPeerAuthority, ProtectedLaunchPeerAuthorityError};
 pub use receipt::ProtectedLaunchReceipt;

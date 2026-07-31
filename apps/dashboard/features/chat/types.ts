@@ -146,6 +146,10 @@ export interface CoderSession {
   execution_mode_override?: ExecutionMode;
   /** Sticky extended-thinking toggle for this conversation (migration 226). */
   thinking_enabled?: boolean;
+  /** Null means the session runs until natural completion. */
+  max_turns?: number | null;
+  /** Extra batches after an enabled turn limit. */
+  max_auto_continues?: number;
   /**
    * Per-session sticky plan-depth (migration 151): 'simple' | 'normal' |
    * 'complex'. NULL → 'normal'. Surfaced as the depth selector in the Composer

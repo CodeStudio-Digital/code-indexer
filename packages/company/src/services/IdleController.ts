@@ -113,6 +113,15 @@ export class IdleController implements IIdleController {
     if (!this.deps.master.hasEnded) return;
     if (this.deps.subordinates.runningCount > 0) return;
 
+    // Explicit confirmation through `finalize_subordinates` is terminal, not
+    // ordinary conversational idleness. Preserve the completed status written
+    // by the orchestrator and close the SSE bus immediately.
+    if (this.deps.ctx.isFinalized) {
+      this.clear();
+      this.deps.bus.markEnded('done', { reason: 'finalized' });
+      return;
+    }
+
     // Auto-continue after question/plan answer — the master acknowledged
     // the answer but didn't make tool calls, so the runner exited. Resume
     // it so it can proceed with the next orchestration step.

@@ -39,6 +39,10 @@ export interface FsPendingAgentTransition {
 }
 
 export interface FsRuntimeSessionState {
+  /** Null means the top-level conversation has no turn ceiling. */
+  max_turns: number | null;
+  /** Extra batches granted after a configured turn ceiling is reached. */
+  max_auto_continues: number;
   temperature_override: number | null;
   reasoning_effort_override: string | null;
   execution_mode_override: CoderExecutionMode;

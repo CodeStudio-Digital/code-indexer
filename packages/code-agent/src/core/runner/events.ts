@@ -493,7 +493,8 @@ export interface RunnerEvents {
     model: string;
     profile: string | null;
     planMode: boolean;
-    maxTurns: number;
+    /** Null means the session is intentionally unlimited. */
+    maxTurns: number | null;
     /**
      * Ultra execution identity — present only when Ultra is active for this
      * run. 'session' = the sticky execution-mode toggle; 'turn' = the

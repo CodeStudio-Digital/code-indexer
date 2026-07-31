@@ -41,6 +41,7 @@ interface DesktopNotificationOptions {
 }
 
 let streamRequestSeq = 0;
+const rendererCspNonce = ipcRenderer.sendSync('security:getRendererCspNonce') as unknown;
 
 function nextRequestId(): string {
   streamRequestSeq += 1;
@@ -272,6 +273,14 @@ function subscribe<T>(channel: string, cb: (value: T) => void): () => void {
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  /**
+   * Per-launch nonce accepted by the packaged renderer CSP. The dashboard
+   * stamps it only onto inline scripts inside sandboxed plugin webviews.
+   */
+  rendererCspNonce:
+    typeof rendererCspNonce === 'string' && rendererCspNonce.length > 0
+      ? rendererCspNonce
+      : null,
   /**
    * OS platform, surfaced so the renderer can pick window-control chrome:
    * custom min/max/close on win32/linux, native traffic-lights on darwin.

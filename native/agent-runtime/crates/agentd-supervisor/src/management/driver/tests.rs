@@ -25,6 +25,7 @@ where
         self.ownership.state(key).ok()
     }
 
+    #[cfg(windows)]
     fn physical_runtime_for_test(&self, idempotency_key: &str) -> Option<(u32, String)> {
         let key = self
             .launch_registry

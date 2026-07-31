@@ -1,6 +1,6 @@
 {
   "name": "provider-chatgpt",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260730123259",
   "description": "ChatGPT / Codex (OAuth) as a bundled first-party provider plugin",
   "author": { "name": "mcp" },
   "apps": ".app.json",

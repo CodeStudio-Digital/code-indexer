@@ -103,7 +103,10 @@ export interface RunnerOptions {
   systemPrompt: string;
   toolContext: ToolContext;
   initialMessages?: AgentMessage[];
+  /** Omitted/zero means the top-level run has no turn limit. */
   maxTurns?: number;
+  /** Extra batches after maxTurns. Ignored while maxTurns is disabled. */
+  maxAutoContinues?: number;
   /** Persistent session id — used only for tagging logs. */
   sessionId?: SessionId;
   /** True for ephemeral subagents. Tags logs as `s=<parentId>/sub`. */

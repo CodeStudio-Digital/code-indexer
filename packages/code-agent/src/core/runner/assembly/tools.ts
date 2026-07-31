@@ -15,7 +15,7 @@ import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
-import { filterByTiers, getToolTier, MASTER_TOOLS } from '@mcp/code-agent/tools/tiers.js';
+import { filterByTiers, getToolTier } from '@mcp/code-agent/tools/tiers.js';
 import {
   NEVER_TRIM,
   PREVIEW_WORKFLOW_FLOOR,
@@ -83,6 +83,30 @@ export interface BuildToolsResult {
   protectedToolNames: ReadonlySet<string>;
 }
 
+const BUILD_TASK_LIST_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {
+    gate: {
+      type: 'string',
+      enum: ['track'],
+      description: "'track' = lightweight progress checklist; never pauses.",
+    },
+    items: {
+      type: 'array',
+      description:
+        'Full checklist. Each item: {id?, content, activeForm, status: pending|in_progress|completed}.',
+      items: { type: 'object' },
+    },
+    updates: {
+      type: 'array',
+      description:
+        'Patch existing checklist items by id. Each entry: {id, status?, content?, activeForm?}.',
+      items: { type: 'object' },
+    },
+  },
+  additionalProperties: false,
+} as unknown as JsonSchema;
+
 /**
  * Goal creation and completion form one capability. Preserve the original
  * array reference when the pair is already coherent so memoized tool JSON and
@@ -116,13 +140,14 @@ export function enforceAtomicGoalToolPair<T extends { name: string }>(
 
 export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   let filtered = args.registry.list();
-  // Spec mode has a dedicated human gate. Do not advertise submit_plan to the
-  // model and rely on prose saying it is blocked: the tool previously remained
-  // protected by NEVER_TRIM and was repeatedly selected, even though its
-  // approval can never set specApproved. The registry keeps the handler so
-  // persisted legacy calls can still resolve deterministically.
+  // submit_plan is an execution gate, not a generic planning aid. Advertising
+  // it to Build agents lets weak models turn a pre-approved implementation
+  // request into an indefinite human wait. Keep the handler in the registry
+  // for persisted calls, but expose it only when Plan mode owns that gate.
   const specModeBlocksPlan = args.toolContext.runner?.specMode === true;
-  if (specModeBlocksPlan) {
+  const planModeAllowsPlan = args.toolContext.runner?.planMode === true
+    && !specModeBlocksPlan;
+  if (!planModeAllowsPlan) {
     filtered = filtered.filter((tool) => tool.name !== 'submit_plan');
   }
 
@@ -145,7 +170,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     const present = new Set(filtered.map((t) => t.name));
     for (const t of args.registry.list()) {
       if (!args.pinnedTools.has(t.name) || present.has(t.name)) continue;
-      if (specModeBlocksPlan && t.name === 'submit_plan') continue;
+      if (!planModeAllowsPlan && t.name === 'submit_plan') continue;
       if (args.globalDisabledTools?.has(t.name)) continue;
       if (args.sessionDisabledTools?.has(t.name)) continue;
       filtered.push(t);
@@ -202,7 +227,6 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
       PREVIEW_WORKFLOW_FLOOR.has(t.name) ||
       ROLE_CAPABILITY_FLOOR.has(t.name) ||
       !!args.pinnedTools?.has(t.name) ||
-      (isMasterRunner && MASTER_TOOLS.has(t.name)) ||
       (isCompanyRunner && isEssentialCompanyTool(t.name, isMasterRunner));
     (isProtected ? protectedBucket : others).push(t);
   }
@@ -211,7 +235,9 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // for models missing from the registry, and sessions without a preflight
   // cap shipped the whole catalog (telemetry: 1319 turns >96 visible tools,
   // ~105k chars ≈ 26k tokens of defs per turn, constant 128-tool sessions).
-  // The default is run-constant, so membership only changes across runs —
+  // A 28-tool default keeps the high-priority working set while relying on
+  // find_tools/pinning for cold capabilities. The default is run-constant,
+  // so membership only changes across runs —
   // never mid-run — which preserves the prompt-cache contract. Pins and the
   // protected floor still survive the cap. `CODER_TOOL_CAP_DEFAULT=0`
   // disables the default (legacy: model cap only). Applies only to
@@ -220,7 +246,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   const defaultCapRaw = Number.parseInt(process.env.CODER_TOOL_CAP_DEFAULT ?? '', 10);
   const defaultSessionCap = Number.isFinite(defaultCapRaw) && defaultCapRaw >= 0
     ? defaultCapRaw
-    : 48;
+    : 28;
   const sessionCap = args.sessionToolCap != null && args.sessionToolCap > 0
     ? args.sessionToolCap
     : args.activeTiers !== null
@@ -284,29 +310,32 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     && !args.activeTiers.has('admin')
   );
   // Compact catalogs (EFFECTIVE cap ≤ 64) get terse descriptions in EVERY
-  // tier state: serialized bytes compete with real context, and full text is
-  // recoverable via find_tools. Exception: the NEVER_TRIM core keeps its
-  // full USE/DON'T text — those are the tools whose discipline notes matter
-  // most. Perf W3 — keyed to the effective cap (was: model cap only), so the
-  // default 48-tool session ships terse defs (~1.5k chars/tool measured with
-  // full text). Run-constant inputs → byte-stable within a run.
+  // tier state: serialized bytes compete with task context, while find_tools
+  // returns the full contract on demand. Safety and lifecycle policy belong
+  // in runtime gates, not repeated prose on every tool. Run-constant inputs
+  // keep this byte-stable within a run.
   const compactModel = maxTools <= 64;
-  const useTerse = (name: string): boolean =>
-    (bootstrapOnly || compactModel) && !(compactModel && NEVER_TRIM.has(name));
+  const useTerse = (): boolean => bootstrapOnly || compactModel;
+  const serializeTool = (t: typeof filtered[number]): SerializedTool => {
+    if (!planModeAllowsPlan && t.name === 'task_list') {
+      return {
+        name: t.name,
+        description: 'Maintain the live progress checklist without pausing execution.',
+        parameters: BUILD_TASK_LIST_SCHEMA,
+      };
+    }
+    return {
+      name: t.name,
+      description: useTerse() ? terseDescription(t.description) : t.description,
+      parameters: t.parameters,
+    };
+  };
 
-  const tools: SerializedTool[] = filtered.map((t) => ({
-    name: t.name,
-    description: useTerse(t.name) ? terseDescription(t.description) : t.description,
-    parameters: t.parameters,
-  }));
+  const tools: SerializedTool[] = filtered.map(serializeTool);
   const eligibleToolsDefChars = JSON.stringify(
     eligibleBeforeCap
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map((t) => ({
-        name: t.name,
-        description: useTerse(t.name) ? terseDescription(t.description) : t.description,
-        parameters: t.parameters,
-      })),
+      .map(serializeTool),
   ).length;
 
   return {

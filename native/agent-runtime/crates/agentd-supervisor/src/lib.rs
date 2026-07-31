@@ -13,6 +13,8 @@
 )]
 mod admission;
 pub mod management;
+#[cfg(windows)]
+pub mod process;
 #[allow(
     dead_code,
     reason = "staged exit/reap transitions remain private and test-covered without an external bypass"

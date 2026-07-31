@@ -1,6 +1,6 @@
 {
   "name": "provider-moonshot",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.local-20260731004500",
   "description": "Moonshot AI (API key) as a bundled provider plugin",
   "author": { "name": "mcp" },
   "apps": ".app.json",

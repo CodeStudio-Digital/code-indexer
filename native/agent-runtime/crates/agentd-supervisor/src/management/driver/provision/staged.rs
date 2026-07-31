@@ -2,10 +2,12 @@ use std::fmt::{self, Debug, Formatter};
 
 use agent_platform::containment::{ChildHandleAllowlist, ContainmentReport};
 use agent_protocol::generated::v1 as wire;
+#[cfg(windows)]
 use agent_protocol::runner_bootstrap::MatchedRunnerEndpointsReady;
 
 use super::facts::ProtectedLaunchHandoffFacts;
 use super::peer::ProtectedLaunchPeerAuthority;
+#[cfg(any(test, windows))]
 use super::receipt::ProtectedLaunchReceipt;
 use super::request::ProtectedLaunchRequest;
 use super::seal::ProtectedLaunchSeal;
@@ -98,6 +100,7 @@ impl<P> PendingProtectedLaunch<P> {
     }
 
     #[must_use]
+    #[cfg(windows)]
     pub(in crate::management::driver) fn mint_receipt(
         self,
         physical: &ProtectedLaunchPhysicalFacts,

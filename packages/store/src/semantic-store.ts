@@ -1506,12 +1506,29 @@ export class SemanticStore {
    * Chunked because SQLite caps bound parameters.
    */
   listJobs(
-    filter: { namespace?: string; status?: SemanticJobStatus; namespaces?: readonly string[] } = {},
+    filter: {
+      namespace?: string;
+      status?: SemanticJobStatus;
+      namespaces?: readonly string[];
+      statuses?: readonly SemanticJobStatus[];
+      kinds?: readonly SemanticJobKind[];
+    } = {},
   ): SemanticJobRow[] {
     const base: string[] = [];
     const baseParams: unknown[] = [];
+    if (filter.statuses?.length === 0 || filter.kinds?.length === 0) return [];
     if (filter.namespace) { base.push('namespace = ?'); baseParams.push(filter.namespace); }
     if (filter.status) { base.push('status = ?'); baseParams.push(filter.status); }
+    if (filter.statuses) {
+      const statuses = [...new Set(filter.statuses)];
+      base.push(`status IN (${statuses.map(() => '?').join(',')})`);
+      baseParams.push(...statuses);
+    }
+    if (filter.kinds) {
+      const kinds = [...new Set(filter.kinds)];
+      base.push(`kind IN (${kinds.map(() => '?').join(',')})`);
+      baseParams.push(...kinds);
+    }
     const order = 'ORDER BY priority DESC, id';
     const run = (where: string[], params: unknown[]): JsonJobRow[] =>
       this.db

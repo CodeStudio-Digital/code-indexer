@@ -1,6 +1,7 @@
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { runStructuralIndex } from '@mcp/indexer/indexer/structural.js';
 import { indexFilesStructural, removeFilesStructural } from '@mcp/indexer/indexer/structural-incremental.js';
+import { InteractivePriorityGate } from '@mcp/indexer/indexer/interactive-priority-gate.js';
 import type { StructuralExecutor } from './types.js';
 
 export interface InProcessExecutorConfig {
@@ -20,7 +21,11 @@ export function createInProcessStructuralExecutor(
   db: CodeIndexDB,
   config: InProcessExecutorConfig = {},
 ): StructuralExecutor {
+  const priorityGate = new InteractivePriorityGate();
   return {
+    setInteractivePriority(projectId, busy) {
+      priorityGate.setBusy(projectId, busy);
+    },
     async runStructuralIndex(projectId, opts) {
       const r = await runStructuralIndex(db, projectId, {
         ignorePatterns: config.ignorePatterns,
@@ -30,6 +35,7 @@ export function createInProcessStructuralExecutor(
         allowEmptyWipe: opts.allowEmptyWipe,
         onProgress: opts.onProgress,
         onChanges: opts.onChanges,
+        waitForInteractivePriority: () => priorityGate.wait(projectId),
       });
       return {
         totalFiles: r.totalFiles, indexed: r.indexed, removed: r.removed,

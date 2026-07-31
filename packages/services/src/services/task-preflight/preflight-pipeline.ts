@@ -39,8 +39,11 @@ const PIPELINE_NAME = 'code-agent';
 const ROLE = 'preflight';
 const LABEL = `${PIPELINE_NAME}/${ROLE}`;
 const DEFAULT_TIMEOUT_MS = 20000;
-const DEFAULT_MAX_TOOLS = 12;
-const MAX_MEMORIES = 5;
+const DEFAULT_MAX_TOOLS = 4;
+// Three durable facts are enough to constrain the first move. A five-item seed
+// made weaker models eagerly open several overlapping memories before reading
+// code, increasing latency and context without improving the implementation.
+const MAX_MEMORIES = 3;
 const MAX_SKILLS = 3;
 
 export type PreflightStatus = 'ok' | 'unconfigured' | 'timeout' | 'provider_error' | 'parse_fail';

@@ -775,8 +775,14 @@ export interface ProjectGitApi {
     ctx: ApiContext,
   ): Promise<GitRunResult>;
 
-  /** Apply `ref` and remove it from the stash list (`git stash pop`). */
-  stashPop(input: GitScope & { ref: string }, ctx: ApiContext): Promise<GitRunResult>;
+  /**
+   * Apply `ref` and remove it from the stash list (`git stash pop`).
+   * `restoreIndex` also restores which changes were staged before the stash.
+   */
+  stashPop(
+    input: GitScope & { ref: string; restoreIndex?: boolean },
+    ctx: ApiContext,
+  ): Promise<GitRunResult>;
 
   /** Apply `ref` without removing it (`git stash apply`). */
   stashApply(input: GitScope & { ref: string }, ctx: ApiContext): Promise<GitRunResult>;

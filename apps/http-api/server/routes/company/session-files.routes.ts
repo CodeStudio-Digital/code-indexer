@@ -11,6 +11,7 @@ import {
   parseJsonBody,
 } from '../_helpers.js';
 import {
+  resolveRoleProjectBindings,
   validateAllowedModels,
   type CreateSessionBody,
 } from './session-create-validation.js';
@@ -103,10 +104,24 @@ export function mountCompanyFileSessionRoutes(
       const error = validateAllowedModels(body.allowed_models, body);
       if (error) return c.json({ error }, 400);
     }
+    const roleAssignments = resolveRoleProjectBindings(
+      body.role_assignments ?? [],
+      body.project_ids.flatMap((projectId) => {
+        const project = deps.db.getProject(projectId);
+        return project
+          ? [{
+              id: project.id,
+              name: project.name,
+              root_path: project.root_path,
+              label: body.project_labels?.[projectId] ?? null,
+            }]
+          : [];
+      }),
+    );
     const config = {
       master_provider: body.master_provider,
       master_model: body.master_model,
-      role_assignments: body.role_assignments ?? [],
+      role_assignments: roleAssignments,
       ...(body.allowed_models?.length
         ? { allowed_models: body.allowed_models }
         : {}),

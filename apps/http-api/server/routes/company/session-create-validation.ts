@@ -6,6 +6,8 @@
  * pools) and from session config patch (PATCH /:id/config) — when the
  * latter moves out of `sessions.ts` it can import the same helper.
  */
+import type { CompanyRoleConfig } from '@mcp/company/types.js';
+
 export interface CreateSessionBody {
   template_id?: number;
   name: string;
@@ -13,17 +15,7 @@ export interface CreateSessionBody {
   project_labels?: Record<number, string>;
   master_provider: string;
   master_model: string;
-  role_assignments?: Array<{
-    role: string;
-    provider: string;
-    model: string;
-    project_ids: number[];
-    tier?: string;
-    /** Phase E: enable extended thinking for subordinates spawned with this role. */
-    thinking?: boolean;
-    /** Phase E: Anthropic-specific thinking budget. Ignored by other providers. */
-    thinkingBudgetTokens?: number;
-  }>;
+  role_assignments?: CompanyRoleConfig[];
   /**
    * Curated pool of `(provider, model)` tuples the master is allowed
    * to spawn subordinates with. When present (length > 0), the master's
@@ -56,6 +48,85 @@ export interface CreateSessionBody {
    * preserves the legacy session shape.
    */
   operational_rules?: string;
+}
+
+export interface SessionProjectBindingCandidate {
+  id: number;
+  name: string;
+  root_path: string;
+  label?: string | null;
+}
+
+const PROJECT_HINT_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  backend: ['backend', 'api', 'server'],
+  frontend: ['frontend', 'front', 'web', 'client', 'public'],
+  admin: ['admin', 'backoffice', 'console'],
+};
+
+function normalizedWords(value: string): string[] {
+  return value
+    .normalize('NFKD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLocaleLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+function projectMatchesHint(
+  project: SessionProjectBindingCandidate,
+  hint: string,
+): boolean {
+  const hintWords = normalizedWords(hint);
+  if (hintWords.length === 0) return false;
+  const hintPhrase = hintWords.join(' ');
+  const aliases = new Set(
+    hintWords.flatMap((word) => PROJECT_HINT_ALIASES[word] ?? [word]),
+  );
+  const fields = [
+    project.label ?? '',
+    project.name,
+    project.root_path,
+  ];
+  for (const field of fields) {
+    const words = normalizedWords(field);
+    if (words.length === 0) continue;
+    const phrase = words.join(' ');
+    if (phrase === hintPhrase || phrase.includes(hintPhrase)) return true;
+    if (words.some((word) => aliases.has(word))) return true;
+  }
+  return false;
+}
+
+/**
+ * Turn reusable template `projectHints` into the concrete `projectIds` that
+ * Company runtime enforcement consumes. Explicit bindings always win.
+ * Unmatched hints remain visible and unbound so creation stays compatible
+ * with generic templates instead of silently assigning the wrong project.
+ */
+export function resolveRoleProjectBindings(
+  roles: readonly CompanyRoleConfig[],
+  projects: readonly SessionProjectBindingCandidate[],
+): CompanyRoleConfig[] {
+  const selectedIds = new Set(projects.map((project) => project.id));
+  return roles.map((role) => {
+    if (Array.isArray(role.projectIds) && role.projectIds.length > 0) {
+      return {
+        ...role,
+        projectIds: [...new Set(role.projectIds.filter((id) => selectedIds.has(id)))],
+      };
+    }
+    if (!Array.isArray(role.projectHints) || role.projectHints.length === 0) {
+      return { ...role };
+    }
+    const projectIds = projects
+      .filter((project) =>
+        role.projectHints!.some((hint) => projectMatchesHint(project, hint)),
+      )
+      .map((project) => project.id);
+    return projectIds.length > 0
+      ? { ...role, projectIds: [...new Set(projectIds)] }
+      : { ...role };
+  });
 }
 
 /**

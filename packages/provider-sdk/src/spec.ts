@@ -23,7 +23,14 @@ export const PROVIDER_SPEC_VERSION = 1 as const;
 export type WireKind = 'openai-compat' | 'anthropic' | 'gemini' | 'bedrock' | 'codex' | 'kimi';
 
 /** OpenAI-compatible vendor flag (enables vendor-specific request tweaks). */
-export type OpenAICompatVendor = 'openai' | 'openrouter' | 'zai' | 'deepseek' | 'copilot' | 'fugu';
+export type OpenAICompatVendor =
+  | 'openai'
+  | 'openrouter'
+  | 'zai'
+  | 'deepseek'
+  | 'copilot'
+  | 'fugu'
+  | 'mistral';
 
 /** Reads a value from `cfg.extra[key]` or `process.env[key]`. */
 export interface ValueSource {
@@ -81,9 +88,17 @@ export interface WireOpts {
   /** Route via OAuth accessToken/refreshToken/projectId instead of api-key. */
   geminiOAuth?: boolean;
 
-  // codex
-  /** Use the OpenAI Responses API (stateful) rather than chat/completions. */
+  // Responses API
+  /** Use the OpenAI Responses API rather than chat/completions. */
   responsesApi?: boolean;
+  /** Omit `store`/`previous_response_id` for stateless Responses endpoints. */
+  responsesStateless?: boolean;
+  /** Model ids that support readable reasoning summaries (`summary:'auto'`). */
+  responsesReasoningSummaryModels?: string[];
+  /** Let the legacy boolean thinking toggle choose a supported effort. */
+  responsesReasoningFromThinking?: boolean;
+  /** Include provider-specific orchestration token details in billable usage. */
+  responsesIncludeOrchestrationUsage?: boolean;
 
   // indexer
   /** Cheap default model for summary-only indexing. */
@@ -206,6 +221,9 @@ export interface DiscoveryDescriptor {
 export interface ProviderModelMeta {
   contextWindow?: number;
   maxTokens?: number;
+  canReason?: boolean;
+  supportsAttachments?: boolean;
+  inputModalities?: string[];
   supportedReasoningLevels?: string[] | null;
   defaultReasoningLevel?: string | null;
   applyPatchToolType?: string | null;

@@ -1,5 +1,5 @@
-import { GoogleGenAI } from '@google/genai';
-import type { Content, Part, Tool, FunctionDeclaration } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import type { Content, Part, Tool, FunctionDeclaration, ThinkingConfig } from '@google/genai';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
 import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { renderTextDocument } from './document-utils.js';
@@ -49,7 +49,7 @@ export class GeminiChatProvider implements ChatProvider {
     cloudCodeSessionId?: string;
     model?: string;
   }) {
-    this.model = opts.model ?? 'gemini-2.5-flash';
+    this.model = opts.model ?? 'gemini-3.6-flash';
     if (opts.accessToken) {
       // OAuth mode: route through CloudCode (cloudcode-pa.googleapis.com)
       // like the Gemini CLI does. generativelanguage.googleapis.com does NOT
@@ -97,6 +97,7 @@ export class GeminiChatProvider implements ChatProvider {
       : undefined;
 
     const temperature = req.inference?.temperature;
+    const thinkingConfig = resolveGeminiThinkingConfig(this.model, req);
 
     let stream;
     try {
@@ -108,9 +109,7 @@ export class GeminiChatProvider implements ChatProvider {
           tools,
           abortSignal: req.signal,
           ...(typeof temperature === 'number' ? { temperature } : {}),
-          ...(req.thinking
-            ? { thinkingConfig: { includeThoughts: true, thinkingBudget: DEFAULT_THINKING_MODE } }
-            : {}),
+          ...(thinkingConfig ? { thinkingConfig } : {}),
         },
       });
     } catch (e) {
@@ -206,12 +205,17 @@ export class GeminiChatProvider implements ChatProvider {
       : undefined;
 
     const ccTemperature = req.inference?.temperature;
+    const ccThinkingConfig = resolveGeminiThinkingConfig(this.model, req);
+    const generationConfig = {
+      ...(typeof ccTemperature === 'number' ? { temperature: ccTemperature } : {}),
+      ...(ccThinkingConfig ? { thinkingConfig: ccThinkingConfig } : {}),
+    };
     const request = {
       contents,
       systemInstruction: req.system ? { parts: [{ text: req.system }] } : undefined,
       tools,
-      ...(typeof ccTemperature === 'number'
-        ? { generationConfig: { temperature: ccTemperature } }
+      ...(Object.keys(generationConfig).length > 0
+        ? { generationConfig }
         : {}),
     };
 
@@ -227,7 +231,9 @@ export class GeminiChatProvider implements ChatProvider {
         request,
         req.signal,
         cc.sessionId,
-        req.thinking,
+        // The model-specific config is already present in generationConfig;
+        // do not let the legacy CloudCode boolean shim overwrite it.
+        undefined,
         1,
       )) {
         if (chunk.thought) {
@@ -463,13 +469,22 @@ function humanizeGeminiError(e: unknown, model: string): string {
       // fieldViolations is an unknown model id. Detect it via a known-good
       // prefix check — Gemini's current public models all start with
       // `gemini-1.5-`, `gemini-2.0-`, or `gemini-2.5-`.
-      const KNOWN_PREFIXES = ['gemini-1.5-', 'gemini-2.0-', 'gemini-2.5-', 'gemini-3-', 'gemini-3.1-', 'gemini-embedding'];
+      const KNOWN_PREFIXES = [
+        'gemini-1.5-',
+        'gemini-2.0-',
+        'gemini-2.5-',
+        'gemini-3-',
+        'gemini-3.1-',
+        'gemini-3.5-',
+        'gemini-3.6-',
+        'gemini-embedding',
+      ];
       const looksLikeUnknownModel = !KNOWN_PREFIXES.some((p) => model.startsWith(p));
       if (looksLikeUnknownModel) {
         return (
           `Gemini rejected model id "${model}" — this model does not exist in the Gemini API. ` +
-          `Valid public models include gemini-2.5-flash, gemini-2.5-pro, gemini-2.5-flash-lite, ` +
-          `gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash. ` +
+          `Valid public models include gemini-3.6-flash, gemini-3.5-flash, ` +
+          `gemini-3.1-pro, and gemini-3.1-flash-lite. ` +
           `If you expected it to exist, run "Refresh models" in the admin to pull the live list.`
         );
       }
@@ -513,6 +528,91 @@ function humanizeGeminiError(e: unknown, model: string): string {
   } catch {
     return raw;
   }
+}
+
+/**
+ * Translate the product's normalized effort/toggle into the model-specific
+ * Gemini API control. Gemini 3+ uses discrete thinkingLevel values; Gemini 2.5
+ * keeps the legacy token-budget contract.
+ */
+export function resolveGeminiThinkingConfig(
+  model: string,
+  req: Pick<ChatRequest, 'thinking' | 'thinkingBudgetTokens' | 'reasoningEffort'>,
+): ThinkingConfig | undefined {
+  const family = model.toLowerCase();
+  const requested = req.reasoningEffort?.trim().toLowerCase();
+  const wantsVisibleThoughts =
+    req.thinking === true || (requested != null && requested !== '' && requested !== 'none');
+
+  if (/^gemini-3(?:[.\-]|$)/.test(family)) {
+    const supported = gemini3SupportedLevels(family);
+    const level = normalizeGemini3Level(requested, supported)
+      ?? (req.thinking === false ? supported[0] : null);
+    if (!level && req.thinking === undefined) return undefined;
+    return {
+      includeThoughts: wantsVisibleThoughts,
+      ...(level ? { thinkingLevel: level } : {}),
+    };
+  }
+
+  if (/^gemini-2\.5-/.test(family)) {
+    const isPro = family.includes('pro');
+    const maxBudget = isPro ? 32_768 : 24_576;
+    let thinkingBudget: number | undefined;
+    if (typeof req.thinkingBudgetTokens === 'number' && req.thinkingBudgetTokens >= 0) {
+      thinkingBudget = Math.min(req.thinkingBudgetTokens, maxBudget);
+    } else if (requested) {
+      thinkingBudget = gemini25Budget(requested, maxBudget, isPro);
+    } else if (req.thinking === true) {
+      thinkingBudget = DEFAULT_THINKING_MODE;
+    } else if (req.thinking === false && !isPro) {
+      thinkingBudget = 0;
+    }
+    if (thinkingBudget === undefined) return undefined;
+    return { includeThoughts: wantsVisibleThoughts, thinkingBudget };
+  }
+
+  return req.thinking === true
+    ? { includeThoughts: true, thinkingBudget: DEFAULT_THINKING_MODE }
+    : undefined;
+}
+
+function gemini3SupportedLevels(model: string): ThinkingLevel[] {
+  if (model.includes('3.1-pro')) {
+    return [ThinkingLevel.LOW, ThinkingLevel.MEDIUM, ThinkingLevel.HIGH];
+  }
+  return [
+    ThinkingLevel.MINIMAL,
+    ThinkingLevel.LOW,
+    ThinkingLevel.MEDIUM,
+    ThinkingLevel.HIGH,
+  ];
+}
+
+function normalizeGemini3Level(
+  value: string | undefined,
+  supported: readonly ThinkingLevel[],
+): ThinkingLevel | null {
+  const mapped =
+    value === 'none' || value === 'minimal'
+      ? ThinkingLevel.MINIMAL
+      : value === 'low'
+        ? ThinkingLevel.LOW
+        : value === 'medium'
+          ? ThinkingLevel.MEDIUM
+          : value === 'high' || value === 'xhigh' || value === 'max' || value === 'ultra'
+            ? ThinkingLevel.HIGH
+            : null;
+  if (!mapped) return null;
+  return supported.includes(mapped) ? mapped : supported[0] ?? null;
+}
+
+function gemini25Budget(value: string, maxBudget: number, isPro: boolean): number {
+  if (value === 'none') return isPro ? 128 : 0;
+  if (value === 'minimal') return 512;
+  if (value === 'low') return 2_048;
+  if (value === 'medium') return 8_192;
+  return maxBudget;
 }
 
 /**

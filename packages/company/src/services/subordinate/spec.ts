@@ -18,10 +18,10 @@ export interface SpawnSubordinateSpec {
   /** Origin of this fresh run, persisted for runtime provenance. */
   dispatchSource?: RoleDispatchSource;
   /**
-   * Project id to run the subordinate in. Optional when the role has a
-   * single-project binding (`CompanyRoleConfig.projectIds.length === 1`):
-   * in that case the spawn auto-resolves to that project id. Required
-   * otherwise, and enforced against the role's `projectIds` (if any).
+   * Primary project for native file/shell tools. Optional for every bound
+   * role: the first configured project becomes primary and the subordinate
+   * retains access to the role's complete `projectIds` scope. Required only
+   * for roles with no project binding.
    */
   projectId?: number;
   provider?: string;
@@ -119,12 +119,7 @@ export function resolveSpawnProjectBinding(args: {
     }
     return specProjectId;
   }
-  if (typeof specProjectId !== 'number') {
-    throw new Error(
-      `Role '${role}' is bound to multiple projects [${boundProjectIds.join(', ')}]. ` +
-        `Pass project_id to choose one.`,
-    );
-  }
+  if (typeof specProjectId !== 'number') return boundProjectIds[0];
   if (!boundProjectIds.includes(specProjectId)) {
     throw new Error(
       `Role '${role}' is bound to projects [${boundProjectIds.join(', ')}]; ` +
@@ -132,4 +127,23 @@ export function resolveSpawnProjectBinding(args: {
     );
   }
   return specProjectId;
+}
+
+/**
+ * Resolve both the primary root and the complete role authorization scope.
+ * Keeping this pair atomic prevents spawn/session/context persistence from
+ * silently collapsing a multi-project role back to one project.
+ */
+export function resolveSpawnProjectScope(args: {
+  role: string;
+  specProjectId: number | undefined;
+  boundProjectIds: number[];
+}): { projectId: number; projectIds: number[] } {
+  const projectId = resolveSpawnProjectBinding(args);
+  return {
+    projectId,
+    projectIds: args.boundProjectIds.length > 0
+      ? [...new Set([projectId, ...args.boundProjectIds])]
+      : [projectId],
+  };
 }

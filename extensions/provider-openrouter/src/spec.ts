@@ -209,10 +209,10 @@ export const openrouterSpec: ProviderSpec = {
   defaultModels: [
     '~openai/gpt-latest',
     'openrouter/auto',
-    'openai/gpt-4o-mini',
-    'anthropic/claude-sonnet-4.5',
-    'google/gemini-2.5-pro',
-    'deepseek/deepseek-chat',
+    'openai/gpt-5.6-sol',
+    'anthropic/claude-sonnet-5',
+    'google/gemini-3.6-flash',
+    'deepseek/deepseek-v4-flash',
   ],
   semantic: {
     embedding: {

@@ -11,13 +11,24 @@ export const openaiSpec: ProviderSpec = {
   visual: { icon: 'Brain', fg: 'text-emerald-500', bg: 'bg-emerald-500/15' },
   credKind: 'api-key',
   envVars: ['OPENAI_API_KEY'],
-  defaultModels: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'],
+  defaultBaseURL: 'https://api.openai.com/v1',
+  defaultModel: 'gpt-5.6-sol',
+  defaultModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
   pricing: {
+    'gpt-5.6-sol': { inputPer1M: 5.0, outputPer1M: 30.0 },
+    'gpt-5.6-terra': { inputPer1M: 2.0, outputPer1M: 12.0 },
+    'gpt-5.6-luna': { inputPer1M: 0.2, outputPer1M: 1.2 },
+    // Retain historical rows so persisted sessions keep accurate cost data.
     'gpt-4o-mini': { inputPer1M: 0.15, outputPer1M: 0.6 },
     'gpt-4o': { inputPer1M: 2.5, outputPer1M: 10.0 },
     'gpt-4-turbo': { inputPer1M: 10.0, outputPer1M: 30.0 },
   },
-  capabilities: { supportsVision: true, supportsImageGen: true, fileInput: 'native' },
+  capabilities: {
+    supportsThinking: true,
+    supportsVision: true,
+    supportsImageGen: true,
+    fileInput: 'native',
+  },
   semantic: {
     embedding: {
       protocol: 'openai-embeddings',
@@ -26,9 +37,44 @@ export const openaiSpec: ProviderSpec = {
     },
   },
   wire: 'openai-compat',
-  wireOpts: { summaryModelDefault: 'gpt-4o-mini' },
+  wireOpts: {
+    vendor: 'openai',
+    responsesApi: true,
+    responsesReasoningFromThinking: true,
+    responsesReasoningSummaryModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    summaryModelDefault: 'gpt-5.6-luna',
+  },
   discovery: { from: 'openai-models' },
   test: { from: 'openai-models', fallbackBaseURL: 'https://api.openai.com/v1' },
+  models: {
+    'gpt-5.6-sol': {
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      defaultReasoningLevel: 'medium',
+      applyPatchToolType: 'freeform',
+    },
+    'gpt-5.6-terra': {
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      defaultReasoningLevel: 'medium',
+      applyPatchToolType: 'freeform',
+    },
+    'gpt-5.6-luna': {
+      contextWindow: 1_050_000,
+      maxTokens: 128_000,
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: ['none', 'low', 'medium', 'high', 'xhigh', 'max'],
+      defaultReasoningLevel: 'medium',
+      applyPatchToolType: 'freeform',
+    },
+  },
 };
 
 export const deepseekSpec: ProviderSpec = {
@@ -38,8 +84,11 @@ export const deepseekSpec: ProviderSpec = {
   credKind: 'api-key',
   envVars: ['DEEPSEEK_API_KEY'],
   defaultBaseURL: 'https://api.deepseek.com/v1',
-  defaultModels: ['deepseek-chat', 'deepseek-reasoner'],
+  defaultModel: 'deepseek-v4-flash',
+  defaultModels: ['deepseek-v4-flash', 'deepseek-v4-pro'],
   pricing: {
+    'deepseek-v4-flash': { inputPer1M: 0.14, outputPer1M: 0.28 },
+    'deepseek-v4-pro': { inputPer1M: 0.435, outputPer1M: 0.87 },
     'deepseek-chat': { inputPer1M: 0.14, outputPer1M: 0.28 },
     'deepseek-reasoner': { inputPer1M: 0.55, outputPer1M: 2.19 },
   },
@@ -47,6 +96,22 @@ export const deepseekSpec: ProviderSpec = {
   wire: 'openai-compat',
   wireOpts: { vendor: 'deepseek' },
   discovery: { from: 'openai-models', modelsUrl: 'https://api.deepseek.com/models' },
+  models: {
+    'deepseek-v4-flash': {
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      canReason: true,
+      supportedReasoningLevels: ['high', 'max'],
+      defaultReasoningLevel: 'high',
+    },
+    'deepseek-v4-pro': {
+      contextWindow: 1_000_000,
+      maxTokens: 384_000,
+      canReason: true,
+      supportedReasoningLevels: ['high', 'max'],
+      defaultReasoningLevel: 'high',
+    },
+  },
 };
 
 const ZAI_GENERAL_URL = 'https://api.z.ai/api/paas/v4/';
@@ -131,17 +196,20 @@ export const cloudflareSpec: ProviderSpec = {
   credKind: 'api-key',
   envVars: ['CLOUDFLARE_API_TOKEN', 'CF_API_TOKEN'],
   defaultBaseURL: CF_BASE_URL_TEMPLATE,
+  defaultModel: '@cf/moonshotai/kimi-k2.7-code',
   defaultModels: [
+    '@cf/moonshotai/kimi-k2.7-code',
+    '@cf/zai-org/glm-5.2',
+    '@cf/openai/gpt-oss-120b',
     '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-    '@cf/meta/llama-3.1-8b-instruct-fp8',
     '@cf/google/gemma-4-26b-a4b-it',
     '@cf/zai-org/glm-4.7-flash',
-    '@cf/moonshotai/kimi-k2.6',
-    '@cf/mistral/mistral-7b-instruct-v0.1',
     '@cf/baai/bge-m3',
     '@cf/qwen/qwen3-embedding-0.6b',
   ],
   pricing: {
+    '@cf/moonshotai/kimi-k2.7-code': { inputPer1M: 0.95, outputPer1M: 4.0 },
+    '@cf/zai-org/glm-5.2': { inputPer1M: 1.4, outputPer1M: 4.4 },
     '@cf/meta/llama-3.3-70b-instruct-fp8-fast': { inputPer1M: 0.293, outputPer1M: 2.253 },
     '@cf/meta/llama-3.1-70b-instruct-fp8-fast': { inputPer1M: 0.293, outputPer1M: 2.253 },
     '@cf/meta/llama-3.1-8b-instruct-fp8': { inputPer1M: 0.152, outputPer1M: 0.287 },
@@ -214,6 +282,23 @@ export const cloudflareSpec: ProviderSpec = {
       },
     ],
   },
+  models: {
+    '@cf/moonshotai/kimi-k2.7-code': {
+      contextWindow: 262_144,
+      canReason: true,
+      supportsAttachments: true,
+      supportedReasoningLevels: null,
+      defaultReasoningLevel: null,
+      inputModalities: ['text', 'image'],
+    },
+    '@cf/zai-org/glm-5.2': {
+      contextWindow: 262_144,
+      canReason: true,
+      supportedReasoningLevels: null,
+      defaultReasoningLevel: null,
+      inputModalities: ['text'],
+    },
+  },
 };
 
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
@@ -228,10 +313,10 @@ export const openrouterSpec: ProviderSpec = {
   defaultModels: [
     '~openai/gpt-latest',
     'openrouter/auto',
-    'openai/gpt-4o-mini',
-    'anthropic/claude-sonnet-4.5',
-    'google/gemini-2.5-pro',
-    'deepseek/deepseek-chat',
+    'openai/gpt-5.6-sol',
+    'anthropic/claude-sonnet-5',
+    'google/gemini-3.6-flash',
+    'deepseek/deepseek-v4-flash',
   ],
   semantic: {
     embedding: {
@@ -301,14 +386,10 @@ export const openrouterSpec: ProviderSpec = {
 };
 
 /**
- * Sakana AI Fugu — a multi-agent frontier model exposed over the OpenAI API
- * (https://api.sakana.ai/v1, chat/completions + /models). Its one distinctive
- * control is reasoning effort: Chat Completions takes the STRING field
- * `reasoning_effort` with `high`/`xhigh`/`max` (xhigh==max aliases; server
- * default xhigh) — forwarded per-request by the `vendor:'fugu'` branch in the
- * openai-compat adapter. The bare `/models` endpoint returns only ids, so the
- * reasoning levels + context window are declared as DATA via `models` (gap-filled
- * onto the live discovery result by `discoverOpenAIModels`).
+ * Sakana AI Fugu — a stateless OpenAI-compatible Responses provider. Sakana
+ * recommends Responses for reasoning + tool-call management. The bare /models
+ * endpoint returns only ids, so the documented reasoning levels, 1M context and
+ * freeform apply_patch support are gap-filled from this declarative catalog.
  */
 export const fuguSpec: ProviderSpec = {
   kind: 'fugu',
@@ -317,35 +398,87 @@ export const fuguSpec: ProviderSpec = {
   credKind: 'api-key',
   envVars: ['FUGU_API_KEY'],
   defaultBaseURL: 'https://api.sakana.ai/v1',
-  defaultModels: ['fugu', 'fugu-ultra', 'fugu-ultra-20260615'],
+  defaultModels: [
+    'fugu',
+    'fugu-ultra',
+    'fugu-ultra-v1.1',
+    'fugu-ultra-v1.0',
+    'fugu-ultra-20260615',
+    'fugu-cyber',
+    'fugu-cyber-v1.0',
+  ],
   defaultModel: 'fugu',
   pricing: {
-    // fugu-ultra: $5/1M in, $30/1M out (flat tier; the >272K-context and cached
-    // tiers aren't representable in PricingEntry). Base `fugu` bills at the
-    // underlying model's standard rate — no fixed public number, so omitted.
+    // Standard tier only: >272K and cached-input prices are not representable
+    // in PricingEntry. Base `fugu` has route-dependent pricing, so it is omitted.
     'fugu-ultra': { inputPer1M: 5.0, outputPer1M: 30.0 },
+    'fugu-ultra-v1.1': { inputPer1M: 5.0, outputPer1M: 30.0 },
+    'fugu-ultra-v1.0': { inputPer1M: 5.0, outputPer1M: 30.0 },
     'fugu-ultra-20260615': { inputPer1M: 5.0, outputPer1M: 30.0 },
+    'fugu-cyber': { inputPer1M: 6.0, outputPer1M: 36.0 },
+    'fugu-cyber-v1.0': { inputPer1M: 6.0, outputPer1M: 36.0 },
   },
-  capabilities: { supportsThinking: true, supportsVision: true },
+  capabilities: { supportsThinking: false, supportsVision: true },
   wire: 'openai-compat',
-  wireOpts: { vendor: 'fugu', summaryModelDefault: 'fugu' },
+  wireOpts: {
+    vendor: 'fugu',
+    responsesApi: true,
+    responsesStateless: true,
+    responsesReasoningSummaryModels: [
+      'fugu-ultra',
+      'fugu-ultra-v1.1',
+      'fugu-ultra-v1.0',
+      'fugu-ultra-20260615',
+      'fugu-cyber',
+      'fugu-cyber-v1.0',
+    ],
+    responsesIncludeOrchestrationUsage: true,
+    summaryModelDefault: 'fugu',
+  },
   discovery: { from: 'openai-models' },
   test: { from: 'openai-models', fallbackBaseURL: 'https://api.sakana.ai/v1' },
   models: {
     fugu: {
-      supportedReasoningLevels: ['high', 'xhigh', 'max'],
-      defaultReasoningLevel: 'xhigh',
-      contextWindow: 272_000,
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'high',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
     },
     'fugu-ultra': {
       supportedReasoningLevels: ['high', 'xhigh', 'max'],
       defaultReasoningLevel: 'xhigh',
-      contextWindow: 272_000,
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
     },
-    'fugu-ultra-20260615': {
+    'fugu-ultra-v1.1': {
       supportedReasoningLevels: ['high', 'xhigh', 'max'],
       defaultReasoningLevel: 'xhigh',
-      contextWindow: 272_000,
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
+    },
+    'fugu-ultra-v1.0': {
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'xhigh',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
+    },
+    'fugu-ultra-20260615': {
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'xhigh',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
+    },
+    'fugu-cyber': {
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'high',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
+    },
+    'fugu-cyber-v1.0': {
+      supportedReasoningLevels: ['high', 'xhigh'],
+      defaultReasoningLevel: 'high',
+      contextWindow: 1_000_000,
+      applyPatchToolType: 'freeform',
     },
   },
 };
@@ -363,15 +496,29 @@ export const mistralSpec: ProviderSpec = {
   credKind: 'api-key',
   envVars: ['MISTRAL_API_KEY', 'CODESTRAL_API_KEY'],
   defaultBaseURL: 'https://api.mistral.ai/v1',
-  defaultModels: ['codestral-latest', 'mistral-small-latest'],
+  defaultModel: 'mistral-small-latest',
+  defaultModels: ['mistral-small-latest', 'mistral-medium-3-5', 'codestral-latest'],
   pricing: {
     'codestral-latest': { inputPer1M: 0.3, outputPer1M: 0.9 },
     'mistral-small-latest': { inputPer1M: 0.1, outputPer1M: 0.3 },
   },
+  capabilities: { supportsThinking: true },
   wire: 'openai-compat',
-  wireOpts: {},
+  wireOpts: { vendor: 'mistral' },
   discovery: { from: 'openai-models', requiredCapabilities: ['completion_chat'] },
   test: { from: 'openai-models', fallbackBaseURL: 'https://api.mistral.ai/v1' },
+  models: {
+    'mistral-small-latest': {
+      canReason: true,
+      supportedReasoningLevels: ['none', 'high'],
+      defaultReasoningLevel: 'none',
+    },
+    'mistral-medium-3-5': {
+      canReason: true,
+      supportedReasoningLevels: ['none', 'high'],
+      defaultReasoningLevel: 'none',
+    },
+  },
 };
 
 export const OPENAI_COMPAT_SPECS: ProviderSpec[] = [

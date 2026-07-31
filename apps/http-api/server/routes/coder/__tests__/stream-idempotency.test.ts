@@ -107,6 +107,11 @@ function setup(
   let preflightSeedJson = opts.preflightSeedJson ?? null;
   const preflightSeedWrites: Array<string | null> = [];
   const taskPreflightRun = opts.taskPreflightRun ?? vi.fn(async () => ({ status: 'unconfigured' }));
+  const ensureFresh = vi.fn();
+  const ensureStructuralReady = vi.fn(opts.ensureStructuralReady ?? (async () => ({
+    status: 'ready' as const,
+    phase: 'structural_ready' as const,
+  })));
   const sessionStore = {
     getSession: (id: SessionId) => ({
       id,
@@ -157,11 +162,8 @@ function setup(
         : ({ id: projectId, name: 'Fake project', root_path: 'D:/fake' }),
     },
     projectIndexService: {
-      ensureFresh: () => {},
-      ensureStructuralReady: opts.ensureStructuralReady ?? (async () => ({
-        status: 'ready' as const,
-        phase: 'structural_ready' as const,
-      })),
+      ensureFresh,
+      ensureStructuralReady,
     },
     semanticCoordinator: {
       acquireCodeProjectLease: () => () => {},
@@ -262,6 +264,8 @@ function setup(
     inputCalls,
     preflightSeedWrites,
     taskPreflightRun,
+    ensureFresh,
+    ensureStructuralReady,
     consumeTransitionCalls,
     acceptCalls,
     controlPlaneCommands,
@@ -347,23 +351,24 @@ describe('POST /messages idempotency', () => {
     );
   });
 
-  it('rejects a concurrent payload conflict before indexing or run side effects', async () => {
-    let releaseIndex!: () => void;
-    const indexGate = new Promise<void>((resolve) => { releaseIndex = resolve; });
-    const ensureStructuralReady = vi.fn(async () => {
-      await indexGate;
-      return { status: 'ready' as const, phase: 'structural_ready' as const };
+  it('rejects a concurrent payload conflict before duplicate preflight or run side effects', async () => {
+    vi.stubEnv('CODER_PREFLIGHT', '1');
+    let releasePreflight!: () => void;
+    const preflightGate = new Promise<void>((resolve) => { releasePreflight = resolve; });
+    const taskPreflightRun = vi.fn(async () => {
+      await preflightGate;
+      return { status: 'unconfigured' as const };
     });
     const h = setup(new RecentMessageKeys(), {
       projectFresh: true,
-      ensureStructuralReady,
+      taskPreflightRun,
     });
 
     const owner = h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'payload-a',
       client_msg_id: 'same-key',
     });
-    await vi.waitFor(() => expect(ensureStructuralReady).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(taskPreflightRun).toHaveBeenCalledTimes(1));
     const conflict = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, {
       content: 'payload-b',
       client_msg_id: 'same-key',
@@ -374,17 +379,18 @@ describe('POST /messages idempotency', () => {
     expect(h.acceptCalls).toHaveLength(1);
     expect(h.appendCalls).toHaveLength(0);
     expect(poolMock.runFresh).not.toHaveBeenCalled();
-    releaseIndex();
+    releasePreflight();
     expect((await owner).status).toBe(200);
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
   });
 
   it('keeps 32 pre-bus owners authoritative across waiter TTL and rejects capacity before durable accept', async () => {
-    let releaseIndex!: () => void;
-    const indexGate = new Promise<void>((resolve) => { releaseIndex = resolve; });
-    const ensureStructuralReady = vi.fn(async () => {
-      await indexGate;
-      return { status: 'ready' as const, phase: 'structural_ready' as const };
+    vi.stubEnv('CODER_PREFLIGHT', '1');
+    let releasePreflight!: () => void;
+    const preflightGate = new Promise<void>((resolve) => { releasePreflight = resolve; });
+    const taskPreflightRun = vi.fn(async () => {
+      await preflightGate;
+      return { status: 'unconfigured' as const };
     });
     const keys = new RecentMessageKeys({
       ttlMs: 60_000,
@@ -393,7 +399,7 @@ describe('POST /messages idempotency', () => {
     });
     const h = setup(keys, {
       projectFresh: true,
-      ensureStructuralReady,
+      taskPreflightRun,
     });
 
     const owners = Array.from({ length: 32 }, (_, index) =>
@@ -403,7 +409,7 @@ describe('POST /messages idempotency', () => {
       }),
     );
     await vi.waitFor(
-      () => expect(ensureStructuralReady).toHaveBeenCalledTimes(32),
+      () => expect(taskPreflightRun).toHaveBeenCalledTimes(32),
       { timeout: 3_000 },
     );
     expect(h.controlPlaneCommands.size).toBe(32);
@@ -437,7 +443,7 @@ describe('POST /messages idempotency', () => {
     expect(firstCommand?.reasonCode).toBeUndefined();
     expect(h.acceptCalls).toHaveLength(32);
 
-    releaseIndex();
+    releasePreflight();
     await Promise.all(owners);
   });
 
@@ -649,31 +655,20 @@ describe('POST /messages idempotency', () => {
     })]);
   });
 
-  it('does not start a fresh normal runner before structural indexing is ready', async () => {
-    let release!: (value: { status: 'ready'; phase: 'structural_ready' }) => void;
-    const gate = vi.fn(() => new Promise<{ status: 'ready'; phase: 'structural_ready' }>((resolve) => {
-      release = resolve;
-    }));
+  it('starts a fresh normal runner while structural indexing continues in the background', async () => {
+    const gate = vi.fn(() => new Promise<{
+      status: 'ready';
+      phase: 'structural_ready';
+    }>(() => {}));
     const h = setup(new RecentMessageKeys(), { projectFresh: true, ensureStructuralReady: gate });
 
-    const pending = h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'inspect project' });
-    await vi.waitFor(() => expect(gate).toHaveBeenCalledTimes(1));
-    expect(poolMock.runFresh).not.toHaveBeenCalled();
-
-    release({ status: 'ready', phase: 'structural_ready' });
-    const response = await pending;
+    const response = await h.post(
+      `/api/coder/sessions/${SESSION_ID}/messages`,
+      { content: 'inspect project' },
+    );
     expect(response.status).toBe(200);
-    await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
-  });
-
-  it('starts the same session in degraded mode when the structural gate times out', async () => {
-    const h = setup(new RecentMessageKeys(), {
-      projectFresh: true,
-      ensureStructuralReady: async () => ({ status: 'timeout', phase: 'scanning' }),
-    });
-
-    const response = await h.post(`/api/coder/sessions/${SESSION_ID}/messages`, { content: 'inspect project' });
-    expect(response.status).toBe(200);
+    expect(h.ensureFresh).toHaveBeenCalledWith(99, 'session');
+    expect(gate).not.toHaveBeenCalled();
     await vi.waitFor(() => expect(poolMock.runFresh).toHaveBeenCalledTimes(1));
   });
 

@@ -27,4 +27,17 @@ describe('ReviewingNode', () => {
     expect(event.kind).toBe('CleanFinish');
     expect(ctx.stopReason).toBe('completed');
   });
+
+  it('treats MaxTurnsReached as terminal instead of re-entering Executing', async () => {
+    const { ctx } = makeTestContext();
+    ctx.messages = [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }];
+
+    const event = await new ReviewingNode().execute(ctx, {
+      kind: 'MaxTurnsReached',
+      autoContinueLeft: 0,
+    });
+
+    expect(event.kind).toBe('CleanFinish');
+    expect(ctx.stopReason).toBe('max_turns');
+  });
 });

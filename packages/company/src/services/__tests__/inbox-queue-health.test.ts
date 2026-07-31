@@ -42,6 +42,7 @@ function makeRun(
 ): CompanyAgentRunFileRow {
   return {
     id: over.id,
+    seq: over.seq ?? 1,
     company_session_id: COMPANY_SESSION_ID,
     role: over.role,
     coder_session_id: over.coder_session_id ?? coderSessionId(1),

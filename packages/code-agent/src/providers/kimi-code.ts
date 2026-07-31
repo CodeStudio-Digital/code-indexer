@@ -28,7 +28,7 @@ export class KimiCodeChatProvider implements ChatProvider {
     defaultHeaders?: Record<string, string>;
     thinkingMode?: KimiCodeThinkingMode;
   }) {
-    this.model = opts.model ?? 'kimi-k2.6';
+    this.model = opts.model ?? 'kimi-for-coding';
     this.thinkingMode = opts.thinkingMode ?? 'auto';
     this.client = new OpenAI({
       apiKey: opts.apiKey,
@@ -59,7 +59,11 @@ export class KimiCodeChatProvider implements ChatProvider {
       ...(req.sessionId != null ? { prompt_cache_key: `coder-session-${req.sessionId}` } : {}),
     };
 
-    const effectiveThinking = resolveEffectiveThinking(this.model, req.thinking, this.thinkingMode);
+    const effectiveThinking = resolveEffectiveThinking(
+      this.model,
+      req.reasoningEffort === 'none' ? false : req.thinking,
+      this.thinkingMode,
+    );
     // K3 is calibrated for temperature=1 and must not inherit a sticky
     // user/session override. Keep this at the wire boundary so every caller
     // (individual chat, Company roles, subagents, and summaries) agrees.
@@ -75,11 +79,11 @@ export class KimiCodeChatProvider implements ChatProvider {
       params.thinking = thinking;
     }
 
-    // K3 exposes discrete reasoning intensity through the OpenAI-compatible
-    // `reasoning_effort` string. Omitting it keeps Kimi's server-side `max`
-    // default; older Kimi models only understand the boolean `thinking` shape.
-    if (isKimiK3Model(this.model) && req.reasoningEffort) {
-      params.reasoning_effort = req.reasoningEffort;
+    // K3 exposes low/high/max. Map the product-wide superset at this boundary;
+    // omission keeps Kimi's documented server-side default (`high`).
+    const k3Effort = normalizeKimiK3ReasoningEffort(req.reasoningEffort);
+    if (isKimiK3Model(this.model) && effectiveThinking !== false && k3Effort) {
+      params.reasoning_effort = k3Effort;
     }
 
     if (kimiDebugEnabled()) {
@@ -245,7 +249,7 @@ function isAlwaysThinkingModel(model: string): boolean {
 }
 
 function isKimiK3Model(model: string): boolean {
-  return /^k3$/i.test(model);
+  return /^k3(?:-|$)/i.test(model);
 }
 
 function resolveEffectiveThinking(
@@ -265,7 +269,18 @@ function resolveEffectiveThinking(
 }
 
 export function shouldOmitKimiTemperature(model: string, thinking?: boolean): boolean {
-  return thinking === true || isAlwaysThinkingModel(model) || /^kimi-k2\.(5|6)/i.test(model);
+  return thinking === true
+    || isAlwaysThinkingModel(model)
+    || /^kimi-k2\.(5|6)/i.test(model);
+}
+
+export function normalizeKimiK3ReasoningEffort(
+  effort: ChatRequest['reasoningEffort'],
+): 'low' | 'high' | 'max' | undefined {
+  if (!effort || effort === 'none') return undefined;
+  if (effort === 'minimal' || effort === 'low') return 'low';
+  if (effort === 'medium' || effort === 'high') return 'high';
+  return 'max';
 }
 
 function kimiThinkingConfig(

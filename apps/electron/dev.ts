@@ -1,7 +1,8 @@
 /**
  * Dev launcher — spawns Electron pointing at the Vite dev server.
- * Main process runs via `tsx`, no build step. The dashboard's Vite
- * server should already be running on :7317 (npm run dev:dashboard).
+ * Main process runs via `tsx`, no build step. This launcher owns both the
+ * dashboard's Vite process and Electron so closing either side cannot leave
+ * the other (or its grandchildren) orphaned.
  *
  * Preload pre-build: Electron's preload script runs in a sandbox-like
  * context BEFORE any Node loader registers, so `tsx`/ESM imports never
@@ -26,10 +27,13 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { buildSync } from 'esbuild';
 import { brandDevBinary } from './brand-dev-binary.js';
+import { DevChildLifecycle } from './src/dev-child-lifecycle.js';
 import { waitForDevServer } from './src/wait-for-dev-server.js';
+import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const repoRoot = path.resolve(__dirname, '../..');
 const nodeRequire = createRequire(import.meta.url);
 
 // 1) Bundle preload.ts → preload.cjs. Synchronous so the spawn below
@@ -71,22 +75,71 @@ const configuredWaitMs = Number(process.env.MCP_ELECTRON_DEV_WAIT_MS ?? 120_000)
 const dashboardWaitMs = Number.isFinite(configuredWaitMs) && configuredWaitMs >= 0
   ? configuredWaitMs
   : 120_000;
+const manageDashboard =
+  process.env.MCP_ELECTRON_DEV_MANAGE_DASHBOARD !== '0';
 
 // 3) On Windows, stamp the prebuilt electron.exe so Task Manager shows
 //    "CodeStudio" instead of "Electron" (idempotent + fail-open). Must run
 //    before the spawn below, otherwise the launched process locks the binary.
 await brandDevBinary(electronBin);
 
-// Vite and this launcher are sibling processes under `concurrently`; being
-// spawned first does not mean the renderer socket is accepting connections.
+// Start Vite as a DIRECT child. `concurrently` used to own an npm wrapper and,
+// on Windows, closing Electron could leave the wrapper's vite/esbuild
+// descendants alive. Set MCP_ELECTRON_DEV_MANAGE_DASHBOARD=0 only when an
+// independently managed renderer server is intentional.
+let dashboardChild: ReturnType<typeof spawn> | null = null;
+if (manageDashboard) {
+  const vitePackage = nodeRequire.resolve('vite/package.json');
+  const viteCli = path.join(path.dirname(vitePackage), 'bin', 'vite.js');
+  dashboardChild = spawn(process.execPath, [viteCli, 'dev', 'apps/dashboard'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: process.env,
+    detached: process.platform !== 'win32',
+  });
+}
+
 // Wait for the exact URL Electron will load so a slow cold start cannot abort
-// the entire main-process bootstrap with ERR_CONNECTION_REFUSED.
+// the entire main-process bootstrap with ERR_CONNECTION_REFUSED. If our Vite
+// child exits before readiness, fail immediately instead of waiting 120 s.
 console.log(`[electron] waiting for dashboard at ${dashboardUrl}`);
-await waitForDevServer(dashboardUrl, { timeoutMs: dashboardWaitMs });
+let earlyDashboardExit:
+  | ((code: number | null, signal: NodeJS.Signals | null) => void)
+  | null = null;
+const dashboardExitedBeforeReady = dashboardChild
+  ? new Promise<never>((_, reject) => {
+      earlyDashboardExit = (code, signal) => {
+        reject(
+          new Error(
+            `Dashboard Vite exited before readiness (code=${String(code)}, signal=${String(signal)})`,
+          ),
+        );
+      };
+      dashboardChild?.once('exit', earlyDashboardExit);
+    })
+  : null;
+try {
+  await (
+    dashboardExitedBeforeReady
+      ? Promise.race([
+          waitForDevServer(dashboardUrl, { timeoutMs: dashboardWaitMs }),
+          dashboardExitedBeforeReady,
+        ])
+      : waitForDevServer(dashboardUrl, { timeoutMs: dashboardWaitMs })
+  );
+} catch (error) {
+  await killProcessTree(dashboardChild?.pid, 'SIGKILL');
+  throw error;
+} finally {
+  if (dashboardChild && earlyDashboardExit) {
+    dashboardChild.off('exit', earlyDashboardExit);
+  }
+}
 console.log(`[electron] dashboard ready at ${dashboardUrl}`);
 
 const child = spawn(electronBin, [path.join(__dirname, 'main.ts')], {
   stdio: 'inherit',
+  detached: process.platform !== 'win32',
   env: {
     ...process.env,
     MCP_ELECTRON_DEV_URL: dashboardUrl,
@@ -101,4 +154,28 @@ const child = spawn(electronBin, [path.join(__dirname, 'main.ts')], {
   },
 });
 
-child.on('exit', (code) => process.exit(code ?? 0));
+const lifecycle = new DevChildLifecycle({
+  electronPid: child.pid,
+  dashboardPid: dashboardChild?.pid,
+});
+
+child.once('exit', (code) => {
+  void lifecycle.electronExited(code).then((exitCode) => {
+    if (exitCode != null) process.exit(exitCode);
+  });
+});
+
+dashboardChild?.once('exit', (code) => {
+  void lifecycle.dashboardExited(code).then((exitCode) => {
+    if (exitCode != null) process.exit(exitCode);
+  });
+});
+
+const terminate = (signal: 'SIGINT' | 'SIGTERM'): void => {
+  void lifecycle.signalReceived(signal).then((exitCode) => {
+    if (exitCode != null) process.exit(exitCode);
+  });
+};
+process.once('SIGINT', () => terminate('SIGINT'));
+process.once('SIGTERM', () => terminate('SIGTERM'));
+process.once('exit', () => lifecycle.forceCleanup());

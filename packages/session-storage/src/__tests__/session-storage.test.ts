@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile, readdir, rm, stat, utimes, writeFile } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdtempSync } from 'node:fs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ArtifactRecoveryCorruptionError,
   ArtifactStore,
@@ -269,6 +269,58 @@ describe('filesystem session bundle', () => {
       code: 'ENOENT',
     });
     catalog.close();
+  });
+
+  it('refreshes a catalog projection after another writer updates the bundle', async () => {
+    const { repository, locator } = await fixture();
+    const created = await repository.createSession({
+      kind: 'coder',
+      scope: { kind: 'project', project_id: 1 },
+    });
+    const catalog = new SessionCatalog({ locator, repository });
+    await catalog.refresh();
+    expect(catalog.get(created.session.id)?.state?.status).toBe('idle');
+
+    const workerRepository = new FileSessionRepository({
+      locator,
+      writerOwnerId: 'coder-worker:test-refresh',
+    });
+    try {
+      await workerRepository.updateState(created.location, (state) => ({
+        ...state,
+        status: 'updated-by-worker',
+      }));
+      await workerRepository.closeSession(created.location);
+
+      expect(catalog.get(created.session.id)?.state?.status).toBe('idle');
+      repository.refreshSessionProjection(created.location);
+      expect(catalog.get(created.session.id)?.state?.status).toBe(
+        'updated-by-worker',
+      );
+    } finally {
+      catalog.close();
+      await workerRepository.close();
+    }
+  });
+
+  it('shares one initial catalog scan across concurrent consumers', async () => {
+    const { locator, repository } = await fixture();
+    const catalog = new SessionCatalog({ locator, repository });
+    const rootsScan = vi.spyOn(locator, 'allKnownSessionRoots');
+    try {
+      await Promise.all([
+        catalog.ensureReady(),
+        catalog.ensureReady(),
+        catalog.ensureReady(),
+      ]);
+      await catalog.ensureReady();
+      expect(rootsScan).toHaveBeenCalledTimes(1);
+
+      await catalog.refresh();
+      expect(rootsScan).toHaveBeenCalledTimes(2);
+    } finally {
+      catalog.close();
+    }
   });
 
   it('quarantines a duplicated session UUID across roots until a full refresh resolves it', async () => {

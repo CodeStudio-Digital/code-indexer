@@ -164,6 +164,22 @@ export function readConversationSync(conversationPath: string): readonly Convers
   return parseConversationBytes(readFileSync(conversationPath)).records;
 }
 
+/**
+ * Read committed conversation records without blocking the host event loop.
+ * Unlike recovery this is read-only: an incomplete crash suffix is ignored but
+ * never truncated by an ordinary query.
+ */
+export async function readConversation(
+  conversationPath: string,
+): Promise<readonly ConversationCommit[]> {
+  try {
+    return parseConversationBytes(await readFile(conversationPath)).records;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
 export async function recoverConversation(conversationPath: string): Promise<readonly ConversationCommit[]> {
   let bytes: Buffer;
   try {

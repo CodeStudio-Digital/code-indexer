@@ -1,9 +1,11 @@
 import { minimatch } from 'minimatch';
 import { glob as fastGlob } from 'glob';
+import { readFileSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { defineTool, mcpAccess, type McpSourceTruncation, type McpTool, type McpToolResult } from '../tool.js';
 import { grepInFiles } from '@mcp/services/services/code-reader.js';
 import { buildContentMatchQuery } from '@mcp/indexer/search/content-grep.js';
-import type { SearchMode, SearchType } from '@mcp/shared/types.js';
+import type { HybridSearchResult, SearchMode, SearchType } from '@mcp/shared/types.js';
 import { withProject } from './_helpers.js';
 import { renderDegradedTrailer, renderZeroResultDiagnostics } from './search-diagnostics.js';
 import { assignWorkspaceSlugs } from '@mcp/shared/utils/workspace-slug.js';
@@ -99,11 +101,40 @@ function grepResult(text: string, sourceTruncations: McpSourceTruncation[]): Mcp
   return sourceTruncations.length > 0 ? { text, sourceTruncations } : text;
 }
 
+function searchEvidence(result: HybridSearchResult): string {
+  const fts = result.fts_rank === null ? null : `FTS #${result.fts_rank}`;
+  const vector = result.vector_score === null
+    ? null
+    : `vector ${result.vector_score.toFixed(3)}`;
+  if (fts && vector) return `hybrid · ${vector} · ${fts}`;
+  return vector ?? fts ?? `rank score ${result.score.toPrecision(3)}`;
+}
+
+export function smallSemanticFilePreview(
+  projectRoot: string,
+  filePath: string,
+  lineCount: number,
+  read: (path: string, encoding: BufferEncoding) => string = readFileSync,
+): string | null {
+  if (lineCount > 40) return null;
+  const root = resolve(projectRoot);
+  const absolute = resolve(root, filePath);
+  const rel = relative(root, absolute);
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
+  try {
+    const lines = read(absolute, 'utf-8').split(/\r?\n/).slice(0, 12);
+    const preview = lines.map((line, index) => `${index + 1}\t${line}`).join('\n').slice(0, 900);
+    return preview ? `Semantic preview (small file):\n${preview}` : null;
+  } catch {
+    return null;
+  }
+}
+
 const search = defineTool({
   name: 'search',
   tier: 'bootstrap',
   ...mcpAccess('read'),
-  description: 'Search files and symbols in a project (FTS + semantic). mode defaults to auto: the planner routes identifier-shaped queries to fast FTS and natural-language queries to hybrid.',
+  description: 'Hybrid code search. Ask a natural-language question with mode=auto to use vectors; use grep_code for exact identifiers or literals.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -172,16 +203,22 @@ const search = defineTool({
         pending_delta_items: generation?.delta_items ?? 0,
       }));
     }
+    let semanticPreviews = 0;
     const body = results.map(r => {
       const d = r.data as unknown as Record<string, unknown>;
       if (r.type === 'file') {
+        const preview = r.vector_score !== null && r.fts_rank === null && semanticPreviews < 3
+          ? smallSemanticFilePreview(project.root_path, String(d.path), Number(d.line_count))
+          : null;
+        if (preview) semanticPreviews++;
         return [
-          `## [file] ${d.path} (score: ${r.score.toFixed(3)})`,
+          `## [file] ${d.path} (${searchEvidence(r)})`,
           `Language: ${d.language} | Lines: ${d.line_count}`,
+          preview,
         ].filter(Boolean).join('\n');
       }
       return [
-        `## [symbol] ${d.name} (${d.kind}) — score: ${r.score.toFixed(3)}`,
+        `## [symbol] ${d.name} (${d.kind}) — ${searchEvidence(r)}`,
         `File: ${d.file_path}:${d.line ?? '?'}`,
         `Signature: ${d.signature ?? ''}`,
         d.comment ? `Description: ${d.comment}` : '',

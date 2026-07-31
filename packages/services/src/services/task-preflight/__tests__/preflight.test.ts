@@ -21,6 +21,9 @@ import {
 
 const CATALOG = [
   { name: 'read_file', tier: 'bootstrap', description: 'Read file contents' },
+  { name: 'mcp__read_file', tier: 'bootstrap', description: 'Read indexed file contents' },
+  { name: 'mcp__get_symbol_body', tier: 'navigate', description: 'Read one symbol' },
+  { name: 'mcp__get_file_skeleton', tier: 'navigate', description: 'Outline a large file' },
   { name: 'edit_file', tier: 'navigate', description: 'Find/replace edit' },
   { name: 'mcp__search', tier: 'bootstrap', description: 'Hybrid search' },
   { name: 'git_commit', tier: 'admin' },
@@ -128,6 +131,44 @@ describe('parsePreflightOutput', () => {
     });
     const seed = parsePreflightOutput(raw, PARSE_CTX);
     expect(seed?.pinTools).toEqual(['read_file', 'edit_file', 'mcp__search']);
+  });
+
+  it('coalesces overlapping code-read routes before applying the pin cap', () => {
+    const raw = JSON.stringify({
+      tools: [
+        'mcp__search',
+        'mcp__get_file_skeleton',
+        'mcp__get_symbol_body',
+        'mcp__read_file',
+        'edit_file',
+      ],
+    });
+    const seed = parsePreflightOutput(raw, PARSE_CTX);
+    expect(seed?.pinTools).toEqual(['mcp__search', 'mcp__read_file', 'edit_file']);
+  });
+
+  it('does not pin a broad repo map alongside targeted search', () => {
+    const ctx = {
+      ...PARSE_CTX,
+      toolNames: new Set([...PARSE_CTX.toolNames, 'mcp__get_repo_map', 'mcp__get_project_overview']),
+    };
+    const raw = JSON.stringify({
+      tools: ['mcp__get_repo_map', 'mcp__search', 'mcp__get_project_overview', 'mcp__read_file'],
+    });
+    expect(parsePreflightOutput(raw, ctx)?.pinTools).toEqual(['mcp__search', 'mcp__read_file']);
+  });
+
+  it('drops memory tools when the analyzer selected no actual memory', () => {
+    const ctx = {
+      ...PARSE_CTX,
+      toolNames: new Set([...PARSE_CTX.toolNames, 'recall_memory', 'mcp__search_memory']),
+    };
+    const raw = JSON.stringify({
+      profile: 'bootstrap',
+      tools: ['recall_memory', 'mcp__search_memory', 'mcp__search'],
+      memories: [],
+    });
+    expect(parsePreflightOutput(raw, ctx)?.pinTools).toEqual(['mcp__search']);
   });
 
   it('pins an external MCP tool when the catalog lists it', () => {
@@ -264,7 +305,7 @@ describe('buildPreflightMessages', () => {
       maxSkills: 3,
     })[1]!.content;
     expect(user).toContain('<memory_index>');
-    expect(user).toContain('- [gotcha] Auth token refresh gotcha — "refresh expires in 25min"');
+    expect(user).toContain('- [gotcha; source=unknown] Auth token refresh gotcha — "refresh expires in 25min"');
     expect(user).toContain('<skill_catalog>');
     expect(user).toContain('- api-collection [builtin] — Build or import an HTTP API client collection');
   });

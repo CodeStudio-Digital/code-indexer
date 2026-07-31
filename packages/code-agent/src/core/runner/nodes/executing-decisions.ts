@@ -20,7 +20,7 @@ const DEBUG = process.env.CODER_BT_DEBUG === '1';
 export function decideTerminal(ctx: RunContext): BehaviorEvent {
   // Ephemeral children are free-running by default. A zero/omitted maxTurns
   // means "until natural completion" and deliberately bypasses the parent's
-  // CODER_MAX_AUTO_CONTINUES batches. When an operator supplies a positive
+  // session-owned auto-continue batches. When an operator supplies a positive
   // cap, it is an exact child-only ceiling (no automatic extension).
   if (ctx.opts.isSubagent) {
     const subagentMaxTurns = ctx.opts.maxTurns ?? 0;
@@ -31,12 +31,21 @@ export function decideTerminal(ctx: RunContext): BehaviorEvent {
     return events.maxTurnsReached({ autoContinueLeft: 0 });
   }
 
-  const maxTurns = ctx.opts.maxTurns ?? 50;
+  const maxTurns = ctx.opts.maxTurns ?? 0;
+  if (maxTurns <= 0) {
+    return events.turnSucceeded({ hasToolCalls: true });
+  }
+  // A plan is a bounded decision artifact, not an implementation marathon.
+  // If it cannot converge within its current turn budget, stop instead of
+  // multiplying that budget through automatic continuation batches.
+  const autoContinueCap = ctx.opts.planMode
+    ? 0
+    : (ctx.opts.maxAutoContinues ?? maxAutoContinues());
   const verdict = checkMaxTurns({
     turn: ctx.turn,
     autoContinues: ctx.autoContinues,
     maxTurns,
-  });
+  }, autoContinueCap);
 
   if (verdict.kind === 'continue') {
     return events.turnSucceeded({ hasToolCalls: true });
@@ -44,7 +53,7 @@ export function decideTerminal(ctx: RunContext): BehaviorEvent {
 
   if (verdict.kind === 'auto-continue') {
     ctx.autoContinues = verdict.nextCount;
-    const cap = maxAutoContinues();
+    const cap = autoContinueCap;
     ctx.emit('auto_continue', verdict.nextCount, cap);
     // Each auto-continue grants a fresh batch of ~maxTurns turns. On
     // intermediate batches, nudge the model to keep working (the old

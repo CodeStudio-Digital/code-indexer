@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { IndexerWorkerClient } from '../IndexerWorkerClient.js';
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const ENV_KEYS = [
   'MCP_INDEX_WORKERS',
   'MCP_INDEX_POOL_MIN_BYTES',
@@ -75,6 +77,57 @@ describe('IndexerWorkerClient nested parser pool', () => {
         verifyDb.close();
       }
     } finally {
+      await client.dispose().catch(() => undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('pauses an active structural request until foreground priority is released', async () => {
+    process.env.MCP_INDEX_WORKERS = '0';
+    process.env.MCP_EXTRACT_CACHE = '0';
+    process.env.MCP_PROJECT_DB = '0';
+
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-indexer-worker-priority-'));
+    const root = join(dir, 'project');
+    const dbPath = join(dir, 'index.db');
+    mkdirSync(root);
+    writeFileSync(join(root, 'foreground.ts'), 'export const foreground = true;\n', 'utf8');
+
+    const setupDb = new CodeIndexDB(dbPath);
+    const project = setupDb.createProject('worker-priority', root);
+    setupDb.close();
+    const client = new IndexerWorkerClient(
+      { dbPath, concurrency: 1, idleTtlMs: 100 },
+      {
+        file: fileURLToPath(new URL('../../workers/_dev-bootstrap.mjs', import.meta.url)),
+        execArgv: [],
+        devTsEntry: fileURLToPath(new URL('../../workers/indexer-worker.ts', import.meta.url)),
+        built: false,
+      },
+    );
+
+    try {
+      client.setInteractivePriority(project.id, true);
+      let settled = false;
+      const run = client.runStructuralIndex(project.id, {})
+        .finally(() => { settled = true; });
+
+      let workerReady = false;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        if (await client.memStats()) {
+          workerReady = true;
+          break;
+        }
+        await sleep(20);
+      }
+      expect(workerReady).toBe(true);
+      await sleep(50);
+      expect(settled).toBe(false);
+
+      client.setInteractivePriority(project.id, false);
+      await expect(run).resolves.toMatchObject({ indexed: 1, errorCount: 0 });
+    } finally {
+      client.setInteractivePriority(project.id, false);
       await client.dispose().catch(() => undefined);
       rmSync(dir, { recursive: true, force: true });
     }

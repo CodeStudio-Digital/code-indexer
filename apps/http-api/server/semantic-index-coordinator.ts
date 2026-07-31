@@ -274,7 +274,7 @@ export class SemanticIndexCoordinator {
     }
     // Keep completed removal markers fenced until the caller deletes the
     // project row. This survives a crash in the gap after vectors.db is gone.
-    for (const job of deps.semanticStore.listJobs()) {
+    for (const job of deps.semanticStore.listJobs({ kinds: ['cleanup'] })) {
       if (job.kind !== 'cleanup' || job.cursor?.reason !== 'project-removal') continue;
       const projectId = projectIdFromRemovalNamespace(job.namespace);
       if (projectId !== null && job.status !== 'failed' && job.status !== 'cancelled') {
@@ -456,7 +456,10 @@ export class SemanticIndexCoordinator {
     if (!hasGeneration || !compact || !this.deps.vectorStore.dropGeneration) {
       throw new SemanticVectorWorkerUnavailableError('unused vector cleanup');
     }
-    const executing = this.deps.semanticStore.listJobs().some((job) =>
+    const executing = this.deps.semanticStore.listJobs({
+      statuses: ['running'],
+      kinds: ['build', 'backfill'],
+    }).some((job) =>
       // Pending rows are durable requests waiting for an explicit wake-up;
       // only running means a worker currently owns the physical database.
       job.status === 'running'
@@ -1278,7 +1281,9 @@ export class SemanticIndexCoordinator {
    * enumeration, model probe or vector build starts until an explicit request
    * or a new targeted mutation arrives. */
   recoverInterruptedJobsPassively(): void {
-    for (const job of this.deps.semanticStore.listJobs()) {
+    for (const job of this.deps.semanticStore.listJobs({
+      statuses: ['pending', 'running', 'paused'],
+    })) {
       const open = job.status === 'pending' || job.status === 'running' || job.status === 'paused';
       if (open
         && job.generation_id !== null
@@ -1360,11 +1365,15 @@ export class SemanticIndexCoordinator {
 
   private async drainPendingProjectRemovals(): Promise<number> {
     let completed = 0;
-    const requests = this.deps.semanticStore.listJobs().filter((job) =>
+    const requests = this.deps.semanticStore.listJobs({
+      statuses: ['pending', 'paused', 'running'],
+      kinds: ['cleanup'],
+    }).filter((job) =>
       job.kind === 'cleanup'
       && job.cursor?.reason === 'project-removal'
       && job.cursor?.finalize_project === true
-      && (job.status === 'pending' || job.status === 'paused' || job.status === 'running'));
+      && (job.status === 'pending' || job.status === 'paused' || job.status === 'running')
+    );
     for (const request of requests) {
       const projectId = projectIdFromRemovalNamespace(request.namespace);
       if (projectId === null) continue;
@@ -1449,11 +1458,15 @@ export class SemanticIndexCoordinator {
   }
 
   private pendingDocsBackfillJobs(): SemanticJobRow[] {
-    return this.deps.semanticStore.listJobs().filter((job) =>
+    return this.deps.semanticStore.listJobs({
+      statuses: ['pending', 'paused', 'running'],
+      kinds: ['backfill'],
+    }).filter((job) =>
       job.generation_id === null
       && job.kind === 'backfill'
       && /^docs:c\d+$/.test(job.namespace)
-      && (job.status === 'pending' || job.status === 'paused' || job.status === 'running'));
+      && (job.status === 'pending' || job.status === 'paused' || job.status === 'running')
+    );
   }
 
   private hasPendingDocsBackfills(): boolean {
@@ -1725,10 +1738,13 @@ export class SemanticIndexCoordinator {
    * idempotent, so a crash after the physical operation but before the job
    * update is recovered safely on the next attempt. */
   private async recoverPendingCleanupJobs(purpose: SemanticPurpose): Promise<void> {
-    const jobs = this.deps.semanticStore.listJobs()
+    const jobs = this.deps.semanticStore.listJobs({
+      statuses: ['pending', 'paused', 'running'],
+      kinds: ['cleanup'],
+    })
       .filter((job) => job.kind === 'cleanup'
-        && (job.status === 'pending' || job.status === 'paused' || job.status === 'running'))
-      .filter((job) => job.generation_id
+        && (job.status === 'pending' || job.status === 'paused' || job.status === 'running')
+        && job.generation_id
         && this.deps.semanticStore.getGeneration(job.generation_id)?.purpose === purpose);
     for (const job of jobs) await this.performCleanupJob(job);
   }

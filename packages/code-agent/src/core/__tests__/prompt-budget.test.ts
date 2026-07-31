@@ -65,53 +65,49 @@ function splitStatic(prompt: string): { preamble: string; sections: Section[] } 
 
 /**
  * Per-section ceilings (chars). Baselines measured 2026-06-12 on the
- * matrix below, +~10% slack. A section not listed here = test failure —
+ * lean-prompt pass (2026-07-29), +~10% slack. A section not listed here = test failure —
  * register it (with a ceiling) when you intentionally add one.
  */
 const SECTION_BUDGETS: Record<string, number> = {
-  '(preamble)': 360,
-  '(base-intro)': 280,
-  '# Project context': 1250, // Windows shell guidance measured 1178 (2026-07-23)
-  '# Goal lifecycle': 500, // optional telemetry + advisory completion contract
-  '# Tool tiers': 420,
-  '# Tool tiers (IMPORTANT)': 720,
-  '# Tool strategy — token economy': 1150,
-  '# Tool strategy — project NOT indexed': 1010,
-  '# Tool strategy — index starting': 1010,
-  '# Tool strategy — native only (MCP bridge unavailable)': 770,
-  '# Native tools available to this session': 800, // capability-derived catalog (2026-07-11; measured 700)
-  '# Images & vision': 500,
-  '# Session overlay (automatic freshness)': 730,
-  '# Subagents (isolated delegation)': 1450, // 2026-07-02: subagent guidance grew in the parallel prompt-audit batch (measured 1327)
-  '# Memory': 1600, // company/no-Session-Drive long-term memory block (measured 1455)
-  "# Memory (four distinct layers — don't conflate them)": 2600, // session/durable/project/history guidance (measured 2333)
-  '# Style': 560, // 2026-07-02: + parallel-batching + result-honesty bullets (measured 511)
+  '(preamble)': 340,
+  '(base-intro)': 130,
+  '# Workspace': 1100, // includes the platform-derived shell descriptor
+  '# Goal lifecycle': 160,
+  '# Tool tiers': 170,
+  '# Tool tiers (IMPORTANT)': 240,
+  '# Code retrieval': 430,
+  '# Tool strategy — index starting': 280,
+  '# Tool strategy — native only (MCP bridge unavailable)': 200,
+  '# Tool contract': 200,
+  '# Images & vision': 200,
+  '# Session overlay (automatic freshness)': 150,
+  '# Subagents (isolated delegation)': 320,
+  '# Memory': 420,
+  '# Operating contract': 600,
   // Session-fixed directives (only rendered when configured): language (G1),
   // output style (G8), unsupervised framing (G3).
-  '# Language': 420,
-  '# Explanatory output': 420,
-  '# Learning output': 420,
-  '# Operating autonomously': 760,
-  '# Multi-agent mode (Ultra)': 1600, // bounded orchestration guidance measured 1465 (2026-07-23)
-  '# Multi-agent mode (explicit request only)': 600,
-  '# Plan mode is ACTIVE': 5800, // plan.txt + ## Plan depth block + decision-gate step/section + recall step 0 (2026-07; complex measured 5792)
+  '# Language': 140,
+  '# Explanatory output': 150,
+  '# Learning output': 200,
+  '# Operating autonomously': 260,
+  '# Multi-agent mode (Ultra)': 420,
+  '# Multi-agent mode (explicit request only)': 320,
+  '# Plan mode is ACTIVE': 1750,
 
-  '# Explore mode is ACTIVE': 2600, // + recall-first reword + directory-skeleton hint (2026-07, measured 2564)
-  '# Build mode is ACTIVE': 2980, // Track G: + pre-execution destructive-action evidence line
+  '# Explore mode is ACTIVE': 950,
+  '# Build mode is ACTIVE': 1200,
+  '# Builder mode is ACTIVE': 1600,
 
   '# Admin mode is ACTIVE': 2450,
-  '# Interactive tools': 1020,
-  '# Agent loop': 2050, // Track G + 2026-07-02 broken-tool-vs-Unknown-tool error recovery (measured 1860)
-
-  '# Preambles before tool calls': 370,
-  '# Do not re-read what you already have': 430,
-  '# Active context': 300,
+  '# Interactive tools': 720,
+  '# Execution contract': 520,
+  '# Active context': 140,
 };
 
 /** Whole-composition ceilings for the two canonical shapes (chars). */
 const TOTAL_BUDGETS = {
-  default: 12350,   // zai · navigate · no plan · no agentId · loop v2 · drive (2026-07-02 prompt-audit + memory-incentives batches; ~12104 measured)
-  planMode: 17800,  // same + specialist plan.txt + ## Plan depth block + null-plan case (~17575 measured)
+  default: 5400,   // lean baseline measured 4842 chars on 2026-07-29
+  planMode: 7000,  // lean normal-plan baseline measured 6353 chars
 };
 
 interface Composition {
@@ -122,7 +118,7 @@ interface Composition {
 const MATRIX: Composition[] = [];
 for (const providerFamily of ['anthropic', 'zai'] as const) {
   for (const planMode of [false, true]) {
-    for (const agentId of [undefined, 'explore', 'build'] as const) {
+  for (const agentId of [undefined, 'explore', 'build', 'builder'] as const) {
       MATRIX.push({
         label: `${providerFamily}|plan=${planMode}|agent=${agentId ?? 'none'}`,
         ctx: { ...BASE_CTX, providerFamily, planMode, agentId },
@@ -218,9 +214,9 @@ describe('prompt-budget — cache boundary guarantees', () => {
       customTiers: [{ tier: 'cf', displayName: 'Cloudflare', toolCount: 9 }],
     });
     const [staticPrefix, dynamicSuffix] = prompt.split(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
-    expect(staticPrefix).not.toContain('# Tool visibility (model-adapted)');
+    expect(staticPrefix).not.toContain('# Tool visibility');
     expect(staticPrefix).not.toContain('# External tool groups');
-    expect(dynamicSuffix).toContain('# Tool visibility (model-adapted)');
+    expect(dynamicSuffix).toContain('# Tool visibility');
     expect(dynamicSuffix).toContain('# External tool groups (hidden, on-demand)');
   });
 });

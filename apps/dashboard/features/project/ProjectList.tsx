@@ -1,13 +1,16 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  Check,
+  ChevronDown,
   ChevronRight,
+  FolderPlus,
   FolderGit2,
-  Layers,
   LayoutGrid,
   LayoutList,
   Plus,
   Search,
+  SlidersHorizontal,
   Sparkles,
   X,
 } from 'lucide-react';
@@ -19,12 +22,29 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '../../components/ui/collapsible.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu.js';
 import { Input } from '../../components/ui/input.js';
+import { toast } from '../../components/ui/prompt-dialog.js';
 import { Skeleton } from '../../components/ui/skeleton.js';
-import { useApi } from '../../hooks/useApi.js';
+import { apiPost, useApi } from '../../hooks/useApi.js';
 import { cn } from '../../lib/utils.js';
+import { loadRecentProjects } from '../../state/recent-projects.js';
 import type { Project as SettingsProject } from '@mcp/shared/types.js';
 import { ProjectCard, type ProjectCardData } from './list/ProjectCard.js';
+import {
+  countProjectStatuses,
+  filterProjectList,
+  groupProjectList,
+  recentProjectList,
+  type ProjectListFilter,
+} from './list/projectListModel.js';
 import { ProjectRow } from './list/ProjectRow.js';
 
 const ProjectCreateDialog = lazy(() => import('./ProjectCreateDialog.js'));
@@ -63,9 +83,14 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
   const [creating, setCreating] = useState(false);
   const [scaffolding, setScaffolding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [filter, setFilter] = useState<ProjectListFilter>('all');
   const [grouped, setGrouped] = useState(true);
   const [layout, setLayout] = useState<LayoutMode>(readStoredLayout);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [indexingIds, setIndexingIds] = useState<Set<number>>(new Set());
+  const [recentIds] = useState(loadRecentProjects);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const indexingIdsRef = useRef<Set<number>>(new Set());
 
   // Stable row handlers so `React.memo(ProjectRow)` actually dedupes — the
   // compact list can be 40+ rows and per-row inline arrows would re-render
@@ -75,6 +100,42 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     [onSelectProject],
   );
   const handleEditProject = useCallback((p: Project) => setEditing(p), []);
+  const handleIndexProject = useCallback(
+    async (p: Project) => {
+      if (indexingIdsRef.current.has(p.id)) return;
+      indexingIdsRef.current.add(p.id);
+      setIndexingIds((current) => new Set(current).add(p.id));
+      try {
+        const result = await apiPost<{ ok: boolean }>(
+          `/projects/${encodeURIComponent(p.id)}/index/structural/reconcile`,
+          {},
+        );
+        refetch();
+        if (result.ok) {
+          toast.success(t('projects:indexAction.completed'), {
+            description: p.name,
+          });
+        } else {
+          toast.info(t('projects:indexAction.continuing'), {
+            description: p.name,
+          });
+        }
+      } catch (indexError) {
+        toast.error(t('projects:indexAction.failed'), {
+          description:
+            indexError instanceof Error ? indexError.message : String(indexError),
+        });
+      } finally {
+        indexingIdsRef.current.delete(p.id);
+        setIndexingIds((current) => {
+          const next = new Set(current);
+          next.delete(p.id);
+          return next;
+        });
+      }
+    },
+    [refetch, t],
+  );
 
   // Persist layout choice; tiny enough that a debounce would be noise.
   useEffect(() => {
@@ -84,6 +145,33 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
       /* private mode / quota — best-effort */
     }
   }, [layout]);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if (
+        event.key !== '/' ||
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey
+      ) {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (
+        target?.isContentEditable ||
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.tagName === 'SELECT'
+      ) {
+        return;
+      }
+      event.preventDefault();
+      searchInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', focusSearch);
+    return () => window.removeEventListener('keydown', focusSearch);
+  }, []);
 
   // All unique group names defined across projects (for the edit dialog picker)
   const existingGroups = useMemo(() => {
@@ -95,46 +183,22 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     return [...names].sort((a, b) => a.localeCompare(b));
   }, [projects]);
 
-  const filteredProjects = useMemo(() => {
-    if (!projects) return [];
-    const q = searchQuery.toLowerCase().trim();
-    if (!q) return projects;
-    return projects.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.root_path.toLowerCase().includes(q) ||
-        (p.description ?? '').toLowerCase().includes(q) ||
-        (p.group_name ?? '').toLowerCase().includes(q),
-    );
-  }, [projects, searchQuery]);
-
-  const groupedProjects = useMemo(() => {
-    if (!grouped) return null;
-    const named = new Map<string, Project[]>();
-    const ungrouped: Project[] = [];
-
-    for (const p of filteredProjects) {
-      if (p.group_name) {
-        const bucket = named.get(p.group_name) ?? [];
-        bucket.push(p);
-        named.set(p.group_name, bucket);
-      } else {
-        ungrouped.push(p);
-      }
-    }
-
-    // Sort named groups alphabetically
-    const sorted = new Map(
-      [...named.entries()].sort(([a], [b]) => a.localeCompare(b)),
-    );
-
-    // Ungrouped always at the end
-    if (ungrouped.length > 0) {
-      sorted.set('__ungrouped__', ungrouped);
-    }
-
-    return sorted;
-  }, [filteredProjects, grouped]);
+  const filteredProjects = useMemo(
+    () => filterProjectList(projects ?? [], searchQuery, filter),
+    [projects, searchQuery, filter],
+  );
+  const groupedProjects = useMemo(
+    () => (grouped ? groupProjectList(filteredProjects) : null),
+    [filteredProjects, grouped],
+  );
+  const recentProjects = useMemo(
+    () => recentProjectList(projects ?? [], recentIds),
+    [projects, recentIds],
+  );
+  const statusCounts = useMemo(
+    () => countProjectStatuses(projects ?? []),
+    [projects],
+  );
 
   function toggleGroup(group: string) {
     setCollapsedGroups((prev) => {
@@ -220,19 +284,23 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     if (list.length === 0) {
       return (
         <p className="col-span-full text-center py-8 text-sm text-muted-foreground">
-          {t('projects:noMatch', { query: searchQuery })}
+          {searchQuery.trim()
+            ? t('projects:noMatch', { query: searchQuery })
+            : t('projects:noProjectsForFilter')}
         </p>
       );
     }
     if (layout === 'compact') {
       return (
-        <div className="flex flex-col gap-1.5">
+        <div className="overflow-hidden rounded-lg border bg-card/40">
           {list.map((p) => (
             <ProjectRow
               key={p.id}
               project={p}
               onSelect={handleSelectProject}
               onEdit={handleEditProject}
+              onIndex={handleIndexProject}
+              indexing={indexingIds.has(p.id)}
             />
           ))}
         </div>
@@ -246,6 +314,8 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             project={p}
             onSelect={() => onSelectProject(p.id, p.name)}
             onEdit={() => setEditing(p)}
+            onIndex={() => void handleIndexProject(p)}
+            indexing={indexingIds.has(p.id)}
           />
         ))}
       </div>
@@ -253,99 +323,205 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">{t('projects:title')}</h2>
-          <p className="text-sm text-muted-foreground mt-1">
-            {searchQuery.trim()
-              ? t('projects:searchFiltered', { filtered: filteredProjects.length, total: projects.length })
-              : t('projects:count', { count: projects.length })}
+          <div className="flex items-center gap-2">
+            <h2 className="text-2xl font-bold tracking-tight">{t('projects:title')}</h2>
+            <Badge variant="muted" className="normal-case tracking-normal">
+              {projects.length}
+            </Badge>
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t('projects:indexSummary', {
+              indexed: statusCounts.indexed,
+              total: projects.length,
+            })}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t('projects:searchPlaceholder')}
-              className="pl-8 h-8 w-48 sm:w-64 text-sm"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                aria-label={t('projects:clearSearch')}
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          <Button
-            variant={grouped ? 'secondary' : 'outline'}
-            size="sm"
-            onClick={() => setGrouped((g) => !g)}
-            title={grouped ? t('projects:flatView') : t('projects:groupByGroup')}
-          >
-            <Layers className="h-4 w-4" />
-            <span className="hidden sm:inline ml-1">{grouped ? t('projects:grouped') : t('projects:group')}</span>
-          </Button>
-          {/* Layout toggle — Cards vs Compact list. Persisted so the
-              user's choice survives reloads. Wide-screen muscle memory
-              ("LayoutGrid for tiles, LayoutList for rows") inherited
-              from VS Code / Finder. */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setLayout((m) => (m === 'cards' ? 'compact' : 'cards'))}
-            title={layout === 'cards' ? t('projects:compactView', { defaultValue: 'Compact list' }) : t('projects:cardsView', { defaultValue: 'Card grid' })}
-            aria-label={layout === 'cards' ? t('projects:switchToCompactView') : t('projects:switchToCardsView')}
-          >
-            {layout === 'cards' ? (
-              <LayoutList className="h-4 w-4" />
-            ) : (
-              <LayoutGrid className="h-4 w-4" />
-            )}
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setCreating(true)} title={t('projects:registerExisting', { defaultValue: 'Register folder' })}>
-            <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline ml-1">{t('projects:registerExisting', { defaultValue: 'Register folder' })}</span>
-          </Button>
-          <Button size="sm" onClick={() => setScaffolding(true)}>
-            <Sparkles className="h-4 w-4" />
-            <span className="hidden sm:inline ml-1">{t('projects:newProject')}</span>
-          </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button size="sm">
+              <Plus className="h-4 w-4" />
+              {t('projects:addProject')}
+              <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem onSelect={() => setScaffolding(true)}>
+              <Sparkles className="h-4 w-4" />
+              {t('projects:newProject')}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setCreating(true)}>
+              <FolderPlus className="h-4 w-4" />
+              {t('projects:registerExisting')}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[260px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder={t('projects:searchPlaceholderDetailed')}
+            className="h-9 w-full pl-9 pr-10 text-sm"
+            aria-label={t('projects:searchPlaceholderDetailed')}
+          />
+          {searchQuery ? (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+              aria-label={t('projects:clearSearch')}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          ) : (
+            <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+              /
+            </kbd>
+          )}
         </div>
+
+        <div className="flex items-center rounded-md border bg-background p-0.5">
+          {([
+            ['all', t('projects:filters.all'), projects.length],
+            ['notIndexed', t('projects:filters.notIndexed'), statusCounts.notIndexed],
+            ['indexed', t('projects:filters.indexed'), statusCounts.indexed],
+          ] as const).map(([value, label, count]) => (
+            <Button
+              key={value}
+              type="button"
+              variant={filter === value ? 'secondary' : 'ghost'}
+              size="sm"
+              className="h-7 px-2.5"
+              aria-pressed={filter === value}
+              onClick={() => setFilter(value)}
+            >
+              {label}
+              <span className="text-[10px] tabular-nums text-muted-foreground">{count}</span>
+            </Button>
+          ))}
+        </div>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={t('projects:view.title')}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              <span className="hidden sm:inline">{t('projects:view.title')}</span>
+              <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-52">
+            <DropdownMenuLabel>{t('projects:view.organization')}</DropdownMenuLabel>
+            <DropdownMenuItem onSelect={() => setGrouped((current) => !current)}>
+              <Check className={cn('h-4 w-4', !grouped && 'opacity-0')} />
+              {t('projects:groupByGroup')}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel>{t('projects:view.layout')}</DropdownMenuLabel>
+            <DropdownMenuItem onSelect={() => setLayout('compact')}>
+              <LayoutList className="h-4 w-4" />
+              <span className="flex-1">{t('projects:compactView')}</span>
+              {layout === 'compact' && <Check className="h-4 w-4" />}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setLayout('cards')}>
+              <LayoutGrid className="h-4 w-4" />
+              <span className="flex-1">{t('projects:cardsView')}</span>
+              {layout === 'cards' && <Check className="h-4 w-4" />}
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      {recentProjects.length > 0 && !searchQuery.trim() && filter === 'all' && (
+        <section className="space-y-2" aria-labelledby="recent-projects-heading">
+          <h3
+            id="recent-projects-heading"
+            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+          >
+            {t('projects:recent')}
+          </h3>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {recentProjects.map((project) => (
+              <Button
+                key={project.id}
+                variant="outline"
+                className="h-auto min-w-0 justify-start px-3 py-2.5 text-left"
+                onClick={() => handleSelectProject(project)}
+              >
+                <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="min-w-0">
+                  <span className="block truncate text-sm">{project.name}</span>
+                  <span className="block truncate font-mono text-[10px] font-normal text-muted-foreground">
+                    {project.root_path}
+                  </span>
+                </span>
+              </Button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-sm font-semibold">{t('projects:allProjects')}</h3>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {searchQuery.trim() || filter !== 'all'
+            ? t('projects:searchFiltered', {
+                filtered: filteredProjects.length,
+                total: projects.length,
+              })
+            : t('projects:visibleCount', { count: filteredProjects.length })}
+        </span>
       </div>
 
       {!grouped && renderProjects(filteredProjects)}
 
       {grouped && groupedProjects && (
-        <div className="space-y-6">
+        <div className="space-y-5">
           {groupedProjects.size === 0 && (
             <p className="text-center py-12 text-sm text-muted-foreground">
-              {t('projects:noMatch', { query: searchQuery })}
+              {searchQuery.trim()
+                ? t('projects:noMatch', { query: searchQuery })
+                : t('projects:noProjectsForFilter')}
             </p>
           )}
           {[...groupedProjects.entries()].map(([group, groupProjects]) => {
             const isUngrouped = group === '__ungrouped__';
-            const isOpen = searchQuery.length > 0 || !collapsedGroups.has(group);
+            const isOpen = searchQuery.trim().length > 0 || !collapsedGroups.has(group);
+            const notIndexedCount = groupProjects.filter(
+              (project) => !project.last_indexed,
+            ).length;
             return (
               <Collapsible key={group} open={isOpen} onOpenChange={() => toggleGroup(group)}>
-                <div className="flex items-center gap-3 mb-3">
+                <div className="mb-2">
                   <CollapsibleTrigger asChild>
-                    <button className="flex items-center gap-2 text-sm font-semibold hover:text-primary transition-colors">
+                    <button className="flex w-full items-center gap-2 border-b pb-2 text-left text-sm font-semibold transition-colors hover:text-primary">
                       <ChevronRight
                         className={cn('h-4 w-4 transition-transform', isOpen && 'rotate-90')}
                       />
                       <span className={cn(isUngrouped && 'text-muted-foreground italic')}>
                         {isUngrouped ? t('projects:ungrouped') : group}
                       </span>
+                      <Badge variant="muted" className="normal-case tracking-normal">
+                        {groupProjects.length}
+                      </Badge>
+                      <span className="ml-auto text-xs font-normal text-muted-foreground">
+                        {notIndexedCount > 0
+                          ? t('projects:groupNotIndexed', { count: notIndexedCount })
+                          : t('projects:groupAllIndexed')}
+                      </span>
                     </button>
                   </CollapsibleTrigger>
-                  <Badge variant="muted">{groupProjects.length}</Badge>
-                  <div className="flex-1 h-px bg-border" />
                 </div>
                 <CollapsibleContent>{renderProjects(groupProjects)}</CollapsibleContent>
               </Collapsible>

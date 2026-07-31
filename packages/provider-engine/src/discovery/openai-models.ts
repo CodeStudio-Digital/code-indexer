@@ -82,6 +82,12 @@ export async function discoverOpenAIModels(
         ...m,
         context_window: m.context_window ?? meta.contextWindow ?? null,
         default_max_tokens: m.default_max_tokens ?? meta.maxTokens ?? null,
+        can_reason:
+          m.can_reason
+          ?? meta.canReason
+          ?? (meta.supportedReasoningLevels != null || meta.defaultReasoningLevel != null),
+        supports_attachments: m.supports_attachments ?? meta.supportsAttachments ?? false,
+        input_modalities: m.input_modalities ?? meta.inputModalities ?? null,
         supported_reasoning_levels: m.supported_reasoning_levels ?? meta.supportedReasoningLevels ?? null,
         default_reasoning_level: m.default_reasoning_level ?? meta.defaultReasoningLevel ?? null,
         apply_patch_tool_type: m.apply_patch_tool_type ?? meta.applyPatchToolType ?? null,

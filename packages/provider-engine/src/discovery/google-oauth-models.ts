@@ -10,6 +10,7 @@
 import type { ProviderStore, ProviderConfig, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { refreshIfExpired } from '@mcp/services/services/oauth/google.js';
 import type { ProviderSpec } from '@mcp/provider-sdk';
+import { geminiReasoningMetadata } from './gemini-models.js';
 
 type GeminiModel = {
   name: string;
@@ -37,11 +38,23 @@ export async function discoverGoogleOAuthModels(
   const data = (await r.json()) as { models: GeminiModel[] };
   return data.models
     .filter((m) => m.supportedGenerationMethods?.includes('generateContent') ?? true)
-    .map((m) => ({
-      model_id: m.name.replace(/^models\//, ''),
-      name: m.displayName ?? m.name,
-      context_window: m.inputTokenLimit ?? null,
-      default_max_tokens: m.outputTokenLimit ?? null,
-      source: 'live' as const,
-    }));
+    .map((m) => {
+      const id = m.name.replace(/^models\//, '');
+      const reasoning = geminiReasoningMetadata(id);
+      return {
+        model_id: id,
+        name: m.displayName ?? m.name,
+        display_name: m.displayName ?? m.name,
+        context_window: m.inputTokenLimit ?? null,
+        default_max_tokens: m.outputTokenLimit ?? null,
+        can_reason: reasoning != null,
+        supports_attachments: true,
+        supported_reasoning_levels: reasoning?.levels ?? null,
+        default_reasoning_level: reasoning?.defaultLevel ?? null,
+        input_modalities: ['text', 'image', 'audio', 'video'],
+        visibility: 'list' as const,
+        supported_in_api: true,
+        source: 'live' as const,
+      };
+    });
 }

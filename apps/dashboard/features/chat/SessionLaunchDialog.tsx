@@ -1,6 +1,6 @@
 import type { AgentPreset } from '@mcp/api-bus';
 import { Gauge, Repeat, Sparkles, Thermometer } from 'lucide-react';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/button.js';
 import {
@@ -27,6 +27,7 @@ export interface SessionLaunchConfig {
   reasoningEffort: string | null;
   thinking: boolean;
   maxTurns: number | null;
+  maxAutoContinues: number;
   temperature: number | null;
 }
 
@@ -76,6 +77,12 @@ export function SessionLaunchDialog({
     value.executionMode,
     modelCanReason(value.provider, providerOptions, value.model),
   );
+  const [turnLimitEnabled, setTurnLimitEnabled] = useState(
+    value.maxTurns !== null,
+  );
+  useEffect(() => {
+    setTurnLimitEnabled(value.maxTurns !== null);
+  }, [value.maxTurns]);
   const patch = (next: Partial<SessionLaunchConfig>) => onChange({ ...value, ...next });
 
   const changeProvider = (provider: string) => {
@@ -217,28 +224,74 @@ export function SessionLaunchDialog({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label htmlFor="session-launch-turns" className="text-xs font-medium text-muted-foreground">
-                {t('chat:toolbar.maxTurns')}
-              </label>
-              <div className="flex items-center gap-2">
-                <Repeat className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+            <div className="flex items-start gap-3">
+              <Repeat className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div className="min-w-0 flex-1">
+                <label htmlFor="session-launch-turn-limit" className="text-sm font-medium">
+                  {t('chat:toolbar.turnLimitEnabled')}
+                </label>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {!turnLimitEnabled
+                    ? t('chat:toolbar.turnLimitUnlimited')
+                    : value.maxTurns === null
+                      ? t('chat:toolbar.turnLimitAwaiting')
+                      : t('chat:toolbar.turnLimitActive', { turns: value.maxTurns })}
+                </p>
+              </div>
+              <Switch
+                id="session-launch-turn-limit"
+                checked={turnLimitEnabled}
+                onCheckedChange={(checked) => {
+                  setTurnLimitEnabled(checked);
+                  if (!checked) patch({ maxTurns: null });
+                }}
+                aria-label={t('chat:toolbar.turnLimitEnabled')}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label htmlFor="session-launch-turns" className="text-xs font-medium text-muted-foreground">
+                  {t('chat:toolbar.maxTurns')}
+                </label>
                 <Input
                   id="session-launch-turns"
                   type="number"
                   min={1}
-                  max={200}
+                  max={100000}
+                  disabled={!turnLimitEnabled}
                   value={value.maxTurns ?? ''}
                   onChange={(event) => {
-                    const next = event.target.value;
-                    patch({ maxTurns: next === '' ? null : Math.min(200, Math.max(1, Number.parseInt(next, 10) || 1)) });
+                    const parsed = Number.parseInt(event.target.value, 10);
+                    if (Number.isFinite(parsed)) {
+                      patch({ maxTurns: Math.min(100000, Math.max(1, parsed)) });
+                    }
                   }}
-                  placeholder={t('chat:sessionLaunch.automatic')}
+                  className="font-mono"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label htmlFor="session-launch-auto-continues" className="text-xs font-medium text-muted-foreground">
+                  {t('chat:toolbar.maxAutoContinues')}
+                </label>
+                <Input
+                  id="session-launch-auto-continues"
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={value.maxAutoContinues}
+                  onChange={(event) => {
+                    const parsed = Number.parseInt(event.target.value, 10);
+                    if (Number.isFinite(parsed)) {
+                      patch({ maxAutoContinues: Math.min(1000, Math.max(0, parsed)) });
+                    }
+                  }}
                   className="font-mono"
                 />
               </div>
             </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label htmlFor="session-launch-temperature" className="text-xs font-medium text-muted-foreground">
                 {t('chat:toolbar.temperature', { defaultValue: 'Temperature' })}

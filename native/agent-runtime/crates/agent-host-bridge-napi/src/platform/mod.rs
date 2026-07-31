@@ -4,6 +4,6 @@ mod supported;
 mod unsupported;
 
 #[cfg(windows)]
-pub use supported::{ChannelKind, NativeChannelSet};
+pub use supported::{ChannelKind, NativeChannelSet, NativeSupervisorSet};
 #[cfg(not(windows))]
-pub use unsupported::{ChannelKind, NativeChannelSet};
+pub use unsupported::{ChannelKind, NativeChannelSet, NativeSupervisorSet};

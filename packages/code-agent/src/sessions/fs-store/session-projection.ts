@@ -260,6 +260,8 @@ export function mapCatalogEntry(
     cloudcode_session_id: runtimeState.cloudcode_session_id,
     last_response_id: runtimeState.last_response_id,
     last_response_message_count: runtimeState.last_response_message_count,
+    max_turns: runtimeState.max_turns,
+    max_auto_continues: runtimeState.max_auto_continues,
     temperature_override: runtimeState.temperature_override,
     reasoning_effort_override: runtimeState.reasoning_effort_override,
     execution_mode_override: runtimeState.execution_mode_override,

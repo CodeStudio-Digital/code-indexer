@@ -5,7 +5,10 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { pauseSubordinate } from '@mcp/company/services/subordinate/abort.js';
-import { isUserStoppedRun } from '@mcp/company/services/subordinate/completion-handler.js';
+import {
+  attachSubordinateCompletionHandler,
+  isUserStoppedRun,
+} from '@mcp/company/services/subordinate/completion-handler.js';
 
 const AGENT_RUN_ID = '00000000-0000-4000-8000-000000000001';
 const UNKNOWN_RUN_ID = '00000000-0000-4000-8000-000000000099';
@@ -81,5 +84,61 @@ describe('isUserStoppedRun (completion-handler guard)', () => {
     expect(isUserStoppedRun(depsFor('working'), AGENT_RUN_ID)).toBe(false);
     expect(isUserStoppedRun(depsFor('completed'), AGENT_RUN_ID)).toBe(false);
     expect(isUserStoppedRun(depsFor('error'), AGENT_RUN_ID)).toBe(false);
+  });
+});
+
+describe('stale completion fencing', () => {
+  it('does not let an aborted previous runner clobber a resumed run', async () => {
+    let settle!: (value: { reason: string; error?: string }) => void;
+    const done = new Promise<{ reason: string; error?: string }>((resolve) => {
+      settle = resolve;
+    });
+    const oldHandle = {
+      session: { id: 'old-session' },
+      runner: { abort: vi.fn() },
+      done,
+    };
+    const updateAgentRunStatus = vi.fn(async () => undefined);
+    const post = vi.fn();
+    const signal = vi.fn();
+    const notifyIdleChanged = vi.fn();
+    const runningIds = new Set([AGENT_RUN_ID]);
+    const deps = {
+      ctx: {
+        companyFiles: {
+          getAgentRunSync: () => ({ status: 'running' }),
+          updateAgentRunStatus,
+        },
+      },
+      board: { post },
+      status: {},
+      kanban: {},
+      master: { notify: vi.fn() },
+      attention: { signal },
+      retryPolicy: { clear: vi.fn() },
+      orchestratorRef: {},
+      runningIds,
+      notifyIdleChanged,
+      // The map now points at the resumed runner, not oldHandle.
+      isCurrentHandle: () => false,
+      resume: vi.fn(),
+    } as never;
+
+    attachSubordinateCompletionHandler(
+      oldHandle as never,
+      AGENT_RUN_ID,
+      'admin',
+      false,
+      deps,
+    );
+    settle({ reason: 'aborted' });
+    await done;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(updateAgentRunStatus).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+    expect(signal).not.toHaveBeenCalled();
+    expect(runningIds.has(AGENT_RUN_ID)).toBe(true);
+    expect(notifyIdleChanged).not.toHaveBeenCalled();
   });
 });

@@ -254,6 +254,43 @@ describe('CoderWorkerPool', () => {
     });
   });
 
+  it('routes live session settings through the worker writer', async () => {
+    const p = createPool();
+    await p.runFresh(sid(92), { userMessage: 'first' });
+
+    await expect(
+      p.stageManualAgentTransition(sid(92), 'build'),
+    ).resolves.toBe(true);
+    await expect(
+      p.setToolPermissionMode(sid(92), 'unrestricted'),
+    ).resolves.toBe(true);
+    await expect(
+      p.setToolOutputCapLevel(sid(92), 'ultra'),
+    ).resolves.toBe(true);
+    await expect(
+      p.setRunLimits(sid(92), 80, 4),
+    ).resolves.toBe(true);
+
+    expect(mockWorker.state.hosts[0].bridge.requests.slice(-4)).toEqual([
+      expect.objectContaining({
+        type: 'stageManualAgentTransition',
+        payload: { agent: 'build' },
+      }),
+      expect.objectContaining({
+        type: 'setToolPermissionMode',
+        payload: { mode: 'unrestricted' },
+      }),
+      expect.objectContaining({
+        type: 'setToolOutputCapLevel',
+        payload: { level: 'ultra' },
+      }),
+      expect.objectContaining({
+        type: 'setRunLimits',
+        payload: { maxTurns: 80, maxAutoContinues: 4 },
+      }),
+    ]);
+  });
+
   it('deduplicates concurrent startup so one session never gets two worker writers', async () => {
     let releaseStart!: () => void;
     const startGate = new Promise<void>((resolve) => {
@@ -1050,6 +1087,11 @@ describe('CoderWorkerPool', () => {
         'follow-up',
         ['skill-a'],
         'message:test-follow-up',
+        [{
+          name: 'notes.txt',
+          mediaType: 'text/plain',
+          text: 'attachment details',
+        }],
       ),
     ).resolves.toBe(42);
 
@@ -1059,6 +1101,11 @@ describe('CoderWorkerPool', () => {
         content: 'follow-up',
         selectedSkillIds: ['skill-a'],
         operationId: 'message:test-follow-up',
+        attachments: [{
+          name: 'notes.txt',
+          mediaType: 'text/plain',
+          text: 'attachment details',
+        }],
       },
     });
   });

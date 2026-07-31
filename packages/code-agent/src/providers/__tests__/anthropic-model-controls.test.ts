@@ -9,8 +9,8 @@ describe('Anthropic current model request controls', () => {
       { supported_reasoning_levels: ['low', 'medium', 'high', 'xhigh', 'max'] },
     )).toMatchObject({
       apiModel: 'claude-opus-5',
-      maxTokens: 64_000,
-      thinking: { type: 'adaptive' },
+      maxTokens: 128_000,
+      thinking: { type: 'adaptive', display: 'summarized' },
       outputConfig: { effort: 'max' },
       effort: 'max',
     });
@@ -22,8 +22,8 @@ describe('Anthropic current model request controls', () => {
       { thinking: false, reasoningEffort: null },
     )).toMatchObject({
       apiModel: 'claude-fable-5',
-      maxTokens: 64_000,
-      thinking: { type: 'adaptive' },
+      maxTokens: 128_000,
+      thinking: { type: 'adaptive', display: 'summarized' },
     });
   });
 

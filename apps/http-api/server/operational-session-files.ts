@@ -187,14 +187,39 @@ export class OperationalSessionFiles {
 
   async #ready(): Promise<void> {
     if (!this.#catalogReady) {
-      this.#catalogReady = this.#catalog.refresh().then(() => undefined);
+      this.#catalogReady = this.#catalog.ensureReady();
     }
     await this.#catalogReady;
   }
 
   async #entry(id: string): Promise<CatalogEntry | null> {
     await this.#ready();
-    return this.#catalog.get(id);
+    let entry = this.#catalog.get(id);
+    if (!entry) {
+      // Another process (for example the Company worker) may have created the
+      // bundle after this host catalog was first scanned.
+      await this.#catalog.refresh();
+      entry = this.#catalog.get(id);
+    }
+    return entry ? this.#freshEntry(entry) : null;
+  }
+
+  #freshEntry(entry: CatalogEntry): CatalogEntry | null {
+    try {
+      // Repository events keep the catalog current only for writes made in
+      // this process. Company workers mutate the same bundle from a different
+      // process, so read the two small authoritative projections before
+      // returning lifecycle/configuration state through the HTTP API.
+      return {
+        ...entry,
+        session: this.#repository.readSessionSync(entry.location),
+        state: this.#repository.readStateSync(entry.location),
+      };
+    } catch {
+      // A concurrently removed bundle must disappear from API reads rather
+      // than leak the last cached projection.
+      return null;
+    }
   }
 
   async #requireEntry(
@@ -322,9 +347,16 @@ export class OperationalSessionFiles {
     await this.#ready();
     return this.#catalog
       .list()
+      // Kind and parent are immutable session metadata already held by the
+      // shared catalog. Narrow first: #freshEntry performs two synchronous,
+      // path-safe reads and must never run for every historical Coder bundle.
       .filter((entry) =>
         (entry.session.kind === 'company' || entry.session.kind === 'app_studio') &&
-        (input.includeChildren || entry.session.parent_session_id == null) &&
+        (input.includeChildren || entry.session.parent_session_id == null),
+      )
+      .map((entry) => this.#freshEntry(entry))
+      .filter((entry): entry is CatalogEntry => entry != null)
+      .filter((entry) =>
         (!input.status || entry.state?.status === input.status),
       )
       .map((entry) => this.#companyRow(entry));

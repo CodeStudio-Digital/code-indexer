@@ -59,7 +59,15 @@ describe('CoderRunner pending user-message liveness', () => {
     const running = runner.run();
 
     await provider.firstTurnStarted.promise;
-    runner.pushUserMessage('queued during final turn', { roundMessageId: 22 });
+    runner.pushPendingUserContent([
+      { type: 'text', text: 'queued during final turn' },
+      {
+        type: 'document',
+        name: 'notes.txt',
+        mediaType: 'text/plain',
+        text: 'attachment details',
+      },
+    ], { roundMessageId: 22 });
     provider.releaseFirstTurn.resolve();
 
     const result = await running;
@@ -67,8 +75,42 @@ describe('CoderRunner pending user-message liveness', () => {
     expect(result.reason).toBe('completed');
     expect(provider.calls).toBe(2);
     expect(provider.requests[1]).toContain('queued during final turn');
+    expect(provider.requests[1]).toContain('attachment details');
     expect(runner.turn).toBe(2);
     expect(runner.hasPendingUserMessages()).toBe(false);
     expect(runner.roundMessageId).toBe(22);
+  });
+
+  it('refreshes the live exact-file roots used by filesystem tools', () => {
+    const externalRoots: Array<{
+      id: string;
+      seq?: number;
+      rootPath: string;
+      access: 'read' | 'write';
+    }> = [];
+    const runner = new CoderRunner({
+      provider: new ControlledProvider(),
+      registry: new ToolRegistry(),
+      systemPrompt: 'test',
+      toolContext: {
+        cwd: process.cwd(),
+        projectName: 'pending-message-test',
+        externalRoots,
+      },
+    });
+
+    runner.refreshExternalFilesystemRoots([{
+      id: 'attachment-root',
+      seq: 7,
+      rootPath: 'C:\\Temp\\notes.txt',
+      access: 'read',
+    }]);
+
+    expect(externalRoots).toEqual([{
+      id: 'attachment-root',
+      seq: 7,
+      rootPath: 'C:\\Temp\\notes.txt',
+      access: 'read',
+    }]);
   });
 });

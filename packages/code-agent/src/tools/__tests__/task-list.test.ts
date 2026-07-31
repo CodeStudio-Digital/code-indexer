@@ -36,12 +36,19 @@ interface Harness {
   ctx: ToolContext;
   stateRef: { state: TasksState | null };
   userInput: string;
+  waitCount: number;
 }
 
-function makeHarness(initial: TasksState | null = null): Harness {
+function makeHarness(initial: TasksState | null = null, planMode = true): Harness {
   const stateRef = { state: initial };
-  const h: Harness = { ctx: null as unknown as ToolContext, stateRef, userInput: '{"approved":true,"execution_mode":"inline"}' };
+  const h: Harness = {
+    ctx: null as unknown as ToolContext,
+    stateRef,
+    userInput: '{"approved":true,"execution_mode":"inline"}',
+    waitCount: 0,
+  };
   const runner = {
+    planMode,
     emit: () => undefined,
     currentTaskScopeId: () => null,
     endTaskScope: () => undefined,
@@ -50,12 +57,16 @@ function makeHarness(initial: TasksState | null = null): Harness {
     setTodos: (todos: TodoItem[]) => { stateRef.state = buildTrackState(todos); },
     get currentTodos(): TodoItem[] { return deriveTodosFromState(stateRef.state); },
     // Approve gate: submit_tasks pauses on waitForUserInput then resolves.
-    waitForUserInput: async () => h.userInput,
+    waitForUserInput: async () => {
+      h.waitCount += 1;
+      return h.userInput;
+    },
     markTasksApproved: () => undefined,
   };
   h.ctx = {
     cwd: 'D:/MCP',
     projectName: 'test',
+    planMode,
     runner,
     getTasksState: () => stateRef.state,
     recordTasks: (_id: string, next: TasksState) => { stateRef.state = next; },
@@ -102,6 +113,21 @@ describe('task_list — gate inference + track path', () => {
 });
 
 describe('task_list — gate inference + approve path', () => {
+  it('refuses an approve gate immediately in Build mode instead of waiting for user input', async () => {
+    const h = makeHarness(null, false);
+    const res = await taskList.handler(
+      { gate: 'approve', summary: 'Do two things', items: [
+        approveTask({ id: 'a1', title: 'One' }),
+        approveTask({ id: 'a2', title: 'Two', files: ['src/b.ts'] }),
+      ] },
+      h.ctx,
+    );
+    expect(res.isError).toBe(true);
+    expect(String(res.content)).toMatch(/only in Plan mode/i);
+    expect(h.waitCount).toBe(0);
+    expect(h.stateRef.state).toBeNull();
+  });
+
   it('routes a title-bearing item (gate omitted) to the approve path, not the misleading todo error', async () => {
     const h = makeHarness();
     // A single under-specified approve item: `title` is the discriminator, so it

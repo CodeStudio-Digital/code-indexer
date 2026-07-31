@@ -10,6 +10,7 @@ const MAX_NORMAL_QUEUE_FRAMES: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct AsyncManagementPolicy {
+    session: ManagementSessionPolicy,
     maximum_frame_bytes: u32,
     maximum_chunk_bytes: u64,
     read_progress_timeout: Duration,
@@ -45,6 +46,7 @@ impl AsyncManagementPolicy {
             .map_err(|_| ManagementChannelError::InvalidFrameLimits)?
             .min(MAX_MANAGEMENT_REPLAY_BYTES);
         Ok(Self {
+            session: session.clone(),
             maximum_frame_bytes,
             maximum_chunk_bytes: frame.max_chunk_bytes,
             read_progress_timeout: Duration::from_millis(frame.read_timeout_ms),
@@ -76,6 +78,11 @@ impl AsyncManagementPolicy {
     #[must_use]
     pub const fn write_timeout(&self) -> Duration {
         self.write_timeout
+    }
+
+    #[must_use]
+    pub const fn session_policy(&self) -> &ManagementSessionPolicy {
+        &self.session
     }
 
     pub(super) const fn urgent_queue_frames(&self) -> usize {

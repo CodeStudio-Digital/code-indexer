@@ -23,11 +23,11 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
 
 ## 2. Estado das fases
 
-| Fase | Estado inicial | Gate proprietário |
+| Fase | Estado atual | Gate proprietário |
 |---|---|---|
-| G0 — spec e baseline | não iniciado | `MIG-011` |
+| G0 — spec e baseline | corpus definido; gate ainda não aprovado | `MIG-011` |
 | G1 — workspace, IDL, storage foundation e build | em andamento | `MIG-012` |
-| G2 — supervisor e isolamento | não iniciado | `MIG-013` |
+| G2 — supervisor e isolamento | fundação antecipada em andamento; gate ainda bloqueado por G1 | `MIG-013` |
 | G3 — engine e provider | não iniciado | `MIG-014` |
 | G4 — tools e capabilities | não iniciado | `MIG-015` |
 | G5 — durabilidade e subagentes | não iniciado | `MIG-016` |
@@ -140,17 +140,19 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
     binário somente após o match confiável e a liga ao runtime/PID físicos.
     `session_store.proto` acrescenta leitura path-free do payload comprometido,
     ligada ao writer/authority/operation/kind/hash/tamanho exatos; hash isolado
-    não autoriza leitura. Bindings TS/Prost foram gerados e compilados a partir
-    do IDL; `buf lint` e `buf build` passam localmente. Item aberto até o CI
-    candidato.
+    não autoriza leitura. `supervisor_bootstrap.proto` agora separa o handoff
+    físico single-use do canal management permanente e descreve
+    `SupervisorProcessHandoff/Ready`, sem argv/env para segredos. Bindings
+    TS/Prost foram gerados e compilados a partir do IDL; `buf lint` e
+    `buf build` passam localmente. Item aberto até o CI candidato.
 - [ ] `G1-IDL-02` — Bindings TS/Rust são gerados; nenhum tipo de wire é mantido
   manualmente em paralelo.
   - Spec: `IPC-001..002`
-  - Evidência parcial (atualizada em 2026-07-26): `buf generate` regenerou
+  - Evidência parcial (atualizada em 2026-07-29): `buf generate` regenerou
     os bindings TS e o módulo Prost compartilhado a partir dos mesmos `.proto`,
-    incluindo `FenceAttempt.idempotency_key`. O plugin Prost está fixado em
-    `v0.5.0`, `revision: 1`, e uma segunda geração preservou hashes SHA-256
-    idênticos das seis saídas. Nenhum binding foi escrito manualmente.
+    incluindo o bootstrap físico do supervisor. O plugin Prost está fixado em
+    `v0.5.0`, `revision: 1`; existem sete módulos TS gerados e um módulo Prost
+    agregado. Nenhum binding foi escrito manualmente.
 - [ ] `G1-IDL-03` — Golden fixtures cobrem IDs opacos, `uint64`, optional/oneof,
   canonical JSON, hash, enum desconhecido e frame máximo.
   - Spec: `IPC-003..005`, `IPC-007`, `IPC-010..012`, `IPC-035`,
@@ -285,6 +287,57 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
     11 crates/12 arestas. O item permanece aberto somente até o adapter ligar
     esse owner ao framing/driver e o E2E process-real completar
     Prepare/Activate.
+    Atualização 2026-07-29 (spec 1.6.0): o adapter agora existe. O addon entrega
+    endpoint ID, connection ID, PID atestado e caps dos dois canais sem expor
+    address/token/HANDLE. `NativeHostBridgeDuplex` adapta reads/writes nativos
+    ao `DelimitedByteChannel` em chunks físicos de 64 KiB; Control e Data
+    compartilham uma única close authority e qualquer poison inicia cleanup
+    explícito retido por `native_reaper`. O composition root
+    `createNativeShadowAttemptAdapters` abre o owner Rust uma vez depois dos
+    fatos duráveis e transfere cada transporte aos adapters sem probe/reopen.
+    O teste integrado percorreu
+    `AgentHello → HostHello → Prepare → Data bind/hydration →
+    AttemptPrepared → Activate → ACK → Active` e o teste de fragmentação
+    comprova que uma frame pode atravessar múltiplos reads nativos sem stall.
+    Evidência local: 361 testes contracts+Host TS; 3/3 testes físicos Windows
+    do core; package verify, smoke Node read-only e smoke Electron 42.5 verdes;
+    LOC 607 módulos/250 cap e grafo 11 crates/12 arestas.
+    Atualização 2026-07-29 (spec 1.7.0): o `agentd-supervisor` Windows deixou de
+    ser scaffold no caminho autorizado. Ele recebe um handoff físico bounded
+    por handles allowlisted, exige EOF, verifica o PID Host derivado do mesmo
+    pipe, conecta o Named Pipe management protegido, devolve Ready e compõe
+    `SupervisorAsyncService` no `main`. Um smoke multiprocesso real passou
+    Hello, `ShutdownSupervisor`, ACK, exit 0 e reap físico. Invocação direta
+    continua exit `78`. Naquela fatia, o item permanecia aberto até o
+    launcher/owner N-API do Host ligar esse caminho ao control plane e o E2E
+    alcançar Active com supervisor e runner de produção.
+    Evidência consolidada desta fatia: 550 testes Rust passaram/14 ignored; 361
+    testes contracts+Host TS; 14 doctests; o smoke multiprocesso
+    Host→supervisor passou 1/1. `buf lint/build/generate`, typecheck, rustfmt,
+    Clippy workspace e Clippy cruzado Linux estritos, build release, package
+    verify, smoke Node read-only e smoke Electron passaram. LOC: 616 módulos de
+    produção sob cap 250; grafo: 11 crates/12 arestas. Pacote verificado:
+    `runtime-v1-d76461a228c334fa035efcca41c12be1fc2825589f3bff642c1085876c9b870f`.
+    Atualização 2026-07-30 (spec 1.8.0): o launcher/owner Host foi ligado ao
+    caminho process-real. O core Rust valida o request Protobuf bounded, hashes,
+    nomes, paths absolutos, target e policy do package; cria o Named Pipe
+    management protegido; lança `agentd-supervisor.exe` em Job Object com
+    handles bootstrap allowlisted e sem segredos em argv/env; revalida os
+    binários pós-spawn; exige Ready/EOF/connection/address/PID exatos e aceita
+    somente o peer físico esperado. O wrapper Node-API retém stream + Job,
+    oferece I/O management bounded e uma única close authority com reap
+    explícito. O Host TS produz um request single-use com scrub, adapta o stream
+    ao framing existente e fecha o owner em todo fail path. O teste process-real
+    percorreu `open → Ready → HostHello/SupervisorHello → Shutdown/ACK →
+    exit 0 → reap` com `forced=false`; testes TS cobrem scrub, consumo único,
+    provenance divergente, composição sem reopen e close. O item permanece
+    aberto até o supervisor lançar o runner empacotado e o E2E físico alcançar
+    `Prepare/Activate/Active`. Evidência consolidada: 554 testes Rust
+    passaram/14 ignored; 364 testes contracts+Host TS; typecheck,
+    `buf lint/build/generate`, rustfmt e Clippy Windows/Linux estritos; LOC 630
+    módulos/250 cap; grafo 11 crates/12 arestas; package verify, smoke read-only
+    e smoke Electron verdes. Pacote:
+    `runtime-v1-6fa52342994e93fa0ed1c8b48b088610572853e4ea3a8b2ab2ac05e501612eb2`.
 - [ ] `G1-HS-02` — Management é bounded e runner conecta control/data
   diretamente ao host; supervisor não recebe payload de provider/tool.
   - Spec: `IPC-036..040`, `D-RUST-003`
@@ -298,10 +351,13 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
     `LaunchAccepted → AttemptProcessSpawned → AttemptContainmentReport` é
     correlacionada e limitada pela janela negociada. O data endpoint e o pump
     de hidratação runner-side agora são concretos, autenticados e bounded; o
-    adapter do owner N-API ao framing/driver Host, pulse, composição
-    multi-launch no `main` process-real, recovery e rehydration ainda são
-    pendentes; item aberto. O sender Data e seu adapter `test|shadow` já
-    existem, mas não são promovidos por PID ou path fornecido pelo JavaScript.
+    pulse, composição multi-launch process-real,
+    recovery e rehydration ainda são pendentes; item aberto. O `main` Windows
+    já possui composition root permanente e smoke real de Hello/Shutdown. O
+    owner N-API de attempts já chega ao
+    framing/driver Control/Data sem reopen e o sender Data/adapter
+    `test|shadow` usa o PID atestado no mesmo transporte, nunca um path ou PID
+    fornecido como prova pelo JavaScript.
 - [ ] `G1-HS-03` — Bootstrap entrega o mesmo stream a um canal estabelecido com
   cap físico exato; seed transplantado, reject, poison e write failure não
   produzem receipt de commit. Header de saída é gerado por authority única e
@@ -416,8 +472,9 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
     exige cleanup `closed | native_reaper`. O core `agent-host-bridge` já cria
     owners Control/Data e verifica o peer no mesmo HANDLE/FD. O wrapper
     `agent-host-bridge-napi` já os mantém no processo Host com I/O bounded e
-    cleanup explícito; D-RUST-027 ainda bloqueia produção até o adapter
-    transferir esses transports ao framing/driver sem reopen.
+    cleanup explícito. O adapter já transfere Control/Data ao framing/driver
+    sem reopen; D-RUST-027 ainda bloqueia produção até o E2E process-real pelo
+    supervisor/runner comprovar o mesmo owner até Active.
     No runner pós-`Active`, Cancel/Fence seguem uma transação própria:
     validação → revogação síncrona → ACK bounded → reamostragem do clock →
     receipt → `Cancelling`. Testes cobrem write bloqueado/abandonado, deadline
@@ -504,14 +561,16 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
     `test|shadow`; core e wrapper N-API já materializam e retêm os owners opacos
     no mesmo HANDLE/FD, mas `PrepareAttempt` continua fail-closed em produção
     enquanto o adapter não os ligar ao framing/driver TS.
+    O `main` Windows agora liga o serviço ao bootstrap físico single-use e ao
+    management protegido; o smoke multiprocesso comprova Ready, Hello,
+    Shutdown/ACK e reap sem usar o CodeStudio.
     Pendente:
-    integrar o owner pós-Active com pulse/effects e ligar o serviço supervisor ao seu `main`
-    process-real; implementar heartbeat, drain
+    integrar o owner pós-Active com pulse/effects e implementar heartbeat, drain
     cooperativo, cancelamento host-owned, `UpdateAttemptAuthority`,
     `QuerySupervisorState` e outbox/fatos duráveis
-    `AttemptProcessExited`/`AttemptProcessReaped` e substituir o `main` scaffold
-    do supervisor pela composição real; estender o E2E Host TS↔binários de Hello
-    para Prepare/Activate/Cancel/Fence/Reap, testes de expiry nas
+    `AttemptProcessExited`/`AttemptProcessReaped`; estender o E2E Host
+    TS↔binários de Hello para Prepare/Activate/Cancel/Fence/Reap, testes de
+    expiry nas
     fronteiras do spawn/Ready, matriz Windows packaged/nested/breakaway,
     backend de spawn Unix e unlink Unix descriptor-relative. O item permanece
     aberto.
@@ -748,8 +807,8 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
     core de Launch é usado pelos adapters síncrono e assíncrono e cobre
     reservation, provisionamento, spawn contido, handoff, watchdog, fatos
     correlacionados, replay e cleanup fail-closed. Continuam pendentes Run,
-    checkpoint, terminal durável, integração process-real do runner, outbox de
-    Exited/Reaped, estado `Reaped` end-to-end, recovery, pulse e drain
+    checkpoint, terminal durável, integração process-real completa até Active,
+    outbox de Exited/Reaped, estado `Reaped` end-to-end, recovery, pulse e drain
     cooperativo; item aberto.
 - [ ] `G2-LIFE-02` — Liveness e progress são distintos; hard deadline não pode
   ser renovado por heartbeat.
@@ -800,9 +859,10 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
     antes do schedule, usa grace
     `min(hard deadline, observed + sealed cancel_grace_ms)` e não pode alongar
     Cancel anterior; Reap posterior torna termination imediatamente due.
-    O timer já participa do serviço async de biblioteca sem depender de novo
-    frame; ainda faltam ligá-lo ao binário process-real, cancelamento das
-    operações host-owned, outbox/fatos duráveis e E2E Host TS que prove
+    O timer já participa do serviço async usado pelo binário process-real sem
+    depender de novo frame; ainda faltam o routing de cancelamento pelo launcher
+    Host, cancelamento das operações host-owned, outbox/fatos duráveis e E2E
+    Host TS que prove
     kill/reap; item aberto.
 - [ ] `G2-LIFE-04` — Cancel ACK p95 ≤ 250 ms e árvore não cooperativa some em
   até 2 s depois da grace.
@@ -814,8 +874,8 @@ existência de um PR. O checkbox de gate é sempre o último da fase.
     o mesmo teto físico antes de ACKar o schedule; seu watchdog inicial e
     deadlines monotônicos impedem Cancel/Fence/disconnect de ampliar a vida da
     attempt. O loop async já mantém o timer ativo enquanto o ACK está em write.
-    Ainda faltam medição p95, drain cooperativo, routing no processo real e
-    prova E2E de desaparecimento da árvore não cooperativa em até 2 s; item
+    Ainda faltam medição p95, drain cooperativo, routing de cancelamento pelo
+    launcher Host e prova E2E de desaparecimento da árvore não cooperativa em até 2 s; item
     aberto.
 - [ ] `G2-LIFE-05` — 1.000 ciclos/24 h deixam zero PID, Job, pipe, handle e
   scratch dir órfão.

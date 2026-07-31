@@ -38,6 +38,7 @@ export interface AgentMemoryIndexEntry {
   name: string;
   description: string;
   type: string;
+  source: string;
   scope: string;
   importance: number;
   created_at: string;
@@ -491,6 +492,37 @@ const INDEX_TYPE_WEIGHT: Record<string, number> = {
   procedure: 0.7, architecture: 0.55, pattern: 0.5, external_pointer: 0.4, note: 0.25,
 };
 
+/** Explicit/user-authored memory is durable intent. Automatic session
+ * distillation is useful evidence, but it must not outrank a slightly older
+ * canonical decision merely because it was generated recently. */
+const INDEX_SOURCE_WEIGHT: Record<string, number> = {
+  user: 1.1,
+  agent: 1,
+  'migrated-snapshot': 0.85,
+  distill: 0.65,
+  session: 0.65,
+};
+
+function memoryTitleTokens(value: string): Set<string> {
+  return new Set(
+    value
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((token) => token.length > 2),
+  );
+}
+
+function nearDuplicateTitle(a: string, b: string): boolean {
+  const left = memoryTitleTokens(a);
+  const right = memoryTitleTokens(b);
+  if (left.size === 0 || right.size === 0) return false;
+  let shared = 0;
+  for (const token of left) if (right.has(token)) shared += 1;
+  if (shared < 2) return false;
+  const union = left.size + right.size - shared;
+  return union > 0 && shared / union >= 0.5;
+}
+
 /**
  * Logical-frontmatter index for `recall_memory(mode:'list')` and the turn-1
  * memory index. Ranked by importance × 30-day recency decay × type weight.
@@ -509,14 +541,14 @@ export function listMemoryIndex(
   if (type) params.push(type);
   const rows = db
     .prepare(
-      `SELECT id, name, description, type, scope, importance, created_at, last_accessed_at,
+      `SELECT id, name, description, type, source, scope, importance, created_at, last_accessed_at,
               substr(content, 1, 200) AS excerpt
        FROM agent_memory
        WHERE scope = ? AND project_id = ? AND archived_at IS NULL ${typeClause}
        ORDER BY importance DESC LIMIT 100`,
     )
     .all(...params) as Array<{
-    id: number; name: string; description: string; type: string; scope: string;
+    id: number; name: string; description: string; type: string; source: string; scope: string;
     importance: number; created_at: string; last_accessed_at: string | null; excerpt: string | null;
   }>;
   const now = Date.now();
@@ -525,14 +557,25 @@ export function listMemoryIndex(
     const ts = Date.parse(`${(r.last_accessed_at ?? r.created_at).replace(' ', 'T')}Z`);
     const age = Number.isNaN(ts) ? HALF_LIFE_MS : Math.max(0, now - ts);
     const typeBoost = 0.5 + 0.5 * (INDEX_TYPE_WEIGHT[r.type] ?? 0.5);
-    return { r, score: (r.importance ?? 0.5) * Math.pow(0.5, age / HALF_LIFE_MS) * typeBoost };
+    const sourceBoost = INDEX_SOURCE_WEIGHT[r.source] ?? 0.8;
+    return {
+      r,
+      score: (r.importance ?? 0.5) * Math.pow(0.5, age / HALF_LIFE_MS) * typeBoost * sourceBoost,
+    };
   });
   scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, Math.max(1, limit)).map(({ r }) => ({
+  const diverse: typeof scored = [];
+  for (const candidate of scored) {
+    if (diverse.some(({ r }) => nearDuplicateTitle(r.name, candidate.r.name))) continue;
+    diverse.push(candidate);
+    if (diverse.length >= Math.max(1, limit)) break;
+  }
+  return diverse.map(({ r }) => ({
     id: r.id,
     name: r.name,
     description: r.description,
     type: r.type,
+    source: r.source,
     scope: r.scope,
     importance: r.importance ?? 0.5,
     created_at: r.created_at,

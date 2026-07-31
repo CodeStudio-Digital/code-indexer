@@ -13,9 +13,18 @@ import type { ProviderSpec, TemplateVar } from '@mcp/provider-sdk';
 interface CloudflareCatalogModel {
   id?: string;
   name?: string;
+  display_name?: string;
   description?: string;
   task?: { id?: string; name?: string };
-  properties?: Array<{ property_id?: string; value?: unknown }>;
+  properties?: CloudflareCatalogProperty[];
+  deprecated?: boolean;
+  planned_deprecation_date?: string | null;
+}
+
+interface CloudflareCatalogProperty {
+  property_id?: string;
+  name?: string;
+  value?: unknown;
 }
 
 interface CloudflareCatalogResponse {
@@ -58,10 +67,29 @@ export async function discoverCloudflareModels(
     if (!id || !id.startsWith('@cf/')) continue;
     const task = m.task?.name ?? '';
     if (!SUPPORTED_TASKS.has(task)) continue;
+    const metadata = cloudflareModelMetadata(m, id);
     out.push({
       model_id: id,
-      name: id,
-      context_window: readContextWindow(m) ?? getRegistryContextWindow(id),
+      name: m.display_name ?? id,
+      display_name: m.display_name ?? id,
+      description: m.description ?? null,
+      context_window:
+        readPositiveNumberProperty(m, ['context_window', 'context_length', 'context_size'])
+        ?? metadata.contextWindow
+        ?? getRegistryContextWindow(id),
+      default_max_tokens:
+        readPositiveNumberProperty(m, ['max_output_tokens', 'max_completion_tokens'])
+        ?? null,
+      can_reason: readBooleanProperty(m, ['reasoning', 'supports_reasoning'])
+        ?? metadata.canReason,
+      supports_attachments: readBooleanProperty(m, ['vision', 'supports_vision'])
+        ?? metadata.supportsVision,
+      supported_reasoning_levels: null,
+      default_reasoning_level: null,
+      visibility: isDeprecated(m) ? 'hidden' : 'list',
+      supported_in_api: true,
+      input_modalities: readStringArrayProperty(m, ['input_modalities'])
+        ?? (metadata.supportsVision ? ['text', 'image'] : ['text']),
       source: 'live' as const,
     });
   }
@@ -93,14 +121,81 @@ function resolveAccountId(tpl: TemplateVar | undefined, cfg: ProviderConfig): st
  * array (entry with property_id="context_window"). Best-effort parse so we get
  * a useful value when present; falls back to the static registry.
  */
-function readContextWindow(m: CloudflareCatalogModel): number | null {
-  const prop = m.properties?.find((p) => p.property_id === 'context_window');
-  if (!prop) return null;
-  const v = prop.value;
-  if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v;
-  if (typeof v === 'string') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
+function readPositiveNumberProperty(
+  m: CloudflareCatalogModel,
+  ids: string[],
+): number | null {
+  for (const id of ids) {
+    const value = findProperty(m, id)?.value;
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+    if (typeof value === 'string') {
+      const parsed = Number(value.replaceAll(',', ''));
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
   }
   return null;
+}
+
+function readBooleanProperty(
+  m: CloudflareCatalogModel,
+  ids: string[],
+): boolean | null {
+  for (const id of ids) {
+    const value = findProperty(m, id)?.value;
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string' && /^(?:true|yes|supported)$/i.test(value)) return true;
+    if (typeof value === 'string' && /^(?:false|no|unsupported)$/i.test(value)) return false;
+  }
+  return null;
+}
+
+function readStringArrayProperty(
+  m: CloudflareCatalogModel,
+  ids: string[],
+): string[] | null {
+  for (const id of ids) {
+    const value = findProperty(m, id)?.value;
+    if (Array.isArray(value)) {
+      const strings = value.filter((entry): entry is string => typeof entry === 'string');
+      if (strings.length > 0) return strings;
+    }
+  }
+  return null;
+}
+
+function findProperty(
+  m: CloudflareCatalogModel,
+  id: string,
+): CloudflareCatalogProperty | undefined {
+  return m.properties?.find((property) =>
+    (property.property_id ?? property.name)?.toLowerCase() === id.toLowerCase());
+}
+
+function isDeprecated(m: CloudflareCatalogModel): boolean {
+  if (m.deprecated === true) return true;
+  const flag = readBooleanProperty(m, ['deprecated', 'is_deprecated']);
+  if (flag != null) return flag;
+  if (!m.planned_deprecation_date) return false;
+  const timestamp = Date.parse(m.planned_deprecation_date);
+  return Number.isFinite(timestamp) && timestamp <= Date.now();
+}
+
+function cloudflareModelMetadata(
+  _model: CloudflareCatalogModel,
+  id: string,
+): { contextWindow: number | null; canReason: boolean; supportsVision: boolean } {
+  const normalized = id.toLowerCase();
+  const contextWindow =
+    /(?:kimi-k2\.6|kimi-k2\.7-code|glm-5\.2)/.test(normalized)
+      ? 262_144
+      : /kimi-k2\.5/.test(normalized)
+        ? 256_000
+        : /(?:glm-4\.7-flash|gemma-4|llama-4)/.test(normalized)
+          ? 131_072
+          : null;
+  const canReason =
+    /(?:kimi-k2\.[567]|glm-(?:4\.7|5\.2)|gpt-oss|gemma-4|nemotron-3|deepseek-r1|qwen3-30b|qwq)/.test(normalized);
+  const supportsVision =
+    /(?:kimi-k2\.[567]|gemma-4|llama-4-scout|mistral-small-3\.1)/.test(normalized);
+  return { contextWindow, canReason, supportsVision };
 }

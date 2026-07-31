@@ -47,6 +47,10 @@ import { resolveToolInvocationMetadata } from '../../policy.js';
 import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js';
 import { normalizeSourceTruncations } from '../tool-output-telemetry.js';
 import { asAbortSignal } from '../../abort-signal.js';
+import {
+  planRetrievalBatch,
+  type RetrievalBatchPlanOptions,
+} from '../guards/retrieval-batch.js';
 
 /**
  * Per-invocation timeout is delegated to `resolveToolTimeoutMs` (the
@@ -114,6 +118,12 @@ export interface DispatchedToolResult {
 
 export interface DispatchArgs {
   toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>;
+  /**
+   * Deterministic, same-batch retrieval planning. This removes provably
+   * redundant search/map/grep invocations without adding prompt text. Omit to
+   * retain legacy dispatch; CODER_RETRIEVAL_GUARD=0 is the runtime kill switch.
+   */
+  retrievalBatch?: Omit<RetrievalBatchPlanOptions, 'enabled'>;
   registry: ToolRegistry;
   toolContext: ToolContext;
   turn: number;
@@ -335,6 +345,12 @@ export interface DispatchResult {
 
 export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult> {
   const results: DispatchedToolResult[] = [];
+  const retrievalPlan = planRetrievalBatch(args.toolUses, {
+    ...args.retrievalBatch,
+    enabled:
+      args.retrievalBatch !== undefined
+      && process.env.CODER_RETRIEVAL_GUARD !== '0',
+  });
   let toolLoopDetected = false;
   // PR 5 — which guard fired last. Tracked so the Executing node can
   // surface the correct guard kind to the orchestrator.
@@ -351,7 +367,14 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     count: number;
   }>();
 
-  for (const tu of args.toolUses) {
+  for (const requestedToolUse of args.toolUses) {
+    const retrievalDecision = retrievalPlan.get(requestedToolUse.id);
+    const tu = {
+      ...requestedToolUse,
+      input: retrievalDecision?.action === 'execute'
+        ? retrievalDecision.input
+        : requestedToolUse.input,
+    };
     const tool = lookupTool(args.registry, tu.name);
     const normalizedInput = normalizeGuardInput(tool, tu.input);
     const resolvedMetadata = tool
@@ -385,6 +408,27 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     };
 
     try {
+    if (retrievalDecision?.action === 'coalesce') {
+      await pushResult({
+        toolUseId: tu.id,
+        name: tu.name,
+        content: retrievalDecision.content,
+        isError: false,
+        durationMs: 0,
+        wasRefusedByDedup: false,
+        guardVerdict: {
+          action: 'reuse',
+          reason: retrievalDecision.reason,
+          shouldReflect: false,
+          affectsFailureStreak: false,
+          sourceTool: tu.name,
+          originToolUseId: retrievalDecision.originToolUseId,
+          stateEpoch: invocationGuard.stateEpoch,
+        },
+        stateEpoch: invocationGuard.stateEpoch,
+      });
+      continue;
+    }
 
     // Hidden-call handling (pin mechanism). A registered tool can be absent
     // from the model's visible list (tier-hidden or cap-cut) yet still be

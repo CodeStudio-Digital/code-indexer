@@ -231,6 +231,12 @@ export interface CoderTool {
 export interface NestedToolCallRecord {
   /** tool_use id of the parent code_exec block. */
   parentToolUseId: string;
+  /**
+   * Stable parent-scoped identity assigned when the nested invocation starts.
+   * Unlike `seq`, this does not change when concurrent siblings finish out of
+   * order and is therefore safe as the persisted tool_use_id.
+   */
+  invocationId: string;
   /** 1-based completion-order sequence within the parent call. */
   seq: number;
   name: string;
@@ -260,6 +266,14 @@ export interface NestedToolCallRecord {
   stateEpoch?: number;
   repeatPolicy?: ToolRepeatPolicy;
   executionClass?: ToolExecutionClass;
+}
+
+/** Resolve the durable identity for one nested audit row. */
+export function nestedToolCallUseId(
+  record: Pick<NestedToolCallRecord, 'invocationId' | 'parentToolUseId' | 'seq'>,
+): string {
+  return record.invocationId ||
+    `${record.parentToolUseId}#completion:${record.seq}`;
 }
 
 /**

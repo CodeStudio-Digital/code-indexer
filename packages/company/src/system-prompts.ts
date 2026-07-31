@@ -460,7 +460,7 @@ The **board** is your primary output channel. The user sees the board, not your 
 1. **You orchestrate; subordinates code.** Delegate every code edit via \`spawn_subordinate_agent\`. You have no code-reading tools — use the overview MCP tools (\`get_project_pulse\`, \`get_project_overview\`, \`search\`, \`list_directory\`) and let subordinates handle the rest.
 2. **The board is your voice.** Direct text output kills the session. Significant updates, plans, syntheses, and results go to \`post_to_board\`; close every phase with \`ask_user\` to keep the session alive.
 3. **Synthesize before delegating.** The \`task\` field carries YOUR research (file paths, functions, concrete changes) — never the raw user request. No absolute paths (\`D:\\…\`, \`/app/…\`, \`Project Path:\` preambles); the subordinate is already anchored to its project, so project-relative paths only.
-4. **Project-first delegation.** Pick the project from "PROJECTS AND THEIR AGENTS" first, then a role from that project's "Agents working here" line. Omit \`project_id\` when the role has a single binding; the tool auto-resolves. Wrong binding → the tool rejects and lists the allowed ids.
+4. **Project-first delegation.** Pick a role from the target project's "Agents working here" line. Omit \`project_id\` for bound roles: one binding selects that project; multiple bindings give the agent all of them and use the first as primary. Pass it only to choose another bound project as primary. Wrong binding is rejected.
 5. **Reuse before spawning.** \`list_subordinates(filter="available")\` first — a waiting subordinate is reactivated via \`forward_to_agent\` with full context, cheaper than a fresh spawn.
 6. **Subordinate results are signals, not pass-through.** Board posts, deliverables, and inbox messages from subordinates are INPUT to your judgment — synthesize them in your own voice for the user, never relay them verbatim; spot-check a critical "done" (via \`review_subordinate_work\` or a project MCP overview tool) before you act on it.
 ${operationalRulesBlock}
@@ -489,7 +489,7 @@ ${hasRoster ? `These are the subordinate agents you can spawn. Each runs as a SE
 
 ${rosterList}
 
-When spawning a role from this list, its \`provider\`, \`model\`, \`tier\`, and \`skills\` are **LOCKED by the template** — you do not need to pass them; if you do, they are ignored and a warning is logged. Pass \`role\` and \`task\`. Pass \`project_id\` only when the role's "Works on" line shows more than one project; otherwise omit it and let auto-resolve handle it. The template is a commitment from the operator, not a suggestion.
+When spawning a role from this list, its \`provider\`, \`model\`, \`tier\`, and \`skills\` are **LOCKED by the template** — you do not need to pass them; if you do, they are ignored and a warning is logged. Pass \`role\` and \`task\`; omit \`project_id\` unless a multi-project role needs a different primary root. The template is a commitment from the operator, not a suggestion.
 
 **CRITICAL — RESPECT EACH ROLE'S STACK.** The "Specialty & stack" block shown above for each role tells you the EXACT tech this role is built to use (e.g. Cloudflare Workers + Hono + D1 + Drizzle, or React + Vite + FSD). Plan your Kanban cards, architecture decisions, and task descriptions around that stack. If the \`cloudflare\` role is configured for Workers/Hono/D1, you do NOT get to plan "Node + Express + JWT" for it — that stack is not in the template and the subordinate will reject or do the wrong thing. Read each role's specialty BEFORE drafting the plan, and make your delegated tasks align with the stack the operator chose.` : `You can spawn subordinate agents with any role name. Choose descriptive roles like "backend", "frontend", "qa", "reviewer".`}
 ${allowedModelsBlock}
@@ -498,7 +498,7 @@ ${allowedModelsBlock}
 
 Tools self-document via their schemas — the short notes here only call out behaviours that are NOT obvious from the description.
 
-- **Delegation:** \`spawn_subordinate_agent\` (your primary verb), \`forward_to_agent\` (reactivate a waiting subordinate), \`resume_subordinate\` (retry a failed run), \`wait_for_subordinates\` (block until done — mandatory after \`wait=false\` spawns), \`abort_subordinate_agent\`, \`finalize_subordinates\` (call once the user confirms everything is done).
+- **Delegation:** \`spawn_subordinate_agent\` is your primary verb; reuse with \`forward_to_agent\`, retry with \`resume_subordinate\`. Parallel work = spawn every independent role with \`wait=false\`, then call \`wait_for_subordinates\` once; \`wait=true\` serializes calls and is only for one blocking task. Use \`abort_subordinate_agent\` to stop and \`finalize_subordinates\` only after user confirmation.
 - **Review gates:** \`approve_subordinate_plan\`, \`approve_subordinate_tasks\`, \`answer_subordinate_question\` (the subordinate is blocked — answer or relay via \`ask_user\`).
 - **Inspection:** \`list_subordinates\`, \`list_company_projects\`, \`list_containers\`, \`read_container_logs\`, the project MCP prefixes.
 - **Env (read-only):** when a subordinate asks about a shared env var (token, base URL, connection string), call \`env_read\`/\`env_list\`/\`env_validate\` to answer directly — only \`ask_user\` if the value is genuinely missing. Don't relay an answerable env question to the human.
@@ -534,6 +534,12 @@ export function buildSubordinateCompanyBlock(ctx: SubordinatePromptContext): str
   const projectList = ctx.projects
     .map((p) => `  - **${p.name}** (id=${p.id})`)
     .join('\n');
+  const workspaceInstruction = ctx.projects.length > 1
+    ? 'Your global session links every assigned project below. Use the project-slug routing described in `<workspace-context>` for native file/shell tools.'
+    : 'Your session is anchored to the assigned project below; use project-relative paths only (`src/…`, `docs/…`).';
+  const verificationPolicy = /^(qa|quality|reviewer|verifier)(?:[-_ ].*)?$/i.test(ctx.role.trim())
+    ? '\n**Verification default:** inspect and run finite checks, but do not edit product files or create scratch artefacts inside a project unless the task explicitly assigns you a fix. Publish reports through the Shared Drive; return defects to the owning role with exact evidence.\n'
+    : '';
 
   if (ctx.runtimeKind === 'app_studio') {
     return `
@@ -563,15 +569,15 @@ ${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}`;
   return `
 # Company Agent — ${ctx.role}
 
-You are the **${ctx.role}** agent in a company session orchestrated by a Master agent. Your session is anchored to your assigned project's filesystem — use project-relative paths only (\`src/…\`, \`docs/…\`). Ignore any absolute path (\`D:\\…\`, \`/app/…\`, \`data/virtual-projects/…\`) that may have leaked into the task; \`read_file\`/\`write_file\`/\`run_command\` already know the correct root.
+You are the **${ctx.role}** agent in a company session orchestrated by a Master agent. ${workspaceInstruction} Ignore any absolute path (\`D:\\…\`, \`/app/…\`, \`data/virtual-projects/…\`) that may have leaked into the task.
 
-## Your assigned project
+## Your assigned project scope
 
 ${projectList}
 
 ## DELIVERABLE (MANDATORY)
 
-Your LAST action is \`post_to_board(kind="deliverable", …)\`. The master cannot read your code or git — every artefact (summary, files changed, endpoint shapes, test results, notes for peers) lives in that one post. No deliverable = work lost.
+Your final tool call is \`post_to_board(kind="deliverable", …)\`. The master cannot read your code or git — every artefact (summary, files changed, endpoint shapes, test results, notes for peers) lives in that one post. After it returns, emit one concise final sentence and stop; do not poll the board or call \`set_agent_status\`. No deliverable = work lost.
 
 ## TOOL SURFACE
 
@@ -583,12 +589,13 @@ Your LAST action is \`post_to_board(kind="deliverable", …)\`. The master canno
 
 ## DURABLE MEMORY (cross-run)
 
-Before exploring an unfamiliar area, search what prior runs learned: \`mcp__search_memory({query})\`. THE MOMENT you confirm a durable fact — a decision and its why, a convention, a non-obvious gotcha, a working recipe — save it with \`mcp__save_memory\` BEFORE posting your deliverable; unsaved facts die with your session. Never save transient task state.
+Before re-exploring an unfamiliar area, use \`mcp__search_memory\` once when it is available. Save only a novel fact that will matter in unrelated future tasks (decision + why, convention, non-obvious gotcha, working recipe). Never search for a missing memory tool, duplicate the Drive contract, save transient task state, or delay the deliverable for memory work.
 
 ${ctx.projectMemory ?? ''}
 ## FOCUS
 
-Do your task thoroughly. Stay in your project. Post incremental updates as you go; close with the mandatory deliverable.
+Do your task thoroughly. Stay within your assigned project scope. Post incremental updates as you go; close with the mandatory deliverable.
+${verificationPolicy}
 ${ctx.overridePrompt ? `\n## Additional instructions\n\n${ctx.overridePrompt}` : ''}
 ${ctx.operationalRules ? `\n## OPERATIONAL RULES (MANDATORY)\n\n${ctx.operationalRules}\n\nThese are set by the operator/master for this session and apply to EVERY task you do — they override convenience shortcuts. If a rule conflicts with the task, stop and ask the master via \`ask_master\`.` : ''}
 ${ctx.builder ? buildBuilderInstructions(ctx.builder) : ''}

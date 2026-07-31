@@ -1,8 +1,8 @@
 # Rust Agent Runtime — especificação normativa
 
 > **Status:** especificação final para implementação  
-> **Versão:** 1.5.0
-> **Data-base:** 2026-07-29
+> **Versão:** 1.8.0
+> **Data-base:** 2026-07-30
 > **Autoridade:** este diretório governa o novo runtime de agentes em Rust  
 > **Checklist executiva:** [IMPLEMENTATION-CHECKLIST.md](./IMPLEMENTATION-CHECKLIST.md)
 

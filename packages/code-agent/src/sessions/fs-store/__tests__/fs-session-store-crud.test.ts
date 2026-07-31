@@ -1,7 +1,8 @@
 import { mkdir, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { asSessionId } from '@mcp/session-storage';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsSessionStore } from '../fs-session-store.js';
 
 const SUBAGENT_RUN_ID = '11111111-1111-4111-8111-111111111111';
@@ -56,6 +57,58 @@ afterEach(async () => {
 });
 
 describe('FsSessionStore session catalog', () => {
+  it('resolves the last provider/model from catalog metadata without reading every metrics file', async () => {
+    await store.createSession({
+      id: asSessionId('ffffffff-ffff-4fff-8fff-ffffffffffff'),
+      project_id: 1,
+      title: 'Older model',
+      provider: 'anthropic',
+      model: 'claude-test',
+    });
+    await store.createSession({
+      id: asSessionId('00000000-0000-4000-8000-000000000001'),
+      project_id: 2,
+      title: 'Latest model',
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+    const metricsRead = vi
+      .spyOn(store.repository, 'readMetricsSummarySync')
+      .mockImplementation(() => {
+        throw new Error('last-model lookup must not hydrate metrics');
+      });
+
+    await expect(store.getLastUsedProviderModel()).resolves.toEqual({
+      provider: 'openai',
+      model: 'gpt-test',
+    });
+    expect(metricsRead).not.toHaveBeenCalled();
+  });
+
+  it('hydrates metrics only for the requested recent-session window', async () => {
+    const sessions = await Promise.all(
+      Array.from({ length: 6 }, (_, index) =>
+        store.createSession({
+          project_id: index % 2 === 0 ? 1 : 2,
+          title: `Recent ${index}`,
+          provider: 'openai',
+          model: 'gpt-test',
+        }),
+      ),
+    );
+    await store.setSessionArchived(sessions[0].id, true);
+    const metricsRead = vi.spyOn(
+      store.repository,
+      'readMetricsSummarySync',
+    );
+
+    const recent = await store.listRecentSessionsGlobal(2);
+
+    expect(recent).toHaveLength(2);
+    expect(recent.every((session) => !session.is_archived)).toBe(true);
+    expect(metricsRead).toHaveBeenCalledTimes(2);
+  });
+
   it('publishes creation-time runtime settings in the initial state projection', async () => {
     const session = await store.createSession({
       project_id: 1,
@@ -65,6 +118,8 @@ describe('FsSessionStore session catalog', () => {
       execution_mode_override: 'ultra',
       reasoning_effort_override: 'high',
       thinking_enabled: true,
+      max_turns: null,
+      max_auto_continues: 15,
     });
 
     expect(session).toMatchObject({
@@ -89,6 +144,8 @@ describe('FsSessionStore session catalog', () => {
           execution_mode_override: string;
           reasoning_effort_override: string | null;
           thinking_enabled: boolean;
+          max_turns: number | null;
+          max_auto_continues: number;
         };
       };
     };
@@ -96,6 +153,8 @@ describe('FsSessionStore session catalog', () => {
       execution_mode_override: 'ultra',
       reasoning_effort_override: 'high',
       thinking_enabled: true,
+      max_turns: null,
+      max_auto_continues: 15,
     });
   });
 

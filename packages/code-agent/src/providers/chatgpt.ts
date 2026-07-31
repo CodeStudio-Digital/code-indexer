@@ -107,6 +107,16 @@ export class ChatGPTCodexProvider implements ChatProvider {
    * provider re-emits it as the `image_generated` ChatDelta.
    */
   private imageGenerationEnabled = false;
+  /** Whether to attach the Codex CLI attribution/session headers. */
+  private codexHeadersEnabled = true;
+  /** Whether this Responses backend accepts store/previous_response_id. */
+  private statefulResponses = true;
+  /** Whether the legacy boolean thinking control may derive an effort. */
+  private reasoningFromThinking = true;
+  /** Readable reasoning summary mode requested from compatible backends. */
+  private reasoningSummary: 'auto' | 'concise' | 'detailed' | null = null;
+  /** Count Sakana-style orchestration token details in billable usage. */
+  private includeOrchestrationUsage = false;
   /**
    * One-shot guard so the "temperature ignored by Codex Responses API" warning
    * fires once per provider instance, not on every turn.
@@ -133,6 +143,16 @@ export class ChatGPTCodexProvider implements ChatProvider {
     /** Attach the `image_generation` server-managed tool to every request.
      *  Gated by the factory to models that support it. */
     imageGenerationEnabled?: boolean;
+    /** Attach ChatGPT/Codex attribution and session headers (default true). */
+    codexHeaders?: boolean;
+    /** Allow store/previous_response_id (default true). */
+    statefulResponses?: boolean;
+    /** Derive effort from the legacy boolean thinking toggle (default true). */
+    reasoningFromThinking?: boolean;
+    /** Request readable reasoning summaries when the model supports them. */
+    reasoningSummary?: 'auto' | 'concise' | 'detailed' | null;
+    /** Add provider-specific orchestration tokens to usage totals. */
+    includeOrchestrationUsage?: boolean;
   }) {
     this.name = opts.name ?? 'chatgpt';
     this.model = opts.model;
@@ -145,18 +165,24 @@ export class ChatGPTCodexProvider implements ChatProvider {
     };
     this.applyPatchToolType = opts.applyPatchToolType ?? null;
     this.imageGenerationEnabled = opts.imageGenerationEnabled ?? false;
+    this.codexHeadersEnabled = opts.codexHeaders ?? true;
+    this.statefulResponses = opts.statefulResponses ?? true;
+    this.reasoningFromThinking = opts.reasoningFromThinking ?? true;
+    this.reasoningSummary = opts.reasoningSummary ?? null;
+    this.includeOrchestrationUsage = opts.includeOrchestrationUsage ?? false;
 
-    const headers: Record<string, string> = {
-      originator: 'codex_cli_rs',
-      'User-Agent': 'codex_cli_rs/0.1.0',
-      session_id: this.sessionId,
-    };
-    if (opts.accountId) headers['ChatGPT-Account-Id'] = opts.accountId;
+    const headers: Record<string, string> = {};
+    if (this.codexHeadersEnabled) {
+      headers.originator = 'codex_cli_rs';
+      headers['User-Agent'] = 'codex_cli_rs/0.1.0';
+      headers.session_id = this.sessionId;
+      if (opts.accountId) headers['ChatGPT-Account-Id'] = opts.accountId;
+    }
 
     this.client = new OpenAI({
       apiKey: opts.apiKey,
       baseURL: opts.baseURL,
-      defaultHeaders: headers,
+      ...(Object.keys(headers).length > 0 ? { defaultHeaders: headers } : {}),
       maxRetries: 0,
       // Use undici (native fetch) so installLlmDispatcher's bodyTimeout:0
       // applies during the reasoning phase. See native-fetch.ts.
@@ -225,7 +251,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
       // control for backward compatibility.
       if (explicit.toLowerCase() === 'ultra' || resolution.effort) return resolution.effort;
     }
-    return this.pickReasoningEffort(req.thinking);
+    return this.reasoningFromThinking ? this.pickReasoningEffort(req.thinking) : null;
   }
 
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
@@ -239,7 +265,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
     ) {
       this.temperatureWarningEmitted = true;
       console.warn(
-        `[chatgpt] temperature=${req.inference.temperature} ignored — Codex Responses API does not accept the parameter. Use reasoning.effort (req.thinking) instead.`,
+        `[${this.name}] temperature=${req.inference.temperature} ignored — Responses API does not use the parameter. Use reasoning.effort instead.`,
       );
     }
 
@@ -247,7 +273,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
     // The chatgpt.com OAuth backend often rejects or silently drops these
     // (the official Codex CLI only sets store:true for Azure Responses).
     // Defaulting off keeps behaviour aligned with that reference impl.
-    const wantStore = process.env.CODEX_STORE_RESPONSES === '1';
+    const wantStore = this.statefulResponses && process.env.CODEX_STORE_RESPONSES === '1';
 
     // When `previousResponseId` is set AND store is on, the backend already
     // has the prefix up to `previousResponseMessageCount` — ship only the
@@ -296,6 +322,12 @@ export class ChatGPTCodexProvider implements ChatProvider {
     // when the model supports it (or capability is unknown); otherwise we fall
     // back to the derived behaviour so an invalid override never breaks a turn.
     const reasoningEffort = this.resolveReasoningEffort(req);
+    const reasoning = reasoningEffort || this.reasoningSummary
+      ? {
+          ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+          ...(this.reasoningSummary ? { summary: this.reasoningSummary } : {}),
+        }
+      : null;
     const promptCacheKey =
       req.sessionId != null && GPT_56_PROMPT_CACHE_MODELS.has(this.model.toLowerCase())
         ? `coder-session-${req.sessionId}`
@@ -322,15 +354,13 @@ export class ChatGPTCodexProvider implements ChatProvider {
         // and replay `previous_response_id` next turn for ~40-80% better
         // cache utilization. Default off — the OAuth backend isn't documented
         // to support this and we observed silent failures with store=true.
-        store: wantStore,
+        ...(this.statefulResponses ? { store: wantStore } : {}),
         ...(useResume ? { previous_response_id: req.previousResponseId } : {}),
         // Reasoning effort is only sent when the runner explicitly opted in
         // via `req.thinking`. When undefined we omit the field so the backend
         // applies the model's default level (e.g. 'medium' for gpt-5.5).
         // `summary: 'auto'` requests reasoning summary deltas the user can read.
-        ...(reasoningEffort
-          ? { reasoning: { effort: reasoningEffort, summary: 'auto' } }
-          : {}),
+        ...(reasoning ? { reasoning } : {}),
       },
       // Forward the AbortSignal so the SDK can tear down the underlying
       // fetch when the runner aborts (e.g. user-initiated cancellation
@@ -339,7 +369,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
       req.signal || stableTransportSessionId
         ? {
             ...(req.signal ? { signal: req.signal } : {}),
-            ...(stableTransportSessionId
+            ...(this.codexHeadersEnabled && stableTransportSessionId
               ? { headers: { session_id: stableTransportSessionId } }
               : {}),
           }
@@ -601,6 +631,11 @@ export class ChatGPTCodexProvider implements ChatProvider {
                 input_tokens_details?: {
                   cached_tokens?: number;
                   cache_write_tokens?: number;
+                  orchestration_input_tokens?: number;
+                  orchestration_input_cached_tokens?: number;
+                };
+                output_tokens_details?: {
+                  orchestration_output_tokens?: number;
                 };
               };
               status?: string;
@@ -617,20 +652,31 @@ export class ChatGPTCodexProvider implements ChatProvider {
         }
         const u = response?.usage;
         if (u) {
-          const inputTokens = u.input_tokens ?? 0;
-          const cachedTokens = u.input_tokens_details?.cached_tokens ?? 0;
+          const orchestrationInputTokens = this.includeOrchestrationUsage
+            ? (u.input_tokens_details?.orchestration_input_tokens ?? 0)
+            : 0;
+          const orchestrationCachedTokens = this.includeOrchestrationUsage
+            ? (u.input_tokens_details?.orchestration_input_cached_tokens ?? 0)
+            : 0;
+          const orchestrationOutputTokens = this.includeOrchestrationUsage
+            ? (u.output_tokens_details?.orchestration_output_tokens ?? 0)
+            : 0;
+          const inputTokens = (u.input_tokens ?? 0) + orchestrationInputTokens;
+          const outputTokens = (u.output_tokens ?? 0) + orchestrationOutputTokens;
+          const cachedTokens =
+            (u.input_tokens_details?.cached_tokens ?? 0) + orchestrationCachedTokens;
           const cacheWriteTokens = u.input_tokens_details?.cache_write_tokens ?? 0;
           if (inputTokens > 0) {
             const ratio = Math.round((cachedTokens / inputTokens) * 100);
             console.log(
-              `[chatgpt] turn cache: input=${inputTokens} cached=${cachedTokens} written=${cacheWriteTokens} ratio=${ratio}% model=${this.model}`,
+              `[${this.name}] turn cache: input=${inputTokens} cached=${cachedTokens} written=${cacheWriteTokens} ratio=${ratio}% model=${this.model}`,
             );
           }
           yield {
             type: 'usage',
             usage: {
               input_tokens: inputTokens,
-              output_tokens: u.output_tokens ?? 0,
+              output_tokens: outputTokens,
               cache_read_input_tokens: cachedTokens,
               cache_creation_input_tokens: cacheWriteTokens,
               // Responses API: input_tokens already INCLUDES cached tokens.
@@ -647,7 +693,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
         const err = (evt.error ?? (evt.response as { error?: unknown })?.error) as
           | { message?: string }
           | undefined;
-        throw new Error(`Codex responses error: ${err?.message ?? JSON.stringify(evt)}`);
+        throw new Error(`${this.name} responses error: ${err?.message ?? JSON.stringify(evt)}`);
       }
     }
   }

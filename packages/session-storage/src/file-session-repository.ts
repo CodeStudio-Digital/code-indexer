@@ -10,6 +10,7 @@ import { recoverSessionArtifacts } from './artifact-recovery.js';
 import { atomicWriteFile, atomicWriteJson, canonicalJson, durableRename } from './atomic-file.js';
 import {
   assertContainedPath,
+  assertPathHasNoLinks,
   assertPathHasNoLinksSync,
   assertSafeFileName,
   ensureDirectoryTreeNoLinks,
@@ -28,6 +29,7 @@ import {
 } from './session-initial-state.js';
 import {
   computeRequestHash,
+  readConversation,
   readConversationSync,
   SessionWriter,
   type SessionWriterOptions,
@@ -355,6 +357,16 @@ export class FileSessionRepository {
     return readConversationSync(path);
   }
 
+  async readConversation(
+    location: SessionLocation,
+  ): Promise<readonly ConversationCommit[]> {
+    this.#assertReadableLocation(location);
+    const path = join(location.bundle_path, 'conversation.jsonl');
+    assertContainedPath(location.bundle_path, path);
+    await assertPathHasNoLinks(location.bundle_path, path);
+    return readConversation(path);
+  }
+
   readMetricsSummarySync(location: SessionLocation): SessionMetricsSummary {
     this.#assertReadableLocation(location);
     return readSessionMetricsSummarySync(location.bundle_path);
@@ -366,6 +378,17 @@ export class FileSessionRepository {
 
   getCachedState(location: SessionLocation): SessionState | null {
     return this.#stateCache.get(cacheKey(location)) ?? null;
+  }
+
+  /**
+   * Re-read projections written by another authority (for example a coder
+   * worker) and notify the in-memory catalog without acquiring the writer
+   * lease in this process.
+   */
+  refreshSessionProjection(location: SessionLocation): void {
+    this.readSessionSync(location);
+    this.readStateSync(location);
+    this.#emit({ type: 'updated', location });
   }
 
   #writer(

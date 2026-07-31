@@ -1,4 +1,5 @@
 import {
+  appendFile,
   mkdir,
   mkdtemp,
   readFile,
@@ -8,7 +9,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toolOutputRecordFileName } from '@mcp/session-storage';
 import { FsSessionStore } from '../fs-session-store.js';
 
@@ -43,6 +44,58 @@ afterEach(async () => {
 });
 
 describe('FsSessionStore conversation journal', () => {
+  it('reads the highest message sequence from the committed JSONL tail without hydrating history', async () => {
+    const session = await store.createSession({
+      project_id: 7,
+      title: 'Cheap tail sequence',
+      provider: 'test',
+      model: 'test',
+    });
+    await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'tail-user-1',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'first' }],
+      },
+    });
+    const location = await store.getSessionLocation(session.id);
+    expect(location).not.toBeNull();
+    await store.repository.commitTurn(location!, {
+      operation_id: 'tail-patch-only',
+      payload: {
+        schema_version: 1,
+        type: 'coder.turn',
+        request_key: 'tail-patch-only',
+        messages: [],
+        message_patches: [],
+        tool_calls: [],
+        goal_mutations: [],
+      },
+    });
+    await appendFile(
+      join(location!.bundle_path, 'conversation.jsonl'),
+      '{"uncommitted":true',
+      'utf8',
+    );
+
+    const fullRead = vi
+      .spyOn(store.repository, 'readConversationSync')
+      .mockImplementation(() => {
+        throw new Error('full conversation hydration is forbidden');
+      });
+
+    await expect(store.maxMessageSeq(session.id)).resolves.toBe(1);
+    await expect(store.listMessagesAfter(session.id, 0)).resolves.toMatchObject({
+      maxSeq: 1,
+      messages: [{
+        role: 'user',
+        content: [{ type: 'text', text: 'first' }],
+      }],
+    });
+    expect(fullRead).not.toHaveBeenCalled();
+  });
+
   it('persists every tool-bearing assistant turn from the same agent run', async () => {
     const session = await store.createSession({
       project_id: 7,

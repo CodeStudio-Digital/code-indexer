@@ -35,7 +35,13 @@ type AnthropicStreamEvent = {
   index?: number;
   message?: { usage?: Partial<AnthropicStreamUsage> };
   content_block?: { type?: string; id?: string; name?: string };
-  delta?: { type?: string; text?: string; partial_json?: string };
+  delta?: {
+    type?: string;
+    text?: string;
+    thinking?: string;
+    signature?: string;
+    partial_json?: string;
+  };
   usage?: { output_tokens?: number };
 };
 
@@ -83,16 +89,16 @@ function supportsAnthropicAdaptiveThinking(model: string): boolean {
 function anthropicDefaultMaxTokens(model: string): number {
   const family = anthropicModelFamily(model);
   if (
-    family.includes('claude-fable-5') ||
-    family.includes('claude-mythos-5') ||
-    family.includes('claude-opus-5') ||
-    family.includes('claude-opus-4-8') ||
-    family.includes('claude-opus-4-7') ||
-    family.includes('claude-opus-4-6') ||
-    family.includes('claude-sonnet-5')
-  ) {
-    return 64_000;
-  }
+    family.includes('claude-fable-5')
+    || family.includes('claude-mythos-5')
+    || family.includes('claude-opus-5')
+    || family.includes('claude-sonnet-5')
+  ) return 128_000;
+  if (
+    family.includes('claude-opus-4-8')
+    || family.includes('claude-opus-4-7')
+    || family.includes('claude-opus-4-6')
+  ) return 64_000;
   if (
     family.includes('claude-sonnet-4-6') ||
     family.includes('claude-haiku-4-5')
@@ -115,7 +121,10 @@ export function resolveAnthropicRequestModel(
   const adaptive = supportsAnthropicAdaptiveThinking(model);
   const family = anthropicModelFamily(model);
   const alwaysAdaptive =
-    family.includes('claude-fable-5') || family.includes('claude-mythos-5');
+    family.includes('claude-fable-5')
+    || family.includes('claude-mythos-5')
+    || family.includes('claude-opus-5')
+    || family.includes('claude-sonnet-5');
   const requestedEffort = req.reasoningEffort?.trim().toLowerCase();
   const advertisedLevels = metadata?.supported_reasoning_levels?.map((level) =>
     level.toLowerCase(),
@@ -131,7 +140,7 @@ export function resolveAnthropicRequestModel(
       : null;
   const thinking =
     adaptive && (alwaysAdaptive || req.thinking === true || effort !== null)
-      ? { type: 'adaptive' as const }
+      ? { type: 'adaptive' as const, display: 'summarized' as const }
       : undefined;
 
   return {
@@ -535,6 +544,10 @@ export class AnthropicChatProvider implements ChatProvider {
           const d = event.delta;
           if (d?.type === 'text_delta' && typeof d.text === 'string') {
             yield { type: 'text_delta', text: d.text };
+          } else if (d?.type === 'thinking_delta' && typeof d.thinking === 'string') {
+            // Visible thought summaries use `delta.thinking`; reading only
+            // `delta.text` made Anthropic reasoning disappear from the UI.
+            yield { type: 'thinking_delta', text: d.thinking };
           } else if (
             d?.type === 'input_json_delta' &&
             typeof d.partial_json === 'string' &&

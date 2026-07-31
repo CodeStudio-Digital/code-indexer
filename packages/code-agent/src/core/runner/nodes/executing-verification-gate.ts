@@ -188,15 +188,30 @@ export function buildGoalCompletionAdvisory(
   };
 }
 
-/**
- * @deprecated Verification no longer intercepts a clean finish.
- */
 export function maybeVerificationNudge(
-  _ctx: RunContext,
-  _readiness: VerificationReadiness,
-  _options: VerificationGateOptions = {},
+  ctx: RunContext,
+  readiness: VerificationReadiness,
+  options: VerificationGateOptions = {},
 ): string | null {
-  return null;
+  const maxNudges = Math.max(0, options.maxNudges ?? 1);
+  if (
+    ctx.verification.nudges >= maxNudges
+    || readiness.lastWriteSeq == null
+    || readiness.status === 'fresh'
+    || readiness.status === 'not_applicable'
+  ) {
+    return null;
+  }
+
+  ctx.verification.nudges += 1;
+  const instruction = readiness.status === 'missing'
+    ? 'No validation was recorded after the latest write.'
+    : 'The recorded validation failed, is stale, or does not clearly cover the latest write.';
+  return (
+    `[verification-required] ${instruction} ` +
+    'Run the smallest relevant test, typecheck, lint, or build now. ' +
+    'If validation is impossible, say why and do not claim that it passed.'
+  );
 }
 
 /**

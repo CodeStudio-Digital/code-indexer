@@ -49,11 +49,11 @@ describe('BootstrapNode', () => {
     expect(recordedEvents[0].args[0]).toMatchObject({ profile: null });
   });
 
-  it('falls back to maxTurns=50 when opts.maxTurns is unset', async () => {
+  it('reports an unlimited session when opts.maxTurns is unset', async () => {
     const { ctx, recordedEvents } = makeTestContext();
-    // Simulate the test helper setting maxTurns; ensure the default is honored.
+    delete ctx.opts.maxTurns;
     await new BootstrapNode().execute(ctx, null);
-    expect(recordedEvents[0].args[0]).toMatchObject({ maxTurns: 50 });
+    expect(recordedEvents[0].args[0]).toMatchObject({ maxTurns: null });
   });
 
   it('defensively re-adds "bootstrap" to activeTiers if missing', async () => {

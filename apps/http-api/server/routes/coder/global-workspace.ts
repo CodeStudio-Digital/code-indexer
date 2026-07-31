@@ -29,6 +29,8 @@ export interface CreateGlobalInput {
   execution_mode_override?: 'standard' | 'ultra';
   reasoning_effort_override?: string | null;
   thinking_enabled?: boolean;
+  max_turns?: number | null;
+  max_auto_continues?: number;
   /** Real linked projects, with exactly one primary after normalization. */
   projects: {
     id: number;
@@ -60,6 +62,10 @@ export async function createGlobalWorkspaceSession(
     ...(input.thinking_enabled === undefined
       ? {}
       : { thinking_enabled: input.thinking_enabled }),
+    max_turns: input.max_turns ?? null,
+    ...(input.max_auto_continues === undefined
+      ? {}
+      : { max_auto_continues: input.max_auto_continues }),
     owner_project_id:
       projects.find((project) => project.isPrimary)?.id ?? projects[0]?.id,
     realProjects: projects.map((project) => ({
@@ -94,6 +100,8 @@ export async function reuseGlobalWorkspaceSession(
     execution_mode_override?: 'standard' | 'ultra';
     reasoning_effort_override?: string | null;
     thinking_enabled?: boolean;
+    max_turns?: number | null;
+    max_auto_continues?: number;
   },
 ): Promise<FsCoderSession> {
   const source = await deps.sessionStore.getSession(input.reuseSessionId);
@@ -135,6 +143,10 @@ export async function reuseGlobalWorkspaceSession(
     ...(input.thinking_enabled === undefined
       ? {}
       : { thinking_enabled: input.thinking_enabled }),
+    max_turns: input.max_turns ?? null,
+    ...(input.max_auto_continues === undefined
+      ? {}
+      : { max_auto_continues: input.max_auto_continues }),
     projects: currentProjects,
   });
 }

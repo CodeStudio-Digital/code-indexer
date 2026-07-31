@@ -40,18 +40,6 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
     default: '1',
   },
   {
-    key: 'CODER_MAX_AUTO_CONTINUES',
-    label: 'Max auto-continues per run',
-    description:
-      'How many extra max-turn batches a top-level run may receive without a new user message. ' +
-      'Ephemeral subagents do not use auto-continue. ' +
-      'The effective ceiling is maxTurns × (1 + this value); the recommended default is 3 and values above 3 are aggressive.',
-    type: 'int',
-    category: 'agent',
-    default: '3',
-    min: 0,
-  },
-  {
     key: 'CODER_IMPLEMENT_MAX_TURNS',
     label: 'Build mode max turns',
     description: 'Optional exact turn cap for build/implement subagents. 0 = unlimited.',
@@ -106,7 +94,7 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
       'Purely advisory text; set 0 to suppress it.',
     type: 'bool',
     category: 'agent',
-    default: '1',
+    default: '0',
     advanced: true,
   },
   {
@@ -271,10 +259,10 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
   {
     key: 'CODER_PREFLIGHT_MAX_TOOLS',
     label: 'Task preflight max pinned tools',
-    description: 'How many tools the analyzer may pin visible from turn 1.',
+    description: 'How many non-overlapping tools the analyzer may prioritize on turn 1.',
     type: 'int',
     category: 'agent',
-    default: '12',
+    default: '4',
     min: 1,
     advanced: true,
   },
@@ -311,7 +299,7 @@ export const AGENT_BEHAVIOUR_SETTINGS: readonly SettingDef[] = [
       'preflight pins always survive; hidden tools stay callable via find_tools.',
     type: 'int',
     category: 'agent',
-    default: '48',
+    default: '28',
     min: 16,
     advanced: true,
   },

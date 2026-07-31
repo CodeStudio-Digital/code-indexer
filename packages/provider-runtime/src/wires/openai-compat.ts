@@ -1,5 +1,10 @@
-import type { ProviderSpec, ProviderDefinition } from '@mcp/provider-sdk';
+import {
+  selectRuntimeModelMetadata,
+  type ProviderSpec,
+  type ProviderDefinition,
+} from '@mcp/provider-sdk';
 import { OpenAIChatProvider } from '@mcp/code-agent/providers/openai.js';
+import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
 import { parseModelWithMode } from '../wire-helpers/model-mode.js';
 import { resolveBaseURL } from '../wire-helpers/base-url.js';
 import { resolveHeaders } from '../wire-helpers/headers.js';
@@ -17,7 +22,7 @@ type WireParts = Pick<
 
 /**
  * OpenAI-compatible chat/completions wire (openai, openrouter, zai, deepseek,
- * cloudflare, copilot). Constants come from `spec.wireOpts` rather than an
+ * cloudflare, copilot, mistral). Constants come from `spec.wireOpts` rather than an
  * inline provider switch.
  */
 export function buildOpenAICompat(spec: ProviderSpec): WireParts {
@@ -27,10 +32,46 @@ export function buildOpenAICompat(spec: ProviderSpec): WireParts {
     parseModelWithMode(model).model ?? spec.defaultModel ?? spec.defaultModels[0];
 
   return {
-    createCoder: (creds, model) => {
+    createCoder: (creds, model, opts) => {
       const parsed = parseModelWithMode(model);
       const baseURL = resolveBaseURL(spec, creds, parsed.mode);
       const baseModel = parsed.model ?? spec.defaultModel ?? spec.defaultModels[0];
+
+      if (spec.wireOpts?.responsesApi) {
+        if (!baseURL) {
+          throw new Error(`${spec.displayName} Responses API requires a base URL`);
+        }
+        if (!baseModel) {
+          throw new Error(`${spec.displayName} Responses API requires a model`);
+        }
+        if (!creds.apiKey) {
+          throw new Error(`${spec.displayName} Responses API requires an API key`);
+        }
+        const activeMetadata = selectRuntimeModelMetadata(
+          opts?.providerModels,
+          model ?? baseModel,
+        );
+        return new ChatGPTCodexProvider({
+          name: spec.kind,
+          apiKey: creds.apiKey,
+          baseURL,
+          model: baseModel,
+          reasoning: {
+            supportedLevels: activeMetadata?.supported_reasoning_levels,
+            defaultLevel: activeMetadata?.default_reasoning_level,
+          },
+          applyPatchToolType: activeMetadata?.apply_patch_tool_type,
+          codexHeaders: false,
+          statefulResponses: spec.wireOpts.responsesStateless !== true,
+          reasoningFromThinking:
+            spec.wireOpts.responsesReasoningFromThinking === true,
+          reasoningSummary: spec.wireOpts.responsesReasoningSummaryModels?.includes(baseModel)
+            ? 'auto'
+            : null,
+          includeOrchestrationUsage:
+            spec.wireOpts.responsesIncludeOrchestrationUsage === true,
+        });
+      }
 
       // Fast path: no `request` descriptor → byte-identical to the native wire.
       if (!spec.request) {

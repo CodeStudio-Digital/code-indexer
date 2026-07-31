@@ -59,6 +59,39 @@ describe('runBehaviorTree — Fix 1 (node throw → done, never reject)', () => 
     expect(done!.args[0]).toBe('error'); // reason
     expect(done!.args[1]).toBe(boom); // captured error
   });
+
+  it('honors a host abort requested while a node is in flight', async () => {
+    const { ctx } = makeTestContext();
+    const { events, emit } = recordingEmit();
+    let abortRequested = false;
+    const executeNext = vi.fn(async () => ({ kind: 'CleanFinish' as const }));
+    const nodes = buildDefaultNodes();
+    nodes.Bootstrap = {
+      state: 'Bootstrap',
+      execute: async () => {
+        abortRequested = true;
+        return { kind: 'TurnSucceeded', hasToolCalls: false };
+      },
+    } as BehaviorNode;
+    nodes.Executing = {
+      state: 'Executing',
+      execute: executeNext,
+    } as BehaviorNode;
+
+    const result = await runBehaviorTree(
+      {
+        opts: ctx.opts,
+        emit,
+        initialTiers: null,
+        bridge: { isAbortRequested: () => abortRequested },
+      },
+      nodes,
+    );
+
+    expect(result.reason).toBe('aborted');
+    expect(executeNext).not.toHaveBeenCalled();
+    expect(events.find((e) => e.event === 'done')?.args[0]).toBe('aborted');
+  });
 });
 
 describe('runBehaviorTree — Fix 3 (pre-emit compaction is bounded)', () => {

@@ -1221,18 +1221,6 @@
       "tier": "review"
     },
     {
-      "key": "CODER_GLOBAL_INDEX_GATE_TIMEOUT_MS",
-      "prefix": "CODER",
-      "inferred_type": "string",
-      "enums": [],
-      "usage_count": 1,
-      "files": [
-        "apps/http-api/server/routes/coder/stream.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
-    },
-    {
       "key": "CODER_GOAL_LIFECYCLE_MAX_NUDGES",
       "prefix": "CODER",
       "inferred_type": "string",
@@ -1315,18 +1303,6 @@
       ],
       "in_catalog": true,
       "tier": "cataloged"
-    },
-    {
-      "key": "CODER_INDEX_GATE_TIMEOUT_MS",
-      "prefix": "CODER",
-      "inferred_type": "string",
-      "enums": [],
-      "usage_count": 1,
-      "files": [
-        "apps/http-api/server/routes/coder/stream.ts"
-      ],
-      "in_catalog": false,
-      "tier": "review"
     },
     {
       "key": "CODER_LOG_TOOLS_COUNT",

@@ -69,6 +69,9 @@ export interface FsCoderSession {
   cloudcode_session_id: string | null;
   last_response_id: string | null;
   last_response_message_count: number | null;
+  /** Null means this session runs until natural completion. */
+  max_turns: number | null;
+  max_auto_continues: number;
   temperature_override: number | null;
   reasoning_effort_override: string | null;
   execution_mode_override: 'standard' | 'ultra';
@@ -130,6 +133,8 @@ export interface FsCreateSessionInput {
   execution_mode_override?: 'standard' | 'ultra';
   reasoning_effort_override?: string | null;
   thinking_enabled?: boolean;
+  max_turns?: number | null;
+  max_auto_continues?: number;
   metadata?: Readonly<Record<string, JsonValue>>;
 }
 
@@ -144,6 +149,8 @@ export interface FsCreateGlobalSessionInput {
   execution_mode_override?: 'standard' | 'ultra';
   reasoning_effort_override?: string | null;
   thinking_enabled?: boolean;
+  max_turns?: number | null;
+  max_auto_continues?: number;
   owner_project_id?: ProjectId | null;
   realProjects: ReadonlyArray<{
     projectId: ProjectId;

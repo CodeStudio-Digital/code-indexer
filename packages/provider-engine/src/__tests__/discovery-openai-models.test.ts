@@ -159,19 +159,39 @@ describe('discoverOpenAIModels', () => {
 describe('discoverOpenAIModels spec.models gap-fill overlay', () => {
   it('(d) fugu: overlays reasoning levels + context window from spec.models onto live ids', async () => {
     // Fugu's /v1/models returns only ids; the reasoning levels live in spec.models.
-    const FUGU_RESPONSE = { data: [{ id: 'fugu' }, { id: 'fugu-ultra' }] };
+    const FUGU_RESPONSE = {
+      data: [{ id: 'fugu' }, { id: 'fugu-ultra-v1.1' }, { id: 'fugu-ultra-v1.0' }],
+    };
     const cfg = baseCfg({ kind: 'fugu', base_url: 'https://api.sakana.ai/v1', api_key: 'k' });
 
     stubFetch(FUGU_RESPONSE);
     const out = await discoverOpenAIModels(fuguSpec, cfg);
 
-    expect(out).toHaveLength(2);
-    for (const row of out) {
-      expect(row.supported_reasoning_levels).toEqual(['high', 'xhigh', 'max']);
-      expect(row.default_reasoning_level).toBe('xhigh');
-      expect(row.context_window).toBe(272_000);
-      expect(row.source).toBe('live');
-    }
+    expect(out).toHaveLength(3);
+    expect(out[0]).toMatchObject({
+      model_id: 'fugu',
+      supported_reasoning_levels: ['high', 'xhigh'],
+      default_reasoning_level: 'high',
+      context_window: 1_000_000,
+      apply_patch_tool_type: 'freeform',
+      source: 'live',
+    });
+    expect(out[1]).toMatchObject({
+      model_id: 'fugu-ultra-v1.1',
+      supported_reasoning_levels: ['high', 'xhigh', 'max'],
+      default_reasoning_level: 'xhigh',
+      context_window: 1_000_000,
+      apply_patch_tool_type: 'freeform',
+      source: 'live',
+    });
+    expect(out[2]).toMatchObject({
+      model_id: 'fugu-ultra-v1.0',
+      supported_reasoning_levels: ['high', 'xhigh'],
+      default_reasoning_level: 'xhigh',
+      context_window: 1_000_000,
+      apply_patch_tool_type: 'freeform',
+      source: 'live',
+    });
   });
 
   it('(d) ids absent from spec.models pass through untouched', async () => {

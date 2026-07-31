@@ -33,6 +33,7 @@ describe('buildProviderPluginDefinition host wire fallback', () => {
       setModel: vi.fn(function setModel(this: ChatProvider, model: string) { this.model = model; }),
       async *chat() { yield { type: 'text_delta', text: 'ok' } satisfies ChatDelta; },
     };
+    const hostCreateImages = vi.fn() as NonNullable<ProviderDefinition['createImages']>;
     const hostDefinition: ProviderDefinition = {
       kind: 'acme',
       displayName: 'Acme',
@@ -43,6 +44,7 @@ describe('buildProviderPluginDefinition host wire fallback', () => {
       fetchModels: vi.fn(async () => ['from-host']),
       testConnection: vi.fn(async () => undefined),
       createCoder: vi.fn(() => hostClient),
+      createImages: hostCreateImages,
     };
     const definition = buildProviderPluginDefinition(spec, {
       namespace: 'provider-acme',
@@ -61,6 +63,7 @@ describe('buildProviderPluginDefinition host wire fallback', () => {
     expect(hostDefinition.fetchModels).toHaveBeenCalledWith(creds);
     expect(hostDefinition.testConnection).toHaveBeenCalledWith({ config, creds });
     expect(hostDefinition.createCoder).toHaveBeenCalledWith(creds, 'chosen-model', undefined);
+    expect(definition.createImages).toBe(hostCreateImages);
     expect(chunks).toEqual([{ type: 'text_delta', text: 'ok' }]);
   });
 });

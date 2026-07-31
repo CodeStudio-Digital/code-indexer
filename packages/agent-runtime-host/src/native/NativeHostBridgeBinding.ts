@@ -3,8 +3,9 @@ import type {
 } from '../packaging/RuntimePackageTypes.js';
 import { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import { ATTEMPT_FRAME_MAX_BYTES } from '../ipc/AttemptFrameLimits.js';
+import { MANAGEMENT_FRAME_MAX_BYTES } from '../ipc/ManagementFrame.js';
 
-export const NATIVE_HOST_BRIDGE_API_VERSION = 1;
+export const NATIVE_HOST_BRIDGE_API_VERSION = 2;
 export const MINIMUM_NODE_API_VERSION = 8;
 
 export interface NativeHostBridgeAbi {
@@ -32,11 +33,30 @@ export interface NativeHostAttemptChannels {
   close(): Promise<'closed'>;
 }
 
+export interface NativeHostSupervisorCloseReceipt {
+  readonly processId: number;
+  readonly exitCode: number;
+  readonly forced: boolean;
+}
+
+export interface NativeHostSupervisorChannel {
+  readonly managementConnectionId: string;
+  readonly managementMaximumFrameBytes: number;
+  readonly supervisorProcessId: number;
+  readonly isClosed: boolean;
+  readManagement(maximumBytes: number): Promise<Uint8Array | null>;
+  writeManagement(bytes: Uint8Array): Promise<void>;
+  close(): Promise<NativeHostSupervisorCloseReceipt>;
+}
+
 export interface NativeHostBridgeBinding {
   nativeHostBridgeAbi(): NativeHostBridgeAbi;
   openHostAttemptBridge(
     request: Uint8Array,
   ): Promise<NativeHostAttemptChannels>;
+  openHostSupervisorBridge(
+    request: Uint8Array,
+  ): Promise<NativeHostSupervisorChannel>;
 }
 
 export function assertNativeHostBridgeBinding(
@@ -46,15 +66,18 @@ export function assertNativeHostBridgeBinding(
   if (!record(value)) throw invalid('module');
   const abiFunction = value.nativeHostBridgeAbi;
   const openFunction = value.openHostAttemptBridge;
+  const openSupervisorFunction = value.openHostSupervisorBridge;
   if (
     typeof abiFunction !== 'function'
     || typeof openFunction !== 'function'
+    || typeof openSupervisorFunction !== 'function'
   ) throw invalid('exports');
   const abi = abiFunction() as unknown;
   assertAbi(abi, runtimePackage);
   return Object.freeze({
     nativeHostBridgeAbi: abiFunction.bind(value),
     openHostAttemptBridge: openFunction.bind(value),
+    openHostSupervisorBridge: openSupervisorFunction.bind(value),
   });
 }
 
@@ -80,6 +103,35 @@ export function assertNativeHostAttemptChannels(
     || typeof value.writeData !== 'function'
     || typeof value.close !== 'function'
   ) throw invalid('channel owner');
+}
+
+export function assertNativeHostSupervisorChannel(
+  value: unknown,
+): asserts value is NativeHostSupervisorChannel {
+  if (
+    !record(value)
+    || !identifier(value.managementConnectionId)
+    || value.managementMaximumFrameBytes !== MANAGEMENT_FRAME_MAX_BYTES
+    || !processId(value.supervisorProcessId)
+    || value.isClosed !== false
+    || typeof value.readManagement !== 'function'
+    || typeof value.writeManagement !== 'function'
+    || typeof value.close !== 'function'
+  ) throw invalid('supervisor owner');
+}
+
+export function assertNativeHostSupervisorCloseReceipt(
+  value: unknown,
+  expectedProcessId: number,
+): asserts value is NativeHostSupervisorCloseReceipt {
+  if (
+    !record(value)
+    || value.processId !== expectedProcessId
+    || !Number.isInteger(value.exitCode)
+    || Number(value.exitCode) < 0
+    || Number(value.exitCode) > 0xffff_ffff
+    || typeof value.forced !== 'boolean'
+  ) throw invalid('supervisor close receipt');
 }
 
 function assertAbi(

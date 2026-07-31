@@ -140,6 +140,72 @@ describe('branch ops', () => {
     expect(await gitOutput(work, ['branch', '--show-current'])).toBe('feature/remote-checkout');
   });
 
+  it('classifies local changes that block remote checkout without modifying the worktree', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'mcp-checkout-blocked-origin-'));
+    const work = mkdtempSync(join(tmpdir(), 'mcp-checkout-blocked-work-'));
+    dirs.push(origin, work);
+
+    await runGit(origin, ['init', '-b', 'main']);
+    await runGit(origin, ['config', 'user.email', 't@example.com']);
+    await runGit(origin, ['config', 'user.name', 'Tester']);
+    await runGit(origin, ['config', 'commit.gpgsign', 'false']);
+    writeFileSync(join(origin, 'file.txt'), 'base\n');
+    await runGit(origin, ['add', '.']);
+    await runGit(origin, ['commit', '-m', 'base']);
+    await runGit(origin, ['checkout', '-b', 'feature/remote-conflict']);
+    writeFileSync(join(origin, 'file.txt'), 'remote\n');
+    await runGit(origin, ['commit', '-am', 'remote']);
+    await runGit(origin, ['checkout', 'main']);
+
+    await runGit(tmpdir(), ['clone', origin, work]);
+    writeFileSync(join(work, 'file.txt'), 'local\n');
+    const h = makeHandlers(work);
+
+    await expect(h.branchCheckout({
+      projectId: 1,
+      name: 'feature/remote-conflict',
+      create: true,
+      from: 'origin/feature/remote-conflict',
+    }, {} as never)).rejects.toMatchObject({
+      code: 'git_checkout_local_changes',
+      status: 409,
+    });
+    expect(await gitOutput(work, ['branch', '--show-current'])).toBe('main');
+    expect(await gitOutput(work, ['branch', '--list', 'feature/remote-conflict'])).toBe('');
+    expect(await gitOutput(work, ['diff', '--name-only'])).toBe('file.txt');
+  });
+
+  it('restores the staged state used by Smart Checkout', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-smart-checkout-index-'));
+    dirs.push(dir);
+    await runGit(dir, ['init', '-b', 'main']);
+    await runGit(dir, ['config', 'user.email', 't@example.com']);
+    await runGit(dir, ['config', 'user.name', 'Tester']);
+    await runGit(dir, ['config', 'commit.gpgsign', 'false']);
+    writeFileSync(join(dir, 'file.txt'), 'base\n');
+    await runGit(dir, ['add', '.']);
+    await runGit(dir, ['commit', '-m', 'base']);
+    writeFileSync(join(dir, 'file.txt'), 'staged\n');
+    await runGit(dir, ['add', 'file.txt']);
+    const h = makeHandlers(dir);
+
+    const saved = await h.stashSave({
+      projectId: 1,
+      message: 'smart-checkout-index',
+    }, {} as never);
+    expect(saved.ok).toBe(true);
+    expect(await gitOutput(dir, ['diff', '--cached', '--name-only'])).toBe('');
+
+    const [stash] = await h.stashList({ projectId: 1 }, {} as never);
+    const restored = await h.stashPop({
+      projectId: 1,
+      ref: stash.index,
+      restoreIndex: true,
+    }, {} as never);
+    expect(restored.ok).toBe(true);
+    expect(await gitOutput(dir, ['diff', '--cached', '--name-only'])).toBe('file.txt');
+  });
+
   it('log pagina commits com limit + skip sem repetir a pagina anterior', async () => {
     const dir = await setupDivergingRepo();
     const h = makeHandlers(dir);

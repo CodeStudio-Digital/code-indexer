@@ -10,7 +10,7 @@
  * same per-session state threaded down from AgentChat, so changes apply
  * immediately to the next turn.
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BookOpen, Gauge, Languages, Layers, Repeat, Sparkles, Thermometer } from 'lucide-react';
 import { Input } from '../../../components/ui/input.js';
@@ -63,6 +63,8 @@ interface ModelSettingsDialogProps {
   currentProviderModels: EnrichedProviderModel[];
   maxTurns: number | null;
   setMaxTurns: (v: number | null) => void;
+  maxAutoContinues: number;
+  setMaxAutoContinues: (v: number) => void;
   temperature: number | null;
   setTemperature: (v: number | null) => void;
   reasoningEffort?: string | null;
@@ -113,6 +115,8 @@ function ModelSettingsDialogBody({
   currentProviderModels,
   maxTurns,
   setMaxTurns,
+  maxAutoContinues,
+  setMaxAutoContinues,
   temperature,
   setTemperature,
   reasoningEffort,
@@ -135,6 +139,10 @@ function ModelSettingsDialogBody({
 }: Omit<ModelSettingsDialogProps, 'open' | 'onOpenChange'>) {
   const { t } = useTranslation(['chat', 'common']);
   const fixedTemperature = fixedTemperatureForModel(model);
+  const [turnLimitEnabled, setTurnLimitEnabled] = useState(maxTurns !== null);
+  useEffect(() => {
+    setTurnLimitEnabled(maxTurns !== null);
+  }, [maxTurns]);
   const providerComboboxOptions = useMemo(
     () => providerOptions.map((p) => ({ value: p.id, label: p.label })),
     [providerOptions],
@@ -237,25 +245,72 @@ function ModelSettingsDialogBody({
               </div>
             </div>
           )}
-          <div className="flex gap-3">
-            <div className="flex-1 space-y-1.5">
-              <label className="text-xs text-muted-foreground">{t('chat:toolbar.maxTurns')}</label>
-              <div className="flex items-center gap-1.5">
-                <Repeat className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+            <div className="flex items-start gap-3">
+              <Repeat className="mt-0.5 h-4 w-4 text-muted-foreground shrink-0" />
+              <div className="min-w-0 flex-1">
+                <label htmlFor="model-settings-turn-limit" className="text-sm font-medium">
+                  {t('chat:toolbar.turnLimitEnabled')}
+                </label>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  {!turnLimitEnabled
+                    ? t('chat:toolbar.turnLimitUnlimited')
+                    : maxTurns === null
+                      ? t('chat:toolbar.turnLimitAwaiting')
+                      : t('chat:toolbar.turnLimitActive', { turns: maxTurns })}
+                </p>
+              </div>
+              <Switch
+                id="model-settings-turn-limit"
+                checked={turnLimitEnabled}
+                onCheckedChange={(checked) => {
+                  setTurnLimitEnabled(checked);
+                  if (!checked) setMaxTurns(null);
+                }}
+                aria-label={t('chat:toolbar.turnLimitEnabled')}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">
+                  {t('chat:toolbar.maxTurns')}
+                </label>
                 <Input
                   type="number"
                   min={1}
-                  max={200}
+                  max={100000}
                   value={maxTurns ?? ''}
+                  disabled={!turnLimitEnabled}
                   onChange={(e) => {
-                    const v = e.target.value;
-                    setMaxTurns(v === '' ? null : Math.max(1, parseInt(v, 10) || 1));
+                    const parsed = Number.parseInt(e.target.value, 10);
+                    if (Number.isFinite(parsed)) {
+                      setMaxTurns(Math.min(100000, Math.max(1, parsed)));
+                    }
                   }}
-                  placeholder="50"
+                  className="h-7 text-xs font-mono px-1.5"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs text-muted-foreground">
+                  {t('chat:toolbar.maxAutoContinues')}
+                </label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={1000}
+                  value={maxAutoContinues}
+                  onChange={(e) => {
+                    const parsed = Number.parseInt(e.target.value, 10);
+                    if (Number.isFinite(parsed)) {
+                      setMaxAutoContinues(Math.min(1000, Math.max(0, parsed)));
+                    }
+                  }}
                   className="h-7 text-xs font-mono px-1.5"
                 />
               </div>
             </div>
+          </div>
+          <div className="flex gap-3">
             <div className="flex-1 space-y-1.5">
               <label className="text-xs text-muted-foreground">{t('chat:toolbar.temperature', { defaultValue: 'Temperature' })}</label>
               <div className="flex items-center gap-1.5">

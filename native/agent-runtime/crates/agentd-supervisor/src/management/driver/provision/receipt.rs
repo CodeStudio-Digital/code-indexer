@@ -30,6 +30,7 @@ pub struct ProtectedLaunchReceipt {
     )
 )]
 impl ProtectedLaunchReceipt {
+    #[cfg(windows)]
     pub(super) const fn new(
         seal: ProtectedLaunchSeal,
         physical: ProtectedLaunchPhysicalFacts,

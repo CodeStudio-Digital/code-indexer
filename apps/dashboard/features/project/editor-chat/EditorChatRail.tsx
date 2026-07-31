@@ -25,6 +25,7 @@ import { SelectionChips } from './SelectionChips.js';
 import { SessionPickerDropdown } from './SessionPickerDropdown.js';
 import { useEditorChatSession } from './useEditorChatSession.js';
 import type { AgentPreset } from '@mcp/api-bus';
+import { DEFAULT_SESSION_MAX_AUTO_CONTINUES } from '@mcp/code-agent/sessions/run-limits.js';
 
 interface Props {
   projectId: number;
@@ -84,10 +85,11 @@ export function EditorChatRail({
       executionMode: s.executionMode,
       reasoningEffort: s.reasoningEffort,
       thinking: s.thinking,
-      maxTurns: s.maxTurns,
+      maxTurns: null,
+      maxAutoContinues: DEFAULT_SESSION_MAX_AUTO_CONTINUES,
       temperature: s.temperature,
     };
-  }, [s.agent, s.executionMode, s.getModelsForProvider, s.maxTurns, s.model, s.provider, s.reasoningEffort, s.temperature, s.thinking]);
+  }, [s.agent, s.executionMode, s.getModelsForProvider, s.model, s.provider, s.reasoningEffort, s.temperature, s.thinking]);
 
   useEffect(() => {
     const onExternalPrompt = (event: Event) => {
@@ -328,6 +330,8 @@ export function EditorChatRail({
           currentProviderModels={s.currentProviderModels}
           maxTurns={s.maxTurns}
           setMaxTurns={s.setMaxTurns}
+          maxAutoContinues={s.maxAutoContinues}
+          setMaxAutoContinues={s.setMaxAutoContinues}
           sessionId={s.selectedId}
           thinking={s.thinking}
           setThinking={s.setThinking}

@@ -119,7 +119,7 @@ const get_file_skeleton = defineTool({
   name: 'get_file_skeleton',
   tier: 'bootstrap',
   ...mcpAccess('read'),
-  description: 'Compact outline of a file: header + symbol list (line, kind, name, signature). Symbol count is capped by max_symbols (default 100). Pass format="json" for a structured response.\n' +
+  description: 'Outline for large or unfamiliar files; skip it when search already reports a file with ≤800 lines because read_file returns that file in full. Symbol count is capped by max_symbols (default 100). Pass format="json" for a structured response.\n' +
     'file_path may also be a DIRECTORY — returns the exported symbols of the indexed files under it (grouped per file), which is the cheapest way to map an unfamiliar module.',
   inputSchema: {
     type: 'object',

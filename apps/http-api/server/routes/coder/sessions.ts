@@ -42,6 +42,12 @@ import {
   resolveAgentSelection,
   type AgentSelectionId,
 } from '../../../custom-agents.js';
+import { withSessionLock } from './sessionLock.js';
+import {
+  DEFAULT_SESSION_MAX_AUTO_CONTINUES,
+  MAX_SESSION_AUTO_CONTINUES,
+  MAX_SESSION_TURNS,
+} from '@mcp/code-agent/sessions/run-limits.js';
 
 /**
  * Trim heavy inline content (tool_result strings and image/document base64)
@@ -316,6 +322,9 @@ interface CreateGlobalSessionBody {
   execution_mode?: CoderExecutionMode;
   /** Native provider effort; legacy `ultra` is converted to execution_mode. */
   reasoning_effort?: string | null;
+  /** Null/omitted means unlimited. */
+  max_turns?: number | null;
+  max_auto_continues?: number;
 }
 
 interface CreateSessionBody {
@@ -333,6 +342,9 @@ interface CreateSessionBody {
   execution_mode?: CoderExecutionMode;
   /** Initial sticky extended-thinking state. Defaults to false. */
   thinking_enabled?: boolean;
+  /** Null/omitted means unlimited. */
+  max_turns?: number | null;
+  max_auto_continues?: number;
   /** Optional phase profile binding (Camada 2). Null = walk cascade. */
   phase_profile_id?: number | null;
   /** Trusted host metadata persisted with the filesystem bundle. */
@@ -346,6 +358,48 @@ export function mountCoderSessionsRoutes(
 ): void {
   const { sessionStore, providerStore } = deps;
   const workerPool = getCoderWorkerPool();
+
+  const enabledSelectedModel = (
+    selected: { provider: string; model: string } | null | undefined,
+  ): { provider: string; model: string } | null => {
+    if (!selected || !providerStore.getProvider(selected.provider)?.enabled) {
+      return null;
+    }
+    const [modelId, mode = ''] = selected.model.split('::');
+    const enabled = providerStore
+      .listModels(selected.provider, true)
+      .some((candidate) => (
+        candidate.model_id === modelId
+        && (!mode || candidate.mode === mode)
+      ));
+    return enabled ? selected : null;
+  };
+
+  const resolveLastSelectedModel = async (): Promise<{
+    provider: string;
+    model: string;
+  } | null> => {
+    const persisted = enabledSelectedModel(
+      await deps.coderPreferences?.getLastSelectedModel(),
+    );
+    if (persisted) return persisted;
+    return enabledSelectedModel(
+      await sessionStore.getLastUsedProviderModel(),
+    );
+  };
+
+  const rememberSelectedModel = (provider: string, model: string): void => {
+    if (!provider.trim() || !model.trim()) return;
+    void deps.coderPreferences
+      ?.setLastSelectedModel(provider, model)
+      .catch((error) => {
+        console.warn(
+          `[coder-preferences] could not persist last selected model: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
+  };
 
   const validateAgentSelection = (value: unknown): value is AgentSelectionId =>
     resolveAgentSelection(providerStore, value) !== null;
@@ -382,6 +436,51 @@ export function mountCoderSessionsRoutes(
       return `reasoning effort '${effort}' not supported for ${model ?? '(default model)'}; supported: ${supported.join(',')}`;
     }
     return null;
+  };
+
+  const validateRunLimits = (
+    maxTurns: unknown,
+    maxAutoContinues: unknown,
+  ):
+    | { ok: true; maxTurns: number | null; maxAutoContinues: number }
+    | { ok: false; error: string } => {
+    if (
+      maxTurns !== undefined
+      && maxTurns !== null
+      && (
+        typeof maxTurns !== 'number'
+        || !Number.isSafeInteger(maxTurns)
+        || maxTurns < 1
+        || maxTurns > MAX_SESSION_TURNS
+      )
+    ) {
+      return {
+        ok: false,
+        error: `max_turns must be null or an integer from 1 to ${MAX_SESSION_TURNS}`,
+      };
+    }
+    if (
+      maxAutoContinues !== undefined
+      && (
+        typeof maxAutoContinues !== 'number'
+        || !Number.isSafeInteger(maxAutoContinues)
+        || maxAutoContinues < 0
+        || maxAutoContinues > MAX_SESSION_AUTO_CONTINUES
+      )
+    ) {
+      return {
+        ok: false,
+        error: `max_auto_continues must be an integer from 0 to ${MAX_SESSION_AUTO_CONTINUES}`,
+      };
+    }
+    return {
+      ok: true,
+      maxTurns: maxTurns == null ? null : maxTurns,
+      maxAutoContinues:
+        maxAutoContinues === undefined
+          ? DEFAULT_SESSION_MAX_AUTO_CONTINUES
+          : maxAutoContinues,
+    };
   };
 
   /**
@@ -435,6 +534,11 @@ export function mountCoderSessionsRoutes(
     }
     const execution = resolveCreationExecutionSettings(body.execution_mode, body.reasoning_effort);
     if (!execution.ok) return c.json({ error: execution.error }, 400);
+    const runLimits = validateRunLimits(
+      body.max_turns,
+      body.max_auto_continues,
+    );
+    if (!runLimits.ok) return c.json({ error: runLimits.error }, 400);
     const effortError = validateReasoningEffort(body.provider, body.model, execution.reasoningEffort);
     if (effortError) return c.json({ error: effortError }, 400);
     if (body.reuse_session_id) {
@@ -451,8 +555,16 @@ export function mountCoderSessionsRoutes(
           agent: body.agent ?? null,
           execution_mode_override: execution.executionMode,
           reasoning_effort_override: execution.reasoningEffort,
+          max_turns: runLimits.maxTurns,
+          max_auto_continues: runLimits.maxAutoContinues,
         });
-        return c.json((await sessionStore.getSession(session.id)) ?? session, 201);
+        const responseSession =
+          (await sessionStore.getSession(session.id)) ?? session;
+        rememberSelectedModel(
+          responseSession.provider,
+          responseSession.model,
+        );
+        return c.json(responseSession, 201);
       } catch (e) {
         return c.json({ error: `could not reuse global session: ${e instanceof Error ? e.message : String(e)}` }, 400);
       }
@@ -485,12 +597,17 @@ export function mountCoderSessionsRoutes(
         agent: body.agent ?? null,
         execution_mode_override: execution.executionMode,
         reasoning_effort_override: execution.reasoningEffort,
+        max_turns: runLimits.maxTurns,
+        max_auto_continues: runLimits.maxAutoContinues,
         projects,
       });
     } catch (e) {
       return c.json({ error: `could not create global workspace: ${e instanceof Error ? e.message : String(e)}` }, 500);
     }
-    return c.json((await sessionStore.getSession(session.id)) ?? session, 201);
+    const responseSession =
+      (await sessionStore.getSession(session.id)) ?? session;
+    rememberSelectedModel(responseSession.provider, responseSession.model);
+    return c.json(responseSession, 201);
   });
 
   /** Built-in presets plus enabled user-defined agents for the dashboard picker. */
@@ -883,20 +1000,64 @@ export function mountCoderSessionsRoutes(
    * | high | extra | max | ultra. Supersedes the binary `/unrestricted-output`
    * toggle. `null` clears back to the runtime default (derived from the legacy
    * boolean, else 'economic'). Validated against the fixed set; no model gate.
-   * No live-runner push — the cap is baked into `effectivePushTimeCap` at the
-   * next runner construction (like `/plan-depth` and `/reasoning-effort`).
+   * An active worker persists the value and updates its warm runner so the
+   * next tool call observes the new cap without reconstructing the session.
    */
   app.patch('/api/coder/sessions/:id/tool-output-cap-level', async (c) => {
     const id = parseSessionIdParam(c);
     const body = await parseJsonBody<{ level?: string | null }>(c);
     const level = body.level ?? null;
-    if (level !== null && parseToolOutputCapLevel(level) === null) {
+    const parsedLevel = parseToolOutputCapLevel(level);
+    if (level !== null && parsedLevel === null) {
       return c.json({ error: `level: one of ${TOOL_OUTPUT_CAP_LEVELS.join('|')}|null required` }, 400);
     }
-    const session = await sessionStore.getSession(id);
-    if (!session) return notFound(c);
-    await sessionStore.setSessionToolOutputCapLevel(id, parseToolOutputCapLevel(level));
-    const updated = await sessionStore.getSession(id);
+    const updated = await withSessionLock(id, async () => {
+      const session = await sessionStore.getSession(id);
+      if (!session) return null;
+      const persistedByWorker = await workerPool.setToolOutputCapLevel(
+        id,
+        parsedLevel,
+      );
+      if (persistedByWorker) return sessionStore.refreshSession(id);
+      await sessionStore.setSessionToolOutputCapLevel(id, parsedLevel);
+      return sessionStore.getSession(id);
+    });
+    if (!updated) return notFound(c);
+    return c.json(updated);
+  });
+
+  /**
+   * Persist this conversation's execution budget. Null max_turns is the
+   * default and means "run until natural completion". Auto-continues are
+   * additional batches available only when a positive max_turns is enabled.
+   */
+  app.patch('/api/coder/sessions/:id/run-limits', async (c) => {
+    const id = parseSessionIdParam(c);
+    const body = await parseJsonBody<{
+      max_turns?: number | null;
+      max_auto_continues?: number;
+    }>(c);
+    const limits = validateRunLimits(
+      body.max_turns,
+      body.max_auto_continues,
+    );
+    if (!limits.ok) return c.json({ error: limits.error }, 400);
+    const updated = await withSessionLock(id, async () => {
+      const session = await sessionStore.getSession(id);
+      if (!session) return null;
+      const persistedByWorker = await workerPool.setRunLimits(
+        id,
+        limits.maxTurns,
+        limits.maxAutoContinues,
+      );
+      if (persistedByWorker) return sessionStore.refreshSession(id);
+      await sessionStore.setSessionRunLimits(
+        id,
+        limits.maxTurns,
+        limits.maxAutoContinues,
+      );
+      return sessionStore.getSession(id);
+    });
     if (!updated) return notFound(c);
     return c.json(updated);
   });
@@ -914,14 +1075,19 @@ export function mountCoderSessionsRoutes(
     if (mode !== null && !TOOL_PERMISSION_MODES.includes(mode)) {
       return c.json({ error: "mode:'ask'|'auto'|'unrestricted'|null required" }, 400);
     }
-    await sessionStore.setSessionToolPermissionMode(id, mode);
-    const effective = mode ?? 'auto';
-    try {
-      await workerPool.setToolPermissionMode(id, effective);
-    } catch { /* no live worker — column alone covers the next run */ }
-    const session = await sessionStore.getSession(id);
-    if (!session) return notFound(c);
-    return c.json(session);
+    const updated = await withSessionLock(id, async () => {
+      const session = await sessionStore.getSession(id);
+      if (!session) return null;
+      const persistedByWorker = await workerPool.setToolPermissionMode(
+        id,
+        mode,
+      );
+      if (persistedByWorker) return sessionStore.refreshSession(id);
+      await sessionStore.setSessionToolPermissionMode(id, mode);
+      return sessionStore.getSession(id);
+    });
+    if (!updated) return notFound(c);
+    return c.json(updated);
   });
 
   /**
@@ -944,15 +1110,25 @@ export function mountCoderSessionsRoutes(
     if (agent !== null && !validateAgentSelection(agent)) {
       return c.json({ error: 'agent must reference an enabled built-in or custom agent, or null' }, 400);
     }
-    const previous = await sessionStore.getSession(id);
-    if (!previous) return notFound(c);
+    const updated = await withSessionLock(id, async () => {
+      const previous = await sessionStore.getSession(id);
+      if (!previous) return null;
 
-    if (previous.agent === agent) return c.json(previous);
+      // A warm/running worker owns the filesystem writer lease. Persisting
+      // from the HTTP process in that state fails and makes the optimistic
+      // selector snap back. Route the staged NEXT-run transition through the
+      // owner; unlike a runner-driven plan→build transition, this must not
+      // mutate the active runner.
+      const persistedByWorker =
+        await workerPool.stageManualAgentTransition(id, agent);
+      if (persistedByWorker) return sessionStore.refreshSession(id);
 
-    await sessionStore.stageManualAgentTransition(id, agent);
-    const session = await sessionStore.getSession(id);
-    if (!session) return notFound(c);
-    return c.json(session);
+      if (previous.agent === agent) return previous;
+      await sessionStore.stageManualAgentTransition(id, agent);
+      return sessionStore.getSession(id);
+    });
+    if (!updated) return notFound(c);
+    return c.json(updated);
   });
 
   app.patch('/api/coder/sessions/:id/group', async (c) => {
@@ -970,18 +1146,10 @@ export function mountCoderSessionsRoutes(
   app.post('/api/coder/sessions', async (c) => {
     const body = await c.req.json<CreateSessionBody>();
     const lastUsed = body.use_last_model === true
-      ? await sessionStore.getLastUsedProviderModel()
+      ? await resolveLastSelectedModel()
       : null;
-    const lastUsedMode = lastUsed?.model.split('::')[1] ?? '';
-    const lastUsedModelId = lastUsed?.model.split('::')[0] ?? '';
-    const canUseLast = !!lastUsed
-      && !!deps.providerStore.getProvider(lastUsed.provider)?.enabled
-      && deps.providerStore.listModels(lastUsed.provider, true).some((candidate) => (
-        candidate.model_id === lastUsedModelId
-        && (!lastUsedMode || candidate.mode === lastUsedMode)
-      ));
-    const provider = (canUseLast ? lastUsed!.provider : body.provider) as CoderProviderName | undefined;
-    const model = canUseLast ? lastUsed!.model : (body.model ?? '');
+    const provider = (lastUsed?.provider ?? body.provider) as CoderProviderName | undefined;
+    const model = lastUsed?.model ?? (body.model ?? '');
     if (!body.project_id || !body.title || !provider) {
       return c.json({ error: 'project_id, title, provider required' }, 400);
     }
@@ -990,6 +1158,11 @@ export function mountCoderSessionsRoutes(
     }
     const execution = resolveCreationExecutionSettings(body.execution_mode, body.reasoning_effort);
     if (!execution.ok) return c.json({ error: execution.error }, 400);
+    const runLimits = validateRunLimits(
+      body.max_turns,
+      body.max_auto_continues,
+    );
+    if (!runLimits.ok) return c.json({ error: runLimits.error }, 400);
     if (body.thinking_enabled !== undefined && typeof body.thinking_enabled !== 'boolean') {
       return c.json({ error: 'thinking_enabled:boolean required' }, 400);
     }
@@ -1007,6 +1180,8 @@ export function mountCoderSessionsRoutes(
       execution_mode_override: execution.executionMode,
       reasoning_effort_override: execution.reasoningEffort,
       thinking_enabled: body.thinking_enabled === true,
+      max_turns: runLimits.maxTurns,
+      max_auto_continues: runLimits.maxAutoContinues,
       metadata: body.metadata,
     });
     // Best-effort base_commit_sha capture for Camada 4's reviewer subagent.
@@ -1014,6 +1189,7 @@ export function mountCoderSessionsRoutes(
     // isn't a git repo, or the workdir lookup fails, leave it null and the
     // reviewer will fall back to running `git_diff` itself (or report no diff).
     const responseSession = (await sessionStore.getSession(session.id)) ?? session;
+    rememberSelectedModel(responseSession.provider, responseSession.model);
     setImmediate(() => {
       void (async () => {
         try {

@@ -158,7 +158,10 @@ export { canRunSummarizer };
 // (Pre-class helpers + tunable constants extracted to ./runner/* sub-modules —
 // see the import block above. The corresponding doc-blocks live in those files.)
 import { envInt, doomLoopThreshold } from './runner/constants.js';
-import { capFor } from './runner/output-caps.js';
+import {
+  capFor,
+  type ToolOutputCapLevel,
+} from './runner/output-caps.js';
 import { isEssentialCompanyTool } from './runner/company-essentials.js';
 
 // Assembly modules — extracted in Commit 2 of the BT refactor. The legacy
@@ -225,8 +228,8 @@ export { backoffDelayMs };
 // Post-legacy-removal: the auto-continue cap lives entirely inside the
 // BT's `MaxTurnsGuard` (`runner/guards/max-turns.ts:maxAutoContinues`).
 // The duplicated `MAX_AUTO_CONTINUES` constant that used to drive the
-// legacy while-loop is gone; the env var `CODER_MAX_AUTO_CONTINUES`
-// continues to override the BT-side default.
+// legacy while-loop and the process-wide env override are gone. Filesystem
+// session state is now the only authority for top-level run limits.
 
 /** How often (in turns) to re-inject the deliverable reminder for subordinate agents. */
 const SUBORDINATE_REMINDER_INTERVAL = Number(process.env.CODER_SUBORDINATE_REMINDER_INTERVAL ?? 8);
@@ -504,7 +507,6 @@ export class CoderRunner extends EventEmitter {
   getReasoningEffort(): string | undefined {
     return this.opts.reasoningEffort;
   }
-  private readonly maxTurns: number;
   private aborted = false;
   /**
    * Live turn counter — mirrored from the loop-local `turn` variable so
@@ -543,7 +545,7 @@ export class CoderRunner extends EventEmitter {
   private readonly injectedToolErrors: Map<string, string> = new Map();
   private static readonly DEFAULT_INPUT_KEY = '__default__';
   private pendingUserMessages: Array<{
-    text: string;
+    content: ContentBlock[];
     selectedSkillIds?: string[];
     roundMessageId?: number;
   }> = [];
@@ -767,7 +769,7 @@ export class CoderRunner extends EventEmitter {
    * unrestricted ceiling stays consistent across `buildToolResultBlock`
    * arguments and the side-file `toolOutputStore` gate.
    */
-  public readonly effectivePushTimeCap: number;
+  public effectivePushTimeCap: number;
   /** Tool names whose authoritative outputs use the expanded inline budget. */
   private readonly authoritativeToolOutputNames: ReadonlySet<string>;
 
@@ -836,7 +838,6 @@ export class CoderRunner extends EventEmitter {
       (toolName) => this.resolveToolOutputCap(toolName),
       this.opts.toolContext.toolOutputStore,
     );
-    this.maxTurns = opts.maxTurns ?? 50;
     // back-reference so native interaction tools can pause the loop
     this.opts.toolContext.runner = this;
     this.opts.toolContext.toolOutputInlineCap = this.resolveToolOutputCap('get_tool_output').cap;
@@ -1322,17 +1323,25 @@ export class CoderRunner extends EventEmitter {
   }
 
   /**
-   * Append a user message (text only). Messages are buffered and flushed at
-   * the start of the next turn so they never land mid-turn between an
-   * assistant tool_use block and its tool_result — which would produce an
-   * invalid message sequence for the LLM API.
+   * Append a text user message. Messages are buffered and flushed at the start
+   * of the next turn so they never land mid-turn between an assistant tool_use
+   * block and its tool_result — which would produce an invalid message
+   * sequence for the LLM API.
    */
   pushUserMessage(
     text: string,
     extras?: { selectedSkillIds?: string[]; roundMessageId?: number },
   ): void {
+    this.pushPendingUserContent([{ type: 'text', text }], extras);
+  }
+
+  /** Queue a user message containing text plus image/document blocks. */
+  pushPendingUserContent(
+    content: ContentBlock[],
+    extras?: { selectedSkillIds?: string[]; roundMessageId?: number },
+  ): void {
     this.pendingUserMessages.push({
-      text,
+      content,
       selectedSkillIds: extras?.selectedSkillIds,
       roundMessageId: extras?.roundMessageId,
     });
@@ -1392,6 +1401,27 @@ export class CoderRunner extends EventEmitter {
     this.messages.push(msg);
   }
 
+  /**
+   * Refresh the live filesystem-authority array after the host grants an exact
+   * path-backed attachment. Tool contexts retain this array by reference.
+   */
+  refreshExternalFilesystemRoots(roots: ReadonlyArray<{
+    id: string;
+    seq?: number;
+    rootPath: string;
+    access: 'read' | 'write';
+  }>): void {
+    const current = this.opts.toolContext.externalRoots;
+    if (!current || !Array.isArray(current) || Object.isFrozen(current)) return;
+    const mutable = current as Array<{
+      id: string;
+      seq?: number;
+      rootPath: string;
+      access: 'read' | 'write';
+    }>;
+    mutable.splice(0, mutable.length, ...roots.map((root) => ({ ...root })));
+  }
+
   setRoundMessageId(roundMessageId: number | null): void {
     this.roundMessageId = roundMessageId;
   }
@@ -1419,6 +1449,39 @@ export class CoderRunner extends EventEmitter {
   /** Switch the tool permission mode mid-run (PATCH endpoint / worker RPC). */
   setToolPermissionMode(mode: 'ask' | 'auto' | 'unrestricted'): void {
     this.opts = { ...this.opts, toolPermissionMode: mode };
+  }
+
+  /**
+   * Apply a tool-output cap change to subsequent tool results without
+   * rebuilding a warm runner. Previously this value was constructor-only,
+   * leaving the composer selector stale until the worker was evicted.
+   */
+  setToolOutputCapLevel(level: ToolOutputCapLevel): void {
+    this.opts = { ...this.opts, toolOutputCapLevel: level };
+    const capBase = this.isSubagent
+      ? this.tunables.subagentPushTimeCap
+      : this.tunables.pushTimeCap;
+    const capCeiling = this.isSubagent
+      ? this.tunables.unrestrictedSubagentPushTimeCap
+      : this.tunables.unrestrictedPushTimeCap;
+    this.effectivePushTimeCap =
+      level === 'economic'
+        ? (this.opts.pushTimeCap ?? capBase)
+        : capFor(level, capBase, capCeiling);
+    this.opts.toolContext.toolOutputInlineCap =
+      this.resolveToolOutputCap('get_tool_output').cap;
+  }
+
+  /**
+   * Update the active behavior-tree context and future turns from the
+   * session-owned run-limit controls. Null keeps the session unlimited.
+   */
+  setRunLimits(
+    maxTurns: number | null,
+    maxAutoContinues: number,
+  ): void {
+    this.opts.maxTurns = maxTurns ?? undefined;
+    this.opts.maxAutoContinues = maxAutoContinues;
   }
 
   private async maybeAskAgentDecisionSwitch(): Promise<RunResult | null> {
@@ -1510,6 +1573,7 @@ export class CoderRunner extends EventEmitter {
       // / BT pushes all see the same backing store.
       initialMessages: this.messages,
       bridge: {
+        isAbortRequested: () => this.aborted,
         buildActiveSkillsBlock: (history) => this.buildActiveSkillsBlockForLastUser(history),
         buildActiveContextBlock: () =>
           this.opts.agentLoopV2 ? this.buildActiveContextBlockForTurn() : null,
@@ -1735,10 +1799,7 @@ export class CoderRunner extends EventEmitter {
   private flushPendingMessages(): void {
     while (this.pendingUserMessages.length > 0) {
       const pending = this.pendingUserMessages.shift()!;
-      const msg: AgentMessage = {
-        role: 'user',
-        content: [{ type: 'text', text: pending.text }],
-      };
+      const msg: AgentMessage = { role: 'user', content: pending.content };
       if (pending.selectedSkillIds && pending.selectedSkillIds.length > 0) {
         msg.selectedSkillIds = pending.selectedSkillIds;
       }

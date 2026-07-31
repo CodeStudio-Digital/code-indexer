@@ -69,10 +69,13 @@ function shortSpanStore(id: SessionId) {
   const setBoundary = vi.fn(async () => undefined);
   const resetAttempts = vi.fn(async () => undefined);
   const entry = catalogEntry(id);
+  const readStateSync = vi.fn(() => entry.state!);
   const sessionStore = {
-    refresh: vi.fn(async () => undefined),
+    ensureCatalog: vi.fn(async () => undefined),
     catalog: { list: vi.fn(() => [entry]) },
-    repository: { readStateSync: vi.fn(() => entry.state!) },
+    repository: {
+      readStateSync,
+    },
     maxMessageSeq: vi.fn(async () => 9),
     listMessagesAfter: vi.fn(async () => ({
       messages: [{ role: 'user', content: 'one' }],
@@ -86,12 +89,121 @@ function shortSpanStore(id: SessionId) {
     didRunSucceed: vi.fn(async () => false),
     listSessionMemory: vi.fn(async () => []),
   } as unknown as MemorySweeperSessionStore;
-  return { sessionStore, setBoundary, resetAttempts };
+  return {
+    sessionStore,
+    entry,
+    readStateSync,
+    setBoundary,
+    resetAttempts,
+  };
 }
 
 describe('memory sweeper relational writes', () => {
-  it('settles session state on filesystem and confines SQL queueing to project-memory hygiene', async () => {
+  it('does not reopen an unchanged no-op conversation on every timer tick and balances diagnostics', async () => {
+    const id = sessionId(39);
+    const { sessionStore, entry } = shortSpanStore(id);
+    vi.mocked(sessionStore.maxMessageSeq).mockResolvedValue(0);
+    const enterBackgroundActivity = vi.fn(() => 71);
+    const exitBackgroundActivity = vi.fn();
+    const sweeper = startMemorySweeper({
+      sessionStore,
+      db: {
+        getProjectMemoryEnabled: vi.fn(() => true),
+      } as unknown as CodeIndexDB,
+      runEndMemory: {
+        isConfigured: vi.fn(async () => true),
+      } as unknown as RunEndMemory,
+      enterBackgroundActivity,
+      exitBackgroundActivity,
+      intervalMs: 60_000,
+      idleAfterMs: 0,
+      maxPerSweep: 1,
+    });
+    try {
+      expect(await sweeper.runOnce()).toBe(0);
+      expect(await sweeper.runOnce()).toBe(0);
+      expect(sessionStore.maxMessageSeq).toHaveBeenCalledTimes(1);
+
+      (entry.session as { updated_at: string }).updated_at =
+        new Date(1).toISOString();
+      expect(await sweeper.runOnce()).toBe(0);
+      expect(sessionStore.maxMessageSeq).toHaveBeenCalledTimes(2);
+    } finally {
+      sweeper.stop();
+    }
+
+    expect(enterBackgroundActivity).toHaveBeenCalledTimes(3);
+    expect(exitBackgroundActivity).toHaveBeenCalledTimes(3);
+    expect(exitBackgroundActivity).toHaveBeenNthCalledWith(1, 71);
+  });
+
+  it('does not distill an apparently idle session while its worker is alive', async () => {
+    const id = sessionId(40);
+    const { sessionStore, setBoundary } = shortSpanStore(id);
+    const db = {
+      getProjectMemoryEnabled: vi.fn(() => true),
+    } as unknown as CodeIndexDB;
+    const runEndMemory = {
+      isConfigured: vi.fn(async () => true),
+    } as unknown as RunEndMemory;
+    const isSessionActive = vi.fn(() => true);
+
+    const sweeper = startMemorySweeper({
+      sessionStore,
+      db,
+      runEndMemory,
+      isSessionActive,
+      intervalMs: 60_000,
+      idleAfterMs: 0,
+      maxPerSweep: 1,
+    });
+    try {
+      expect(await sweeper.runOnce()).toBe(0);
+    } finally {
+      sweeper.stop();
+    }
+
+    expect(isSessionActive).toHaveBeenCalledWith(id);
+    expect(sessionStore.ensureCatalog).toHaveBeenCalledTimes(1);
+    expect(sessionStore.repository.readStateSync).not.toHaveBeenCalled();
+    expect(sessionStore.maxMessageSeq).not.toHaveBeenCalled();
+    expect(runEndMemory.isConfigured).not.toHaveBeenCalled();
+    expect(setBoundary).not.toHaveBeenCalled();
+  });
+
+  it('freshens only a cached non-idle state after its external worker exits', async () => {
     const id = sessionId(41);
+    const { sessionStore, entry, readStateSync } = shortSpanStore(id);
+    entry.state!.status = 'running';
+    readStateSync.mockReturnValue({ ...entry.state!, status: 'idle' });
+    const db = {
+      getProjectMemoryEnabled: vi.fn(() => true),
+    } as unknown as CodeIndexDB;
+    const runEndMemory = {
+      isConfigured: vi.fn(async () => false),
+    } as unknown as RunEndMemory;
+
+    const sweeper = startMemorySweeper({
+      sessionStore,
+      db,
+      runEndMemory,
+      intervalMs: 60_000,
+      idleAfterMs: 0,
+      maxPerSweep: 1,
+    });
+    try {
+      expect(await sweeper.runOnce()).toBe(0);
+    } finally {
+      sweeper.stop();
+    }
+
+    expect(readStateSync).toHaveBeenCalledOnce();
+    expect(sessionStore.maxMessageSeq).toHaveBeenCalledWith(id);
+    expect(runEndMemory.isConfigured).toHaveBeenCalledOnce();
+  });
+
+  it('settles session state on filesystem and confines SQL queueing to project-memory hygiene', async () => {
+    const id = sessionId(42);
     const { sessionStore, setBoundary, resetAttempts } =
       shortSpanStore(id);
 
@@ -139,6 +251,7 @@ describe('memory sweeper relational writes', () => {
 
     expect(setBoundary).toHaveBeenCalledWith(id, 9);
     expect(resetAttempts).toHaveBeenCalledWith(id);
+    expect(sessionStore.repository.readStateSync).not.toHaveBeenCalled();
     expect(transaction).not.toHaveBeenCalled();
     expect(runScopeMutationAsync).toHaveBeenCalledTimes(2);
     expect(runScopeMutationAsync.mock.calls.map((call) => call.slice(0, 2)))
@@ -151,7 +264,7 @@ describe('memory sweeper relational writes', () => {
   });
 
   it('skips semantic scope mutations when hygiene preflight is a no-op', async () => {
-    const { sessionStore } = shortSpanStore(sessionId(42));
+    const { sessionStore } = shortSpanStore(sessionId(43));
     const db = {
       transaction: <T>(operation: () => T): T => operation(),
       getProjectMemoryEnabled: vi.fn(() => true),

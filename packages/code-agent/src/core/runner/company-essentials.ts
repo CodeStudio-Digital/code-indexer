@@ -15,11 +15,13 @@
  *
  * Master essentials cover delegation primitives (spawn / forward /
  * resume / list_subordinates / wait / abort / approve / answer / finalize),
- * the inbox response, and the board read/write surface.
+ * the inbox response, a minimal Kanban loop, and the three shared-drive
+ * operations needed to publish and consume cross-project contracts.
  *
  * Subordinate essentials cover the escalation primitives back to the
  * master (`ask_master`, `submit_plan_to_master`, `submit_tasks_to_master`)
- * plus the board read/write surface (so subs can post + scan).
+ * plus the board and shared-drive surface needed to consume or publish the
+ * cross-project contract.
  */
 export function isEssentialCompanyTool(name: string, isMaster: boolean): boolean {
   // Shared across master + subordinate: the board is the canonical
@@ -28,10 +30,19 @@ export function isEssentialCompanyTool(name: string, isMaster: boolean): boolean
   if (
     name === 'post_to_board' ||
     name === 'read_board' ||
-    name === 'set_agent_status'
+    // The Drive is shared infrastructure, not a Master-only capability.
+    // Architects and specialists must be able to publish/consume the same
+    // contract even when a compact model trims the rest of the Company tier.
+    name === 'write_shared_file' ||
+    name === 'read_shared_file' ||
+    name === 'list_shared_files'
   ) {
     return true;
   }
+  // A subordinate owns its explicit status lifecycle. Master status is
+  // persisted by MasterLifecycle, so protecting this tool for the master adds
+  // no capability and can push the compact catalog past its 28-tool ceiling.
+  if (name === 'set_agent_status') return !isMaster;
   if (isMaster) {
     return (
       name === 'spawn_subordinate_agent' ||
@@ -45,7 +56,12 @@ export function isEssentialCompanyTool(name: string, isMaster: boolean): boolean
       name === 'approve_subordinate_plan' ||
       name === 'approve_subordinate_tasks' ||
       name === 'answer_subordinate_question' ||
-      name === 'respond_to_inbox'
+      name === 'respond_to_inbox' ||
+      // Minimal Kanban closed loop. Detailed mutation helpers stay
+      // discoverable instead of bloating every master turn.
+      name === 'kanban_plan_graph' ||
+      name === 'kanban_list_cards' ||
+      name === 'kanban_move_card'
     );
   }
   // Subordinate path

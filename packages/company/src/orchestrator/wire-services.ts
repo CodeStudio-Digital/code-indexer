@@ -39,6 +39,7 @@ import { CompanyEventBus } from '../services/CompanyEventBus.js';
 import { createAutonomyProvider, type AutonomyProvider } from '../services/autonomy/autonomy-provider.js';
 import type { CompanyOrchestrator } from '../orchestrator.js';
 import { CompanySessionFiles } from '../services/CompanySessionFiles.js';
+import { consumeAutoContinueSignals } from './auto-continue-signals.js';
 
 export interface WiredServices {
   ctx: SessionContext;
@@ -201,7 +202,10 @@ export function wireServices(args: {
       get lastUserMessageAt() { return master.lastUserMessageAt; },
     },
     consumeMasterShouldContinue: () =>
-      humanInLoop.consumeMasterShouldContinue() || master.consumeShouldContinue(),
+      consumeAutoContinueSignals(
+        { consume: () => humanInLoop.consumeMasterShouldContinue() },
+        { consume: () => master.consumeShouldContinue() },
+      ),
     onAutoContinue: () => {
       master.notify(
         '[SYSTEM] The human has responded. Continue orchestrating — call the appropriate tools to proceed with the next steps.',

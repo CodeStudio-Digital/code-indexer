@@ -75,8 +75,10 @@ export interface RunCoderOptions {
    * code-agent decoupled from the dashboard editor store.
    */
   ideContext?: import('@mcp/code-agent/core/ide-context.js').IdeContext;
-  /** Optional max turns (default 50) */
+  /** Optional turn limit. Omitted/zero means unlimited. */
   maxTurns?: number;
+  /** Extra turn batches after an enabled maxTurns limit is reached. */
+  maxAutoContinues?: number;
   /** Abort signal */
   signal?: AbortSignal;
   /**
@@ -193,8 +195,9 @@ export interface RunCoderOptions {
    */
   specMode?: boolean;
   /**
-   * Agent preset — bundles profile + planMode + maxTurns for a common usage
-   * pattern. Takes precedence over explicit `profile` / `planMode` when set.
+   * Agent preset — bundles profile + planMode for a common usage pattern.
+   * Explicit `profile` / `planMode` still win. Turn limits are session-owned
+   * and are never supplied by an agent preset.
    * See src/core/coder/agents/index.ts for the four built-in presets
    * (explore / plan / build / admin).
    */

@@ -320,8 +320,16 @@ ordem management, pelo registro físico e pela evidência do SO.
 > bilateral e reap a zero. A attempt permanece `Reserved`: hidratação em disco,
 > `AttemptPrepared`, Activate, ownership pós-Active,
 > `UpdateAttemptAuthority`, `QuerySupervisorState`, outbox durável e o
-> `agentd-supervisor` process-real ainda faltam. Launch direto ou malformado
-> continua fail-closed com exit `78`.
+> `agentd-supervisor` process-real já consome o handoff privado, verifica o Host
+> no endpoint management, negocia Hello e compõe o lifecycle permanente. O
+> launcher/owner Host em Rust + Node-API cria o Named Pipe protegido, verifica
+> os executáveis antes e depois do spawn, lança o supervisor em Job Object,
+> entrega o handoff somente por handles allowlisted e só devolve o stream após
+> Ready, EOF e peer PID concordarem. O teste process-real percorre
+> `Host launcher → Ready → Hello → Shutdown/ACK → exit 0 → reap` sem
+> `forced`. Ainda falta o percurso multiprocesso completo até `Active` com o
+> runner de produção. Launch direto ou malformado continua fail-closed com exit
+> `78`.
 
 ### Fluxo normal
 

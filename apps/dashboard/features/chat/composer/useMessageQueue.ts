@@ -16,12 +16,14 @@
  * does not survive reload — matching how file picks behave.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { AgentAttachment } from '../types.js';
 
 export type QueueMode = 'next-turn' | 'end-of-session';
 
 export interface QueuedMessage {
   id: number;
   text: string;
+  attachments?: AgentAttachment[];
   skillIds?: string[];
   mode: QueueMode;
   /** 'pending' = parked; 'sent' = handed to the live run (transient chip). */
@@ -35,7 +37,11 @@ export interface QueuedMessage {
  */
 export type QueueDeliver = (
   text: string,
-  opts: { interject: boolean; skillIds?: string[] },
+  opts: {
+    interject: boolean;
+    attachments?: AgentAttachment[];
+    skillIds?: string[];
+  },
 ) => void | Promise<void>;
 
 /** How long a delivered next-turn confirmation chip lingers before clearing. */
@@ -61,28 +67,56 @@ export function useMessageQueue(opts: { streaming: boolean; deliver: QueueDelive
     timersRef.current.add(handle);
   }, []);
 
-  const fireNextTurn = useCallback((id: number, text: string, skillIds?: string[]) => {
+  const fireNextTurn = useCallback((
+    id: number,
+    text: string,
+    attachments?: AgentAttachment[],
+    skillIds?: string[],
+  ) => {
     setItems((prev) => prev.map((i) => (i.id === id ? { ...i, status: 'sent', mode: 'next-turn' } : i)));
-    void Promise.resolve(deliver(text, { interject: true, skillIds })).catch(() => {});
+    void Promise.resolve(deliver(text, { interject: true, attachments, skillIds })).catch(() => {});
     scheduleRemoval(id);
   }, [deliver, scheduleRemoval]);
 
-  const enqueue = useCallback((text: string, mode: QueueMode, skillIds?: string[]) => {
-    if (!text.trim()) return;
+  const enqueue = useCallback((
+    text: string,
+    mode: QueueMode,
+    attachments?: AgentAttachment[],
+    skillIds?: string[],
+  ) => {
+    if (!text.trim() && !attachments?.length) return;
     const id = ++idRef.current;
     if (mode === 'next-turn') {
-      setItems((prev) => [...prev, { id, text, skillIds, mode, status: 'sent' }]);
-      void Promise.resolve(deliver(text, { interject: true, skillIds })).catch(() => {});
+      setItems((prev) => [...prev, {
+        id,
+        text,
+        attachments,
+        skillIds,
+        mode,
+        status: 'sent',
+      }]);
+      void Promise.resolve(deliver(text, {
+        interject: true,
+        attachments,
+        skillIds,
+      })).catch(() => {});
       scheduleRemoval(id);
     } else {
-      setItems((prev) => [...prev, { id, text, skillIds, mode, status: 'pending' }]);
+      setItems((prev) => [...prev, {
+        id,
+        text,
+        attachments,
+        skillIds,
+        mode,
+        status: 'pending',
+      }]);
     }
   }, [deliver, scheduleRemoval]);
 
   /** Promote a parked end-of-session item to deliver right now (next turn). */
   const promote = useCallback((item: QueuedMessage) => {
     if (item.status !== 'pending') return;
-    fireNextTurn(item.id, item.text, item.skillIds);
+    fireNextTurn(item.id, item.text, item.attachments, item.skillIds);
   }, [fireNextTurn]);
 
   const remove = useCallback((id: number) => {
@@ -101,7 +135,11 @@ export function useMessageQueue(opts: { streaming: boolean; deliver: QueueDelive
     const next = itemsRef.current.find((i) => i.mode === 'end-of-session' && i.status === 'pending');
     if (!next) return;
     setItems((prev) => prev.filter((i) => i.id !== next.id));
-    void Promise.resolve(deliver(next.text, { interject: false, skillIds: next.skillIds })).catch(() => {});
+    void Promise.resolve(deliver(next.text, {
+      interject: false,
+      attachments: next.attachments,
+      skillIds: next.skillIds,
+    })).catch(() => {});
   }, [streaming, deliver]);
 
   return { items, enqueue, promote, remove, clear };

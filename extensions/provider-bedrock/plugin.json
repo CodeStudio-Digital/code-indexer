@@ -1,6 +1,6 @@
 {
   "name": "provider-bedrock",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.local-20260731004500",
   "description": "AWS Bedrock (SigV4) as a bundled first-party provider plugin",
   "author": { "name": "mcp" },
   "apps": ".app.json",

@@ -206,13 +206,27 @@ describe('evaluateVerificationReadinessAtFinish', () => {
     )).toMatchObject({ health: 'verified' });
   });
 
-  it('keeps the retired nudge and refusal APIs non-blocking', async () => {
+  it('nudges exactly once after a write without fresh validation', async () => {
     const { ctx, ledger } = harness();
     write(ledger);
     const readiness = await evaluateVerificationReadinessAtFinish(ctx);
 
+    expect(maybeVerificationNudge(ctx, readiness)).toContain('[verification-required]');
     expect(maybeVerificationNudge(ctx, readiness)).toBeNull();
     expect(maybeVerificationCompletionRefusal(ctx)).toBeNull();
-    expect(ctx.verification.nudges).toBe(0);
+    expect(ctx.verification.nudges).toBe(1);
+  });
+
+  it('does not nudge read-only work or a write with fresh validation', async () => {
+    const readOnly = harness([]);
+    const readOnlyReadiness = await evaluateVerificationReadinessAtFinish(readOnly.ctx);
+    expect(maybeVerificationNudge(readOnly.ctx, readOnlyReadiness)).toBeNull();
+
+    const verified = harness();
+    write(verified.ledger);
+    validate(verified.ledger);
+    const verifiedReadiness = await evaluateVerificationReadinessAtFinish(verified.ctx);
+    expect(maybeVerificationNudge(verified.ctx, verifiedReadiness)).toBeNull();
+    expect(verified.ctx.verification.nudges).toBe(0);
   });
 });

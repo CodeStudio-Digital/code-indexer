@@ -11,6 +11,7 @@ mod owner;
 mod platform;
 mod request;
 mod request_validation;
+mod supervisor;
 
 pub use binding::DurableHostAttemptBinding;
 #[cfg(windows)]
@@ -19,3 +20,7 @@ pub use endpoint::{HostControlChannel, HostDataChannel, HostEndpointBinding, Hos
 pub use error::HostBridgeError;
 pub use owner::AuthenticatedHostAttemptChannels;
 pub use request::HOST_BRIDGE_OPEN_MAX_BYTES;
+pub use supervisor::{
+    AuthenticatedHostSupervisorChannel, HostSupervisorBinding, HostSupervisorBridgeError,
+    HostSupervisorVerifiedStream, SupervisorCloseEvidence, SupervisorProcessOwner,
+};

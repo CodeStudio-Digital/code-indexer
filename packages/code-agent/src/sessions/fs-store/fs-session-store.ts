@@ -142,6 +142,10 @@ export class FsSessionStore {
     return this.#directory.getSession(id);
   }
 
+  refreshSession(id: SessionId | string): Promise<FsCoderSession | null> {
+    return this.#directory.refreshSession(id);
+  }
+
   getLastUsedProviderModel(): Promise<{
     provider: string;
     model: string;

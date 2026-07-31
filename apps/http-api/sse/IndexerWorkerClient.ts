@@ -32,6 +32,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
   private boundBridge: MessageBridge | null = null;
   private inflight = 0;
   private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private interactivePriorityProjects = new Set<number>();
   private progressHandlers = new Map<number, (p: StructuralProgressFrame) => void>();
   private changeHandlers = new Map<
     number,
@@ -42,6 +43,14 @@ export class IndexerWorkerClient implements StructuralExecutor {
     private opts: IndexerWorkerClientOpts,
     private resolved: NonNullable<ReturnType<typeof resolveWorkerFile>>,
   ) {}
+
+  setInteractivePriority(projectId: number, busy: boolean): void {
+    if (busy) this.interactivePriorityProjects.add(projectId);
+    else this.interactivePriorityProjects.delete(projectId);
+    if (this.host?.state === 'running') {
+      this.host.requireBridge().emit('interactivePriority', { projectId, busy });
+    }
+  }
 
   async runStructuralIndex(
     projectId: number,
@@ -163,6 +172,9 @@ export class IndexerWorkerClient implements StructuralExecutor {
         await handler(payload.events);
         return { ok: true };
       });
+      for (const projectId of this.interactivePriorityProjects) {
+        bridge.emit('interactivePriority', { projectId, busy: true });
+      }
       this.boundBridge = bridge;
     }
     return this.host;
@@ -234,6 +246,12 @@ export function createStructuralIndexerExecutor(
     }
   };
   const executor: StructuralExecutor = {
+    setInteractivePriority(projectId, busy) {
+      // Arm both implementations. If the worker fails mid-run and falls back,
+      // background work still observes the same foreground priority.
+      client.setInteractivePriority(projectId, busy);
+      fallback.setInteractivePriority?.(projectId, busy);
+    },
     runStructuralIndex: withFallback(
       'structuralIndex',
       client.runStructuralIndex.bind(client),

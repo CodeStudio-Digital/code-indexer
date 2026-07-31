@@ -3,6 +3,10 @@ import type {
   SessionState,
 } from '@mcp/session-storage';
 import { toJsonValue } from './conversation-codec.js';
+import {
+  normalizeSessionMaxAutoContinues,
+  normalizeSessionMaxTurns,
+} from '../run-limits.js';
 import type {
   FsPendingAgentTransition,
   FsRuntimeSessionState,
@@ -29,6 +33,10 @@ function strings(value: unknown): string[] {
 export function runtimeFromState(state: SessionState): FsRuntimeSessionState {
   const runtime = record(state.extra.runtime);
   return {
+    max_turns: normalizeSessionMaxTurns(runtime.max_turns),
+    max_auto_continues: normalizeSessionMaxAutoContinues(
+      runtime.max_auto_continues,
+    ),
     temperature_override:
       typeof runtime.temperature_override === 'number'
         ? runtime.temperature_override

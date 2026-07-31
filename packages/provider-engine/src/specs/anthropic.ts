@@ -41,19 +41,19 @@ export const anthropicSpec: ProviderSpec = {
   models: {
     'claude-fable-5': {
       contextWindow: 1_000_000,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
       defaultReasoningLevel: 'high',
       supportedReasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     },
     'claude-opus-5': {
       contextWindow: 1_000_000,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
       defaultReasoningLevel: 'high',
       supportedReasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     },
     'claude-sonnet-5': {
       contextWindow: 1_000_000,
-      maxTokens: 64_000,
+      maxTokens: 128_000,
       defaultReasoningLevel: 'high',
       supportedReasoningLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
     },

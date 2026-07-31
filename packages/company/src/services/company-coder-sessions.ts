@@ -14,10 +14,16 @@ export interface CreateCompanyCoderSessionInput {
   model: string;
   role: string;
   /**
-   * Restricts a subordinate to one project. Masters omit this and link every
-   * Company project.
+   * Selects the primary project for native file/shell tools. Masters omit
+   * this and use the first Company project.
    */
   projectId?: number;
+  /**
+   * Complete authorized project scope for a subordinate. Omit for masters,
+   * which link every Company project. `projectId` is moved to the front so it
+   * remains the primary root.
+   */
+  projectIds?: readonly number[];
   agent?: string | null;
 }
 
@@ -25,24 +31,37 @@ export interface CreateCompanyCoderSessionInput {
  * Create a coder bundle owned by a Company/App Studio session.
  *
  * Single-project Company sessions stay in that project's root. Multi-project
- * Company and every App Studio child are global, while a subordinate only
- * links the project it is authorized to touch.
+ * Company and every App Studio child are global. A subordinate links the
+ * complete project scope configured for its role; `projectId` only selects
+ * which linked project is primary.
  */
 export async function createCompanyCoderSession(
   input: CreateCompanyCoderSessionInput,
 ): Promise<FsCoderSession> {
   const companySessionId = asSessionId(input.ctx.companySessionId);
-  const selectedProjects = input.projectId == null
-    ? [...input.ctx.projects]
-    : input.ctx.projects.filter(
-        (project) => project.project_id === input.projectId,
-      );
-  if (selectedProjects.length === 0) {
+  const requestedIds = input.projectIds && input.projectIds.length > 0
+    ? [
+        ...(input.projectId == null ? [] : [input.projectId]),
+        ...input.projectIds,
+      ]
+    : input.projectId == null
+      ? input.ctx.projects.map((project) => project.project_id)
+      : [input.projectId];
+  const selectedIds = [...new Set(requestedIds)];
+  const projectsById = new Map(
+    input.ctx.projects.map((project) => [project.project_id, project]),
+  );
+  const missingIds = selectedIds.filter((projectId) => !projectsById.has(projectId));
+  if (missingIds.length > 0) {
     throw new Error(
-      `Company coder session has no authorized project${
-        input.projectId == null ? '' : ` ${input.projectId}`
-      }`,
+      `Company coder session references project(s) not linked to the company: ${missingIds.join(', ')}`,
     );
+  }
+  const selectedProjects = selectedIds
+    .map((projectId) => projectsById.get(projectId))
+    .filter((project) => project != null);
+  if (selectedProjects.length === 0) {
+    throw new Error('Company coder session has no authorized projects');
   }
   const metadata = {
     company_session_id: input.ctx.companySessionId,

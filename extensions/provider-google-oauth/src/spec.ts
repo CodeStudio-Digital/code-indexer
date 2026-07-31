@@ -33,7 +33,7 @@ export const googleOAuthSpec: ProviderSpec = {
     'gemini-3-flash-preview': { inputPer1M: 0.0, outputPer1M: 0.0 },
     'gemini-3.1-flash-lite-preview': { inputPer1M: 0.0, outputPer1M: 0.0 },
   },
-  capabilities: { supportsThinking: true, supportsVision: true },
+  capabilities: { supportsThinking: true, supportsVision: true, fileInput: 'pdf-only' },
   wire: 'gemini',
   wireOpts: { geminiOAuth: true },
   discovery: { from: 'sdk:google-oauth' },

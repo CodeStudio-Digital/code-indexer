@@ -135,6 +135,12 @@ export interface StructuralExecutor {
   ): Promise<StructuralRunSummary>;
   indexFiles(projectId: number, relPaths: string[]): Promise<IndexFilesSummary>;
   removeFiles(projectId: number, relPaths: string[]): Promise<{ removed: number }>;
+  /**
+   * Background structural work yields while an interactive filesystem
+   * mutation (for example Git stage/commit) owns priority for this project.
+   * Optional so lightweight/test executors remain valid.
+   */
+  setInteractivePriority?(projectId: number, busy: boolean): void;
 }
 
 export interface ProjectIndexSettings {

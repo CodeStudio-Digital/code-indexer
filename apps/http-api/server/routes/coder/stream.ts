@@ -19,6 +19,10 @@ import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/sh
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
 import { markGoalLifecycleIntentCache } from '@mcp/code-agent/core/runner/goal-lifecycle-intent.js';
 import {
+  normalizeSessionMaxAutoContinues,
+  normalizeSessionMaxTurns,
+} from '@mcp/code-agent/sessions/run-limits.js';
+import {
   emitWorkerLog,
   type CoderRunBus,
 } from '../../../coder-bus.js';
@@ -79,6 +83,7 @@ function hashPreflightContent(s: string): string {
 interface SendMessageBody {
   content: string;
   max_turns?: number;
+  max_auto_continues?: number;
   plan_mode?: boolean;
   attachments?: CoderAttachment[];
   /** Agent preset. Takes precedence over profile/plan_mode when unset. */
@@ -131,21 +136,10 @@ interface SendMessageBody {
   client_msg_id?: string;
 }
 
-const DEFAULT_INDEX_GATE_TIMEOUT_MS = 180_000;
-
-function structuralIndexGateTimeoutMs(): number {
-  const parsed = Number.parseInt(
-    process.env.CODER_INDEX_GATE_TIMEOUT_MS
-      ?? process.env.CODER_GLOBAL_INDEX_GATE_TIMEOUT_MS
-      ?? '',
-    10,
-  );
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_INDEX_GATE_TIMEOUT_MS;
-}
-
 interface ContinueBody {
   plan_mode?: boolean;
   max_turns?: number;
+  max_auto_continues?: number;
   agent?: AgentSelectionId;
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /** Force the vision fallback (image → text) on a resumed run. */
@@ -1000,6 +994,15 @@ export function mountCoderStreamRoutes(
     const claimSession = await sessionStore.getSession(id);
     if (!claimSession) return notFound(c);
     const thinking = body.thinking ?? claimSession.thinking_enabled ?? false;
+    // The filesystem session is authoritative. Keep an explicit request value
+    // as a compatibility override for non-dashboard callers, but never inject
+    // a hidden default turn ceiling.
+    const requestedMaxTurns =
+      normalizeSessionMaxTurns(body.max_turns ?? claimSession.max_turns)
+      ?? undefined;
+    const requestedMaxAutoContinues = normalizeSessionMaxAutoContinues(
+      body.max_auto_continues ?? claimSession.max_auto_continues,
+    );
     const dedupeKey = normalizeDedupeKey(body.client_msg_id);
     // Log the route hit. The bus may not exist yet (fresh session) —
     // emitWorkerLog no-ops in that case, but if a worker is still alive
@@ -1046,7 +1049,7 @@ export function mountCoderStreamRoutes(
         agent: agentSelectionId ?? runAgent,
         profile: body.profile,
         planMode: body.plan_mode,
-        maxTurns: body.max_turns,
+        maxTurns: requestedMaxTurns,
         selectedSkillIds,
         worktree: body.worktree,
       }),
@@ -1160,9 +1163,10 @@ export function mountCoderStreamRoutes(
 
     // Structural auto-index. Only the FIRST turn claims the project lifecycle;
     // later turns rely on watcher/Monaco deltas and never schedule another
-    // full reconciliation. A missing baseline gates for up to three minutes,
-    // while an existing integral index is returned immediately even if its
-    // stat-first reopen reconciliation is still running in the background.
+    // full reconciliation. Indexing is deliberately fire-and-forget: a missing
+    // baseline starts the runner in degraded retrieval mode, where disk/FTS
+    // fallbacks remain usable, and live readiness promotes the same runner once
+    // the structural baseline becomes available.
     {
       const session = await sessionStore.getSession(id);
       if (session) {
@@ -1175,29 +1179,6 @@ export function mountCoderStreamRoutes(
         if (freshSession && projectIds.length > 0) {
           for (const projectId of projectIds) {
             deps.projectIndexService.ensureFresh(projectId, 'session');
-          }
-          const readinessByProject = await Promise.all(projectIds.map(async (projectId) => ({
-            projectId,
-            readiness: await deps.projectIndexService.ensureStructuralReady(
-              projectId,
-              structuralIndexGateTimeoutMs(),
-              c.req.raw.signal,
-            ),
-          })));
-          if (readinessByProject.some(({ readiness }) => readiness.status === 'aborted')) {
-            await settleClaimFailure('index-wait-aborted', undefined, 'cancelled');
-            return c.json({ code: 'INDEX_WAIT_ABORTED', message: 'Envio cancelado durante a indexação.' }, 408);
-          }
-          for (const { projectId, readiness } of readinessByProject) {
-            if (readiness.status === 'ready') continue;
-            // Timeout, disabled indexing or a terminal scan error starts dumb
-            // mode instead of rejecting the user's message. Tools remain in
-            // the registry and observe the live DB on later calls, so this
-            // same session recovers when the baseline eventually completes.
-            console.warn(
-              `[coder] structural index gate bypassed for session ${id}, project ${projectId}: ${readiness.status}` +
-              `${readiness.error ? ` (${readiness.error})` : ''}`,
-            );
           }
         }
       }
@@ -1309,7 +1290,8 @@ export function mountCoderStreamRoutes(
       const freshBus = await pool.runFresh(id, {
         userMessage: body.content,
         attachments: body.attachments,
-        maxTurns: body.max_turns,
+        maxTurns: requestedMaxTurns,
+        maxAutoContinues: requestedMaxAutoContinues,
         planMode: body.plan_mode,
         agent: runAgent,
         agentSelectionId,
@@ -1417,6 +1399,13 @@ export function mountCoderStreamRoutes(
     // appear via the fresh bus's `run_started` event seq=0.
 
     const continueSession = await sessionStore.getSession(id);
+    if (!continueSession) return notFound(c);
+    const continueMaxTurns =
+      normalizeSessionMaxTurns(body.max_turns ?? continueSession.max_turns)
+      ?? undefined;
+    const continueMaxAutoContinues = normalizeSessionMaxAutoContinues(
+      body.max_auto_continues ?? continueSession.max_auto_continues,
+    );
     const liveAtContinueClaim = workerPool.getBus(id);
     const continueEarlyClaim = await withSessionLock(id, async () => claimCoderCommand({
       sessionId: id,
@@ -1428,7 +1417,7 @@ export function mountCoderStreamRoutes(
         agent: agentSelectionId ?? runAgent,
         profile: body.profile,
         planMode: body.plan_mode,
-        maxTurns: body.max_turns,
+        maxTurns: continueMaxTurns,
       }),
       createRun: coderControlPlaneShadowEnabled()
         && !(liveAtContinueClaim && !liveAtContinueClaim.ended),
@@ -1545,7 +1534,8 @@ export function mountCoderStreamRoutes(
         await materializePendingAgentTransition(id);
         const newBus = await workerPool.runFresh(id, {
           userMessage: '',
-          maxTurns: body.max_turns,
+          maxTurns: continueMaxTurns,
+          maxAutoContinues: continueMaxAutoContinues,
           planMode: body.plan_mode,
           agent: runAgent,
           agentSelectionId,
@@ -1603,7 +1593,7 @@ export function mountCoderStreamRoutes(
       requested_agent: body.agent ?? null,
       profile: body.profile,
       plan_mode: body.plan_mode,
-      max_turns: body.max_turns,
+      max_turns: continueMaxTurns ?? null,
     });
 
     // The resume request is already executing in the mandatory worker.

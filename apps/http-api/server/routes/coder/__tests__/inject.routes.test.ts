@@ -10,6 +10,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Hono } from 'hono';
 import { asSessionId, type SessionId } from '@mcp/agent-runtime-contracts';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const SESSION_ID = asSessionId('22222222-2222-4222-8222-222222222222');
 
@@ -42,6 +45,12 @@ function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
     operation_id: string;
     message: unknown;
   }> = [];
+  const filesystemRoots: Array<{
+    id: string;
+    seq: number;
+    root_path: string;
+    access: 'read' | 'write';
+  }> = [];
   const bus = opts.live === false ? null : liveBus();
   poolMock.getBus.mockImplementation((id: SessionId) => id === SESSION_ID ? bus : null);
   poolMock.isWaitingForInput.mockResolvedValue(!!opts.waiting);
@@ -50,6 +59,29 @@ function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
 
   const deps = {
     sessionStore: {
+      getSession: async () => ({
+        id: SESSION_ID,
+        provider: null,
+        model: null,
+        project_id: null,
+        is_global: false,
+        worktree_path: null,
+      }),
+      listSessionFilesystemRoots: async () => [...filesystemRoots],
+      upsertSessionFilesystemRoot: async (
+        _sessionId: SessionId,
+        rootPath: string,
+        access: 'read' | 'write',
+      ) => {
+        const row = {
+          id: `root-${filesystemRoots.length + 1}`,
+          seq: filesystemRoots.length + 1,
+          root_path: rootPath,
+          access,
+        };
+        filesystemRoots.push(row);
+        return row;
+      },
       appendMessage: async (input: {
         session_id: SessionId;
         operation_id: string;
@@ -58,6 +90,13 @@ function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
         appendCalls.push(input);
         return 42;
       },
+    },
+    providerStore: {
+      getProvider: () => undefined,
+      listModels: () => [],
+    },
+    db: {
+      getProject: () => null,
     },
   } as unknown as ServerDeps;
   const runtime = {
@@ -76,7 +115,7 @@ function setup(opts: { live?: boolean; waiting?: boolean } = {}) {
       body: JSON.stringify(body),
     });
 
-  return { inject, appendCalls };
+  return { inject, appendCalls, filesystemRoots };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -94,6 +133,83 @@ describe('coder POST /sessions/:id/inject', () => {
       ['s1'],
       expect.stringMatching(/^interaction:inject:/),
     );
+  });
+
+  it('preserves validated attachments in the live-run enqueue', async () => {
+    const h = setup({ live: true });
+    const attachment = {
+      name: 'notes.txt',
+      mediaType: 'text/plain',
+      text: 'attachment details',
+    };
+    const r = await h.inject(SESSION_ID, {
+      content: 'follow-up with context',
+      attachments: [attachment],
+    });
+
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ injected: true });
+    expect(poolMock.pushUserMessage).toHaveBeenCalledWith(
+      SESSION_ID,
+      'follow-up with context',
+      undefined,
+      expect.stringMatching(/^interaction:inject:/),
+      [attachment],
+    );
+  });
+
+  it('supplies the attachment-only default prompt instead of rejecting the queue item', async () => {
+    const h = setup({ live: true });
+    const attachment = {
+      name: 'notes.txt',
+      mediaType: 'text/plain',
+      text: 'attachment details',
+    };
+    const r = await h.inject(SESSION_ID, { content: '', attachments: [attachment] });
+
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ injected: true });
+    expect(poolMock.pushUserMessage).toHaveBeenCalledWith(
+      SESSION_ID,
+      expect.stringMatching(/attached files/i),
+      undefined,
+      expect.stringMatching(/^interaction:inject:/),
+      [attachment],
+    );
+  });
+
+  it('authorizes an exact local file reference before enqueueing it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mcp-queued-attachment-'));
+    try {
+      const rawPath = join(dir, 'context.tmp');
+      writeFileSync(rawPath, 'local context');
+      const canonicalPath = realpathSync(rawPath);
+      const h = setup({ live: true });
+      const r = await h.inject(SESSION_ID, {
+        content: 'inspect the local file',
+        attachments: [{
+          name: 'context.tmp',
+          mediaType: 'application/octet-stream',
+          path: rawPath,
+        }],
+      });
+
+      expect(r.status).toBe(200);
+      expect(await r.json()).toEqual({ injected: true });
+      expect(h.filesystemRoots).toEqual([expect.objectContaining({
+        root_path: canonicalPath,
+        access: 'read',
+      })]);
+      expect(poolMock.pushUserMessage).toHaveBeenCalledWith(
+        SESSION_ID,
+        'inspect the local file',
+        undefined,
+        expect.stringMatching(/^interaction:inject:/),
+        [expect.objectContaining({ path: canonicalPath })],
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('returns noActiveRun when there is no live run', async () => {

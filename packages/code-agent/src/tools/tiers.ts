@@ -312,7 +312,6 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   'mcp__get_project_pulse',
   'mcp__search',
   'mcp__grep_code',
-  'mcp__get_file_skeleton',
   'mcp__read_file',
   'mcp__list_directory',
   // Unconditional native tools that previously rode the getToolTier bootstrap
@@ -396,6 +395,10 @@ export const NAVIGATE_TOOLS: ReadonlySet<string> = new Set([
   'mcp__trace_usage',
   'mcp__get_dependencies',
   'mcp__get_dependents',
+  // Search reports file line counts and mcp__read_file auto-returns small
+  // files. Keep the outline as an on-demand large-file capability instead of
+  // presenting weak models with three overlapping read routes on turn 1.
+  'mcp__get_file_skeleton',
   'mcp__get_symbol_body',
   'mcp__prepare_edit',
   'mcp__get_hierarchy',
@@ -777,8 +780,8 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   mcp__search_memory: 'Search project memory (decisions/conventions/gotchas/facts) by meaning — try before exploring code',
   mcp__search: 'Hybrid search (FTS + vector) across the project',
   mcp__grep_code: 'Text search with language/layer/glob filters',
-  mcp__get_file_skeleton: 'File outline — headers + symbols (cheap)',
-  mcp__read_file: 'Read file slice from the index (default 100L)',
+  mcp__get_file_skeleton: 'Outline a large file when search and direct read are insufficient',
+  mcp__read_file: 'Read an indexed file; files up to 800 lines return in full',
   mcp__list_directory: 'List files by prefix (no disk access)',
   // ─── Navigate native ──────────────────────────────────────────
   write_file: 'Overwrite an existing file entirely',

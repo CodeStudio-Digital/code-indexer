@@ -44,6 +44,7 @@ export interface PreflightToolMeta {
 export interface PreflightMemoryEntry {
   title: string;
   category?: string;
+  source?: string;
   excerpt?: string;
   projectSlug?: string;
 }
@@ -98,6 +99,7 @@ export function buildPreflightMessages(input: PreflightPromptInput): ChatMessage
     `AT MOST ${input.maxSkills} skills whose id LITERALLY appears in the skill catalog and whose`,
     'description clearly matches this task. List AT MOST',
     `${input.maxMemories} memories and ONLY titles that literally appear in the index. Empty arrays are valid.`,
+    'Prefer user/agent-authored memory over session/distilled memory when they overlap. Select at most one memory per fact.',
     'For a global workspace, select only project slugs that appear in workspace_projects.',
     'session_title must describe the user task in 3-7 words, with no quotes or trailing punctuation.',
     'Do not invent tool names, skill ids or memory titles.',
@@ -133,7 +135,7 @@ export function buildPreflightMessages(input: PreflightPromptInput): ChatMessage
 
   if (input.memoryIndex.length > 0) {
     const memory = input.memoryIndex
-      .map((m) => `- ${m.projectSlug ? `[${m.projectSlug}] ` : ''}[${m.category ?? 'note'}] ${m.title}${m.excerpt ? ` — "${m.excerpt.replace(/\s+/g, ' ').trim()}"` : ''}`)
+      .map((m) => `- ${m.projectSlug ? `[${m.projectSlug}] ` : ''}[${m.category ?? 'note'}; source=${m.source ?? 'unknown'}] ${m.title}${m.excerpt ? ` — "${m.excerpt.replace(/\s+/g, ' ').trim()}"` : ''}`)
       .join('\n');
     parts.push(`<memory_index>\n${memory}\n</memory_index>`);
   }

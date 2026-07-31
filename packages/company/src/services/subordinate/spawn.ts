@@ -45,7 +45,7 @@ import type {
   IMetaBusWirer,
 } from '@mcp/company/services/ports.js';
 import {
-  resolveSpawnProjectBinding,
+  resolveSpawnProjectScope,
   type SpawnSubordinateSpec,
 } from '@mcp/company/services/subordinate/spec.js';
 import {
@@ -137,15 +137,19 @@ export async function spawnSubordinate(
   const boundProjectIds = Array.isArray(runtimePolicy.roleConfig?.projectIds)
     ? [...runtimePolicy.roleConfig.projectIds]
     : (orchestratorForBinding.getProjectIdsForRole?.(spec.role) ?? []);
-  const projectId = resolveSpawnProjectBinding({
+  const { projectId, projectIds: allowedProjectIds } = resolveSpawnProjectScope({
     role: spec.role,
     specProjectId: spec.projectId,
     boundProjectIds,
   });
 
-  if (!ctx.projects.some((p) => p.project_id === projectId)) {
+  const unlinkedProjectIds = allowedProjectIds.filter(
+    (allowedProjectId) =>
+      !ctx.projects.some((project) => project.project_id === allowedProjectId),
+  );
+  if (unlinkedProjectIds.length > 0) {
     throw new Error(
-      `Project ${projectId} is not linked to company session ${ctx.companySessionId}`,
+      `Project(s) ${unlinkedProjectIds.join(', ')} are not linked to company session ${ctx.companySessionId}`,
     );
   }
   spec.projectId = projectId;
@@ -256,6 +260,7 @@ export async function spawnSubordinate(
     model,
     role: spec.role,
     projectId: spec.projectId,
+    projectIds: allowedProjectIds,
   });
 
   // Inherit master's disabled tool config so subordinates respect the
@@ -301,7 +306,7 @@ export async function spawnSubordinate(
   const agentRun = await ctx.companyFiles.createAgentRun({
     role: spec.role,
     coder_session_id: subSession.id,
-    project_ids: [spec.projectId],
+    project_ids: allowedProjectIds,
     provider,
     model,
     configured_provider: roleRuntime.configuredProvider ?? provider,
@@ -317,7 +322,7 @@ export async function spawnSubordinate(
     capabilities: ctx.capabilities,
     agentRole: spec.role,
     agentRunId: agentRun.id,
-    allowedProjectIds: [spec.projectId],
+    allowedProjectIds,
     isMaster: false,
     sandbox: subordinateBinding ?? undefined,
   };
@@ -341,13 +346,14 @@ export async function spawnSubordinate(
 
   let subordinateBlock = buildSubordinateCompanyBlock({
     role: spec.role,
-    projects: [
-      {
-        id: spec.projectId,
-        name: projectName,
-        rootPath: project?.root_path ?? '',
-      },
-    ],
+    projects: allowedProjectIds.map((allowedProjectId) => {
+      const allowedProject = ctx.db.getProject(allowedProjectId);
+      return {
+        id: allowedProjectId,
+        name: allowedProject?.name ?? `project-${allowedProjectId}`,
+        rootPath: allowedProject?.root_path ?? '',
+      };
+    }),
     projectMemory: [projectMemory, userMemory].filter(Boolean).join('\n') || undefined,
     builder: subordinateBinding
       ? {
@@ -461,7 +467,7 @@ export async function spawnSubordinate(
   const subordinateHandle: SubordinateHandle = {
     agentRunId: agentRun.id,
     role: spec.role,
-    projectIds: [spec.projectId],
+    projectIds: allowedProjectIds,
     session: subSession,
     runner: handle.runner,
     bus: createBus(new AbortController()),

@@ -55,6 +55,8 @@ interface RailComposerBarProps {
   currentProviderModels: EnrichedProviderModel[];
   maxTurns: number | null;
   setMaxTurns: (v: number | null) => void;
+  maxAutoContinues: number;
+  setMaxAutoContinues: (v: number) => void;
   temperature: number | null;
   setTemperature: (v: number | null) => void;
   /** Per-session sticky reasoning-effort override (migration 150). Orthogonal
@@ -107,6 +109,7 @@ export function RailComposerBar(props: RailComposerBarProps) {
       <div className="flex items-center gap-0.5">
         <ComposerActionIcons
           streaming={props.streaming}
+          allowAttachmentsWhileStreaming={props.queueable}
           handleFiles={props.handleFiles}
           thinking={props.thinking}
           setThinking={props.setThinking}
@@ -255,6 +258,8 @@ export function RailComposerBar(props: RailComposerBarProps) {
         currentProviderModels={props.currentProviderModels}
         maxTurns={props.maxTurns}
         setMaxTurns={props.setMaxTurns}
+        maxAutoContinues={props.maxAutoContinues}
+        setMaxAutoContinues={props.setMaxAutoContinues}
         temperature={props.temperature}
         setTemperature={props.setTemperature}
         reasoningEffort={props.reasoningEffort}

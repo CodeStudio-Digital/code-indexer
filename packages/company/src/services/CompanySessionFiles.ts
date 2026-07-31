@@ -72,6 +72,8 @@ export interface CompanySessionFileSnapshot {
 
 export interface CompanyAgentRunFileRow {
   id: AgentRunId;
+  /** Stable entity-envelope creation order; unrelated to board_watermark_seq. */
+  seq: number;
   company_session_id: CompanySessionId;
   role: string;
   coder_session_id: SessionId;
@@ -266,6 +268,7 @@ function toAgentRun(
     : [];
   return {
     id: asAgentRunId(record.id),
+    seq: record.seq,
     company_session_id: companySessionId,
     role: stringValue(data.role),
     coder_session_id: coderSessionId,
