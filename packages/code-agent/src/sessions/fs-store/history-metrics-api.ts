@@ -11,17 +11,19 @@ import type {
 } from './history-metrics-types.js';
 import { FsProviderAttemptRepository } from './provider-attempt-repository.js';
 import { FsSessionDirectory } from './session-directory.js';
+import type { FsConversationReader } from './conversation-reader.js';
 
 class FsHistoryMetricsServices {
   readonly chapters: FsConversationChapterRepository;
   readonly compactions: FsCompactionAttemptRepository;
   readonly providerAttempts: FsProviderAttemptRepository;
 
-  constructor(directory: FsSessionDirectory) {
+  constructor(directory: FsSessionDirectory, reader?: FsConversationReader) {
     const entities = new FsSessionEntityFiles(directory);
     this.chapters = new FsConversationChapterRepository(
       directory,
       entities,
+      reader,
     );
     this.compactions = new FsCompactionAttemptRepository(
       directory,
@@ -114,9 +116,10 @@ export type FsHistoryMetricsApi = Pick<
 export function installHistoryMetricsApi(
   target: object,
   directory: FsSessionDirectory,
+  reader?: FsConversationReader,
 ): void {
   const operations = new FsHistoryMetricsOperations(
-    new FsHistoryMetricsServices(directory),
+    new FsHistoryMetricsServices(directory, reader),
   );
   for (const name of Object.keys(operations)) {
     if (name === 'services') continue;

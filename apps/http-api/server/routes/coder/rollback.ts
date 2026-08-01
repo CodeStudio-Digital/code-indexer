@@ -17,6 +17,7 @@ import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseSessionIdParam, parseJsonBody, parseSeqValue, notFound } from '../_helpers.js';
 import { withSessionLock } from './sessionLock.js';
+import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 
 export function mountCoderRollbackRoute(
   app: Hono,
@@ -25,6 +26,7 @@ export function mountCoderRollbackRoute(
 ): void {
   const { sessionStore } = deps;
   const { activeRuns } = runtime;
+  const workerPool = getCoderWorkerPool();
 
   app.post('/api/coder/sessions/:id/rollback-to-message', async (c) => {
     const id = parseSessionIdParam(c);
@@ -36,7 +38,7 @@ export function mountCoderRollbackRoute(
 
     return withSessionLock(id, async () => {
       const bus = activeRuns.get(id);
-      if (bus && !bus.ended) {
+      if (workerPool.isRunning(id) || (bus && !bus.ended)) {
         return c.json(
           { error: 'a run is active — stop it before rolling back', code: 'run_active' },
           409,
@@ -45,16 +47,16 @@ export function mountCoderRollbackRoute(
 
       let result;
       try {
+        // An ended bus may still have a warm worker holding the filesystem
+        // writer. Await the full owner handoff before the HTTP repository
+        // appends the rollback marker; deleting the compatibility Map after
+        // the mutation is fire-and-forget and therefore too late.
+        await workerPool.evict(id);
         result = await sessionStore.rollbackSessionToSeq(id, seq);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         return c.json({ error: msg }, 400);
       }
-
-      // Drop any lingering (ended) bus so the next /messages POST builds a
-      // fresh runner that reloads only the surviving transcript. The Proxy
-      // also evicts the pooled worker for this session.
-      activeRuns.delete(id);
 
       return c.json({ ok: true, ...result });
     });

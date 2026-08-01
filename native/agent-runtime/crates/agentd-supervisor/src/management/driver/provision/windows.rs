@@ -10,10 +10,7 @@ use agent_protocol::runner_bootstrap::{
     SupervisorPhysicalBootstrapSender, prepare_runner_launch_handoff,
 };
 
-use super::completion::{
-    ProtectedLaunchCleanupOwner, ProtectedLaunchCleanupPort, ProtectedLaunchCleanupProof,
-    ProtectedLaunchCompletion,
-};
+use super::completion::{ProtectedLaunchCleanupOwner, ProtectedLaunchCompletion};
 use super::deadline::EffectiveBootstrapDeadline;
 use super::staged::{
     PendingProtectedLaunch, PreparedProtectedLaunch, ProtectedLaunchPhysicalFacts,
@@ -25,6 +22,7 @@ mod cleanup;
 mod error;
 mod handoff;
 mod io;
+mod pulse;
 
 pub use cancellation::WindowsProtectedLaunchCancellation;
 pub use cleanup::WindowsProtectedLaunchCleanup;
@@ -34,11 +32,11 @@ use cancellation::{CancellationRegistry, WindowsBootstrapCancellationRegistratio
 use handoff::build_windows_handoff;
 use io::{OverlappedBootstrapReader, OverlappedBootstrapWriter};
 
-const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
-
 /// Production Windows provisioner for the one-shot supervisor-runner handoff.
 pub struct WindowsProtectedLaunchProvisioner {
     startup_timeout: Duration,
+    pulse_timeout: Duration,
+    pulse_runtime: Option<tokio::runtime::Runtime>,
     cancellations: CancellationRegistry,
 }
 
@@ -55,6 +53,7 @@ impl std::fmt::Debug for WindowsProtectedLaunchProvisioner {
         formatter
             .debug_struct("WindowsProtectedLaunchProvisioner")
             .field("startup_timeout", &self.startup_timeout)
+            .field("pulse_timeout", &self.pulse_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -68,12 +67,6 @@ impl std::fmt::Debug for PendingWindowsProtectedLaunch {
     }
 }
 
-impl Default for WindowsProtectedLaunchProvisioner {
-    fn default() -> Self {
-        Self::new(DEFAULT_STARTUP_TIMEOUT).expect("default startup timeout is non-zero")
-    }
-}
-
 impl WindowsProtectedLaunchProvisioner {
     /// Creates a provisioner whose complete bootstrap shares one monotonic cap.
     ///
@@ -81,11 +74,34 @@ impl WindowsProtectedLaunchProvisioner {
     ///
     /// Rejects a zero startup timeout.
     pub fn new(startup_timeout: Duration) -> Result<Self, WindowsProtectedLaunchError> {
+        Self::new_with_pulse_timeout(startup_timeout, startup_timeout)
+    }
+
+    /// Creates a provisioner with one shared runtime for all pulse receivers.
+    ///
+    /// # Errors
+    ///
+    /// Rejects zero timeouts or a pulse runtime that cannot be created.
+    pub fn new_with_pulse_timeout(
+        startup_timeout: Duration,
+        pulse_timeout: Duration,
+    ) -> Result<Self, WindowsProtectedLaunchError> {
         if startup_timeout.is_zero() {
             return Err(WindowsProtectedLaunchError::InvalidStartupTimeout);
         }
+        if pulse_timeout.is_zero() {
+            return Err(WindowsProtectedLaunchError::InvalidPulseTimeout);
+        }
+        let pulse_runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("agentd-pulse")
+            .enable_all()
+            .build()
+            .map_err(WindowsProtectedLaunchError::PulseRuntime)?;
         Ok(Self {
             startup_timeout,
+            pulse_timeout,
+            pulse_runtime: Some(pulse_runtime),
             cancellations: CancellationRegistry::new(),
         })
     }
@@ -197,6 +213,19 @@ impl ProtectedLaunchProvisionPort for WindowsProtectedLaunchProvisioner {
                 cleanups.into_inner(),
             );
         }
+        let pulse = match pulse::establish_initial_pulse(
+            &mut pending,
+            physical,
+            deadline,
+            self.startup_timeout,
+            self.pulse_timeout,
+            self.pulse_runtime
+                .as_ref()
+                .expect("pulse runtime remains owned until provisioner drop"),
+        ) {
+            Ok(value) => value,
+            Err(error) => return Self::failure(error, Vec::new()),
+        };
         let completed_at = Instant::now();
         let completed_at_unix_ms = match error::now_unix_ms() {
             Ok(value) => value,
@@ -205,15 +234,7 @@ impl ProtectedLaunchProvisionPort for WindowsProtectedLaunchProvisioner {
         if !deadline.permits_completion(completed_at_unix_ms, completed_at) {
             return Self::failure(WindowsProtectedLaunchError::AuthorityExpired, Vec::new());
         }
-        ProtectedLaunchCompletion::completed(pending.mint_receipt(physical, ready))
-    }
-}
-
-impl ProtectedLaunchCleanupPort for WindowsProtectedLaunchCleanup {
-    type Error = WindowsProtectedLaunchError;
-
-    fn try_cleanup(&mut self) -> Result<ProtectedLaunchCleanupProof, Self::Error> {
-        self.try_cleanup()
+        ProtectedLaunchCompletion::completed(pending.mint_receipt(physical, ready, pulse))
     }
 }
 

@@ -9,6 +9,7 @@ import { WorkerHost, type MessageBridge } from '@mcp/orchestrator-host';
 import type {
   DirtyEvent,
   IndexFilesSummary,
+  StructuralChangeHandler,
   StructuralExecutor,
   StructuralProgressFrame,
   StructuralRunSummary,
@@ -36,7 +37,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
   private progressHandlers = new Map<number, (p: StructuralProgressFrame) => void>();
   private changeHandlers = new Map<
     number,
-    (events: readonly DirtyEvent[]) => void | Promise<void>
+    StructuralChangeHandler
   >();
 
   constructor(
@@ -58,7 +59,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
       maxFiles?: number;
       allowEmptyWipe?: boolean;
       onProgress?: (p: StructuralProgressFrame) => void;
-      onChanges?: (events: readonly DirtyEvent[]) => void | Promise<void>;
+      onChanges?: StructuralChangeHandler;
     },
   ): Promise<StructuralRunSummary> {
     if (opts.onProgress) this.progressHandlers.set(projectId, opts.onProgress);
@@ -80,12 +81,38 @@ export class IndexerWorkerClient implements StructuralExecutor {
     }
   }
 
-  async indexFiles(projectId: number, relPaths: string[]): Promise<IndexFilesSummary> {
-    return this.request<IndexFilesSummary>('indexFiles', { projectId, relPaths }, FILES_TIMEOUT_MS);
+  async indexFiles(
+    projectId: number,
+    relPaths: string[],
+    opts?: { onChanges?: StructuralChangeHandler },
+  ): Promise<IndexFilesSummary> {
+    if (opts?.onChanges) this.changeHandlers.set(projectId, opts.onChanges);
+    try {
+      return await this.request<IndexFilesSummary>(
+        'indexFiles',
+        { projectId, relPaths, reportChanges: Boolean(opts?.onChanges) },
+        FILES_TIMEOUT_MS,
+      );
+    } finally {
+      if (opts?.onChanges) this.changeHandlers.delete(projectId);
+    }
   }
 
-  async removeFiles(projectId: number, relPaths: string[]): Promise<{ removed: number }> {
-    return this.request<{ removed: number }>('removeFiles', { projectId, relPaths }, FILES_TIMEOUT_MS);
+  async removeFiles(
+    projectId: number,
+    relPaths: string[],
+    opts?: { onChanges?: StructuralChangeHandler },
+  ): Promise<{ removed: number }> {
+    if (opts?.onChanges) this.changeHandlers.set(projectId, opts.onChanges);
+    try {
+      return await this.request<{ removed: number }>(
+        'removeFiles',
+        { projectId, relPaths, reportChanges: Boolean(opts?.onChanges) },
+        FILES_TIMEOUT_MS,
+      );
+    } finally {
+      if (opts?.onChanges) this.changeHandlers.delete(projectId);
+    }
   }
 
   /**
@@ -162,14 +189,18 @@ export class IndexerWorkerClient implements StructuralExecutor {
         this.progressHandlers.get(p.projectId)?.(p);
       });
       bridge.handle('structural.changes', async (data) => {
-        const payload = data as { projectId: number; events: DirtyEvent[] };
+        const payload = data as {
+          projectId: number;
+          events: DirtyEvent[];
+          previousItemKeys?: string[];
+        };
         const handler = this.changeHandlers.get(payload.projectId);
         if (!handler) {
           throw new Error(
             `no structural change handler registered for project ${payload.projectId}`,
           );
         }
-        await handler(payload.events);
+        await handler(payload.events, payload.previousItemKeys ?? []);
         return { ok: true };
       });
       for (const projectId of this.interactivePriorityProjects) {

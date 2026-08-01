@@ -9,6 +9,7 @@ use agent_protocol::supervisor_bootstrap::SupervisorBootstrapError;
 use crate::management::{
     CleanupStateError, ProtectedLaunchPeerAuthorityError, SupervisorDriverCreateError,
     SupervisorLifecycleClockError, SupervisorManagementTerminal, TrustedRunnerConfigError,
+    WindowsProtectedLaunchError,
 };
 
 #[derive(Debug)]
@@ -20,6 +21,7 @@ pub enum SupervisorProcessError {
     Management(AsyncManagementActorError),
     Configuration(TrustedRunnerConfigError),
     PeerAuthority(ProtectedLaunchPeerAuthorityError),
+    Provisioner(WindowsProtectedLaunchError),
     Driver(SupervisorDriverCreateError),
     Clock(SupervisorLifecycleClockError),
     HardRestart(CleanupStateError),
@@ -36,6 +38,7 @@ impl Display for SupervisorProcessError {
             Self::Management(_) => "management bootstrap failed",
             Self::Configuration(_) => "trusted runner configuration is invalid",
             Self::PeerAuthority(_) => "physical peer authority is invalid",
+            Self::Provisioner(_) => "runner pulse provisioner is unavailable",
             Self::Driver(_) => "supervisor lifecycle core creation failed",
             Self::Clock(_) => "supervisor lifecycle clock is invalid",
             Self::HardRestart(_) => "supervisor requires a hard restart",
@@ -54,6 +57,7 @@ impl Error for SupervisorProcessError {
             Self::Management(error) => Some(error),
             Self::Configuration(_)
             | Self::PeerAuthority(_)
+            | Self::Provisioner(_)
             | Self::Driver(_)
             | Self::HardRestart(_)
             | Self::Terminal(_) => None,

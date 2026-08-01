@@ -3,9 +3,11 @@ import type { ProjectCardData } from '../ProjectCard.js';
 import {
   countProjectStatuses,
   filterProjectList,
+  filterProjectsByGroup,
   groupProjectList,
   matchesProjectSearch,
   recentProjectList,
+  UNGROUPED_PROJECTS_KEY,
 } from '../projectListModel.js';
 
 const projects: ProjectCardData[] = [
@@ -61,8 +63,14 @@ describe('project list model', () => {
 
   it('sorts named groups and keeps the ungrouped bucket last', () => {
     const grouped = groupProjectList(projects);
-    expect([...grouped.keys()]).toEqual(['HapVida', 'POA', '__ungrouped__']);
-    expect(grouped.get('__ungrouped__')?.map((project) => project.id)).toEqual([3]);
+    expect([...grouped.keys()]).toEqual(['HapVida', 'POA', UNGROUPED_PROJECTS_KEY]);
+    expect(grouped.get(UNGROUPED_PROJECTS_KEY)?.map((project) => project.id)).toEqual([3]);
+  });
+
+  it('filters the visible project column by a named or ungrouped sidebar selection', () => {
+    expect(filterProjectsByGroup(projects, null).map((project) => project.id)).toEqual([1, 2, 3]);
+    expect(filterProjectsByGroup(projects, 'POA').map((project) => project.id)).toEqual([2]);
+    expect(filterProjectsByGroup(projects, UNGROUPED_PROJECTS_KEY).map((project) => project.id)).toEqual([3]);
   });
 
   it('preserves MRU order, ignores stale ids and deduplicates entries', () => {

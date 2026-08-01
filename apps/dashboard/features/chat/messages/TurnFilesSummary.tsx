@@ -36,7 +36,7 @@ export function TurnFilesSummary({
   const confirm = useConfirm();
   const actions = useSnapshotActions();
   const byPath = useSnapshotFiles();
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [roundFiles, setRoundFiles] = useState<RoundSnapshotFileSummary[]>([]);
   const [reviews, setReviews] = useState<RoundSnapshotReviewFinding[]>([]);
@@ -166,7 +166,7 @@ export function TurnFilesSummary({
   };
 
   return (
-    <div className="mx-3 my-2 rounded-lg border border-border/70 bg-muted/25 overflow-hidden">
+    <div className="my-2 overflow-hidden rounded-lg border border-border/60 bg-card/35">
       <div className="flex items-center gap-2 px-3 py-2">
         <button
           type="button"

@@ -1,6 +1,10 @@
 import { timingSafeEqual } from 'node:crypto';
 import { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import { AttemptFrameReceiverError } from './AttemptFrameReceiverError.js';
+import {
+  earliestLocalPeerTimestamp,
+  latestLocalPeerTimestamp,
+} from './LocalPeerClock.js';
 
 export type DataOutboundRequestFacts =
   | {
@@ -89,8 +93,10 @@ export function assertDataInboundCorrelation(
       facts?.requestCase !== 'bindAttemptChannel'
       || body.value.runtimeInstanceId !== facts.runtimeInstanceId
       || body.value.channel !== agentV1Runtime.TransportChannel.DATA
-      || body.value.boundAtUnixMs < (request?.sentAtUnixMs ?? 0n)
-      || body.value.boundAtUnixMs > observedAtUnixMs
+      || body.value.boundAtUnixMs < earliestLocalPeerTimestamp(
+        request?.sentAtUnixMs ?? 0n,
+      )
+      || body.value.boundAtUnixMs > latestLocalPeerTimestamp(observedAtUnixMs)
     ) throw mismatch('AttemptChannelBound contradicts its bind request');
     return true;
   }

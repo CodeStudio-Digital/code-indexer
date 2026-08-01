@@ -24,6 +24,7 @@ import {
 } from './indexer/process-file-structural.js';
 import { resolveStructuralPipelineSchedule } from './structural-pipeline-schedule.js';
 import { removeFilesStructural } from './structural-incremental.js';
+import { semanticItemKeysForIndexedPaths } from './indexer/embedding-candidates.js';
 
 export { resolveStructuralPipelineSchedule } from './structural-pipeline-schedule.js';
 
@@ -48,6 +49,7 @@ export interface StructuralIndexOptions {
    */
   onChanges?: (
     events: ReadonlyArray<{ path: string; kind: 'upsert' | 'delete' }>,
+    previousItemKeys: readonly string[],
   ) => void | Promise<void>;
   /** Cooperative abort — remaining files are skipped, run finishes as failed. */
   signal?: AbortSignal;
@@ -208,7 +210,14 @@ export async function runStructuralIndex(
     ...scan.toRemove.map((path) => ({ path, kind: 'delete' as const })),
     ...scan.toIndex.map((file) => ({ path: file.relativePath, kind: 'upsert' as const })),
   ];
-  await opts.onChanges?.(exactChanges);
+  const previousItemKeys = opts.onChanges
+    ? semanticItemKeysForIndexedPaths(
+        db,
+        projectId,
+        exactChanges.map((event) => event.path),
+      )
+    : [];
+  await opts.onChanges?.(exactChanges, previousItemKeys);
   await opts.waitForInteractivePriority?.();
 
   const pipelineSchedule = resolveStructuralPipelineSchedule(

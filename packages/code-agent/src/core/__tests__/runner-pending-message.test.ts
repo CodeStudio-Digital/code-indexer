@@ -25,6 +25,7 @@ class ControlledProvider implements ChatProvider {
   readonly requests: string[] = [];
   readonly firstTurnStarted = deferred();
   readonly releaseFirstTurn = deferred();
+  onRequest?: (call: number) => void;
 
   setModel(model: string): void {
     this.model = model;
@@ -33,6 +34,7 @@ class ControlledProvider implements ChatProvider {
   async *chat(request: ChatRequest): AsyncIterable<ChatDelta> {
     this.calls++;
     this.requests.push(JSON.stringify(request.messages));
+    this.onRequest?.(this.calls);
 
     if (this.calls === 1) {
       yield { type: 'text_delta', text: 'first answer' };
@@ -53,6 +55,13 @@ describe('CoderRunner pending user-message liveness', () => {
       registry: new ToolRegistry(),
       systemPrompt: 'test',
       toolContext: { cwd: process.cwd(), projectName: 'pending-message-test' },
+    });
+    const userBoundaries: number[][] = [];
+    const executionOrder: string[] = [];
+    provider.onRequest = (call) => executionOrder.push(`provider:${call}`);
+    runner.on('user_message_boundary', ({ roundMessageIds }) => {
+      userBoundaries.push(roundMessageIds);
+      executionOrder.push(`boundary:${roundMessageIds.join(',')}`);
     });
 
     runner.pushUserMessage('initial message', { roundMessageId: 11 });
@@ -79,6 +88,10 @@ describe('CoderRunner pending user-message liveness', () => {
     expect(runner.turn).toBe(2);
     expect(runner.hasPendingUserMessages()).toBe(false);
     expect(runner.roundMessageId).toBe(22);
+    expect(userBoundaries).toEqual([[11], [22]]);
+    expect(executionOrder.indexOf('boundary:22')).toBeLessThan(
+      executionOrder.indexOf('provider:2'),
+    );
   });
 
   it('refreshes the live exact-file roots used by filesystem tools', () => {

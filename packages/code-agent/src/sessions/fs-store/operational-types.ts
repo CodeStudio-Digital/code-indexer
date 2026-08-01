@@ -47,6 +47,7 @@ export interface FsRuntimeSessionState {
   reasoning_effort_override: string | null;
   execution_mode_override: CoderExecutionMode;
   thinking_enabled: boolean;
+  block_code_comments: boolean;
   plan_depth_override: string | null;
   response_language_override: string | null;
   output_style_override: string | null;

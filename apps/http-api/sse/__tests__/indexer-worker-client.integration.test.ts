@@ -54,11 +54,13 @@ describe('IndexerWorkerClient nested parser pool', () => {
       },
     );
     const changes: Array<{ path: string; kind: 'upsert' | 'delete' }> = [];
+    const previousItemKeys: string[] = [];
 
     try {
       const result = await client.runStructuralIndex(project.id, {
-        onChanges: (events) => {
+        onChanges: (events, previousKeys) => {
           changes.push(...events);
+          previousItemKeys.push(...previousKeys);
         },
       });
       expect(result).toMatchObject({ indexed: 2, errorCount: 0 });
@@ -67,6 +69,22 @@ describe('IndexerWorkerClient nested parser pool', () => {
         { path: 'alpha.ts', kind: 'upsert' },
         { path: 'beta.ts', kind: 'upsert' },
       ]);
+      expect(previousItemKeys).toEqual([]);
+
+      writeFileSync(join(root, 'alpha.ts'), 'export const alphaRenamed = 2;\n', 'utf8');
+      const incrementalChanges: Array<{ path: string; kind: 'upsert' | 'delete' }> = [];
+      const incrementalPreviousKeys: string[] = [];
+      await client.indexFiles(project.id, ['alpha.ts'], {
+        onChanges: (events, previousKeys) => {
+          incrementalChanges.push(...events);
+          incrementalPreviousKeys.push(...previousKeys);
+        },
+      });
+      expect(incrementalChanges).toEqual([{ path: 'alpha.ts', kind: 'upsert' }]);
+      expect(incrementalPreviousKeys.some((key) => key.startsWith('file:'))).toBe(true);
+      expect(incrementalPreviousKeys.some((key) => key.startsWith('symbol:'))).toBe(true);
+      expect(incrementalPreviousKeys.some((key) => key.startsWith('symbol_body:'))).toBe(true);
+      expect(incrementalPreviousKeys.some((key) => key.startsWith('symbol_group:'))).toBe(true);
 
       await client.dispose();
       const verifyDb = new CodeIndexDB(dbPath);

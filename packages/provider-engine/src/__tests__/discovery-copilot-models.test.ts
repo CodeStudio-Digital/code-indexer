@@ -4,7 +4,7 @@ import type {
   ProviderStore,
 } from '@mcp/store/provider-store.js';
 
-import { discoverCopilotModels } from '../discovery/copilot-models.js';
+import { discoverCopilotModels, mapCopilotModel } from '../discovery/copilot-models.js';
 import { copilotSpec } from '../specs/copilot.js';
 
 // The OAuth helpers only touch `store.getOAuth`. We mock the network at
@@ -118,5 +118,24 @@ describe('sdk:copilot discovery', () => {
     await expect(
       discoverCopilotModels(copilotSpec, CFG, fakeStore()),
     ).rejects.toThrow(/Copilot \/models HTTP 503/);
+  });
+
+  it('exposes configurable Gemini 3.6 effort but keeps Gemini 3.5 model-managed', () => {
+    expect(mapCopilotModel({
+      id: 'gemini-3.6-flash',
+      capabilities: { supports: { reasoning: true } },
+    })).toMatchObject({
+      can_reason: true,
+      supported_reasoning_levels: ['low', 'medium', 'high'],
+      default_reasoning_level: 'medium',
+    });
+    expect(mapCopilotModel({
+      id: 'gemini-3.5-flash',
+      capabilities: { supports: { reasoning: true } },
+    })).toMatchObject({
+      can_reason: true,
+      supported_reasoning_levels: null,
+      default_reasoning_level: null,
+    });
   });
 });

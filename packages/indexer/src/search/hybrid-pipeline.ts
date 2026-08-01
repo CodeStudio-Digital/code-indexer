@@ -413,7 +413,9 @@ export class RecentFilesSourceStage
     const out: HybridSearchPipelineCandidate[] = [];
     for (let i = 0; i < matches.length; i++) {
       const m = matches[i];
-      const data = this.deps.db.getFileById(m.fileId, q.projectId);
+      const data = m.fileId == null
+        ? this.deps.db.getFile(q.projectId, m.filePath)
+        : this.deps.db.getFileById(m.fileId, q.projectId);
       if (!data || data.project_id !== q.projectId) continue;
       const r: HybridSearchResult = {
         id: data.id,

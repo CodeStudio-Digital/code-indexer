@@ -128,7 +128,7 @@ impl Fixture {
     }
 
     fn request(&self) -> ProtectedLaunchRequest<'_> {
-        ProtectedLaunchRequest::new(&self.launch, &self.plan, &self.authority)
+        ProtectedLaunchRequest::new(&self.launch, &self.plan, &self.authority, 100)
     }
 
     fn spawn(

@@ -23,12 +23,13 @@ export function mountFilesRoutes(app: Hono, deps: ServerDeps): void {
   const touchIndexedFile = (projectId: number, filePath: string, kind: 'view' | 'edit'): void => {
     try {
       const normalized = filePath.replace(/\\/g, '/').replace(/^\.\//, '');
-      const file = deps.db.getFile(projectId, normalized);
-      if (!file) return;
+      // Recency is path-addressable until hybrid search actually consumes it.
+      // Opening/saving an editor tab must not synchronously open + bootstrap a
+      // cold per-project SQLite handle merely to obtain an optional ranking id.
       deps.recentFilesSource.touch({
         projectId,
-        fileId: file.id,
-        filePath: file.path,
+        fileId: null,
+        filePath: normalized,
         kind,
       });
     } catch {

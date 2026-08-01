@@ -175,11 +175,19 @@ export class OpenAIChatProvider implements ChatProvider {
     }
 
     // GitHub Copilot's chat endpoint follows the same reasoning_effort contract
-    // exposed by Copilot CLI. Forward only an explicit level/toggle.
+    // exposed by Copilot CLI. An explicit catalog-validated level remains
+    // authoritative. The legacy boolean toggle maps to `high` only for model
+    // families where Copilot documents configurable reasoning; fixed/adaptive
+    // models (notably Gemini 3.5 Flash) must keep their server-side policy.
     const copilotExtras: Record<string, unknown> = {};
     if (this.vendor === 'copilot') {
-      const effort = normalizeCopilotEffort(req.reasoningEffort)
-        ?? (req.thinking === true ? 'high' : null);
+      const modelManaged = copilotUsesModelManagedReasoning(this.model);
+      const effort = modelManaged
+        ? null
+        : normalizeCopilotEffort(req.reasoningEffort)
+          ?? (req.thinking === true && copilotSupportsBooleanReasoningEffort(this.model)
+            ? 'high'
+            : null);
       if (effort) copilotExtras.reasoning_effort = effort;
     }
 
@@ -686,6 +694,20 @@ function normalizeCopilotEffort(
     return effort;
   }
   return null;
+}
+
+function copilotSupportsBooleanReasoningEffort(model: string): boolean {
+  const id = model.trim().toLowerCase();
+  return /^gpt-5\.(?:3-codex|4|5|6)(?:-|$)/.test(id)
+    || /^claude-(?:fable-5|sonnet-(?:4\.6|5)|opus-(?:4\.[678]|5))(?:-|$)/.test(id)
+    || /^gemini-3\.6-flash(?:-|$)/.test(id);
+}
+
+function copilotUsesModelManagedReasoning(model: string): boolean {
+  const id = model.trim().toLowerCase();
+  const gemini3 = /^gemini-3(?:[.-]|$)/.test(id);
+  return (gemini3 && !/^gemini-3\.6-flash(?:-|$)/.test(id))
+    || /^kimi-k2\.7(?:-|$)/.test(id);
 }
 
 function normalizeKimiK3Effort(value: string): 'none' | 'low' | 'high' | 'max' {

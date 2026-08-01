@@ -71,6 +71,10 @@ message RunnerLaunchHandoff {
   // against the trusted installed binary. Runtime instance and PID are then
   // bound to the physical spawn before this protected handoff is committed.
   RuntimeProvenance runtime_provenance = 14;
+  // Derived by the supervisor from its negotiated runner pulse timeout. The
+  // runner may emit more frequently, but never less frequently than this
+  // interval while the attempt remains alive.
+  uint64 runner_pulse_interval_ms = 15;
 }
 
 message RunnerReadyEndpoint {

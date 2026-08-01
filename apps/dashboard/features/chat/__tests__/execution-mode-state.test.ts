@@ -125,6 +125,35 @@ describe('execution-mode dashboard state', () => {
       .toEqual(['high', 'xhigh', 'max']);
   });
 
+  it('does not offer a fake Copilot thinking toggle for model-managed reasoning', () => {
+    const copilotProviders: ProviderOption[] = [{
+      id: 'copilot',
+      kind: 'copilot',
+      label: 'GitHub Copilot',
+      capabilities: { supportsThinking: true, supportsVision: true },
+      models: [
+        {
+          id: 'gemini-3.5-flash',
+          name: 'Gemini 3.5 Flash',
+          mode: null,
+          can_reason: true,
+          supported_reasoning_levels: null,
+        },
+        {
+          id: 'gemini-3.6-flash',
+          name: 'Gemini 3.6 Flash',
+          mode: null,
+          can_reason: true,
+          supported_reasoning_levels: ['low', 'medium', 'high'],
+        },
+      ],
+    }];
+
+    expect(providerSupportsThinking('copilot', copilotProviders, 'gemini-3.5-flash')).toBe(false);
+    expect(modelCanReason('copilot', copilotProviders, 'gemini-3.5-flash')).toBe(true);
+    expect(providerSupportsThinking('copilot', copilotProviders, 'gemini-3.6-flash')).toBe(true);
+  });
+
   it('derives can-reason without treating an Ultra-only stale catalog as native support', () => {
     expect(modelCanReason('test', providers, 'reasoner')).toBe(true);
     expect(modelCanReason('test', providers, 'fixed')).toBe(true);

@@ -126,6 +126,7 @@ describe('FsSessionStore session catalog', () => {
       execution_mode_override: 'ultra',
       reasoning_effort_override: 'high',
       thinking_enabled: true,
+      block_code_comments: true,
     });
     const persisted = JSON.parse(
       await readFile(
@@ -144,6 +145,7 @@ describe('FsSessionStore session catalog', () => {
           execution_mode_override: string;
           reasoning_effort_override: string | null;
           thinking_enabled: boolean;
+          block_code_comments: boolean;
           max_turns: number | null;
           max_auto_continues: number;
         };
@@ -153,6 +155,7 @@ describe('FsSessionStore session catalog', () => {
       execution_mode_override: 'ultra',
       reasoning_effort_override: 'high',
       thinking_enabled: true,
+      block_code_comments: true,
       max_turns: null,
       max_auto_continues: 15,
     });

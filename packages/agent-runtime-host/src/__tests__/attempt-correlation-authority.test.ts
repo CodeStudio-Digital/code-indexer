@@ -36,7 +36,7 @@ function authority(): AttemptCorrelationAuthority {
     'activate-request',
     value.captureNew(request),
     DIGEST,
-    10n,
+    100n,
   );
   return value;
 }
@@ -66,20 +66,42 @@ function prepared(
   });
 }
 
+function bindRequest() {
+  return create(agentV1Runtime.FramePayloadSchema, {
+    body: {
+      case: 'bindAttemptChannel',
+      value: { runtimeInstanceId: 'runtime' },
+    },
+  });
+}
+
+function bound(boundAtUnixMs: bigint) {
+  return create(agentV1Runtime.FramePayloadSchema, {
+    body: {
+      case: 'attemptChannelBound',
+      value: {
+        runtimeInstanceId: 'runtime',
+        channel: agentV1Runtime.TransportChannel.DATA,
+        boundAtUnixMs,
+      },
+    },
+  });
+}
+
 describe('attempt correlation authority', () => {
   it('authenticates Ack identity, payload digest, and timestamp', () => {
     expect(() => authority().validateInbound(
-      ack('activate-request', DIGEST, 15n),
+      ack('activate-request', DIGEST, 110n),
       'activate-request',
-      20n,
+      120n,
     )).not.toThrow();
   });
 
   it.each([
-    [ack('other-request', DIGEST, 15n), 20n],
-    [ack('activate-request', new Uint8Array(32), 15n), 20n],
-    [ack('activate-request', DIGEST, 9n), 20n],
-    [ack('activate-request', DIGEST, 21n), 20n],
+    [ack('other-request', DIGEST, 110n), 120n],
+    [ack('activate-request', new Uint8Array(32), 110n), 120n],
+    [ack('activate-request', DIGEST, 49n), 120n],
+    [ack('activate-request', DIGEST, 171n), 120n],
   ])('rejects forged Ack facts %#', (payload, observedAtUnixMs) => {
     expect(() => authority().validateInbound(
       payload,
@@ -107,6 +129,32 @@ describe('attempt correlation authority', () => {
       'prepare-request',
       20n,
     )).not.toThrow();
+  });
+
+  it('accepts only bounded local peer clock skew for Data bind', () => {
+    const value = new AttemptCorrelationAuthority(4);
+    value.registerNew(
+      'bind-request',
+      value.captureNew(bindRequest()),
+      DIGEST,
+      100n,
+    );
+
+    expect(() => value.validateInbound(
+      bound(99n),
+      'bind-request',
+      100n,
+    )).not.toThrow();
+    expect(() => value.validateInbound(
+      bound(49n),
+      'bind-request',
+      100n,
+    )).toThrow(expect.objectContaining({ code: 'correlation_mismatch' }));
+    expect(() => value.validateInbound(
+      bound(151n),
+      'bind-request',
+      100n,
+    )).toThrow(expect.objectContaining({ code: 'correlation_mismatch' }));
   });
 
   it.each([

@@ -1,22 +1,31 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ChevronUp, History } from 'lucide-react';
+import { AlertCircle, ChevronUp, History, Loader2, RotateCw } from 'lucide-react';
 import type { AssistantTurn } from '../../../hooks/useAgentStream.js';
 import { Alert, AlertDescription } from '../../../components/ui/alert.js';
 import { LOAD_MORE_SIZE } from '../constants.js';
-import type { PersistedTasksState, PromptHandlers, SessionData } from '../types.js';
+import type {
+  ConversationChapter,
+  ConversationChapterSourceMessage,
+  ConversationChapterSourcePage,
+  EarlierMessagePageResult,
+  MessageRow,
+  PersistedMessage,
+  PersistedTasksState,
+  PromptHandlers,
+  SessionData,
+  ToolResultView,
+  VisualGroup,
+} from '../types.js';
 import {
-  buildPersistedLiveReconciliation,
   groupMessages,
-  liveTurnCoversPersistedAssistantRun,
-  liveTurnContinuesPersistedAssistant,
-  liveTurnReconciliationRevision,
   mergeConsecutiveAssistantGroups,
-  suppressLatestPersistedAssistantRun,
-  suppressPersistedAgentDuplicates,
-  type PersistedLiveReconciliation,
-  visibleLiveBlocks,
 } from '../utils.js';
+import {
+  projectTranscriptHistory,
+  type TranscriptProjection,
+} from '../transcript-projection.js';
 import { AssistantBubble } from './AssistantBubble.js';
 import { GroupedToolBubble } from './GroupedToolBubble.js';
 import { MessageView } from './MessageView.js';
@@ -25,652 +34,273 @@ import { PreflightBlock } from './PreflightBlock.js';
 import { SnapshotFilesProvider, type SnapshotActions } from './snapshot-files-context.js';
 import { TurnFilesSummary } from './TurnFilesSummary.js';
 import { computeTurnEditSummaries } from './turn-summaries.js';
+import type { TurnEditSummary } from './turn-summaries.js';
 import { filesFromEditToolCall, type EditFileRef } from './edit-tools.js';
 import type { SnapshotFileSummary } from '../../snapshots/types.js';
 import {
   ConversationChapterDivider,
   useConversationChapters,
 } from './ConversationChapters.js';
-import { loadedChapterMarkers } from './chapter-markers.js';
+import {
+  buildChapterTranscript,
+  sortChaptersChronologically,
+  visualGroupKey,
+} from './chapter-transcript.js';
 
 const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
 const LOAD_EARLIER_SCROLL_THRESHOLD = 200;
+const CHAPTER_SOURCE_PAGE_SIZE = 100;
+const MAX_DUPLICATE_PAGE_HOPS = 8;
 
-/** Render only the transcript tail once it grows past this many groups —
- * streaming or idle. Mounting every group of a large idle session on open
- * froze the renderer; capped groups stay reachable via "load earlier". */
-const RENDER_CAP_THRESHOLD = 60;
-/** Tail size kept in the DOM while capped; also the local reveal step per
- * "load earlier" trigger before the backend is consulted. */
-const RENDER_CAP = 60;
-
-/** Direct scroll fallback for environments where IntersectionObserver does
- * not re-fire after the conversation moves between retained workbench
- * surfaces. Negative values cover elastic overscroll on touch devices. */
+/** Negative values cover elastic overscroll on touch devices. */
 export function shouldLoadEarlierAtScrollTop(scrollTop: number): boolean {
   return scrollTop <= LOAD_EARLIER_SCROLL_THRESHOLD;
-}
-
-/** Token-only streaming updates need one paint; history/structure changes need
- * the immediate + double-rAF settle pass used for fonts/images/layout. */
-export function messageListScrollPasses(
-  streaming: boolean,
-  structuralChange: boolean,
-): 1 | 3 {
-  return streaming && !structuralChange ? 1 : 3;
 }
 
 export interface MessageListProps {
   sessionData: SessionData | null;
   currentTurn: AssistantTurn | null;
   streaming: boolean;
-  /** Set while the blocking preflight runs on a fresh first message. Optional —
-   *  call sites that don't surface the indicator (e.g. the editor rail) omit it. */
   preflight?: { startedAt: number } | null;
   doneReason: string | null;
   error: string | null;
-  liveTurnDuplicatedInHistory: boolean;
-  /** Precomputed once per history refetch by LiveMessageList. Direct callers
-   *  may omit it and MessageList builds the same index locally. */
-  liveReconciliation?: PersistedLiveReconciliation;
-  /** Assistant tool_use ids already in persisted history. The live turn drops
-   *  any gate/tool block whose id is here, so a paused gate (awaiting approval)
-   *  isn't rendered twice — once persisted (above) and once live (below). */
-  persistedToolUseIds: Set<string>;
-  fallbackProviderId: string;
+  projection: TranscriptProjection;
   tasksState: PersistedTasksState | null;
   handlers: PromptHandlers;
-  /** Fetch earlier messages from the backend. Returns count of rows loaded (0 = nothing more).
-   *  `includeArchived` crosses a "summarize & clear" boundary to reveal hidden history. */
-  onLoadEarlier?: (beforeId: number | undefined, limit?: number, includeArchived?: boolean) => Promise<number>;
-  /** Session-snapshot wiring for the file-edit blocks + per-turn "files changed"
-   *  summary. Optional — mounts without snapshot support (e.g. the editor rail)
-   *  degrade to plain file rows and skip the summary. */
+  onLoadEarlier?: (
+    beforeSeq: number | undefined,
+    limit?: number,
+    includeArchived?: boolean,
+  ) => Promise<EarlierMessagePageResult>;
   snapshotActions?: SnapshotActions | null;
   snapshotFiles?: Map<string, SnapshotFileSummary>;
 }
 
-/**
- * Persisted history list. Memoized so that the token-by-token updates to
- * `currentTurn` in the parent do NOT re-render every past message (and every
- * ToolCallBlock inside them). Rerenders only when the session data itself
- * changes (refetch after message_complete).
- */
-const PersistedMessages = React.memo(function PersistedMessages({
-  sessionData,
-  handlers,
-  tasksState,
-  scrollContainerRef,
-  streaming,
-  onLoadEarlier,
-  onChapterNavigate,
-  liveAgentIdentityKey,
-  suppressLatestAssistantRun,
-}: {
-  sessionData: SessionData;
-  handlers: PromptHandlers;
-  tasksState: PersistedTasksState | null;
-  scrollContainerRef: React.RefObject<HTMLDivElement | null>;
-  streaming: boolean;
-  onLoadEarlier?: (beforeId: number | undefined, limit?: number, includeArchived?: boolean) => Promise<number>;
-  onChapterNavigate?: () => void;
-  /** Stable primitive so token deltas do not invalidate the persisted tree. */
-  liveAgentIdentityKey: string;
-  /** The complete live run replaces the checkpointed assistant tail. */
-  suppressLatestAssistantRun: boolean;
-}) {
-  // Build tool-result map once per sessionData change. Tool-produced images
-  // (preview_screenshot / view_image) are rendered as their own image bubble
-  // (the synthetic user message), not paired inline here — that path proved
-  // fragile; the attachment renderer is the reliable one.
-  const { t } = useTranslation('chat');
-  const resultsById = useMemo(() => {
-    const m = new Map<string, { content: string; isError: boolean; truncated?: boolean; originalLength?: number }>();
-    // Seed from the bundle tool-output audit fallback FIRST so any real
-    // tool_result block below overrides it. This covers recovered tool calls
-    // whose transcript block is unavailable; without it they render as a
-    // perpetual loading spinner.
-    for (const tr of sessionData.tool_results ?? []) {
-      m.set(tr.tool_use_id, {
-        content: tr.content ?? '',
-        isError: Boolean(tr.is_error),
-        truncated: Boolean(tr._truncated),
-        originalLength: tr._originalLength,
+interface ChapterSourceState {
+  expanded: boolean;
+  loading: boolean;
+  error: boolean;
+  items: ConversationChapterSourceMessage[];
+}
+
+interface PaginationState {
+  sessionId: string | null;
+  nextBeforeSeq: number | null;
+  hasMore: boolean;
+  includeArchived: boolean;
+  status: 'idle' | 'loading' | 'error' | 'exhausted';
+  error?: string;
+}
+
+type TurnSummary = TurnEditSummary;
+
+type TranscriptRow =
+  | { kind: 'history-control'; key: string }
+  | { kind: 'chapter'; key: string; chapter: ConversationChapter }
+  | {
+      kind: 'message';
+      key: string;
+      group: VisualGroup;
+      resultsById: ReadonlyMap<string, ToolResultView>;
+      summary?: TurnSummary;
+      sourceChapterId?: string;
+    }
+  | { kind: 'tail'; key: string };
+
+function earliestPersistedSeq(sessionData: SessionData | null): number | null {
+  if (!sessionData) return null;
+  let earliest = Number.POSITIVE_INFINITY;
+  for (const row of sessionData.message_rows) {
+    if (row.optimistic || row.seq <= 0) continue;
+    earliest = Math.min(earliest, row.seq);
+  }
+  return Number.isFinite(earliest) ? earliest : null;
+}
+
+function parseSourceContent(item: ConversationChapterSourceMessage): PersistedMessage['content'] {
+  if (Array.isArray(item.content)) return item.content;
+  const raw = item.content_json ?? item.content;
+  if (typeof raw !== 'string') return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) return parsed as PersistedMessage['content'];
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { blocks?: unknown }).blocks)) {
+      return (parsed as { blocks: PersistedMessage['content'] }).blocks;
+    }
+  } catch {
+    if (typeof item.content === 'string') return [{ type: 'text', text: item.content }];
+  }
+  return [];
+}
+
+function parseSelectedSkills(raw: string | null | undefined): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === 'string')
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function projectChapterSource(items: readonly ConversationChapterSourceMessage[]): {
+  groups: VisualGroup[];
+  resultsById: Map<string, ToolResultView>;
+  summaries: Map<number, TurnSummary>;
+} {
+  const messages: PersistedMessage[] = items.map((item) => {
+    const selectedSkillIds = parseSelectedSkills(item.selected_skill_ids_json);
+    return {
+      role: item.role,
+      content: parseSourceContent(item),
+      ...(item.is_meta ? { isMeta: true } : {}),
+      ...(selectedSkillIds?.length ? { selectedSkillIds } : {}),
+    } as PersistedMessage;
+  });
+  const rows: MessageRow[] = items.map((item) => ({
+    id: item.id,
+    seq: item.seq,
+    input_tokens: item.input_tokens ?? 0,
+    output_tokens: item.output_tokens ?? 0,
+    cache_read_tokens: item.cache_read_tokens ?? 0,
+    cache_creation_tokens: item.cache_creation_tokens ?? 0,
+  }));
+  const resultsById = new Map<string, ToolResultView>();
+  for (const message of messages) {
+    if (message.role !== 'tool') continue;
+    for (const block of message.content) {
+      if (block.type !== 'tool_result' || !block.tool_use_id) continue;
+      resultsById.set(block.tool_use_id, {
+        content: block.content ?? '',
+        isError: Boolean(block.is_error),
+        truncated: Boolean(block._truncated),
+        originalLength: block._originalLength,
       });
     }
-    for (const msg of sessionData.messages) {
-      if (msg.role !== 'tool') continue;
-      for (const b of msg.content) {
-        if (b.type === 'tool_result' && b.tool_use_id) {
-          m.set(b.tool_use_id, {
-            content: b.content ?? '',
-            isError: Boolean(b.is_error),
-            truncated: Boolean(b._truncated),
-            originalLength: b._originalLength,
-          });
-        }
-      }
-    }
-    return m;
-  }, [sessionData]);
-
-  // Group messages into visual groups
-  const groups = useMemo(
-    () => groupMessages(sessionData.messages, sessionData.message_rows),
-    [sessionData],
-  );
-
-  // The session keeps ONE coder_tasks_state row (latest submit_tasks wins), so
-  // only the most recent submit_tasks tool_use block may overlay the live
-  // `tasksState`. Older/superseded cards render their own frozen snapshot.
-  // Gated on a non-empty row: after `archive_task_list` clears it there is no
-  // active card and every card falls back to its frozen input.
-  const activeTasksToolUseId = useMemo<string | null>(() => {
-    if (!tasksState?.tasks?.length) return null;
-    let last: string | null = null;
-    for (const msg of sessionData.messages) {
-      if (msg.role !== 'assistant') continue;
-      for (const b of msg.content) {
-        // submit_tasks (legacy) and task_list (merged) both post the approve list.
-        if (b.type === 'tool_use' && (b.name === 'submit_tasks' || b.name === 'task_list') && b.id) last = b.id;
-      }
-    }
-    return last;
-  }, [sessionData, tasksState]);
-
-  // Above RENDER_CAP_THRESHOLD groups, only render the tail to keep DOM light —
-  // streaming or idle (an idle session used to mount every group on open,
-  // freezing the renderer). Derived during render (React's "adjust state on
-  // prop change" pattern) instead of an effect so a heavy transcript is never
-  // mounted uncapped even once; "load earlier" below expands the cap before
-  // consulting the backend.
-  const [renderCap, setRenderCap] = useState<number | null>(
-    () => (groups.length > RENDER_CAP_THRESHOLD ? RENDER_CAP : null),
-  );
-  const [prevSessionId, setPrevSessionId] = useState(sessionData.session.id);
-  if (prevSessionId !== sessionData.session.id) {
-    // Session switched in place — recompute the cap for the new transcript.
-    setPrevSessionId(sessionData.session.id);
-    setRenderCap(groups.length > RENDER_CAP_THRESHOLD ? RENDER_CAP : null);
-  } else if (renderCap === null && groups.length > RENDER_CAP_THRESHOLD) {
-    setRenderCap(RENDER_CAP);
   }
+  const groups = mergeConsecutiveAssistantGroups(groupMessages(messages, rows));
+  return {
+    groups,
+    resultsById,
+    summaries: computeTurnEditSummaries(groups),
+  };
+}
 
-  const cappedGroups = renderCap !== null && groups.length > renderCap
-    ? groups.slice(-renderCap)
-    : groups;
-  const liveAgentIdentities = useMemo(
-    () => (liveAgentIdentityKey ? JSON.parse(liveAgentIdentityKey) : []),
-    [liveAgentIdentityKey],
-  );
-  const chronologicalGroups = useMemo(
-    () => suppressLatestAssistantRun
-      ? suppressLatestPersistedAssistantRun(
-          cappedGroups,
-          sessionData.preceding_user_seq,
-        )
-      : cappedGroups,
-    [
-      cappedGroups,
-      sessionData.preceding_user_seq,
-      suppressLatestAssistantRun,
-    ],
-  );
-  const displayGroups = useMemo(
-    () => mergeConsecutiveAssistantGroups(
-      suppressPersistedAgentDuplicates(chronologicalGroups, liveAgentIdentities, resultsById),
-    ),
-    [chronologicalGroups, liveAgentIdentities, resultsById],
-  );
-  // True while already-loaded groups are hidden by the cap — drives the
-  // "load earlier" affordance even when the backend has nothing more.
-  const capHidesGroups = cappedGroups.length < groups.length;
-  // Latest group count for handlers bound once per session (chapter navigate)
-  // — avoids rebinding window listeners on every transcript growth.
-  const groupsLengthRef = useRef(groups.length);
-  groupsLengthRef.current = groups.length;
-
-  const chapterIndex = useConversationChapters(sessionData.session.id);
-  const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
-  useEffect(() => {
-    let pendingMarkerObserver: MutationObserver | null = null;
-    let pendingMarkerTimeout: number | null = null;
-    const cancelPendingMarkerWait = () => {
-      pendingMarkerObserver?.disconnect();
-      pendingMarkerObserver = null;
-      if (pendingMarkerTimeout != null) window.clearTimeout(pendingMarkerTimeout);
-      pendingMarkerTimeout = null;
-    };
-    const navigate = (event: Event) => {
-      const detail = (event as CustomEvent<{
-        sessionId: string;
-        chapterId: string;
-        endMessageSeq: number;
-      }>).detail;
-      if (!detail || detail.sessionId !== sessionData.session.id) return;
-      onChapterNavigate?.();
-      setActiveChapterId(detail.chapterId);
-      const selector = `[data-chapter-id="${detail.chapterId}"]`;
-      const scrollToMarker = (): boolean => {
-        const marker = document
-          .querySelector<HTMLElement>(selector);
-        if (marker) {
-          marker.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          return true;
-        }
-        return false;
-      };
-      cancelPendingMarkerWait();
-      if (scrollToMarker()) return;
-      // The target may be loaded but hidden by the render cap — lift the cap
-      // over the full transcript (plus headroom for the fetch below) so the
-      // marker can mount; the observer below scrolls once it appears.
-      setRenderCap((cap) => (cap === null ? null : Math.max(cap, groupsLengthRef.current + 160)));
-      if (onLoadEarlier) {
-        // The fetch can resolve before a large prepended transcript finishes
-        // reconciling. Observe the chat container and scroll one paint after
-        // the marker mounts, after React's scroll-preservation layout effect.
-        const root = scrollContainerRef.current ?? document.body;
-        pendingMarkerObserver = new MutationObserver(() => {
-          if (!document.querySelector(selector)) return;
-          cancelPendingMarkerWait();
-          requestAnimationFrame(scrollToMarker);
-        });
-        pendingMarkerObserver.observe(root, { childList: true, subtree: true });
-        pendingMarkerTimeout = window.setTimeout(cancelPendingMarkerWait, 8_000);
-        void onLoadEarlier(detail.endMessageSeq + 1, 160, true)
-          .then(() => {
-            if (scrollToMarker()) cancelPendingMarkerWait();
-          });
-      }
-    };
-    const activate = (event: Event) => {
-      const detail = (event as CustomEvent<{ sessionId: string; chapterId: string }>).detail;
-      if (!detail || detail.sessionId !== sessionData.session.id) return;
-      setActiveChapterId(detail.chapterId);
-    };
-    window.addEventListener('coder:chapter-source', navigate);
-    window.addEventListener('coder:chapter-active', activate);
-    return () => {
-      cancelPendingMarkerWait();
-      window.removeEventListener('coder:chapter-source', navigate);
-      window.removeEventListener('coder:chapter-active', activate);
-    };
-  }, [onChapterNavigate, onLoadEarlier, scrollContainerRef, sessionData.session.id]);
-  useEffect(() => setActiveChapterId(null), [sessionData.session.id]);
-  const chapterMarkers = useMemo(
-    () => loadedChapterMarkers(chapterIndex.chapters, displayGroups),
-    [chapterIndex.chapters, displayGroups],
-  );
-
-  // Per-turn "files changed" summary refs, keyed by each turn's last assistant
-  // group index. Derived from persisted tool calls → survives scrollback/reload.
-  const precedingDisplayRoundMessageId = useMemo(() => {
-    let roundMessageId = sessionData.preceding_user_seq ?? undefined;
-    const skipped = groups.length - cappedGroups.length;
-    for (let index = 0; index < skipped; index++) {
-      const group = groups[index];
-      if (group.kind === 'user') roundMessageId = group.messageId;
-    }
-    return roundMessageId;
-  }, [cappedGroups.length, groups, sessionData.preceding_user_seq]);
-  const turnSummaries = useMemo(
-    () => computeTurnEditSummaries(displayGroups, precedingDisplayRoundMessageId),
-    [displayGroups, precedingDisplayRoundMessageId],
-  );
-
-  // Summary-boundary aware pagination. `total_messages` counts only VISIBLE
-  // rows (above a "summarize & clear" boundary); `archived_count` is what's
-  // hidden below it. The user reveals the archive explicitly, after which
-  // normal pagination continues across the boundary (includeArchived=true).
-  const totalMessages = sessionData.total_messages ?? sessionData.message_rows.length;
-  const archivedCount = sessionData.archived_count ?? 0;
-  const fullTotal = totalMessages + archivedCount;
-  const loadedCount = sessionData.message_rows.length;
-  const [revealArchived, setRevealArchived] = useState(false);
-  const revealArchivedRef = useRef(false);
-  const visibleHasEarlier = totalMessages > loadedCount;
-  const hasEarlier = visibleHasEarlier || (revealArchived && loadedCount < fullTotal);
-  const canRevealArchived = !visibleHasEarlier && archivedCount > 0 && !revealArchived;
-  const displayTotal = revealArchived ? fullTotal : totalMessages;
-
-  // Scroll preservation when loading earlier messages
-  const prevScrollHeightRef = useRef<number>(0);
-  const loadingEarlierRef = useRef(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-
-  // Sync guard refs — React state batching can allow multiple observer
-  // callbacks to slip through before `loadingMore` is committed. Refs
-  // update synchronously and prevent duplicate requests.
-  const loadingRef = useRef(false);
-  const exhaustedRef = useRef(false);
-  const [exhausted, setExhausted] = useState(false);
-
-  // Reset exhausted + archived-reveal flags when switching sessions.
-  useEffect(() => {
-    exhaustedRef.current = false;
-    setExhausted(false);
-    revealArchivedRef.current = false;
-    setRevealArchived(false);
-  }, [sessionData.session.id]);
-
-  const handleLoadEarlier = useCallback(async () => {
-    if (loadingRef.current) return;
-    // Cap-hidden groups are already loaded — reveal one step locally (with
-    // the same scroll preservation as a backend prepend) and only hit the
-    // backend once the cap no longer hides anything. `exhausted` gates the
-    // backend, not this purely local reveal.
-    if (renderCap !== null && groups.length > renderCap) {
-      const el = scrollContainerRef.current;
-      if (el) prevScrollHeightRef.current = el.scrollHeight;
-      loadingEarlierRef.current = true;
-      setRenderCap(renderCap + RENDER_CAP);
-      return;
-    }
-    if (!onLoadEarlier || exhaustedRef.current) return;
-    const earliestSeq = sessionData.message_rows[0]?.seq;
-    // A summarize boundary can leave zero visible rows. In that case there is
-    // no `before_seq`; the backend anchors at maxMessageSeq + 1 when the user
-    // explicitly asks to cross into archived history.
-    if (!earliestSeq && !revealArchivedRef.current) return;
-    loadingRef.current = true;
-    const el = scrollContainerRef.current;
-    if (el) prevScrollHeightRef.current = el.scrollHeight;
-    loadingEarlierRef.current = true;
-    setLoadingMore(true);
-    try {
-      // Rows→groups is at most 1:1, so growing the cap by the page size
-      // guarantees the freshly fetched page is not immediately re-hidden.
-      if (renderCap !== null) setRenderCap(renderCap + LOAD_MORE_SIZE);
-      const count = await onLoadEarlier(earliestSeq, LOAD_MORE_SIZE, revealArchivedRef.current);
-      if (count === 0) {
-        // Backend returned nothing — stop polling forever for this session.
-        exhaustedRef.current = true;
-        setExhausted(true);
-      }
-    } finally {
-      loadingRef.current = false;
-      setLoadingMore(false);
-    }
-  }, [groups.length, onLoadEarlier, renderCap, sessionData.message_rows, scrollContainerRef]);
-
-  // Cross the "summarize & clear" boundary on explicit user request, then let
-  // the normal infinite-scroll continue pulling archived pages.
-  const handleRevealArchived = useCallback(() => {
-    revealArchivedRef.current = true;
-    setRevealArchived(true);
-    void handleLoadEarlier();
-  }, [handleLoadEarlier]);
-
-  // After new messages are prepended — a backend page (messages.length) OR a
-  // local cap reveal (cappedGroups.length) — restore scroll position.
-  useLayoutEffect(() => {
-    if (!loadingEarlierRef.current) return;
-    loadingEarlierRef.current = false;
-    const el = scrollContainerRef.current;
-    if (!el) return;
-    const delta = el.scrollHeight - prevScrollHeightRef.current;
-    if (delta > 0) el.scrollTop += delta;
-  }, [sessionData.messages.length, cappedGroups.length, scrollContainerRef]);
-
-  // Stable ref to the latest handleLoadEarlier — avoids re-creating the
-  // IntersectionObserver every time the callback identity changes.
-  const handleRef = useRef(handleLoadEarlier);
-  handleRef.current = handleLoadEarlier;
-
-  // Infinite scroll: auto-load when a sentinel element near the top becomes
-  // visible. Active while the backend has more rows OR the render cap hides
-  // already-loaded groups; uses refs for all guards to avoid stale closures
-  // (handleLoadEarlier itself routes between cap reveal and backend fetch).
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const sentinel = sentinelRef.current;
-    const root = scrollContainerRef.current;
-    const backendHasMore = hasEarlier && !!onLoadEarlier && !exhaustedRef.current;
-    if (!sentinel || !root || (!backendHasMore && !capHidesGroups)) return;
-    const requestEarlier = () => {
-      if (!loadingRef.current) void handleRef.current();
-    };
-    const onScroll = () => {
-      if (shouldLoadEarlierAtScrollTop(root.scrollTop)) requestEarlier();
-    };
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) requestEarlier();
-      },
-      { root, rootMargin: `${LOAD_EARLIER_SCROLL_THRESHOLD}px 0px 0px 0px` },
+const TranscriptMessage = React.memo(function TranscriptMessage({
+  group,
+  resultsById,
+  sessionId,
+  handlers,
+  tasksState,
+  activeTasksToolUseId,
+  summary,
+}: {
+  group: VisualGroup;
+  resultsById: ReadonlyMap<string, ToolResultView>;
+  sessionId: string;
+  handlers: PromptHandlers;
+  tasksState: PersistedTasksState | null;
+  activeTasksToolUseId: string | null;
+  summary?: TurnSummary;
+}) {
+  let content: React.ReactNode;
+  if (group.kind === 'user') {
+    content = (
+      <MessageView
+        message={group.message}
+        messageId={group.messageId}
+        sessionId={sessionId}
+        toolResultsById={resultsById}
+        usage={group.usage}
+        onAnswer={handlers.onAnswer}
+        onPlanResponse={handlers.onPlanResponse}
+        onTasksResponse={handlers.onTasksResponse}
+        onDecide={handlers.onDecide}
+        onFork={handlers.onFork}
+        onRollback={handlers.onRollback}
+        rollbackPendingSeq={handlers.rollbackPendingSeq}
+        tasksState={tasksState}
+      />
     );
-    io.observe(sentinel);
-    root.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      io.disconnect();
-      root.removeEventListener('scroll', onScroll);
-    };
-  }, [capHidesGroups, hasEarlier, exhausted, onLoadEarlier, scrollContainerRef]);
-
-  const providerId = sessionData.session.provider;
-  // "Load earlier" affordance covers both sources of hidden history: backend
-  // rows not yet fetched and loaded groups clipped by the render cap.
-  const showEarlierControls = (hasEarlier && !exhausted) || capHidesGroups;
+  } else if (group.hasText && group.messages.length === 1) {
+    content = (
+      <MessageView
+        message={group.messages[0]}
+        messageId={group.messageIds[0]}
+        sessionId={sessionId}
+        toolResultsById={resultsById}
+        usage={group.usages[0]}
+        onAnswer={handlers.onAnswer}
+        onPlanResponse={handlers.onPlanResponse}
+        onTasksResponse={handlers.onTasksResponse}
+        onDecide={handlers.onDecide}
+        onFork={handlers.onFork}
+        onRollback={handlers.onRollback}
+        rollbackPendingSeq={handlers.rollbackPendingSeq}
+        tasksState={tasksState}
+        activeTasksToolUseId={activeTasksToolUseId}
+      />
+    );
+  } else {
+    content = (
+      <GroupedToolBubble
+        group={group}
+        toolResultsById={resultsById}
+        sessionId={sessionId}
+        handlers={handlers}
+        tasksState={tasksState}
+        activeTasksToolUseId={activeTasksToolUseId}
+      />
+    );
+  }
 
   return (
     <>
-      {/* Sentinel for infinite scroll — triggers auto-load when near top */}
-      {showEarlierControls && <div ref={sentinelRef} className="h-px" />}
-      {showEarlierControls && (
-        <div className="flex items-center justify-center gap-2 w-full py-2">
-          <button
-            type="button"
-            onClick={handleLoadEarlier}
-            disabled={loadingMore}
-            className="flex items-center justify-center gap-1.5 py-1.5 px-3 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <ChevronUp className="h-3.5 w-3.5" />
-            {loadingMore ? t('messages.loading') : t('messages.loadEarlier')}
-          </button>
-          <span className="text-[10px] text-muted-foreground/60">
-            {t('messages.loadedCount', { loaded: loadedCount, total: displayTotal })}
-          </span>
-        </div>
+      {content}
+      {summary && (
+        <TurnFilesSummary paths={summary.paths} roundMessageId={summary.roundMessageId} />
       )}
-      {canRevealArchived && (
-        <div className="flex items-center justify-center w-full py-2">
-          <button
-            type="button"
-            onClick={handleRevealArchived}
-            disabled={loadingMore}
-            className="flex items-center justify-center gap-1.5 py-1.5 px-3 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 rounded-lg transition-colors disabled:opacity-50"
-          >
-            <History className="h-3.5 w-3.5" />
-            {loadingMore
-              ? t('messages.loading')
-              : t('messages.showEarlierHistory', { count: archivedCount })}
-          </button>
-        </div>
-      )}
-      {exhausted && loadedCount < fullTotal && (
-        <div className="text-center py-1.5 text-[10px] text-muted-foreground/50">
-          {t('messages.allAvailableLoaded')}
-        </div>
-      )}
-      {displayGroups.map((g, gi) => {
-        const groupKey = g.kind === 'user'
-          ? `u-${g.messageId ?? gi}`
-          : `a-${g.messageIds[0] ?? gi}`;
-
-        let el: React.ReactNode;
-        if (g.kind === 'user') {
-          el = (
-            <MessageView
-              key={groupKey}
-              message={g.message}
-              messageId={g.messageId}
-              sessionId={sessionData.session.id}
-              toolResultsById={resultsById}
-              usage={g.usage}
-              providerId={providerId}
-              onAnswer={handlers.onAnswer}
-              onPlanResponse={handlers.onPlanResponse}
-              onTasksResponse={handlers.onTasksResponse}
-              onDecide={handlers.onDecide}
-              onFork={handlers.onFork}
-              onRollback={handlers.onRollback}
-              rollbackPendingSeq={handlers.rollbackPendingSeq}
-              tasksState={tasksState}
-            />
-          );
-        } else if (g.hasText && g.messages.length === 1) {
-          // Single text-bearing assistant message → original MessageView (backward compat)
-          el = (
-            <MessageView
-              key={groupKey}
-              message={g.messages[0]}
-              messageId={g.messageIds[0]}
-              sessionId={sessionData.session.id}
-              toolResultsById={resultsById}
-              usage={g.usages[0]}
-              providerId={providerId}
-              onAnswer={handlers.onAnswer}
-              onPlanResponse={handlers.onPlanResponse}
-              onTasksResponse={handlers.onTasksResponse}
-              onDecide={handlers.onDecide}
-              onFork={handlers.onFork}
-              onRollback={handlers.onRollback}
-              rollbackPendingSeq={handlers.rollbackPendingSeq}
-              tasksState={tasksState}
-              activeTasksToolUseId={activeTasksToolUseId}
-            />
-          );
-        } else {
-          // Grouped assistant bubble (multiple tool-only turns or single tool-only turn)
-          el = (
-            <GroupedToolBubble
-              key={groupKey}
-              group={g}
-              toolResultsById={resultsById}
-              sessionId={sessionData.session.id}
-              providerId={providerId}
-              handlers={handlers}
-              tasksState={tasksState}
-              activeTasksToolUseId={activeTasksToolUseId}
-            />
-          );
-        }
-
-        // Inject the per-turn "files changed" summary after the turn's final
-        // assistant group. For the very last group, only once the turn has
-        // ended (not streaming) — the in-flight turn gets a live summary below.
-        const dividers = chapterMarkers.get(gi) ?? [];
-        const summary = turnSummaries.get(gi);
-        const showSummary = !!summary && (gi < displayGroups.length - 1 || !streaming);
-        return (
-          <React.Fragment key={`grp-${groupKey}`}>
-            {dividers.map((chapter) => (
-              <ConversationChapterDivider
-                key={chapter.id}
-                chapter={chapter}
-                active={activeChapterId === chapter.id}
-                onActivate={setActiveChapterId}
-              />
-            ))}
-            {el}
-            {showSummary && (
-              <TurnFilesSummary
-                paths={summary!.paths}
-                roundMessageId={summary!.roundMessageId}
-              />
-            )}
-          </React.Fragment>
-        );
-      })}
     </>
   );
 });
 
-/**
- * Live streaming turn. Isolated into its own component so that React's
- * reconciliation only touches the streaming bubble on each token flush,
- * leaving <PersistedMessages /> alone.
- */
 const LiveTurn = React.memo(function LiveTurn({
   currentTurn,
+  blocks,
   streaming,
   preflight,
-  providerId,
   handlers,
-  hidden,
-  persistedToolUseIds,
-  persistedInteractivePromptSignatures,
-  persistedToolResultIds,
-  preferCompleteLiveRun,
-  reconciliation,
   continuation,
 }: {
   currentTurn: AssistantTurn | null;
+  blocks: TranscriptProjection['live']['blocks'];
   streaming: boolean;
   preflight: { startedAt: number } | null;
-  providerId: string;
   handlers: PromptHandlers;
-  hidden: boolean;
-  persistedToolUseIds: Set<string>;
-  persistedInteractivePromptSignatures: Set<string>;
-  persistedToolResultIds: Set<string>;
-  preferCompleteLiveRun: boolean;
-  reconciliation: PersistedLiveReconciliation;
   continuation: boolean;
 }) {
-  // Drop live blocks already rendered by the persisted history (gate cards on a
-  // paused turn, or a tool call the refetch landed before currentTurn cleared).
   const allBlocks = currentTurn?.blocks ?? [];
-  const allBlocksRef = useRef(allBlocks);
-  allBlocksRef.current = allBlocks;
-  const structureRevision = liveTurnReconciliationRevision(currentTurn);
-  const visible = useMemo(
-    () => visibleLiveBlocks(
-      allBlocksRef.current,
-      persistedToolUseIds,
-      persistedInteractivePromptSignatures,
-      persistedToolResultIds,
-      preferCompleteLiveRun,
-      reconciliation,
-    ),
-    [
-      persistedInteractivePromptSignatures,
-      persistedToolResultIds,
-      persistedToolUseIds,
-      preferCompleteLiveRun,
-      reconciliation,
-      structureRevision,
-    ],
-  );
-  const hasBlocks = visible.length > 0 && !hidden;
-  if (hasBlocks) {
+  if (blocks.length > 0) {
     return (
-      <AssistantBubble providerId={providerId} streaming={streaming} continuation={continuation}>
-        {visible.map((b, i) => renderStreamBlock(b, i, handlers))}
+      <AssistantBubble streaming={streaming} continuation={continuation}>
+        {blocks.map((block, index) => renderStreamBlock(block, index, handlers))}
       </AssistantBubble>
     );
   }
-  // Had blocks but every one was deduped into history → render nothing. The
-  // persisted cards are showing above; a dot-pulse spinner here would be noise.
-  if (allBlocks.length > 0 && !hidden) return null;
-  // Blocking preflight on a fresh first message — labelled indicator instead of
-  // the bare spinner, until the first SSE event clears it.
-  if (preflight && !hidden) {
+  if (allBlocks.length > 0) return null;
+  if (preflight) {
     return (
-      <AssistantBubble providerId={providerId} streaming continuation={continuation}>
+      <AssistantBubble streaming continuation={continuation}>
         <PreflightBlock startedAt={preflight.startedAt} />
       </AssistantBubble>
     );
   }
   if (streaming) {
     return (
-      <AssistantBubble providerId={providerId} streaming continuation={continuation}>
-        <div className="dot-pulse text-muted-foreground">
-          <span />
-          <span />
-          <span />
-        </div>
+      <AssistantBubble streaming continuation={continuation}>
+        <div className="dot-pulse text-muted-foreground"><span /><span /><span /></div>
       </AssistantBubble>
     );
   }
@@ -684,245 +314,608 @@ export const MessageList = React.memo(function MessageList({
   preflight = null,
   doneReason,
   error,
-  liveTurnDuplicatedInHistory,
-  liveReconciliation,
-  persistedToolUseIds,
-  fallbackProviderId,
+  projection,
   tasksState,
   handlers,
   onLoadEarlier,
   snapshotActions = null,
   snapshotFiles,
 }: MessageListProps) {
+  const { t } = useTranslation('chat');
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Track whether the user scrolled up — if so, don't yank them back to the
-  // bottom on every token. Also use instant scroll during streaming; a smooth
-  // animation per token fights with layout and amplifies the jank.
-  const stickToBottomRef = useRef(true);
-  const sessionIdRef = useRef<string | null>(null);
-  const previousScrollDataRef = useRef<SessionData | null | undefined>(undefined);
-  const previousScrollStructureRef = useRef<string | undefined>(undefined);
-  const previousScrollStreamingRef = useRef<boolean | undefined>(undefined);
-  // Detect user-initiated scroll-up via wheel/touch — not generic scroll
-  // events, which also fire on programmatic scrolls & layout reflows and
-  // can falsely flip stickToBottomRef off when the chat grows.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
+  const sessionId = sessionData?.session.id ?? null;
+  const chapterIndex = useConversationChapters(sessionId ?? '', '', {
+    pageSize: 50,
+    loadAll: true,
+    detail: 'preview',
+  });
+  const chapters = useMemo(
+    () => sortChaptersChronologically(chapterIndex.chapters),
+    [chapterIndex.chapters],
+  );
+  const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
+  const activeChapterRef = useRef<string | null>(null);
+  activeChapterRef.current = activeChapterId;
+  const [expandedSummaries, setExpandedSummaries] = useState<Set<string>>(new Set());
+  const [chapterDetails, setChapterDetails] = useState<Record<string, ConversationChapter>>({});
+  const [detailLoading, setDetailLoading] = useState<Set<string>>(new Set());
+  const [chapterSources, setChapterSources] = useState<Record<string, ChapterSourceState>>({});
+  const sourceControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const detailControllersRef = useRef<Map<string, AbortController>>(new Map());
 
-    const checkBottom = () => {
-      const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (gap < 80) stickToBottomRef.current = true;
-    };
+  const totalMessages = sessionData?.total_messages ?? sessionData?.message_rows.length ?? 0;
+  const archivedCount = sessionData?.archived_count ?? 0;
+  const fullTotal = totalMessages + archivedCount;
+  const loadedCount = sessionData?.message_rows.filter((row) => !row.optimistic).length ?? 0;
+  const initialCursor = earliestPersistedSeq(sessionData);
+  const initialHasMore = totalMessages > loadedCount;
+  const [pagination, setPagination] = useState<PaginationState>(() => ({
+    sessionId,
+    nextBeforeSeq: initialCursor,
+    hasMore: initialHasMore,
+    includeArchived: false,
+    status: initialHasMore ? 'idle' : 'exhausted',
+  }));
+  const paginationRef = useRef(pagination);
+  paginationRef.current = pagination;
+  const previousWindowRef = useRef<{ sessionId: string | null; earliest: number | null; loaded: number }>({
+    sessionId,
+    earliest: initialCursor,
+    loaded: loadedCount,
+  });
 
-    const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) {
-        stickToBottomRef.current = false;
-      } else {
-        requestAnimationFrame(checkBottom);
-      }
-    };
-
-    let touchStartY = 0;
-    const onTouchStart = (e: TouchEvent) => {
-      touchStartY = e.touches[0]?.clientY ?? 0;
-    };
-    const onTouchMove = (e: TouchEvent) => {
-      const y = e.touches[0]?.clientY ?? 0;
-      if (y > touchStartY + 5) {
-        stickToBottomRef.current = false;
-      } else if (y < touchStartY - 5) {
-        requestAnimationFrame(checkBottom);
-      }
-    };
-
-    el.addEventListener('wheel', onWheel, { passive: true });
-    el.addEventListener('touchstart', onTouchStart, { passive: true });
-    el.addEventListener('touchmove', onTouchMove, { passive: true });
-    return () => {
-      el.removeEventListener('wheel', onWheel);
-      el.removeEventListener('touchstart', onTouchStart);
-      el.removeEventListener('touchmove', onTouchMove);
-    };
+  const commitPagination = useCallback((next: PaginationState) => {
+    paginationRef.current = next;
+    setPagination(next);
   }, []);
 
-  // When the session changes, force the sticky-bottom ref back on so the
-  // fresh session lands at the latest message. Without this, a user that
-  // had scrolled up in a previous session would stay "unstuck" across the
-  // switch and land at the top of the new one.
   useEffect(() => {
-    const nextId = sessionData?.session.id ?? null;
-    if (sessionIdRef.current !== nextId) {
-      sessionIdRef.current = nextId;
-      stickToBottomRef.current = true;
-    }
-  }, [sessionData?.session.id]);
-
-  const scrollStructureRevision = liveTurnReconciliationRevision(currentTurn);
-  useEffect(() => {
-    const el = scrollRef.current;
-    const structuralChange =
-      previousScrollDataRef.current !== sessionData
-      || previousScrollStructureRef.current !== scrollStructureRevision
-      || previousScrollStreamingRef.current !== streaming;
-    previousScrollDataRef.current = sessionData;
-    previousScrollStructureRef.current = scrollStructureRevision;
-    previousScrollStreamingRef.current = streaming;
-    if (!el || !stickToBottomRef.current) return;
-    const scroll = () => el.scrollTo({ top: el.scrollHeight, behavior: streaming ? 'auto' : 'smooth' });
-    if (messageListScrollPasses(streaming, structuralChange) === 1) {
-      // Token frames are already rAF-batched by openStream. One further paint
-      // is enough to observe the new height and avoids three scroll/layout
-      // passes for every token flush in a long turn.
-      const raf = requestAnimationFrame(scroll);
-      return () => cancelAnimationFrame(raf);
-    }
-    // Structural/history changes can mount images, fonts and whole message
-    // groups after the first paint. Preserve the settled-layout triple pass.
-    scroll();
-    let raf2: number | null = null;
-    const raf1 = requestAnimationFrame(() => {
-      scroll();
-      raf2 = requestAnimationFrame(scroll);
+    const previous = previousWindowRef.current;
+    const replacedWindow = previous.sessionId === sessionId
+      && previous.earliest != null
+      && initialCursor != null
+      && initialCursor > previous.earliest
+      && loadedCount <= previous.loaded;
+    previousWindowRef.current = { sessionId, earliest: initialCursor, loaded: loadedCount };
+    if (paginationRef.current.sessionId === sessionId && !replacedWindow) return;
+    commitPagination({
+      sessionId,
+      nextBeforeSeq: initialCursor,
+      hasMore: initialHasMore,
+      includeArchived: false,
+      status: initialHasMore ? 'idle' : 'exhausted',
     });
-    return () => {
-      cancelAnimationFrame(raf1);
-      if (raf2 !== null) cancelAnimationFrame(raf2);
+    setActiveChapterId(null);
+    setExpandedSummaries(new Set());
+    setChapterDetails({});
+    setDetailLoading(new Set());
+    setChapterSources({});
+    for (const controller of sourceControllersRef.current.values()) controller.abort();
+    for (const controller of detailControllersRef.current.values()) controller.abort();
+    sourceControllersRef.current.clear();
+    detailControllersRef.current.clear();
+  }, [commitPagination, initialCursor, initialHasMore, loadedCount, sessionId]);
+
+  useEffect(() => () => {
+    for (const controller of sourceControllersRef.current.values()) controller.abort();
+    for (const controller of detailControllersRef.current.values()) controller.abort();
+  }, []);
+
+  const loadEarlier = useCallback(async () => {
+    const current = paginationRef.current;
+    if (!onLoadEarlier || !current.sessionId || !current.hasMore || current.status === 'loading') return;
+    commitPagination({ ...current, status: 'loading', error: undefined });
+    let cursor = current.nextBeforeSeq ?? undefined;
+    let final: EarlierMessagePageResult | null = null;
+    const seenCursors = new Set<number | undefined>();
+    for (let attempt = 0; attempt < MAX_DUPLICATE_PAGE_HOPS; attempt++) {
+      if (seenCursors.has(cursor)) break;
+      seenCursors.add(cursor);
+      final = await onLoadEarlier(cursor, LOAD_MORE_SIZE, current.includeArchived);
+      if (!final.ok || final.addedRows > 0 || !final.hasMore) break;
+      cursor = final.nextBeforeSeq ?? undefined;
+    }
+    if (!final || !final.ok) {
+      if (final?.reason === 'aborted' || final?.reason === 'stale') return;
+      commitPagination({
+        ...paginationRef.current,
+        status: 'error',
+        error: final?.error,
+      });
+      return;
+    }
+    if (final.addedRows === 0 && final.hasMore) {
+      commitPagination({
+        ...paginationRef.current,
+        status: 'error',
+        error: 'history cursor did not advance to an unseen page',
+      });
+      return;
+    }
+    commitPagination({
+      ...paginationRef.current,
+      nextBeforeSeq: final.nextBeforeSeq,
+      hasMore: final.hasMore,
+      status: final.hasMore ? 'idle' : 'exhausted',
+      error: undefined,
+    });
+  }, [commitPagination, onLoadEarlier]);
+
+  const canRevealLegacyArchive = !chapterIndex.loading
+    && !chapterIndex.error
+    && chapters.length === 0
+    && !pagination.includeArchived
+    && !pagination.hasMore
+    && archivedCount > 0;
+  const revealLegacyArchive = useCallback(() => {
+    const current = paginationRef.current;
+    const next = {
+      ...current,
+      includeArchived: true,
+      hasMore: true,
+      status: 'idle' as const,
+      nextBeforeSeq: earliestPersistedSeq(sessionData),
     };
-  }, [sessionData, currentTurn, scrollStructureRevision, streaming]);
+    commitPagination(next);
+    queueMicrotask(() => void loadEarlier());
+  }, [commitPagination, loadEarlier, sessionData]);
 
-  const providerId = sessionData?.session.provider ?? fallbackProviderId;
-  const persistedReconciliation = useMemo(
-    () => liveReconciliation ?? buildPersistedLiveReconciliation(
-      sessionData?.messages ?? [],
-      sessionData?.preceding_user_seq,
-      (sessionData?.tool_results ?? []).map((result) => result.tool_use_id),
-    ),
-    [liveReconciliation, sessionData],
-  );
-  const persistedInteractivePromptSignatures =
-    persistedReconciliation.pendingInteractivePromptSignatures;
-  const persistedToolResultIds = persistedReconciliation.persistedToolResultIds;
-  const liveContinuation = useMemo(
-    () => liveTurnContinuesPersistedAssistant(sessionData?.messages ?? []),
-    [sessionData],
-  );
-  const currentTurnRef = useRef(currentTurn);
-  currentTurnRef.current = currentTurn;
-  const reconciliationRevision = liveTurnReconciliationRevision(
-    currentTurn,
-    persistedReconciliation.tailTextLength,
-    persistedReconciliation.tailThinkingLength,
-  );
-  const preferCompleteLiveRun = useMemo(
-    () => !liveTurnDuplicatedInHistory && liveTurnCoversPersistedAssistantRun(
-      currentTurnRef.current,
-      persistedReconciliation,
-    ),
-    [
-      liveTurnDuplicatedInHistory,
-      persistedReconciliation,
-      reconciliationRevision,
-    ],
-  );
-  const liveAgentIdentityKey = useMemo(() => JSON.stringify(
-    (currentTurn?.blocks ?? []).flatMap((block) => (
-      block.type === 'agents'
-        && !block.group.groupId.startsWith('tasks-wave-')
-        && !(
-          block.group.status === 'completed'
-          && block.group.toolUseId
-          && persistedToolResultIds.has(block.group.toolUseId)
-        )
-        ? [{ toolUseId: block.group.toolUseId, groupId: block.group.groupId }]
-        : []
-    )),
-  ), [currentTurn, persistedToolResultIds]);
+  const fetchChapterDetail = useCallback((chapter: ConversationChapter) => {
+    if (!sessionId || chapterDetails[chapter.id] || detailControllersRef.current.has(chapter.id)) return;
+    const controller = new AbortController();
+    detailControllersRef.current.set(chapter.id, controller);
+    setDetailLoading((current) => new Set(current).add(chapter.id));
+    void fetch(`/api/coder/sessions/${sessionId}/chapters/${chapter.id}`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json() as Promise<ConversationChapter>;
+      })
+      .then((detail) => setChapterDetails((current) => ({ ...current, [chapter.id]: detail })))
+      .catch(() => {})
+      .finally(() => {
+        detailControllersRef.current.delete(chapter.id);
+        setDetailLoading((current) => {
+          const next = new Set(current);
+          next.delete(chapter.id);
+          return next;
+        });
+      });
+  }, [chapterDetails, sessionId]);
 
-  // Files edited by the live turn, for its completion summary. Shown only once
-  // the turn ended AND before it's mirrored into persisted history (the same
-  // dedup gate LiveTurn uses), so the summary never renders twice.
+  const toggleChapter = useCallback((chapter: ConversationChapter) => {
+    setActiveChapterId(chapter.id);
+    setExpandedSummaries((current) => {
+      const next = new Set(current);
+      if (next.has(chapter.id)) next.delete(chapter.id);
+      else {
+        next.add(chapter.id);
+        fetchChapterDetail(chapter);
+      }
+      return next;
+    });
+  }, [fetchChapterDetail]);
+
+  const loadChapterSource = useCallback(async (chapter: ConversationChapter) => {
+    if (!sessionId) return;
+    const existing = chapterSources[chapter.id];
+    if (existing?.loading) return;
+    if (existing?.items.length) {
+      setChapterSources((current) => ({
+        ...current,
+        [chapter.id]: { ...current[chapter.id], expanded: !current[chapter.id].expanded },
+      }));
+      return;
+    }
+    const controller = new AbortController();
+    sourceControllersRef.current.get(chapter.id)?.abort();
+    sourceControllersRef.current.set(chapter.id, controller);
+    setChapterSources((current) => ({
+      ...current,
+      [chapter.id]: { expanded: true, loading: true, error: false, items: [] },
+    }));
+    try {
+      const collected: ConversationChapterSourceMessage[] = [];
+      const seenRows = new Set<string>();
+      const seenCursors = new Set<string>();
+      let cursor: string | null = null;
+      do {
+        if (cursor && seenCursors.has(cursor)) throw new Error('chapter cursor did not advance');
+        if (cursor) seenCursors.add(cursor);
+        const query = new URLSearchParams({ limit: String(CHAPTER_SOURCE_PAGE_SIZE) });
+        if (cursor) query.set('cursor', cursor);
+        const response = await fetch(
+          `/api/coder/sessions/${sessionId}/chapters/${chapter.id}/messages?${query}`,
+          { signal: controller.signal },
+        );
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const page = await response.json() as ConversationChapterSourcePage;
+        for (const item of page.items) {
+          if (seenRows.has(item.id)) continue;
+          seenRows.add(item.id);
+          collected.push(item);
+        }
+        cursor = page.next_cursor ?? null;
+      } while (cursor);
+      collected.sort((left, right) => left.seq - right.seq);
+      setChapterSources((current) => ({
+        ...current,
+        [chapter.id]: { expanded: true, loading: false, error: false, items: collected },
+      }));
+    } catch (sourceError) {
+      if ((sourceError as { name?: string })?.name === 'AbortError') return;
+      setChapterSources((current) => ({
+        ...current,
+        [chapter.id]: {
+          expanded: true,
+          loading: false,
+          error: true,
+          items: current[chapter.id]?.items ?? [],
+        },
+      }));
+    } finally {
+      sourceControllersRef.current.delete(chapter.id);
+    }
+  }, [chapterSources, sessionId]);
+
+  const displayGroups = useMemo(() => sessionData
+    ? projectTranscriptHistory(
+        projection.historyGroups,
+        projection,
+        sessionData.preceding_user_seq,
+      )
+    : [], [projection, sessionData]);
+  const turnSummaries = useMemo(
+    () => computeTurnEditSummaries(displayGroups, sessionData?.preceding_user_seq),
+    [displayGroups, sessionData?.preceding_user_seq],
+  );
+  const sourceProjections = useMemo(() => {
+    const projected = new Map<string, ReturnType<typeof projectChapterSource>>();
+    for (const [chapterId, source] of Object.entries(chapterSources)) {
+      if (source.items.length > 0) projected.set(chapterId, projectChapterSource(source.items));
+    }
+    return projected;
+  }, [chapterSources]);
+
+  const historyItems = useMemo(
+    () => buildChapterTranscript(chapters, displayGroups),
+    [chapters, displayGroups],
+  );
+  const displayGroupIndexes = useMemo(
+    () => new Map(displayGroups.map((group, index) => [group, index])),
+    [displayGroups],
+  );
+  const rows = useMemo<TranscriptRow[]>(() => {
+    const result: TranscriptRow[] = [];
+    const showHistoryControl = pagination.hasMore
+      || pagination.status === 'loading'
+      || pagination.status === 'error'
+      || chapterIndex.error
+      || canRevealLegacyArchive
+      || (pagination.status === 'exhausted'
+        && loadedCount < (pagination.includeArchived ? fullTotal : totalMessages)
+        && chapters.length === 0);
+    if (showHistoryControl) result.push({ kind: 'history-control', key: 'history-control' });
+    for (const item of historyItems) {
+      if (item.kind === 'message') {
+        const groupIndex = displayGroupIndexes.get(item.group) ?? -1;
+        result.push({
+          kind: 'message',
+          key: item.key,
+          group: item.group,
+          resultsById: projection.toolResultsById,
+          summary: turnSummaries.get(groupIndex),
+        });
+        continue;
+      }
+      const chapter = item.chapter;
+      result.push({ kind: 'chapter', key: item.key, chapter });
+      const source = chapterSources[chapter.id];
+      const sourceProjection = sourceProjections.get(chapter.id);
+      if (!source?.expanded || !sourceProjection) continue;
+      sourceProjection.groups.forEach((group, index) => result.push({
+        kind: 'message',
+        key: `chapter-source:${chapter.id}:${visualGroupKey(group)}`,
+        group,
+        resultsById: sourceProjection.resultsById,
+        summary: sourceProjection.summaries.get(index),
+        sourceChapterId: chapter.id,
+      }));
+    }
+    result.push({ kind: 'tail', key: `tail:${sessionId ?? 'empty'}` });
+    return result;
+  }, [
+    canRevealLegacyArchive,
+    chapterIndex.error,
+    chapterSources,
+    chapters.length,
+    displayGroups,
+    displayGroupIndexes,
+    fullTotal,
+    historyItems,
+    loadedCount,
+    pagination.hasMore,
+    pagination.includeArchived,
+    pagination.status,
+    projection.toolResultsById,
+    sessionId,
+    sourceProjections,
+    totalMessages,
+    turnSummaries,
+  ]);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const atEndRef = useRef(true);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    getItemKey: (index) => rowsRef.current[index]?.key ?? index,
+    estimateSize: (index) => {
+      const row = rowsRef.current[index];
+      if (row?.kind === 'history-control') return 48;
+      if (row?.kind === 'chapter') return expandedSummaries.has(row.chapter.id) ? 300 : 68;
+      if (row?.kind === 'tail') return 160;
+      return 180;
+    },
+    anchorTo: 'end',
+    followOnAppend: true,
+    scrollEndThreshold: 80,
+    overscan: 6,
+    useAnimationFrameWithResizeObserver: true,
+    onChange: (instance) => {
+      atEndRef.current = instance.isAtEnd(80);
+      const firstIndex = instance.getVirtualItems()[0]?.index;
+      if (firstIndex == null) return;
+      let visibleChapter: string | null = null;
+      for (let index = firstIndex; index >= 0; index--) {
+        const row = rowsRef.current[index];
+        if (row?.kind === 'chapter') {
+          visibleChapter = row.chapter.id;
+          break;
+        }
+      }
+      if (visibleChapter && visibleChapter !== activeChapterRef.current) {
+        activeChapterRef.current = visibleChapter;
+        setActiveChapterId(visibleChapter);
+      }
+    },
+  });
+
+  const chapterRowIndexes = useMemo(() => {
+    const indexes = new Map<string, number>();
+    rows.forEach((row, index) => {
+      if (row.kind === 'chapter') indexes.set(row.chapter.id, index);
+    });
+    return indexes;
+  }, [rows]);
+  const scrollToChapter = useCallback((chapterId: string) => {
+    const index = chapterRowIndexes.get(chapterId);
+    if (index == null) return;
+    setActiveChapterId(chapterId);
+    virtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
+  }, [chapterRowIndexes, virtualizer]);
+
+  useEffect(() => {
+    const navigate = (event: Event) => {
+      const detail = (event as CustomEvent<{
+        sessionId: string;
+        chapterId: string;
+        expandConversation?: boolean;
+      }>).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      const chapter = chapters.find((candidate) => candidate.id === detail.chapterId);
+      if (!chapter) return;
+      setExpandedSummaries((current) => new Set(current).add(chapter.id));
+      fetchChapterDetail(chapter);
+      if (detail.expandConversation && !chapterSources[chapter.id]?.expanded) {
+        void loadChapterSource(chapter);
+      }
+      requestAnimationFrame(() => scrollToChapter(chapter.id));
+    };
+    window.addEventListener('coder:chapter-source', navigate);
+    return () => window.removeEventListener('coder:chapter-source', navigate);
+  }, [chapterSources, chapters, fetchChapterDetail, loadChapterSource, scrollToChapter, sessionId]);
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root || !onLoadEarlier) return;
+    const onScroll = () => {
+      if (shouldLoadEarlierAtScrollTop(root.scrollTop)) void loadEarlier();
+    };
+    root.addEventListener('scroll', onScroll, { passive: true });
+    return () => root.removeEventListener('scroll', onScroll);
+  }, [loadEarlier, onLoadEarlier]);
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const frame = requestAnimationFrame(() => virtualizer.scrollToEnd({ behavior: 'auto' }));
+    return () => cancelAnimationFrame(frame);
+  }, [sessionId, virtualizer]);
+
+  useEffect(() => {
+    if (!streaming || !atEndRef.current) return;
+    const frame = requestAnimationFrame(() => virtualizer.scrollToEnd({ behavior: 'auto' }));
+    return () => cancelAnimationFrame(frame);
+  }, [currentTurn, streaming, virtualizer]);
+
   const liveEditRefs = useMemo<EditFileRef[]>(() => {
     if (!currentTurn) return [];
     const byPath = new Map<string, EditFileRef>();
-    for (const b of currentTurn.blocks) {
-      if (b.type !== 'tool') continue;
-      for (const ref of filesFromEditToolCall(b.call.name, b.call.input)) byPath.set(ref.path, ref);
+    for (const block of currentTurn.blocks) {
+      if (block.type !== 'tool') continue;
+      for (const ref of filesFromEditToolCall(block.call.name, block.call.input)) byPath.set(ref.path, ref);
     }
     return [...byPath.values()];
   }, [currentTurn]);
-  const showLiveSummary = !streaming && !!doneReason && !liveTurnDuplicatedInHistory && liveEditRefs.length > 0;
+  const showLiveSummary = !streaming
+    && !!doneReason
+    && !projection.live.duplicated
+    && liveEditRefs.length > 0;
   const liveRoundMessageId = useMemo(() => {
     if (!sessionData) return undefined;
     for (let index = sessionData.messages.length - 1; index >= 0; index--) {
       const message = sessionData.messages[index];
-      if (message.role === 'user' && !message.isMeta) {
+      if (message.role === 'user' && !(message as PersistedMessage & { isMeta?: boolean }).isMeta) {
         const row = sessionData.message_rows[index];
         return row?.optimistic ? undefined : row?.seq;
       }
     }
     return sessionData.preceding_user_seq ?? undefined;
   }, [sessionData]);
-  const handleChapterNavigate = useCallback(() => {
-    // A chapter jump is an explicit request to leave the live tail. Prevent
-    // the normal sessionData-change effect from immediately snapping back to
-    // the bottom when archived messages are prepended.
-    stickToBottomRef.current = false;
-  }, []);
+
+  const renderHistoryControl = () => {
+    const expectedTotal = pagination.includeArchived ? fullTotal : totalMessages;
+    const incomplete = pagination.status === 'exhausted' && loadedCount < expectedTotal;
+    if (chapterIndex.error) {
+      return (
+        <div className="flex items-center justify-center gap-2 py-2 text-[10px] text-destructive">
+          <span>{t('messages.chapterLoadError')}</span>
+          <button type="button" onClick={chapterIndex.refresh} className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-destructive/10">
+            <RotateCw className="h-3 w-3" /> {t('messages.retry')}
+          </button>
+        </div>
+      );
+    }
+    if (pagination.status === 'error' || incomplete) {
+      return (
+        <div className="flex items-center justify-center gap-2 py-2 text-[10px] text-destructive">
+          <span>{t(incomplete ? 'messages.historyIncomplete' : 'messages.historyLoadError')}</span>
+          <button type="button" onClick={() => void loadEarlier()} className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-destructive/10">
+            <RotateCw className="h-3 w-3" /> {t('messages.retry')}
+          </button>
+        </div>
+      );
+    }
+    if (canRevealLegacyArchive) {
+      return (
+        <div className="flex items-center justify-center py-2">
+          <button type="button" onClick={revealLegacyArchive} className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground">
+            <History className="h-3.5 w-3.5" />
+            {t('messages.showEarlierHistory', { count: archivedCount })}
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center justify-center gap-2 py-2">
+        <button
+          type="button"
+          onClick={() => void loadEarlier()}
+          disabled={pagination.status === 'loading'}
+          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:opacity-50"
+        >
+          {pagination.status === 'loading' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronUp className="h-3.5 w-3.5" />}
+          {pagination.status === 'loading' ? t('messages.loading') : t('messages.loadEarlier')}
+        </button>
+        <span className="text-[10px] text-muted-foreground/60">
+          {t('messages.loadedCount', { loaded: loadedCount, total: expectedTotal })}
+        </span>
+      </div>
+    );
+  };
 
   return (
-    <div
-      ref={scrollRef}
-      data-text-selectable
-      className="flex-1 overflow-y-auto overscroll-contain px-0 py-2 space-y-2 min-h-0"
-    >
-      <SnapshotFilesProvider actions={snapshotActions} files={snapshotFiles ?? EMPTY_FILES}>
-        {sessionData && (
-          <PersistedMessages
-            sessionData={sessionData}
-            handlers={handlers}
-            tasksState={tasksState}
-            scrollContainerRef={scrollRef}
-            streaming={streaming}
-            onLoadEarlier={onLoadEarlier}
-            onChapterNavigate={handleChapterNavigate}
-            liveAgentIdentityKey={liveAgentIdentityKey}
-            suppressLatestAssistantRun={preferCompleteLiveRun}
-          />
-        )}
-
-        <LiveTurn
-          currentTurn={currentTurn}
-          streaming={streaming}
-          preflight={preflight}
-          providerId={providerId}
-          handlers={handlers}
-          hidden={liveTurnDuplicatedInHistory}
-          persistedToolUseIds={persistedToolUseIds}
-          persistedInteractivePromptSignatures={persistedInteractivePromptSignatures}
-          persistedToolResultIds={persistedToolResultIds}
-          preferCompleteLiveRun={preferCompleteLiveRun}
-          reconciliation={persistedReconciliation}
-          continuation={preferCompleteLiveRun ? false : liveContinuation}
-        />
-
-        {showLiveSummary && (
-          <TurnFilesSummary paths={liveEditRefs} roundMessageId={liveRoundMessageId} />
-        )}
-
-        {error && (
-          <Alert variant="destructive">
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
-
-        {doneReason && !streaming && (
-          <div className="text-[10px] text-center py-1">
-            <span className="text-muted-foreground">— {doneReason} —</span>
+    <div className="relative min-h-0 flex-1">
+      {chapters.length > 1 && (
+        <nav
+          aria-label={t('messages.chapterQuickNav')}
+          className="absolute left-1 top-1/2 z-20 flex max-h-[60%] -translate-y-1/2 flex-col items-center gap-1 overflow-y-auto rounded-full border border-border/55 bg-background/80 px-1.5 py-2 shadow-lg backdrop-blur"
+        >
+          {chapters.map((chapter) => (
+            <button
+              key={chapter.id}
+              type="button"
+              title={`#${chapter.ordinal} · ${chapter.title}`}
+              aria-label={`#${chapter.ordinal} · ${chapter.title}`}
+              aria-current={activeChapterId === chapter.id ? 'location' : undefined}
+              onClick={() => scrollToChapter(chapter.id)}
+              className={`h-1.5 w-1.5 shrink-0 rounded-full transition-all ${activeChapterId === chapter.id ? 'scale-150 bg-primary' : 'bg-muted-foreground/40 hover:bg-primary/75'}`}
+            />
+          ))}
+        </nav>
+      )}
+      <div
+        ref={scrollRef}
+        data-text-selectable
+        className="chat-transcript h-full overflow-y-auto overscroll-contain"
+      >
+        <SnapshotFilesProvider actions={snapshotActions} files={snapshotFiles ?? EMPTY_FILES}>
+          <div
+            className="relative mx-auto w-full max-w-[860px]"
+            style={{ height: `${virtualizer.getTotalSize()}px` }}
+          >
+            {chapters.length > 0 && (
+              <span className="pointer-events-none absolute bottom-0 left-[22px] top-0 w-px bg-gradient-to-b from-primary/35 via-border/70 to-border/15 sm:left-[34px] lg:left-[42px]" />
+            )}
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const row = rows[virtualRow.index];
+              if (!row) return null;
+              return (
+                <div
+                  key={row.key}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  className="absolute left-0 top-0 w-full px-3 pb-3 sm:px-6 lg:px-8"
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  {row.kind === 'history-control' && renderHistoryControl()}
+                  {row.kind === 'chapter' && (
+                    <ConversationChapterDivider
+                      chapter={row.chapter}
+                      detail={chapterDetails[row.chapter.id]}
+                      detailLoading={detailLoading.has(row.chapter.id)}
+                      active={activeChapterId === row.chapter.id}
+                      expanded={expandedSummaries.has(row.chapter.id)}
+                      conversationExpanded={chapterSources[row.chapter.id]?.expanded ?? false}
+                      conversationLoading={chapterSources[row.chapter.id]?.loading ?? false}
+                      conversationError={chapterSources[row.chapter.id]?.error ?? false}
+                      onActivate={setActiveChapterId}
+                      onToggle={toggleChapter}
+                      onToggleConversation={(chapter) => void loadChapterSource(chapter)}
+                    />
+                  )}
+                  {row.kind === 'message' && (
+                    <div className={row.sourceChapterId ? 'pl-10' : chapters.length > 0 ? 'pl-8' : ''}>
+                      <TranscriptMessage
+                        group={row.group}
+                        resultsById={row.resultsById}
+                        sessionId={sessionId ?? ''}
+                        handlers={handlers}
+                        tasksState={row.sourceChapterId ? null : tasksState}
+                        activeTasksToolUseId={row.sourceChapterId ? null : projection.activeTasksToolUseId}
+                        summary={row.summary}
+                      />
+                    </div>
+                  )}
+                  {row.kind === 'tail' && (
+                    <div className={chapters.length > 0 ? 'space-y-3 pl-8 pt-1' : 'space-y-3 pt-1'}>
+                      <LiveTurn
+                        currentTurn={currentTurn}
+                        blocks={projection.live.blocks}
+                        streaming={streaming}
+                        preflight={preflight}
+                        handlers={handlers}
+                        continuation={projection.live.continuation}
+                      />
+                      {showLiveSummary && (
+                        <TurnFilesSummary paths={liveEditRefs} roundMessageId={liveRoundMessageId} />
+                      )}
+                      {error && (
+                        <Alert variant="destructive">
+                          <AlertCircle className="h-4 w-4" />
+                          <AlertDescription>{error}</AlertDescription>
+                        </Alert>
+                      )}
+                      {doneReason && !streaming && (
+                        <span className="sr-only" data-run-finished={doneReason}>{doneReason}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        )}
-      </SnapshotFilesProvider>
+        </SnapshotFilesProvider>
+      </div>
     </div>
   );
 });

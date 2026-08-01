@@ -105,6 +105,13 @@ function copilotReasoningMetadata(model: string): {
   defaultLevel: string | null;
 } {
   const id = model.toLowerCase();
+  if (/^gemini-3\.6-flash(?:-|$)/.test(id)) {
+    return {
+      canReason: true,
+      levels: ['low', 'medium', 'high'],
+      defaultLevel: 'medium',
+    };
+  }
   const configurable =
     /^gpt-5\.(?:3-codex|4|5|6)(?:-|$)/.test(id)
     || /^claude-(?:fable-5|sonnet-(?:4\.6|5)|opus-(?:4\.[678]|5))(?:-|$)/.test(id);

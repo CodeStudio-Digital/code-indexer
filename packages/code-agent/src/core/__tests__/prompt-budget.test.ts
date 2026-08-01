@@ -89,6 +89,7 @@ const SECTION_BUDGETS: Record<string, number> = {
   '# Language': 140,
   '# Explanatory output': 150,
   '# Learning output': 200,
+  '# Code comments': 280,
   '# Operating autonomously': 260,
   '# Multi-agent mode (Ultra)': 420,
   '# Multi-agent mode (explicit request only)': 320,
@@ -139,6 +140,7 @@ MATRIX.push({ label: 'zai|plan=true|depth=complex', ctx: { ...BASE_CTX, planMode
 MATRIX.push({ label: 'zai|lang=pt-BR', ctx: { ...BASE_CTX, responseLanguage: 'Português (Brasil)' } });
 MATRIX.push({ label: 'zai|style=explanatory', ctx: { ...BASE_CTX, outputStyle: 'explanatory' } });
 MATRIX.push({ label: 'zai|style=learning', ctx: { ...BASE_CTX, outputStyle: 'learning' } });
+MATRIX.push({ label: 'zai|block-code-comments', ctx: { ...BASE_CTX, blockCodeComments: true } });
 MATRIX.push({ label: 'zai|unsupervised', ctx: { ...BASE_CTX, unsupervised: true } });
 MATRIX.push({ label: 'zai|multi-agent=ultra', ctx: { ...BASE_CTX, multiAgentMode: 'proactive' } });
 MATRIX.push({ label: 'zai|multi-agent=explicit', ctx: { ...BASE_CTX, multiAgentMode: 'explicit_request_only' } });
@@ -235,6 +237,13 @@ describe('session-fixed directive gating (G1 language / G8 style / G3 autonomous
     expect(buildSystemPrompt({ ...BASE_CTX, outputStyle: 'proactive' })).not.toContain('# Explanatory output');
     expect(buildSystemPrompt({ ...BASE_CTX, outputStyle: 'explanatory' })).toContain('# Explanatory output');
     expect(buildSystemPrompt({ ...BASE_CTX, outputStyle: 'learning' })).toContain('# Learning output');
+  });
+
+  it('code-comment blocking renders only when enabled', () => {
+    expect(buildSystemPrompt(BASE_CTX)).not.toContain('# Code comments');
+    const prompt = buildSystemPrompt({ ...BASE_CTX, blockCodeComments: true });
+    expect(prompt).toContain('# Code comments');
+    expect(prompt).toContain('no line comments, block comments, doc comments, TODOs or FIXMEs');
   });
 
   it('autonomous block renders only when unsupervised', () => {

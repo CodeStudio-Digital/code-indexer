@@ -1,6 +1,5 @@
 use agent_protocol::generated::v1 as wire;
 
-use super::super::SupervisorDriverStep;
 use super::super::fact_flow::PendingFactAction;
 use super::super::provision::ProtectedLaunchReceipt;
 use crate::process_table::OwnershipKey;
@@ -9,7 +8,7 @@ use crate::process_table::OwnershipKey;
 pub(super) enum PreparedLaunchAcceptance {
     Fresh {
         failure_key: Box<OwnershipKey>,
-        _protected_receipt: Box<ProtectedLaunchReceipt>,
+        protected_receipt: Box<ProtectedLaunchReceipt>,
     },
     Replay {
         live_key: Option<Box<OwnershipKey>>,
@@ -30,15 +29,6 @@ impl PreparedLaunchOutcome {
             }
             Self::Accepted(PreparedLaunchAcceptance::Replay { live_key }) => live_key.as_deref(),
             Self::Rejected { .. } => None,
-        }
-    }
-
-    pub(super) fn into_driver_step(self) -> SupervisorDriverStep {
-        match self {
-            Self::Accepted(acceptance) => SupervisorDriverStep::LaunchAccepted {
-                reused_existing: matches!(acceptance, PreparedLaunchAcceptance::Replay { .. }),
-            },
-            Self::Rejected { reason_code } => SupervisorDriverStep::LaunchRejected { reason_code },
         }
     }
 }

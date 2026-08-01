@@ -18,6 +18,7 @@ import {
   liveTurnCoversPersistedAssistantRun,
   liveBlockPersistedId,
   liveTurnReconciliationRevision,
+  scopeLiveTurnToLatestUser,
   suppressLatestPersistedAssistantRun,
   visibleLiveBlocks,
 } from '../utils.js';
@@ -332,6 +333,60 @@ describe('visibleLiveBlocks', () => {
       false,
       reconciliation,
     )).toEqual([]);
+  });
+
+  it('scopes an old-worker live buffer after an injected user boundary', () => {
+    // Exact shape from the reported session: /inject persisted a new user row,
+    // but an older worker kept the prior user's accumulated blocks in the same
+    // currentTurn. History renders both user turns; LiveTurn must render only
+    // the current assistant run instead of appending every old text block again
+    // after tool-id dedup removes their tools.
+    const messages = [
+      { role: 'user', content: [{ type: 'text', text: 'Continue' }] } as PersistedMessage,
+      assistantTextAndTool('Previous audit cycle', 'old-tool'),
+      toolResult('old-tool'),
+      { role: 'user', content: [{ type: 'text', text: 'Keep going while I sleep' }] } as PersistedMessage,
+      assistantTextAndTool('Current migration cycle', 'current-tool'),
+      toolResult('current-tool'),
+    ];
+    const reconciliation = buildPersistedLiveReconciliation(messages);
+    const oldWorkerTurn = {
+      blocks: [
+        textBlock('Previous audit cycle'),
+        toolBlock('old-tool'),
+        textBlock('Current migration cycle'),
+        toolBlock('current-tool'),
+        textBlock('Fresh current suffix'),
+      ],
+    };
+
+    expect(scopeLiveTurnToLatestUser(oldWorkerTurn, reconciliation)?.blocks).toEqual([
+      oldWorkerTurn.blocks[2],
+      oldWorkerTurn.blocks[3],
+      oldWorkerTurn.blocks[4],
+    ]);
+    expect(liveTurnCoversPersistedAssistantRun(oldWorkerTurn, reconciliation)).toBe(true);
+    expect(visibleLiveBlocks(
+      oldWorkerTurn.blocks,
+      reconciliation.persistedToolUseIds,
+      reconciliation.pendingInteractivePromptSignatures,
+      reconciliation.persistedToolResultIds,
+      true,
+      reconciliation,
+    )).toEqual([
+      oldWorkerTurn.blocks[2],
+      oldWorkerTurn.blocks[3],
+      oldWorkerTurn.blocks[4],
+    ]);
+
+    const completedReconciliation = buildPersistedLiveReconciliation([
+      ...messages,
+      assistantText('Fresh current suffix'),
+    ]);
+    expect(isLiveTurnDuplicatedInHistory(
+      oldWorkerTurn,
+      completedReconciliation,
+    )).toBe(true);
   });
 
   it('cuts a covered prefix outside a mid-turn window too', () => {

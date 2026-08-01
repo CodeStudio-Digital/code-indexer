@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ChevronRight, Database, Loader2, ShieldQuestion, Wrench, X } from 'lucide-react';
+import { Check, ChevronRight, Database, Loader2, ShieldQuestion, X } from 'lucide-react';
 import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
-import { Badge } from '../../../components/ui/badge.js';
 import { useNow } from '../../../lib/perf/shared-clock.js';
 import { cn } from '../../../lib/utils.js';
 import { ToolApprovalCard, type ToolApprovalVerdict } from './ToolApprovalCard.js';
@@ -67,6 +66,7 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
   const display = isMcp ? call.name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '') : call.name;
   const dbQuery = isDbQuery ? parseDbQueryInput(call.input) : null;
   const dbAnalysis = dbQuery ? analyzeSqlForDisplay(dbQuery.sql) : null;
+  const activityLabel = t(toolActivityLabelKey(call.name, call.status), { tool: display });
   const [fullResult, setFullResult] = useState<ToolCallEvent['result']>();
   const [loadingFullResult, setLoadingFullResult] = useState(false);
   const [fullResultError, setFullResultError] = useState<string | null>(null);
@@ -124,10 +124,10 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
           : Check;
   const statusColor =
     call.status === 'error'
-      ? 'text-destructive bg-destructive/10'
+      ? 'text-destructive'
       : call.status === 'running' || call.status === 'awaiting_approval'
-        ? 'text-warning bg-warning/10'
-        : 'text-success bg-success/10';
+        ? 'text-warning'
+        : 'text-muted-foreground';
 
   // Elapsed seconds derived client-side from `startedAt` (when the
   // tool_call_start event arrived). Falls back to `elapsedMs` from a
@@ -145,21 +145,22 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
     : null;
 
   return (
-    <div className="my-2 rounded-lg border bg-muted/30 overflow-hidden text-xs">
+    <div className="group/tool my-1 text-xs">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full px-3 py-2 flex items-center gap-2 text-left hover:bg-muted/60 transition-colors"
+        className="flex w-full items-center gap-1.5 rounded-md py-1 text-left text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
       >
         <ChevronRight
-          className={cn('h-3.5 w-3.5 text-muted-foreground transition-transform shrink-0', open && 'rotate-90')}
+          className={cn('h-3 w-3 shrink-0 transition-transform', open && 'rotate-90')}
         />
-        <div className={cn('h-5 w-5 rounded-md flex items-center justify-center shrink-0', statusColor)}>
-          <StatusIcon className={cn('h-3 w-3', call.status === 'running' && 'animate-spin')} />
-        </div>
+        <StatusIcon className={cn('h-3 w-3 shrink-0', statusColor, call.status === 'running' && 'animate-spin')} />
         {isDbQuery
-          ? <Database className="h-3.5 w-3.5 shrink-0 text-primary" />
-          : <Wrench className="h-3 w-3 text-muted-foreground shrink-0" />}
-        <span className="font-mono font-medium text-foreground truncate">{display}</span>
+          ? <Database className="h-3 w-3 shrink-0 text-primary" />
+          : null}
+        <span className="truncate font-medium">{activityLabel}</span>
+        <span className="hidden truncate font-mono text-[10px] text-muted-foreground/60 group-hover/tool:inline sm:max-w-52">
+          {display}
+        </span>
         {dbQuery && dbAnalysis && (
           <>
             <span className="shrink-0 rounded border bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -183,11 +184,6 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
             </span>
           </>
         )}
-        {isMcp && (
-          <Badge variant="info" className="shrink-0">
-            mcp
-          </Badge>
-        )}
         {isAwaitingApproval ? (
           <span className="ml-auto text-warning shrink-0">
             {t('approval.waiting', { defaultValue: 'aguardando aprovação' })}
@@ -203,12 +199,12 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
       {/* PermissionGate card — pinned OUTSIDE the collapse so the user can
           act without expanding the block. */}
       {onToolApproval && call.approvals && call.approvals.length > 0 && (
-        <div className="px-3 pb-3 pt-1 border-t bg-background/50">
+        <div className="ml-4 mt-1 rounded-lg border bg-background/50 px-3 py-2">
           <ToolApprovalCard approvals={call.approvals} onRespond={onToolApproval} />
         </div>
       )}
       {open && !(isDbQuery && call.approvals && call.approvals.length > 0) && (
-        <div className="px-3 pb-3 pt-1 space-y-2 border-t bg-background/50">
+        <div className="ml-4 mt-1 space-y-2 border-l border-border/60 py-1 pl-3">
           {isRunning && call.progressNote && (
             <div className="mt-2 rounded-md border border-warning/30 bg-warning/[0.06] px-2 py-1.5 font-mono text-[11px] text-warning-foreground">
               {call.progressNote}
@@ -285,6 +281,33 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
       )}
     </div>
   );
+}
+
+export function toolActivityLabelKey(
+  toolName: string,
+  status: ToolCallEvent['status'],
+): string {
+  if (status === 'running') {
+    if (isCommandTool(toolName)) return 'messages.toolActivity.runningCommands';
+    if (isInspectionTool(toolName)) return 'messages.toolActivity.inspecting';
+    return 'messages.toolActivity.running';
+  }
+  if (status === 'awaiting_approval') return 'messages.toolActivity.awaitingApproval';
+  if (status === 'error') return 'messages.toolActivity.failed';
+  if (isCommandTool(toolName)) return 'messages.toolActivity.commands';
+  if (isInspectionTool(toolName)) return 'messages.toolActivity.inspected';
+  if (/^(spawn_|resume_agent|send_message|followup_task)/.test(toolName)) {
+    return 'messages.toolActivity.agents';
+  }
+  return 'messages.toolActivity.completed';
+}
+
+function isCommandTool(toolName: string): boolean {
+  return /(^|__)(exec_command|shell_command|run_command|code_exec|terminal)$/.test(toolName);
+}
+
+function isInspectionTool(toolName: string): boolean {
+  return /(^|__)(read_file|view_image|search|search_query|find|glob|grep|rg|list_files|open)$/.test(toolName);
 }
 
 function formatShortDuration(ms: number): string {

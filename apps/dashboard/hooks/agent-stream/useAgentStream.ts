@@ -132,6 +132,8 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
         /** Force the vision fallback (image → text via the configured vision
          *  model) even on vision-capable models. Auto-applies for blind models. */
         describeImages?: boolean;
+        /** Prevent the agent from adding comments inside generated code. */
+        blockCodeComments?: boolean;
         /**
          * When true and a live run is currently blocked inside an interactive
          * tool, ask the server to break the wait (`interruptWait`) and inject
@@ -185,6 +187,7 @@ export function useAgentStream(sessionId: SessionId | null, notificationContext?
             max_auto_continues: extras?.maxAutoContinues,
             thinking: extras?.thinking || undefined,
             describe_images: extras?.describeImages || undefined,
+            block_code_comments: extras?.blockCodeComments,
             interject: extras?.interject || undefined,
             selected_skill_ids:
               extras?.selectedSkillIds && extras.selectedSkillIds.length > 0

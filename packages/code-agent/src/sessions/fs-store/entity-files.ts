@@ -1,7 +1,8 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { lstat, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  assertPathHasNoLinksSync,
+  assertContainedPath,
+  assertPathHasNoLinks,
   isUuid,
   newSessionId,
   type JsonValue,
@@ -107,6 +108,19 @@ function parseEnvelope<T extends JsonValue>(
 export class FsSessionEntityFiles {
   constructor(private readonly directory: FsSessionDirectory) {}
 
+  private async readEnvelope<T extends JsonValue>(
+    root: string,
+    name: string,
+  ): Promise<FsEntityEnvelope<T>> {
+    const path = join(root, name);
+    assertContainedPath(root, path);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Filesystem entity is not a regular file: ${path}`);
+    }
+    return parseEnvelope<T>(path, await readFile(path, 'utf8'));
+  }
+
   async list<T extends JsonValue>(
     sessionId: SessionId | string,
     entityDirectory: SessionEntityDirectory,
@@ -118,14 +132,19 @@ export class FsSessionEntityFiles {
       entry.location.bundle_path,
       ...entityDirectory.split('/'),
     );
-    assertPathHasNoLinksSync(entry.location.bundle_path, root);
-    return readdirSync(root)
-      .filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name))
-      .map((name) => {
-        const path = join(root, name);
-        assertPathHasNoLinksSync(entry.location.bundle_path, path);
-        return parseEnvelope<T>(path, readFileSync(path, 'utf8'));
-      })
+    await assertPathHasNoLinks(entry.location.bundle_path, root);
+    const names = (await readdir(root))
+      .filter((name) => /^[0-9a-f-]{36}\.json$/i.test(name));
+    const records: FsEntityEnvelope<T>[] = [];
+    // Bound I/O so one large session cannot flood libuv, while keeping every
+    // filesystem syscall off Electron's main event loop.
+    for (let offset = 0; offset < names.length; offset += 16) {
+      records.push(...await Promise.all(
+        names.slice(offset, offset + 16).map((name) =>
+          this.readEnvelope<T>(root, name)),
+      ));
+    }
+    return records
       .filter((record) => (kind == null || record.kind === kind))
       .filter((record) => includeDeleted || record.deleted_at == null)
       .sort((left, right) => left.seq - right.seq);
@@ -138,14 +157,26 @@ export class FsSessionEntityFiles {
     includeDeleted = false,
   ): Promise<FsEntityEnvelope<T> | null> {
     if (!isUuid(id)) return null;
-    return (
-      (await this.list<T>(
-        sessionId,
-        entityDirectory,
-        undefined,
-        includeDeleted,
-      )).find((record) => record.id === id) ?? null
+    const entry = await this.directory.requireEntry(sessionId);
+    const root = join(
+      entry.location.bundle_path,
+      ...entityDirectory.split('/'),
     );
+    const path = join(root, `${id}.json`);
+    try {
+      await assertPathHasNoLinks(entry.location.bundle_path, path);
+      const record = await this.readEnvelope<T>(
+        root,
+        `${id}.json`,
+      );
+      if (record.id !== id) {
+        throw new Error(`Filesystem entity id mismatch ${path}`);
+      }
+      return includeDeleted || record.deleted_at == null ? record : null;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
   }
 
   async create<T>(

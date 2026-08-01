@@ -1378,6 +1378,36 @@ describe('ExecutingNode', () => {
     expect(ctx.messages).not.toContainEqual(expect.objectContaining({ role: 'assistant' }));
   });
 
+  it('retries a terminal provider response with no text or tool call', async () => {
+    const { ctx } = makeTestContext({
+      provider: makeStreamingProvider([
+        { type: 'usage', usage: { input_tokens: 0, output_tokens: 0 } as ChatUsage },
+        { type: 'done', stop_reason: 'stop' },
+      ]),
+      registry: makeRegistry({}),
+      toolContext: emptyToolContext(),
+    });
+    const recordProviderAttempt = vi.fn();
+    ctx.opts.sessionStore = { recordProviderAttempt } as never;
+
+    const event = await new ExecutingNode().execute(ctx, null);
+
+    expect(event).toMatchObject({
+      kind: 'ProviderError',
+      retryable: true,
+      status: 502,
+      code: 'provider_empty_result',
+    });
+    expect(recordProviderAttempt).toHaveBeenCalledWith(expect.objectContaining({
+      ok: false,
+      status: 502,
+      error_code: 'provider_empty_result',
+      error_message: 'ProviderStreamProtocolError',
+    }));
+    expect(ctx.stopReason).not.toBe('completed');
+    expect(ctx.messages).not.toContainEqual(expect.objectContaining({ role: 'assistant' }));
+  });
+
   it('routes provider stream abort to Aborted instead of ProviderError', async () => {
     const abort = new AbortController();
     abort.abort();
@@ -1503,6 +1533,19 @@ describe('ExecutingNode', () => {
       name: 'ProviderStreamProtocolError',
       status: 502,
       code: 'stream_ended_no_result',
+    });
+  });
+
+  it('rejects a terminal result that contains only usage metadata', async () => {
+    async function* emptyTerminal(): AsyncIterable<ChatDelta> {
+      yield { type: 'usage', usage: { input_tokens: 0, output_tokens: 0 } as ChatUsage };
+      yield { type: 'done', stop_reason: 'stop' };
+    }
+
+    await expect(consumeStream({ stream: emptyTerminal() })).rejects.toMatchObject({
+      name: 'ProviderStreamProtocolError',
+      status: 502,
+      code: 'provider_empty_result',
     });
   });
 

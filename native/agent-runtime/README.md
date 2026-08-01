@@ -200,13 +200,16 @@ físico, retry semântico e conflito de chave/digest. A mutação física preced
 ACK, write cancelado é retomável, write failure não desfaz shutdown e o serviço
 continua lendo ACK/replay/retry enquanto drena.
 
-O runner já possui um owner Tokio interno que aceita o Host esperado no
-endpoint control, conduz
-`AgentHello → HostHello → Prepare → Prepared → Activate → Ack`, mantém os
-listeners data/pulse e o handoff no mesmo owner e só retorna `Active` depois do
-commit do ACK. Futures abandonados antes do primeiro poll também invalidam
-nonce/canal; cancelamento, EOF, deadline, clock inválido, hidratação e write
-failure fecham a sessão.
+O runner já possui um owner Tokio interno que primeiro aceita o supervisor
+esperado no endpoint privado de pulse, envia um frame `Negotiating` autenticado
+e só então aceita o Host esperado no endpoint control. Em seguida conduz
+`AgentHello → HostHello → Prepare → Prepared → Activate → Ack`, mantém
+data/pulse e o handoff no mesmo owner e só retorna `Active` depois do commit do
+ACK. O sender inicial é então consumido por um pump permanente que emite nas
+transições `Hydrating`, `Prepared` e `Active`, além do tick periódico selado no
+handoff; missed ticks usam `Skip`, sem burst de recuperação. Futures abandonados
+antes do primeiro poll também invalidam nonce/canal; cancelamento, EOF,
+deadline, clock inválido, hidratação e write failure fecham a sessão.
 
 Pós-`Active`, um `advance` bounded processa `CancelAttempt` e `FenceAttempt`.
 Payload, identity, reason/epoch, deadline e idempotência são validados antes de
@@ -214,18 +217,21 @@ revogar effects; a revogação ocorre sincronamente antes do ACK. O lifecycle s�
 instala `Cancelling` depois do write físico, reamostragem estrita do clock e
 receipt ligado ao inbound. Replay físico reutiliza bytes; retry semântico exige
 mesmo tipo, chave e digest. Sucesso devolve cleanup tipado ainda dono de
-handoff/data/pulse; falha ou drop fecha em `Exiting` sem restaurar authority.
-Essa API permanece crate-private porque ainda não existe o pump permanente,
-drain cooperativo nem composição produtiva.
+handoff/data/pulse pump; falha ou drop fecha em `Exiting` sem restaurar
+authority. Essa API permanece crate-private porque ainda não existe o loop de
+effects produtivo nem drain cooperativo.
 
-O entrypoint Windows do `agent-runner` agora consome o bootstrap herdado real,
+O entrypoint Windows do `agent-runner` consome o bootstrap herdado real,
 confere o PID criador do supervisor, materializa control/data/pulse e entra no
-accept/pump control. A proveniência do binário só chega ao runner depois de o
-supervisor comparar a expectativa do Host com a instalação confiável; o handoff
-protegido a liga ao runtime instance e PID físicos. O runner usa esse fato para
-enviar `AgentHello`, aceita somente o PID Host selado e conclui `HostHello`.
-Um E2E com três processos distintos prova Named Pipe, PID bilateral, nonce,
-proveniência, negociação e reap, mantendo a attempt `Reserved`.
+accept/pump. A proveniência do binário só chega ao runner depois de o supervisor
+comparar a expectativa do Host com a instalação confiável; o handoff protegido
+a liga ao runtime instance e PID físicos. O runner deriva uma chave de pulse
+ligada ao endpoint/connection, prova o peer supervisor pelo PID e envia o frame
+inicial com contador 1. O supervisor valida HMAC, identity, fase, contador,
+progress e resource sample antes de admitir `LaunchAccepted`. Depois do commit,
+o receipt instala o monitor no owner permanente do supervisor e o runner emite
+com intervalo `pulse_timeout / 3`, recebido do handoff. Então o runner envia
+`AgentHello`, aceita somente o PID Host selado e conclui `HostHello`.
 
 Nesta fatia, o session store e seu bridge já oferecem leitura path-free dos
 bytes comprometidos, e o runner já verifica/possui os snapshots e artifacts
@@ -241,27 +247,41 @@ async bounded com cancelamento compartilhado e fecha ambos explicitamente. O
 package manifest liga o `.node` aos executáveis e o loader TS só aceita o
 artefato verificado. O adapter Host já transforma os reads/writes nativos em
 `DelimitedByteChannel`, transfere Control/Data sem reopen e compartilha cleanup
-explícito. O teste integrado TS chega a `AttemptPrepared` e `ActiveAuthority`;
-ainda falta provar o mesmo percurso com supervisor e runner de produção em
-processos distintos.
+explícito. O E2E process-real TS chega a `AttemptPrepared` e `ActiveAuthority`
+com supervisor e runner de produção em processos distintos, prova que ambos
+seguem vivos pós-`Active`, fecha/reapeia os dois e cobre hidratação divergente
+sem PID órfão. O mesmo launch só é aceito depois do pulse físico inicial; o E2E
+também espera 1.200 ms sob timeout negociado de 500 ms e comprova que pulses
+periódicos mantêm ambos vivos. Os oito testes Windows físicos executados
+separadamente pela CI também percorrem o entrypoint produtivo do fixture de
+sucesso.
 
-Permanecem pendentes o E2E process-real Prepare/Activate, o pump control
-pós-Active, ownership
-funcional de control/data/pulse por todo o lifetime. `prepare`, o spawn contido e
-`complete_after_spawn` já executam fora do loop Tokio de management/lifecycle,
-em um worker OS dedicado, owned e joinable por launch pendente. O worker usa
-stack explícita de 1 MiB e canais de estágio/cleanup bounded com capacidade 1.
-O serviço preserva pending inbound, estado físico, worker, cleanup owner e
-reservation entre cancelamentos de `advance()`; watchdog de siblings e
-shutdown continuam avançando enquanto o efeito físico bloqueia. Os estados
-`Launching` e `BootstrapPending` impedem reap prematuro e spin de cleanup.
-Também permanecem pendentes `UpdateAttemptAuthority`, `QuerySupervisorState`,
-outbox e fatos duráveis `AttemptProcessExited`/`AttemptProcessReaped`, E2E Host
-TS↔processos completo até Activate, heartbeat/pulse, cancelamento host-owned, terminal durável,
-expiração nas fronteiras spawn/Ready, matriz Windows packaged/nested/breakaway,
-backend de spawn Unix e unlink Unix descriptor-relative. Até esses gates, os
-binários recusam trabalho de agente; somente bootstrap e Hello físicos Windows
-autenticados são admitidos antes da hidratação.
+`prepare`, spawn contido e `complete_after_spawn` executam fora do loop Tokio de
+management/lifecycle, em um worker OS dedicado, owned e joinable por launch
+pendente. O worker usa stack explícita de 1 MiB e canais de estágio/cleanup
+bounded com capacidade 1. O serviço preserva pending inbound, estado físico,
+worker, cleanup owner e reservation entre cancelamentos de `advance()`;
+watchdog de siblings e shutdown continuam avançando enquanto o efeito físico
+bloqueia. Os estados `Launching` e `BootstrapPending` impedem reap prematuro e
+spin de cleanup.
+
+O supervisor possui um único runtime Tokio de pulse por processo, não um thread
+ou runtime por attempt. Após o commit de `LaunchAccepted`, o
+`SupervisorLifecycleCore` retém um monitor bounded por `max_active_attempts` e
+somente a observação validada mais recente. Seu próximo wake é o mínimo entre
+cleanup, `último pulse + timeout` e hard deadline. Silêncio, framing inválido ou
+falha de autenticação removem apenas o monitor alvo e agendam termination/reap
+imediato; pulse fresco nunca renova o hard deadline. Drop do monitor encerra o
+ator receiver.
+
+Permanecem pendentes heartbeat semântico no control, resource sampling real
+(o sample atual é estrutural, com contadores zerados e `process_count = 1`),
+`UpdateAttemptAuthority`, `QuerySupervisorState`, outbox e fatos duráveis
+`AttemptProcessExited`/`AttemptProcessReaped`, Cancel/Fence process-real
+pós-Active, terminal durável, matriz Windows packaged/nested/breakaway, backend
+de spawn Unix e unlink Unix descriptor-relative. Até esses gates, os binários
+completam bootstrap, autenticação, hidratação, ativação e liveness físico, mas
+recusam trabalho produtivo de agente.
 
 O storage Rust vive em `agent-session-store`. Ele valida IDs UUID canônicos e
 layout explícito, cria manifesto imutável `rust_fs_v1`, persiste transições

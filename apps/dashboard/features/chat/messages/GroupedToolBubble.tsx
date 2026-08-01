@@ -1,9 +1,4 @@
 import React from 'react';
-import { useTranslation } from 'react-i18next';
-import { Bot } from 'lucide-react';
-import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
-import { cn } from '../../../lib/utils.js';
-import { providerAccent } from '../constants.js';
 import type {
   ContentBlock,
   MessageRow,
@@ -22,7 +17,6 @@ interface GroupedToolBubbleProps {
   group: AssistantGroup;
   toolResultsById: Map<string, ToolResultView>;
   sessionId?: string;
-  providerId: string;
   handlers: PromptHandlers;
   tasksState: PersistedTasksState | null | undefined;
   /** tool_use id of the session's current task list — only that card overlays
@@ -51,12 +45,10 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
   group,
   toolResultsById,
   sessionId,
-  providerId,
   handlers,
   tasksState,
   activeTasksToolUseId,
 }: GroupedToolBubbleProps) {
-  const { t } = useTranslation('chat');
   const agg = aggregateUsage(group.usages);
   const hasTokens = agg.input_tokens > 0 || agg.output_tokens > 0;
 
@@ -78,31 +70,14 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
     .flatMap((m) => m.content.filter((b) => b.type === 'text').map((b) => b.text ?? ''))
     .join('\n\n');
 
-  // Count total tool calls for the header
-  const toolCount = group.messages.reduce(
-    (acc, m) => acc + m.content.filter((b) => b.type === 'tool_use').length,
-    0,
-  );
-
   return (
-    <div className="group/msg w-full">
-      <article className="w-full min-w-0 px-3 py-2 transition-colors hover:bg-muted/[0.018]">
-        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <Avatar className="h-4 w-4 shrink-0 opacity-90">
-              <AvatarFallback className={cn('text-white text-[8px]', providerAccent(providerId))}>
-                <Bot className="h-2.5 w-2.5" />
-              </AvatarFallback>
-            </Avatar>
-            <span className="font-semibold text-foreground/60">{t('messages.assistant')}</span>
-            {!group.hasText && toolCount > 0 && (
-              <span className="normal-case tracking-normal opacity-70">{t('messages.toolCount', { count: toolCount })}</span>
-            )}
-            {tokenBadge}
-          </div>
+    <div className="group/msg w-full py-1">
+      <article className="relative w-full min-w-0 py-1">
+        <div className="absolute right-0 top-0 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100">
+          {tokenBadge}
           {allText && <CopyMarkdownButton text={allText} />}
         </div>
-        <div>
+        <div className="min-w-0">
           {group.messages.map((msg, mi) =>
             msg.content.map((b: ContentBlock, bi: number) =>
               renderAssistantBlock(

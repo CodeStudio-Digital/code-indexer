@@ -7,6 +7,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from 'vitest';
 import { FsSessionStore } from '../fs-session-store.js';
 
@@ -126,6 +127,7 @@ describe('FsSessionStore chapter and attempt repositories', () => {
         )
       ).items[0]?.id,
     ).toBe(committed.chapter.id);
+    const readConversation = vi.spyOn(store.repository, 'readConversation');
     const source = await store.listConversationChapterSource(
       session.id,
       committed.chapter.id,
@@ -134,6 +136,14 @@ describe('FsSessionStore chapter and attempt repositories', () => {
     expect(source.items).toHaveLength(1);
     expect(source.items[0]).toMatchObject({ seq: 1, role: 'user' });
     expect(source.next_cursor).toBe('message:1');
+    const sourceTail = await store.listConversationChapterSource(
+      session.id,
+      committed.chapter.id,
+      { limit: 1, cursor: source.next_cursor },
+    );
+    expect(sourceTail.items[0]).toMatchObject({ seq: 2, role: 'assistant' });
+    expect(sourceTail.next_cursor).toBeNull();
+    expect(readConversation).toHaveBeenCalledOnce();
 
     const bundle = join(
       projectRoot,

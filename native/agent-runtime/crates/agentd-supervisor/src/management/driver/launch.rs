@@ -10,7 +10,9 @@ use super::cleanup::{FlooredLifecycleClock, LifecycleClockSampler};
 use super::fact_flow::FactIntent;
 use super::facts::{LaunchRejection, authority_rejection};
 use super::plan::LaunchPlan;
-use super::provision::{ProtectedLaunchProvisionPort, ProtectedLaunchRequest};
+use super::provision::{
+    ProtectedLaunchProvisionPort, ProtectedLaunchRequest, runner_pulse_interval_ms,
+};
 use super::reporting::PreparedLaunchEmission;
 use super::{
     SupervisorDriverError, SupervisorDriverStep, SupervisorLifecycleCore, SupervisorPhysicalDriver,
@@ -134,7 +136,12 @@ where
                 observed_at_unix_ms,
             ));
         };
-        let request = ProtectedLaunchRequest::new(launch, plan, &self.peer_authority);
+        let request = ProtectedLaunchRequest::new(
+            launch,
+            plan,
+            &self.peer_authority,
+            runner_pulse_interval_ms(self.policy.limits().runner_pulse_timeout_ms),
+        );
         let prepared = self.provisioner.prepare(&request);
         drop(request);
         let prepared_at_unix_ms = clock.sample()?;

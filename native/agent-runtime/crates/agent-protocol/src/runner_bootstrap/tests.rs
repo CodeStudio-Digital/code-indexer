@@ -52,6 +52,11 @@ fn windows_handoff_round_trips_and_ready_is_bound_to_exact_bytes() {
             .take_endpoint_token_verifier(wire::AttemptEndpointKind::Control)
             .is_err()
     );
+    let pulse_key = received
+        .take_runner_pulse_key()
+        .expect("single-use pulse key");
+    assert!(format!("{pulse_key:?}").contains("[REDACTED]"));
+    assert!(received.take_runner_pulse_key().is_err());
     assert!(format!("{received:?}").contains("[REDACTED]"));
     let nonce = received
         .take_launch_nonce()

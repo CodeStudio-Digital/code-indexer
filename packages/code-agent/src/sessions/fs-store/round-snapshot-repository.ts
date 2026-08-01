@@ -217,7 +217,14 @@ export class FsRoundSnapshotRepository {
         (opts.includeClosed || data.status === 'active')
       );
     });
-    return Promise.all(records.map((record) => this.#row(sessionId, record)));
+    const rows: Round[] = [];
+    for (let offset = 0; offset < records.length; offset += 8) {
+      rows.push(...await Promise.all(
+        records.slice(offset, offset + 8).map((record) =>
+          this.#row(sessionId, record)),
+      ));
+    }
+    return rows;
   }
 
   async listRoundHunkDecisions(

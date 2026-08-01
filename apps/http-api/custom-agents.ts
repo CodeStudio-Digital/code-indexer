@@ -21,9 +21,19 @@ export interface CustomAgentDefinition {
   baseAgentId: AgentId;
   prompt: string;
   skillIds: string[];
+  /** Tools kept visible from turn one without becoming an execution allowlist. */
+  pinnedToolNames: string[];
+  /** Extra runtime tiers activated whenever this agent runs (for example `unity`). */
+  requiredToolTiers: string[];
+  /** Optional per-agent visible catalog ceiling. Model capability remains the hard maximum. */
+  visibleToolCap: number | null;
   /** null inherits the preset/profile catalog; [] intentionally exposes no tools. */
   toolNames: string[] | null;
   enabled: boolean;
+  /** Non-null when an extension owns this agent's lifecycle. */
+  managedBy: string | null;
+  /** Opaque extension version last applied through the managed upsert contract. */
+  managedVersion: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -34,8 +44,16 @@ export interface CustomAgentInput {
   baseAgentId?: unknown;
   prompt?: unknown;
   skillIds?: unknown;
+  pinnedToolNames?: unknown;
+  requiredToolTiers?: unknown;
+  visibleToolCap?: unknown;
   toolNames?: unknown;
   enabled?: unknown;
+}
+
+export interface ManagedAgentInput extends CustomAgentInput {
+  managedBy?: unknown;
+  managedVersion?: unknown;
 }
 
 export interface ResolvedAgentSelection {
@@ -74,6 +92,25 @@ function uniqueStrings(value: unknown, field: string, limit: number): string[] {
   return out;
 }
 
+function uniqueToolTiers(value: unknown): string[] {
+  const tiers = uniqueStrings(value, 'requiredToolTiers', 20);
+  for (const tier of tiers) {
+    if (!/^[a-z0-9][a-z0-9:_-]{0,79}$/.test(tier)) {
+      throw new CustomAgentValidationError('requiredToolTiers contains an invalid tier');
+    }
+  }
+  return tiers;
+}
+
+function visibleToolCap(value: unknown, previous: number | null = null): number | null {
+  const resolved = value === undefined ? previous : value;
+  if (resolved === null) return null;
+  if (!Number.isInteger(resolved) || (resolved as number) < 16 || (resolved as number) > 256) {
+    throw new CustomAgentValidationError('visibleToolCap must be null or an integer between 16 and 256');
+  }
+  return resolved as number;
+}
+
 function cleanText(value: unknown, field: string, maxLength: number, required = false): string {
   if (value == null) value = '';
   if (typeof value !== 'string') throw new CustomAgentValidationError(`${field} must be a string`);
@@ -103,12 +140,30 @@ function normalizeStoredAgent(value: unknown): CustomAgentDefinition | null {
     skillIds: Array.isArray(row.skillIds)
       ? [...new Set(row.skillIds.filter((id): id is string => typeof id === 'string').map((id) => id.trim()).filter(Boolean))].slice(0, 100)
       : [],
+    pinnedToolNames: Array.isArray(row.pinnedToolNames)
+      ? [...new Set(row.pinnedToolNames.filter((name): name is string => typeof name === 'string').map((name) => name.trim()).filter(Boolean))].slice(0, 100)
+      : [],
+    requiredToolTiers: Array.isArray(row.requiredToolTiers)
+      ? [...new Set(row.requiredToolTiers.filter((tier): tier is string => typeof tier === 'string').map((tier) => tier.trim()).filter((tier) => /^[a-z0-9][a-z0-9:_-]{0,79}$/.test(tier)))].slice(0, 20)
+      : [],
+    visibleToolCap: typeof row.visibleToolCap === 'number'
+      && Number.isInteger(row.visibleToolCap)
+      && row.visibleToolCap >= 16
+      && row.visibleToolCap <= 256
+      ? row.visibleToolCap
+      : null,
     toolNames: row.toolNames === null
       ? null
       : Array.isArray(row.toolNames)
         ? [...new Set(row.toolNames.filter((name): name is string => typeof name === 'string').map((name) => name.trim()).filter(Boolean))].slice(0, 300)
         : null,
     enabled: row.enabled !== false,
+    managedBy: typeof row.managedBy === 'string' && row.managedBy.trim()
+      ? row.managedBy.trim().slice(0, 120)
+      : null,
+    managedVersion: typeof row.managedVersion === 'string' && row.managedVersion.trim()
+      ? row.managedVersion.trim().slice(0, 80)
+      : null,
     createdAt,
     updatedAt,
   };
@@ -139,7 +194,7 @@ function persistCustomAgents(store: CustomAgentStore, agents: CustomAgentDefinit
 function normalizeInput(
   input: CustomAgentInput,
   previous?: CustomAgentDefinition,
-): Omit<CustomAgentDefinition, 'id' | 'selectionId' | 'createdAt' | 'updatedAt'> {
+): Omit<CustomAgentDefinition, 'id' | 'selectionId' | 'managedBy' | 'managedVersion' | 'createdAt' | 'updatedAt'> {
   const baseAgentId = input.baseAgentId ?? previous?.baseAgentId;
   if (typeof baseAgentId !== 'string' || !isAgentId(baseAgentId)) {
     throw new CustomAgentValidationError(`baseAgentId must be one of ${Object.keys(AGENTS).join('|')}`);
@@ -151,6 +206,15 @@ function normalizeInput(
     baseAgentId,
     prompt: cleanText(input.prompt ?? previous?.prompt, 'prompt', 50_000),
     skillIds: uniqueStrings(input.skillIds ?? previous?.skillIds ?? [], 'skillIds', 100),
+    pinnedToolNames: uniqueStrings(
+      input.pinnedToolNames ?? previous?.pinnedToolNames ?? [],
+      'pinnedToolNames',
+      100,
+    ),
+    requiredToolTiers: uniqueToolTiers(
+      input.requiredToolTiers ?? previous?.requiredToolTiers ?? [],
+    ),
+    visibleToolCap: visibleToolCap(input.visibleToolCap, previous?.visibleToolCap),
     toolNames: toolSource === null ? null : uniqueStrings(toolSource, 'toolNames', 300),
     enabled: typeof input.enabled === 'boolean' ? input.enabled : (previous?.enabled ?? true),
   };
@@ -163,6 +227,8 @@ export function createCustomAgent(store: CustomAgentStore, input: CustomAgentInp
     id,
     selectionId: selectionIdFor(id),
     ...normalizeInput(input),
+    managedBy: null,
+    managedVersion: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -179,6 +245,11 @@ export function updateCustomAgent(
   const index = agents.findIndex((agent) => agent.id === id);
   if (index < 0) return null;
   const previous = agents[index]!;
+  if (previous.managedBy) {
+    throw new CustomAgentValidationError(
+      `agent is managed by ${previous.managedBy} and must be updated by that extension`,
+    );
+  }
   const next: CustomAgentDefinition = {
     ...previous,
     ...normalizeInput(input, previous),
@@ -191,10 +262,53 @@ export function updateCustomAgent(
 
 export function deleteCustomAgent(store: CustomAgentStore, id: string): boolean {
   const agents = listCustomAgents(store);
+  if (agents.some((agent) => agent.id === id && agent.managedBy)) return false;
   const next = agents.filter((agent) => agent.id !== id);
   if (next.length === agents.length) return false;
   persistCustomAgents(store, next);
   return true;
+}
+
+/**
+ * Idempotently install or update an extension-owned agent under a stable id.
+ * The extension controls prompt/version while the CodeStudio runner continues
+ * to enforce the inherited native preset, policy and tool registry.
+ */
+export function upsertManagedAgent(
+  store: CustomAgentStore,
+  id: string,
+  input: ManagedAgentInput,
+): CustomAgentDefinition {
+  if (!/^[a-zA-Z0-9-]{8,80}$/.test(id)) {
+    throw new CustomAgentValidationError('managed agent id must be 8-80 letters, numbers, or hyphens');
+  }
+  const managedBy = cleanText(input.managedBy, 'managedBy', 120, true);
+  const managedVersion = cleanText(input.managedVersion, 'managedVersion', 80, true);
+  const agents = listCustomAgents(store);
+  const index = agents.findIndex((agent) => agent.id === id);
+  const previous = index >= 0 ? agents[index]! : undefined;
+  if (previous && previous.managedBy !== managedBy) {
+    throw new CustomAgentValidationError(
+      previous.managedBy
+        ? `managed agent belongs to ${previous.managedBy}`
+        : 'managed agent id collides with a user-owned agent',
+    );
+  }
+
+  const now = new Date().toISOString();
+  const next: CustomAgentDefinition = {
+    id,
+    selectionId: selectionIdFor(id),
+    ...normalizeInput(input, previous),
+    managedBy,
+    managedVersion,
+    createdAt: previous?.createdAt ?? now,
+    updatedAt: now,
+  };
+  if (index >= 0) agents[index] = next;
+  else agents.push(next);
+  persistCustomAgents(store, agents);
+  return next;
 }
 
 export function resolveAgentSelection(

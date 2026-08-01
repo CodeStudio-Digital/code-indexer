@@ -949,6 +949,36 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // the conversation transcript.
     },
 
+    user_message_boundary: () => {
+      // POST /inject keeps the same runner and SSE transport alive, but the
+      // drained user message is a new visible conversation turn. Carrying the
+      // run-level buffer across this boundary makes history render the prior
+      // turn correctly while LiveTurn appends a second copy with its persisted
+      // tool ids punched out — one giant text-only ghost at the bottom.
+      //
+      // Preserve only genuinely cross-turn live visualizations. Their detailed
+      // state is not reconstructible from the assistant/tool transcript and is
+      // intentionally accumulated by the replay window.
+      const crossTurnBlocks = blocks.filter((block) => (
+        block.type === 'activity'
+        || block.type === 'agents'
+        || block.type === 'task_run'
+        || block.type === 'workflow'
+      ));
+      blocks.splice(0, blocks.length, ...crossTurnBlocks);
+      rebuildToolIndex(blocks, toolIndex);
+      // Commit the cleared live buffer before publishing the already-persisted
+      // user row. POST /inject intentionally does not refetch history itself:
+      // that would expose the new row beside the preceding turn's live buffer
+      // during the short queue-to-runner handoff window.
+      flushNow();
+      onMessageComplete?.();
+      // The boundary refresh already publishes the new user row. A provider
+      // completion immediately after it is still one persistence cycle behind,
+      // so suppress that redundant refresh just like later cycles in the run.
+      messageCompleteNotified = true;
+    },
+
     context_status: (data) => {
       const d = data as {
         turn: number;

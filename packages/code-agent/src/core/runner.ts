@@ -84,6 +84,10 @@ import { interpolateSkillVars } from '@mcp/code-agent/skills/prompt-injector.js'
 import type { SkillTemplateContext } from '@mcp/code-agent/skills/types.js';
 import { getGlobalToolSelectionOutcomeObserver } from '@mcp/code-agent/tool-selection/global-filter.js';
 import {
+  normalizeDynamicToolPins,
+  promoteDynamicToolPin,
+} from '@mcp/code-agent/tools/tool-pin-window.js';
+import {
   isGlobalContextRelevanceEnabled,
   tryGlobalContextCompact,
 } from '@mcp/code-agent/context-relevance/index.js';
@@ -712,12 +716,15 @@ export class CoderRunner extends EventEmitter {
 
   /**
    * Tools the model called by name while they were hidden (tier-hidden or
-   * cap-cut by the model's maxTools). Dispatch executes the call anyway,
-   * adds the name here, and the next turn's `buildTools` unions it into
-   * the visible list (protected from the cap). Monotone like activeTiers;
-   * shared BY REFERENCE with the BT's RunContext.
+   * cap-cut by the model's maxTools). Dispatch executes the call anyway and
+   * promotes the name into this bounded LRU window. New dynamic capabilities
+   * replace stale ones; configured required pins never leave. Shared BY
+   * REFERENCE with the BT's RunContext.
    */
   public pinnedTools: Set<string> = new Set();
+
+  /** Exact catalog sent on the latest provider turn (after cap + relevance). */
+  public visibleToolNames: ReadonlySet<string> | null = null;
 
   /**
    * Last `response.id` returned by the Responses API (ChatGPT/Codex with
@@ -856,6 +863,22 @@ export class CoderRunner extends EventEmitter {
     // tiers, unioned with the session-persisted pins (mig 142); see runCoder.
     if (opts.initialPinnedTools) {
       this.pinnedTools = new Set(opts.initialPinnedTools);
+    }
+    // Freeze required pins as a reusable Set (callers may pass a one-shot
+    // iterable), then bound old/session-restored dynamic pins immediately.
+    // The newest entries survive because persisted pin order is the LRU order.
+    const requiredPinnedTools = new Set(opts.requiredPinnedTools ?? []);
+    opts.requiredPinnedTools = requiredPinnedTools;
+    const evictedInitialPins = normalizeDynamicToolPins(
+      this.pinnedTools,
+      requiredPinnedTools,
+    );
+    if (evictedInitialPins.length > 0) {
+      console.log(
+        `[coder] dynamic tool window: trimmed ${evictedInitialPins.length} stale restored pin(s): ` +
+        evictedInitialPins.join(', '),
+      );
+      try { this.opts.onPinnedToolsChanged?.([...this.pinnedTools]); } catch { /* best-effort */ }
     }
     // Seed from prior session state so the very first turn after resume can
     // already replay the previous response.
@@ -1335,6 +1358,30 @@ export class CoderRunner extends EventEmitter {
     this.pushPendingUserContent([{ type: 'text', text }], extras);
   }
 
+  /**
+   * Put one discovered capability into the bounded dynamic working set.
+   * `find_tools` uses this before returning so the provider receives the
+   * discovered schema on the very next turn; direct hidden calls retain the
+   * dispatch fallback for providers that can emit an undeclared tool name.
+   */
+  promoteTool(name: string): string[] {
+    const requiredPinnedTools = new Set(this.opts.requiredPinnedTools ?? []);
+    const alreadyPinned = this.pinnedTools.has(name);
+    const evicted = promoteDynamicToolPin(
+      this.pinnedTools,
+      requiredPinnedTools,
+      name,
+    );
+    if (!alreadyPinned || evicted.length > 0) {
+      console.log(
+        `[coder] dynamic tool window: promoted ${name}` +
+        (evicted.length > 0 ? `; evicted LRU ${evicted.join(', ')}` : ''),
+      );
+      try { this.opts.onPinnedToolsChanged?.([...this.pinnedTools]); } catch { /* best-effort */ }
+    }
+    return evicted;
+  }
+
   /** Queue a user message containing text plus image/document blocks. */
   pushPendingUserContent(
     content: ContentBlock[],
@@ -1797,6 +1844,7 @@ export class CoderRunner extends EventEmitter {
    * second call on an empty queue is a no-op).
    */
   private flushPendingMessages(): void {
+    const roundMessageIds: number[] = [];
     while (this.pendingUserMessages.length > 0) {
       const pending = this.pendingUserMessages.shift()!;
       const msg: AgentMessage = { role: 'user', content: pending.content };
@@ -1805,8 +1853,12 @@ export class CoderRunner extends EventEmitter {
       }
       if (pending.roundMessageId != null) {
         this.roundMessageId = pending.roundMessageId;
+        roundMessageIds.push(pending.roundMessageId);
       }
       this.messages.push(msg);
+    }
+    if (roundMessageIds.length > 0) {
+      this.emit('user_message_boundary', { roundMessageIds });
     }
   }
 

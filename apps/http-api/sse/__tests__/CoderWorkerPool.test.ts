@@ -254,6 +254,58 @@ describe('CoderWorkerPool', () => {
     });
   });
 
+  it('treats a model switch as activity and cancels post-run eviction', async () => {
+    vi.useFakeTimers();
+    try {
+      pool = new CoderWorkerPool({
+        workerFile: 'mock-worker.js',
+        dbPath: ':memory:',
+        resolveSessionRuntimeContext: resolveTestSessionRuntimeContext,
+        postRunLingerMs: 1_000,
+        log: () => undefined,
+      });
+      const bus = await pool.runFresh(sid(91), { userMessage: 'first' });
+      const host = mockWorker.state.hosts[0];
+      const runId = getRunId(bus);
+      host.bridge.emitToPool('bus.end', {
+        runId,
+        event: 'done',
+        data: { reason: 'completed' },
+      });
+
+      await expect(pool.swapProvider(sid(91), 'copilot', 'gpt-5.6-terra'))
+        .resolves.toBe(true);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(host.evictCalls).toBe(0);
+      expect(pool.has(sid(91))).toBe(true);
+    } finally {
+      await pool?.dispose();
+      pool = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it('waits for an in-flight eviction before falling back to main-process persistence', async () => {
+    const p = createPool();
+    await p.runFresh(sid(90), { userMessage: 'first' });
+    const host = mockWorker.state.hosts[0];
+    let releaseWriter!: () => void;
+    mockWorker.state.releaseWriterImpl = async () => new Promise((resolve) => {
+      releaseWriter = () => resolve({ ok: true });
+    });
+
+    const eviction = p.evict(sid(90));
+    await vi.waitFor(() => expect(releaseWriter).toBeTypeOf('function'));
+    const swap = p.swapProvider(sid(90), 'copilot', 'gpt-5.6-terra');
+
+    expect(host.bridge.requests.some((request) => request.type === 'swapProvider')).toBe(false);
+    releaseWriter();
+    await eviction;
+    await expect(swap).resolves.toBe(false);
+    expect(host.bridge.requests.some((request) => request.type === 'swapProvider')).toBe(false);
+  });
+
   it('routes live session settings through the worker writer', async () => {
     const p = createPool();
     await p.runFresh(sid(92), { userMessage: 'first' });
@@ -431,6 +483,45 @@ describe('CoderWorkerPool', () => {
     await replacement;
     expect(existsSync(leasePath)).toBe(false);
     expect(mockWorker.state.hosts).toHaveLength(2);
+  });
+
+  it('reclaims a residual owner lease after a planned worker eviction', async () => {
+    const p = createPool();
+    await p.runFresh(sid(92), { userMessage: 'first' });
+    const host = mockWorker.state.hosts[0];
+    const hostOpts = host.opts as {
+      workerData: {
+        sessionContext: {
+          bundlePath: string;
+          writerOwnerId: string;
+        };
+      };
+    };
+    const { bundlePath, writerOwnerId } = hostOpts.workerData.sessionContext;
+    const eventsPath = join(bundlePath, 'events');
+    const leasePath = join(eventsPath, 'writer.lease');
+    mkdirSync(eventsPath, { recursive: true });
+    writeFileSync(
+      leasePath,
+      `${JSON.stringify({
+        schema_version: 1,
+        token: randomUUID(),
+        fence: 1,
+        pid: process.pid,
+        owner_id: writerOwnerId,
+        owner_host: 'test',
+        acquired_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 30_000).toISOString(),
+      })}\n`,
+    );
+
+    // The mocked release RPC acknowledges without touching the lease. The
+    // coordinator must still clean up the exact owner after host eviction.
+    await p.evict(sid(92));
+
+    expect(host.evictCalls).toBe(1);
+    expect(existsSync(leasePath)).toBe(false);
+    expect(p.has(sid(92))).toBe(false);
   });
 
   function makeRunContext(value: number, tag: string): ControlPlaneRunContext {

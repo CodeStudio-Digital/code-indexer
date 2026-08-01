@@ -146,6 +146,8 @@ export interface CoderSession {
   execution_mode_override?: ExecutionMode;
   /** Sticky extended-thinking toggle for this conversation (migration 226). */
   thinking_enabled?: boolean;
+  /** Defaults true. Prevents the agent from adding comments inside generated code. */
+  block_code_comments?: boolean;
   /** Null means the session runs until natural completion. */
   max_turns?: number | null;
   /** Extra batches after an enabled turn limit. */
@@ -283,9 +285,26 @@ export interface SessionData {
 export interface MessagePage {
   messages: PersistedMessage[];
   message_rows: MessageRow[];
+  /** Authoritative exclusive cursor for the next older page. */
+  next_before_seq: number | null;
+  /** Authoritative backend answer; never infer exhaustion from an empty merge. */
+  has_more: boolean;
   preceding_user_seq?: number | null;
   tool_results?: ToolResultFallback[];
 }
+
+export type EarlierMessagePageResult =
+  | {
+      ok: true;
+      addedRows: number;
+      nextBeforeSeq: number | null;
+      hasMore: boolean;
+    }
+  | {
+      ok: false;
+      reason: 'aborted' | 'error' | 'stale';
+      error?: string;
+    };
 
 export type ExecutionMode = 'standard' | 'ultra';
 
@@ -387,6 +406,12 @@ export interface ConversationChapterSourceMessage {
   role: 'user' | 'assistant' | 'tool';
   content?: ContentBlock[] | string;
   content_json?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+  is_meta?: 0 | 1;
+  selected_skill_ids_json?: string | null;
   created_at?: string;
 }
 

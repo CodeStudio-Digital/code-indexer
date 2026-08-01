@@ -2,6 +2,7 @@ import type { CodeIndexDB } from '@mcp/store/db.js';
 import { runStructuralIndex } from '@mcp/indexer/indexer/structural.js';
 import { indexFilesStructural, removeFilesStructural } from '@mcp/indexer/indexer/structural-incremental.js';
 import { InteractivePriorityGate } from '@mcp/indexer/indexer/interactive-priority-gate.js';
+import { semanticItemKeysForIndexedPaths } from '@mcp/indexer/indexer/indexer/embedding-candidates.js';
 import type { StructuralExecutor } from './types.js';
 
 export interface InProcessExecutorConfig {
@@ -43,14 +44,22 @@ export function createInProcessStructuralExecutor(
         phaseTimings: r.phaseTimings, peakRssMb: r.peakRssMb, aborted: r.aborted,
       };
     },
-    async indexFiles(projectId, relPaths) {
+    async indexFiles(projectId, relPaths, opts) {
+      await opts?.onChanges?.(
+        relPaths.map((path) => ({ path, kind: 'upsert' as const })),
+        semanticItemKeysForIndexedPaths(db, projectId, relPaths),
+      );
       return indexFilesStructural(db, projectId, relPaths, {
         ignorePatterns: config.ignorePatterns,
         maxFileSizeKB: config.maxFileSizeKB,
         concurrency: config.concurrency,
       });
     },
-    async removeFiles(projectId, relPaths) {
+    async removeFiles(projectId, relPaths, opts) {
+      await opts?.onChanges?.(
+        relPaths.map((path) => ({ path, kind: 'delete' as const })),
+        semanticItemKeysForIndexedPaths(db, projectId, relPaths),
+      );
       return removeFilesStructural(db, projectId, relPaths);
     },
   };

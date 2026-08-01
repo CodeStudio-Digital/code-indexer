@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { useAgentCurrentTurn } from '../../../hooks/useAgentStream.js';
 import {
-  buildPersistedLiveReconciliation,
-  isLiveTurnDuplicatedInHistory,
   liveTurnReconciliationRevision,
 } from '../utils.js';
+import { buildTranscriptProjection } from '../transcript-projection.js';
 import { MessageList, type MessageListProps } from './MessageList.js';
 
 const GOAL_TOOL_NAMES = new Set([
@@ -16,7 +15,7 @@ const GOAL_TOOL_NAMES = new Set([
 
 interface LiveMessageListProps extends Omit<
   MessageListProps,
-  'currentTurn' | 'liveReconciliation' | 'liveTurnDuplicatedInHistory'
+  'currentTurn' | 'projection'
 > {
   sessionId: string;
   onClearCurrentTurn: () => void;
@@ -30,39 +29,31 @@ interface LiveMessageListProps extends Omit<
 export function LiveMessageList({
   sessionId,
   sessionData,
-  persistedToolUseIds,
+  tasksState,
   onClearCurrentTurn,
   onGoalToolCompleted,
   ...props
 }: LiveMessageListProps) {
   const currentTurn = useAgentCurrentTurn(sessionId);
-  const reconciliation = useMemo(
-    () => buildPersistedLiveReconciliation(
-      sessionData?.messages ?? [],
-      sessionData?.preceding_user_seq,
-      (sessionData?.tool_results ?? []).map((result) => result.tool_use_id),
-    ),
-    [sessionData],
+  const historyProjection = useMemo(
+    () => buildTranscriptProjection(sessionData, null, tasksState),
+    [sessionData, tasksState],
   );
   const currentTurnRef = useRef(currentTurn);
   currentTurnRef.current = currentTurn;
   const reconciliationRevision = liveTurnReconciliationRevision(
     currentTurn,
-    reconciliation.tailTextLength,
-    reconciliation.tailThinkingLength,
+    historyProjection.reconciliation.tailTextLength,
+    historyProjection.reconciliation.tailThinkingLength,
   );
-  const duplicated = useMemo(
-    () => isLiveTurnDuplicatedInHistory(
-      currentTurnRef.current,
-      reconciliation,
-      persistedToolUseIds,
-    ),
-    [persistedToolUseIds, reconciliation, reconciliationRevision],
+  const projection = useMemo(
+    () => buildTranscriptProjection(sessionData, currentTurnRef.current, tasksState),
+    [sessionData, tasksState, reconciliationRevision],
   );
 
   useEffect(() => {
-    if (duplicated) onClearCurrentTurn();
-  }, [duplicated, onClearCurrentTurn]);
+    if (projection.live.duplicated) onClearCurrentTurn();
+  }, [onClearCurrentTurn, projection.live.duplicated]);
 
   const completedGoalToolsRef = useRef(0);
   useEffect(() => {
@@ -85,9 +76,8 @@ export function LiveMessageList({
       {...props}
       sessionData={sessionData}
       currentTurn={currentTurn}
-      liveReconciliation={reconciliation}
-      liveTurnDuplicatedInHistory={duplicated}
-      persistedToolUseIds={persistedToolUseIds}
+      projection={projection}
+      tasksState={tasksState}
     />
   );
 }

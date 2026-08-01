@@ -77,6 +77,7 @@ export interface CoderSession {
   phase_profile_id?: number | null;
   unrestricted_tool_output?: boolean;
   tool_output_cap_level?: string | null;
+  block_code_comments?: boolean;
   created_at: string;
   updated_at: string;
 }

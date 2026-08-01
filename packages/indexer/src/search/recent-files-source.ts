@@ -24,7 +24,8 @@
 
 export interface RecentFileEntry {
   projectId: number;
-  fileId: number;
+  /** Null when the editor touched a path before its project DB was already open. */
+  fileId: number | null;
   filePath: string;
   /** Last-touch wall-clock ms. Newer = more relevant. */
   lastTouchMs: number;
@@ -72,7 +73,7 @@ function basename(filePath: string): string {
 }
 
 export class RecentFilesSource {
-  /** Keyed by `${projectId}:${fileId}` for O(1) update on touch. */
+  /** Keyed by project + normalized path for O(1) update on touch. */
   private entries = new Map<string, RecentFileEntry>();
   private readonly maxSize: number;
 
@@ -82,11 +83,12 @@ export class RecentFilesSource {
 
   /**
    * Record that a file was just touched. Subsequent calls for the same
-   * (projectId, fileId) update `lastTouchMs` and bump `kind` to `'edit'`
+   * (projectId, filePath) update `lastTouchMs` and bump `kind` to `'edit'`
    * if any prior call was an edit (edit "wins" over view).
    */
   touch(entry: Omit<RecentFileEntry, 'lastTouchMs'> & { lastTouchMs?: number }): void {
-    const key = `${entry.projectId}:${entry.fileId}`;
+    const normalizedPath = entry.filePath.replace(/\\/g, '/');
+    const key = `${entry.projectId}:path:${normalizedPath}`;
     const now = entry.lastTouchMs ?? Date.now();
     const existing = this.entries.get(key);
     // Preserve edit kind across subsequent views (edit > view).
@@ -98,8 +100,8 @@ export class RecentFilesSource {
     if (existing) this.entries.delete(key);
     this.entries.set(key, {
       projectId: entry.projectId,
-      fileId: entry.fileId,
-      filePath: entry.filePath,
+      fileId: entry.fileId ?? existing?.fileId ?? null,
+      filePath: normalizedPath,
       lastTouchMs: now,
       kind,
     });

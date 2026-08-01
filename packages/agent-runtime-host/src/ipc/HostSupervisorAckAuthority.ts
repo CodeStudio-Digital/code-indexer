@@ -9,6 +9,9 @@ import type {
   PendingSupervisorFact,
 } from './HostSupervisorFactChannelTypes.js';
 import {
+  latestLocalPeerTimestamp,
+} from './LocalPeerClock.js';
+import {
   encodeSupervisorAcknowledgement,
 } from './HostSupervisorAcknowledgement.js';
 import type {
@@ -37,11 +40,12 @@ export class HostSupervisorAckAuthority {
   prepare(
     pending: PendingSupervisorFact,
   ): PreparedSupervisorAcknowledgement {
-    const acknowledgedAtUnixMs = this.nowUnixMs();
+    const ownerNowUnixMs = this.nowUnixMs();
     if (
-      acknowledgedAtUnixMs < pending.headerSentAtUnixMs
-      || acknowledgedAtUnixMs <= 0n
-      || acknowledgedAtUnixMs > MAX_INT64
+      ownerNowUnixMs <= 0n
+      || ownerNowUnixMs > MAX_INT64
+      || pending.headerSentAtUnixMs
+        > latestLocalPeerTimestamp(ownerNowUnixMs)
       || this.#lastStreamSeq === MAX_UINT64
     ) {
       throw new HostSupervisorFactError(
@@ -49,6 +53,9 @@ export class HostSupervisorAckAuthority {
         'ACK clock or outbound sequence is invalid',
       );
     }
+    const acknowledgedAtUnixMs = pending.headerSentAtUnixMs > ownerNowUnixMs
+      ? pending.headerSentAtUnixMs
+      : ownerNowUnixMs;
     const replay = this.#replay(pending, acknowledgedAtUnixMs);
     return {
       replay,

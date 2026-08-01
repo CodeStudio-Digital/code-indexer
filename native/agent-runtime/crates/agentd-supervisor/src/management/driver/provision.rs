@@ -6,6 +6,7 @@ mod completion;
 mod deadline;
 mod facts;
 mod peer;
+pub(in crate::management::driver) mod pulse;
 mod receipt;
 mod request;
 mod scrub;
@@ -110,3 +111,8 @@ pub use completion::{
     ProtectedLaunchCleanupOwner, ProtectedLaunchCleanupPort, ProtectedLaunchCleanupProof,
     ProtectedLaunchCompletion, ProtectedLaunchCompletionFailure,
 };
+
+pub(super) const fn runner_pulse_interval_ms(timeout_ms: u64) -> u64 {
+    let interval = timeout_ms / 3;
+    if interval == 0 { 1 } else { interval }
+}

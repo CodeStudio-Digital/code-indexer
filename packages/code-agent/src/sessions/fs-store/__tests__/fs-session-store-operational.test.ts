@@ -78,6 +78,7 @@ describe('FsSessionStore operational state', () => {
       store.setSessionReasoningEffort(session.id, 'high'),
       store.setSessionExecutionMode(session.id, 'ultra'),
       store.setSessionThinkingEnabled(session.id, true),
+      store.setSessionBlockCodeComments(session.id, false),
       store.setSessionRunLimits(session.id, 80, 4),
       store.setSessionPlanDepth(session.id, 'deep'),
       store.setSessionResponseLanguage(session.id, 'pt-BR'),
@@ -108,6 +109,17 @@ describe('FsSessionStore operational state', () => {
       ),
       store.setSessionActiveSkills(session.id, ['skill-b', 'skill-a', 'skill-a']),
     ]);
+
+    await store.mergeSessionToolsetState(session.id, {
+      pins: ['look_at', 'save_scene'],
+      visibleCap: 64,
+    });
+    expect((await store.getSession(session.id))?.state.tools.toolset).toEqual({
+      v: 1,
+      extraTiers: ['company'],
+      pins: ['look_at', 'save_scene'],
+      visibleCap: 64,
+    });
 
     const group = await store.createGroup(7, {
       name: 'Runtime',
@@ -183,6 +195,7 @@ describe('FsSessionStore operational state', () => {
       reasoning_effort_override: 'high',
       execution_mode_override: 'ultra',
       thinking_enabled: true,
+      block_code_comments: false,
       max_turns: 80,
       max_auto_continues: 4,
       plan_depth_override: 'deep',

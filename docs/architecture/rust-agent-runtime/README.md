@@ -1,10 +1,25 @@
 # Rust Agent Runtime — especificação normativa
 
 > **Status:** especificação final para implementação  
-> **Versão:** 1.8.0
-> **Data-base:** 2026-07-30
+> **Versão:** 1.10.0
+> **Data-base:** 2026-08-01
 > **Autoridade:** este diretório governa o novo runtime de agentes em Rust  
 > **Checklist executiva:** [IMPLEMENTATION-CHECKLIST.md](./IMPLEMENTATION-CHECKLIST.md)
+
+> **Snapshot operacional:** o E2E físico Windows já comprova
+> `Host TS → supervisor → agent-runner → AgentHello → hidratação → Prepared →
+> grant durável → Activate/ACK → Active`, mantém supervisor e runner vivos sob
+> o owner pós-`Active` e reapeia ambos no fechamento. Antes de aceitar o launch,
+> o supervisor exige um `RunnerPulse` físico inicial autenticado, sequenciado e
+> ligado ao PID/endpoint da attempt. Depois do commit de `LaunchAccepted`, um
+> owner permanente bounded retém o monitor; o runner emite pulses periódicos nas
+> fases `Negotiating/Hydrating/Prepared/Active`, silêncio expira somente a
+> attempt alvo e nenhum pulse renova o hard deadline. Hidratação divergente
+> também falha fechada sem PID órfão. O próximo marco é o heartbeat semântico no
+> canal control e resource samples reais. Depois vêm Cancel/Fence process-real
+> pós-`Active`, fatos duráveis de exit/reap e o primeiro loop de `agent-engine`
+> com Provider Gateway. Engine, providers e tools de produção ainda não estão
+> implementados.
 
 ## 1. Objetivo
 

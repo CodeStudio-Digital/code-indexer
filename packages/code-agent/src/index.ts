@@ -1972,9 +1972,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const seededToolCap = preflightSeed
     ? (Number.isFinite(preflightCapRaw) && preflightCapRaw > 0 ? preflightCapRaw : 28)
     : undefined;
-  const sessionToolCap = seededToolCap ?? persistedToolset?.visibleCap ?? undefined;
-  if (stickyToolset && seededToolCap != null) {
-    try { store.mergeSessionToolsetState(session.id, { visibleCap: seededToolCap }); } catch { /* best-effort */ }
+  const managedToolCap = opts.initialVisibleToolCap != null && opts.initialVisibleToolCap > 0
+    ? opts.initialVisibleToolCap
+    : undefined;
+  const sessionToolCap = managedToolCap ?? seededToolCap ?? persistedToolset?.visibleCap ?? undefined;
+  if (stickyToolset && sessionToolCap != null) {
+    try { await store.mergeSessionToolsetState(session.id, { visibleCap: sessionToolCap }); } catch { /* best-effort */ }
   }
   const profileResolution = resolveSessionProfile({
     explicitProfile:
@@ -2221,6 +2224,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     outputStyle:
       (session.output_style_override as 'proactive' | 'explanatory' | 'learning' | null)
       ?? undefined,
+    blockCodeComments:
+      opts.blockCodeComments ?? (session.block_code_comments !== false),
     // Unsupervised framing (G3): ONLY when a caller explicitly marks the run as
     // headless (cron / scheduled / CI). NOT derived from company-subordinate
     // status: subordinates lack `ask_user` but DO have `ask_master` (blocks
@@ -2419,6 +2424,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   })) {
     activeTiers.add(tier);
   }
+  for (const tier of opts.initialToolTiers ?? []) {
+    if (typeof tier === 'string' && tier.trim()) activeTiers.add(tier.trim() as ToolTier);
+  }
   // Sticky extra tiers (mig 142): master/preview/custom tiers this session
   // unlocked in PRIOR runs via `expand_toolset`. A persisted tier name that
   // no longer exists simply never matches in `filterByTiers` — harmless.
@@ -2468,7 +2476,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       !known.has(p) && !configuredInitialPins.has(p)
     ));
     if (freshPins.length > 0) {
-      try { store.mergeSessionToolsetState(session.id, { addPins: freshPins }); } catch { /* best-effort */ }
+      try { await store.mergeSessionToolsetState(session.id, { addPins: freshPins }); } catch { /* best-effort */ }
     }
   }
   if (initialPinnedTools.length > 0 && process.env.CODER_LOG_TOOLS_COUNT === '1') {
@@ -3062,6 +3070,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     describeImages: opts.describeImages,
     activeTiers,
     initialPinnedTools: initialPinnedTools.length > 0 ? initialPinnedTools : undefined,
+    requiredPinnedTools: configuredInitialPins.size > 0
+      ? configuredInitialPins
+      : undefined,
     // Sticky toolset (mig 142): persist mid-run tier promotions so the next
     // resume rebuilds the SAME tool array (prompt-cache prefix stability).
     // navigate/admin widen the core profile; master/preview/custom land in
@@ -3073,6 +3084,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             else if (tier === 'admin') store.setSessionToolProfile(session.id, 'full');
             else store.mergeSessionToolsetState(session.id, { addExtraTiers: [tier] });
           } catch { /* best-effort */ }
+        }
+      : undefined,
+    onPinnedToolsChanged: stickyToolset
+      ? (pins) => {
+          const dynamicPins = pins.filter((name) => !configuredInitialPins.has(name));
+          void store.mergeSessionToolsetState(session.id, { pins: dynamicPins }).catch(() => {
+            /* best-effort; run-final persistence retries the exact set */
+          });
         }
       : undefined,
     preflightHint: preflightHintSeed
@@ -4030,18 +4049,17 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       await mcpServerManager.closeAll();
       await bridge.close();
       for (const b of extraBridges) await b.close();
-      // Sticky toolset (mig 142): capture pins earned mid-run (hidden tools
-      // the model called by name get pinned at dispatch) before the store
-      // closes, so the next resume rebuilds the same tool array.
-      if (stickyToolset && runner.pinnedTools.size > 0) {
-        const earnedPins = [...runner.pinnedTools].filter((name) => !configuredInitialPins.has(name));
-        if (earnedPins.length > 0) {
-          try {
-            await store.mergeSessionToolsetState(session.id, {
-              addPins: earnedPins,
-            });
-          } catch { /* best-effort */ }
-        }
+      // Persist the exact bounded dynamic working set. Configured agent pins
+      // are supplied on every run and stay out of session state; stale LRU
+      // entries must be removed here or every resume would re-inflate them.
+      if (stickyToolset) {
+        const dynamicPins = [...runner.pinnedTools]
+          .filter((name) => !configuredInitialPins.has(name));
+        try {
+          await store.mergeSessionToolsetState(session.id, {
+            pins: dynamicPins,
+          });
+        } catch { /* best-effort */ }
       }
       // Phase 2: `store`, `db` and `skillStore` all share ONE process-wide
       // central connection now (getSharedCentral). They are NOT closed per-run —

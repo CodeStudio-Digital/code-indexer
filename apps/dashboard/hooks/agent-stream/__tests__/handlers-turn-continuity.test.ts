@@ -73,6 +73,44 @@ describe('live transcript continuity across provider turns', () => {
     expect(onMessageComplete).toHaveBeenCalledTimes(1);
   });
 
+  it('starts a fresh visible transcript when an injected user message reaches the runner', () => {
+    const { blocks, toolIndex, flushNow, onMessageComplete, handlers } = setup();
+
+    handlers.text({ text: 'Previous user turn' }, 'text');
+    handlers.tool_call_start({
+      id: 'old-tool',
+      name: 'run_command',
+      input: { command: 'rg old' },
+    }, 'tool_call_start');
+    blocks.push({
+      type: 'activity',
+      id: 'background-agent',
+      kind: 'subagent',
+      label: 'Background agent',
+      status: 'running',
+      startedAt: 1,
+      lastEventAt: 2,
+    });
+    handlers.message_complete({ usage: {} }, 'message_complete');
+
+    handlers.user_message_boundary({
+      round_message_ids: [1222],
+    }, 'user_message_boundary');
+
+    expect(blocks.map((block) => block.type)).toEqual(['activity']);
+    expect(toolIndex.size).toBe(0);
+    expect(flushNow).toHaveBeenCalledTimes(2);
+    // The persisted injected user row is fetched only after the preceding live
+    // transcript has been cleared, eliminating the transient duplicate frame.
+    expect(onMessageComplete).toHaveBeenCalledTimes(2);
+
+    handlers.text({ text: 'Current user turn' }, 'text');
+    handlers.message_complete({ usage: {} }, 'message_complete');
+
+    expect(blocks.map((block) => block.type)).toEqual(['activity', 'text']);
+    expect(onMessageComplete).toHaveBeenCalledTimes(2);
+  });
+
   it('materializes and deduplicates a result-only pre-dispatch refusal', () => {
     const { blocks, toolIndex, flush, handlers } = setup();
     const refusal = {

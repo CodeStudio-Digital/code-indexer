@@ -3,13 +3,20 @@ use std::fmt::{self, Debug, Display, Formatter};
 
 use agent_platform::ipc::{ProtectedEndpointError, ProtectedEndpointFailure};
 use agent_platform::windows::ipc::WindowsEndpointCleanup;
+use agent_protocol::pulse_channel::RunnerPulseError;
+use agent_protocol::runner_bootstrap::RunnerBootstrapError;
 
 use crate::control::{AsyncControlDriverError, AsyncRunnerBootstrapError};
 
 #[derive(Debug)]
 pub enum RunnerControlServiceError {
     InvalidHostPeer(ProtectedEndpointError),
+    InvalidSupervisorPeer(ProtectedEndpointError),
     Accept(ProtectedEndpointFailure<WindowsEndpointCleanup>),
+    PulseAccept(ProtectedEndpointFailure<WindowsEndpointCleanup>),
+    Pulse(RunnerPulseError),
+    PulseAuthority(RunnerBootstrapError),
+    PulsePumpStopped,
     Bootstrap(AsyncRunnerBootstrapError),
     Driver(AsyncControlDriverError),
     Hydration(Box<dyn Error + Send + Sync>),
@@ -30,8 +37,15 @@ impl RunnerControlServiceError {
 impl Display for RunnerControlServiceError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidHostPeer(error) => Display::fmt(error, formatter),
-            Self::Accept(error) => Display::fmt(error.error(), formatter),
+            Self::InvalidHostPeer(error) | Self::InvalidSupervisorPeer(error) => {
+                Display::fmt(error, formatter)
+            }
+            Self::Accept(error) | Self::PulseAccept(error) => {
+                Display::fmt(error.error(), formatter)
+            }
+            Self::Pulse(error) => Display::fmt(error, formatter),
+            Self::PulseAuthority(error) => Display::fmt(error, formatter),
+            Self::PulsePumpStopped => formatter.write_str("runner pulse pump stopped"),
             Self::Bootstrap(error) => Display::fmt(error, formatter),
             Self::Driver(error) => Display::fmt(error, formatter),
             Self::Hydration(error) => write!(formatter, "attempt hydration failed: {error}"),
@@ -58,12 +72,15 @@ impl Display for RunnerControlServiceError {
 impl Error for RunnerControlServiceError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::InvalidHostPeer(error) => Some(error),
-            Self::Accept(error) => Some(error.error()),
+            Self::InvalidHostPeer(error) | Self::InvalidSupervisorPeer(error) => Some(error),
+            Self::Accept(error) | Self::PulseAccept(error) => Some(error.error()),
+            Self::Pulse(error) => Some(error),
+            Self::PulseAuthority(error) => Some(error),
             Self::Bootstrap(error) => Some(error),
             Self::Driver(error) => Some(error),
             Self::Hydration(error) => Some(error.as_ref()),
             Self::Cancelled
+            | Self::PulsePumpStopped
             | Self::DeadlineElapsed
             | Self::HydrationAlreadyConsumed
             | Self::MissingContainmentAuthority

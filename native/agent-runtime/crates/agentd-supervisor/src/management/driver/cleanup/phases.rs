@@ -153,6 +153,7 @@ where
                     report.reaped += 1;
                     debug_assert!(!self.completion_cleanup.owns(&key));
                     self.launch_registry.mark_physical_reaped(&key);
+                    self.pulse_registry.remove(&key);
                     self.state.complete_reap(&key)?;
                 }
                 Err(ReapAfterCleanupError::PostReapGate(error)) => return Err(error),

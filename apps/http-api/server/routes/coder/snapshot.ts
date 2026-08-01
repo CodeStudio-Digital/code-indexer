@@ -55,14 +55,6 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
     deps.pipelineTelemetrySink,
   );
 
-  const roundBelongsToSession = async (
-    sessionId: SessionId,
-    roundSeq: number,
-  ): Promise<boolean> => {
-    const row = await sessionStore.getMessageBySeq(sessionId, roundSeq);
-    return row?.role === 'user' && row.row.is_meta === 0;
-  };
-
   const roundSnapshotAllowed = async (
     sessionId: SessionId,
     roundSeq: number,
@@ -87,15 +79,29 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   };
 
   const roundContextRows = async (sessionId: SessionId, roundSeq: number) => {
-    if (!(await roundBelongsToSession(sessionId, roundSeq))) return null;
-    const rows = await snapshotStore.listRoundSnapshots('coder', sessionId, roundSeq, {
-      includeClosed: true,
-    });
-    return (await Promise.all(
-      rows.map((row) => roundSnapshotAllowed(sessionId, roundSeq, row.id)),
-    )).every(Boolean)
-      ? rows
-      : null;
+    const [rows, baselines] = await Promise.all([
+      snapshotStore.listRoundSnapshots('coder', sessionId, roundSeq, {
+        includeClosed: true,
+      }),
+      snapshotStore.listBaselines('coder', sessionId, {
+        includeClosed: true,
+      }),
+    ]);
+    if (rows.length === 0) return null;
+    const baselineById = new Map(baselines.map((row) => [row.id, row]));
+    return rows.every((row) => {
+      const global = baselineById.get(row.global_baseline_id);
+      return (
+        row.session_kind === 'coder'
+        && row.session_id === sessionId
+        && row.round_message_id === roundSeq
+        && global != null
+        && global.session_kind === row.session_kind
+        && global.session_id === row.session_id
+        && global.project_id === row.project_id
+        && global.file_path === row.file_path
+      );
+    }) ? rows : null;
   };
 
   app.get('/api/coder/sessions/:id/snapshot', async (c) => {
@@ -123,10 +129,11 @@ export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   app.get('/api/coder/sessions/:id/snapshot/round/:roundSeq', async (c) => {
     const id = parseSessionIdParam(c);
     const roundSeq = parseSeqParam(c, 'roundSeq');
-    if (!(await roundContextRows(id, roundSeq))) {
+    const rows = await roundContextRows(id, roundSeq);
+    if (!rows) {
       return notFound(c, 'round not found');
     }
-    const files = await service.listRoundFiles('coder', id, roundSeq);
+    const files = await service.listRoundFiles('coder', id, roundSeq, rows);
     const reviews = await snapshotStore.listRoundReviewFindings('coder', id, roundSeq);
     return c.json({ roundSeq, files, reviews });
   });

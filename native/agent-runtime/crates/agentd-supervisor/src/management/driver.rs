@@ -21,6 +21,7 @@ mod launch;
 mod launch_registry;
 mod plan;
 mod provision;
+mod pulse_registry;
 mod reporting;
 mod shutdown;
 mod spawn;

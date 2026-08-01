@@ -17,6 +17,13 @@ export function providerSupportsThinking(
   const option = providerOptions.find((p) => p.id === providerId);
   if (!option) return false;
   if (option.capabilities?.supportsThinking === true) {
+    // Copilot exposes reasoning capability and reasoning control separately.
+    // Fixed/adaptive models such as Gemini 3.5 can reason, but the public
+    // Copilot surface does not offer a manual deep-thinking level for them.
+    // Only show the toggle when the selected catalog row has real levels.
+    if (option.kind === 'copilot') {
+      return resolveReasoningLevels(providerId, providerOptions, model).length > 0;
+    }
     // Z.AI's "thinking" parameter is accepted by GLM-4.5+ and the entire
     // GLM-5 family (per docs.z.ai/guides/capabilities/thinking). Older
     // GLM-4.x (4.4, 4.3, 4-air, 4-flash, …) reject it with a 400, so we

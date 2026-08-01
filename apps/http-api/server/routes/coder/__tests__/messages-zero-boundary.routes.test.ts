@@ -24,7 +24,7 @@ describe('coder archived message pagination', () => {
       previousUserMessageSeq: () => null,
       loadMessagesBefore: (...args: unknown[]) => {
         calls.push(args);
-        return { messages: [], message_rows: [] };
+        return { messages: [], message_rows: [], next_cursor: 17 };
       },
       listRecentSessionsGlobal: () => [],
     };
@@ -41,6 +41,10 @@ describe('coder archived message pagination', () => {
 
     expect(response.status).toBe(200);
     expect(calls).toEqual([[SESSION_ID, 43, 25, true]]);
+    expect(await response.json()).toMatchObject({
+      next_before_seq: 17,
+      has_more: true,
+    });
 
     const legacyNumeric = await app.request('/api/coder/sessions/1/messages?include_archived=1');
     expect(legacyNumeric.status).toBe(400);

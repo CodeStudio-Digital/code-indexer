@@ -16,7 +16,8 @@ import { join } from 'node:path';
 import { openRawProjectDb } from '../../open.js';
 import { initSchema } from '../../../db/schema/index.js';
 import { runMigrations } from '../../../migrations/index.js';
-import { trimProjectSchema } from '../index.js';
+import { isProjectSchemaTrimCurrent, trimProjectSchema } from '../index.js';
+import { initProjectSchema } from '../../project-schema.js';
 import { CENTRAL_DROP_TABLES, projectKeepTables } from '../drop-list.js';
 import type { DB } from '../../../db/types.js';
 
@@ -51,6 +52,34 @@ function userTables(db: DB): string[] {
 }
 
 describe('trimProjectSchema (C2)', () => {
+  it('skips central bootstrap and foreign-key sweep when a reopened project DB is current', () => {
+    const { db } = buildFullSchema();
+    try {
+      trimProjectSchema(db);
+      expect(isProjectSchemaTrimCurrent(db)).toBe(true);
+      let foreignKeyChecks = 0;
+      const guarded = new Proxy(db, {
+        get(target, property) {
+          if (property === 'pragma') {
+            return (source: string, ...args: unknown[]) => {
+              if (source === 'foreign_key_check') foreignKeyChecks += 1;
+              return Reflect.apply(target.pragma, target, [source, ...args]);
+            };
+          }
+          const value = Reflect.get(target, property);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as DB;
+
+      initProjectSchema(guarded);
+
+      expect(foreignKeyChecks).toBe(0);
+      expect(userTables(db)).not.toContain('provider_configs');
+    } finally {
+      db.close();
+    }
+  });
+
   it('drops every central table and leaves a project-only DB that still writes', () => {
     const { db } = buildFullSchema();
     try {

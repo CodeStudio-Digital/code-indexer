@@ -14,6 +14,24 @@ interface ChapterPage<T = unknown> {
   next_cursor: string | null;
 }
 
+function chapterPreview<T>(page: ChapterPage<T>): ChapterPage<T> {
+  return {
+    ...page,
+    items: page.items.map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+      const {
+        chapter_json: _chapterJson,
+        chapter_text: _chapterText,
+        resume_json: _resumeJson,
+        resume_text: _resumeText,
+        metrics_json: _metricsJson,
+        ...preview
+      } = item as Record<string, unknown>;
+      return preview as T;
+    }),
+  };
+}
+
 type MaybePromise<T> = T | Promise<T>;
 
 /**
@@ -115,10 +133,13 @@ export function mountCoderChapterRoutes(
     }
     if (!store.listConversationChapters) return unavailable(c);
     const cursor = chapterCursor(c, 'chapter');
-    const page = await store.listConversationChapters(
+    const loadedPage = await store.listConversationChapters(
       sessionId,
       { limit, cursor },
     );
+    const page = c.req.query('detail') === 'preview'
+      ? chapterPreview(loadedPage)
+      : loadedPage;
     return c.json({
       ...page,
       ...(store.getConversationChapterStatus

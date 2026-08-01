@@ -103,6 +103,13 @@ export class FsAdvancedStateRepository {
     })).then(() => undefined);
   }
 
+  setBlockCodeComments(id: SessionId | string, enabled: boolean): Promise<void> {
+    return this.mutate(id, (current) => ({
+      ...current,
+      block_code_comments: enabled,
+    })).then(() => undefined);
+  }
+
   setRunLimits(
     id: SessionId | string,
     maxTurns: number | null,
@@ -421,6 +428,8 @@ export class FsAdvancedStateRepository {
     patch: {
       addExtraTiers?: readonly string[];
       addPins?: readonly string[];
+      /** Exact bounded runtime-pin working set. Takes precedence over addPins. */
+      pins?: readonly string[];
       visibleCap?: number | null;
     },
   ): Promise<void> {
@@ -433,9 +442,13 @@ export class FsAdvancedStateRepository {
           extraTiers: [
             ...new Set([...current.extraTiers, ...(patch.addExtraTiers ?? [])]),
           ],
-          pins: [...new Set([...current.pins, ...(patch.addPins ?? [])])],
+          pins: patch.pins
+            ? [...new Set(patch.pins)]
+            : [...new Set([...current.pins, ...(patch.addPins ?? [])])],
           visibleCap:
-            current.visibleCap ?? patch.visibleCap ?? null,
+            Object.prototype.hasOwnProperty.call(patch, 'visibleCap')
+              ? patch.visibleCap ?? null
+              : current.visibleCap,
         };
         return {
           ...state,

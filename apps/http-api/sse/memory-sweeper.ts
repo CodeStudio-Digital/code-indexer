@@ -21,6 +21,9 @@ import type { AgentMemoryService } from '@mcp/services/memory/agent-memory-servi
 const DEFAULT_INTERVAL_MS = Number(process.env.MCP_MEMORY_SWEEP_INTERVAL_MS ?? 5 * 60 * 1000);
 const DEFAULT_IDLE_AFTER_MS = Number(process.env.MCP_MEMORY_IDLE_AFTER_MS ?? 10 * 60 * 1000);
 const DEFAULT_MAX_PER_SWEEP = Number(process.env.MCP_MEMORY_SWEEP_MAX_SESSIONS ?? 2);
+const DEFAULT_MAX_CANDIDATES_INSPECTED = Number(
+  process.env.MCP_MEMORY_SWEEP_MAX_CANDIDATES_INSPECTED ?? 16,
+);
 const MIN_SPAN_MESSAGES = 4;
 const STEP_TIMEOUT_MS = 60_000;
 const MAX_DISTILL_ATTEMPTS = 3;
@@ -75,6 +78,8 @@ export interface StartMemorySweeperArgs {
   intervalMs?: number;
   idleAfterMs?: number;
   maxPerSweep?: number;
+  /** Bound candidate metadata/tail checks per interval and rotate fairly. */
+  maxCandidatesInspected?: number;
   providerFactory?: typeof createCoderProvider;
 }
 
@@ -128,6 +133,11 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
   const intervalMs = args.intervalMs ?? DEFAULT_INTERVAL_MS;
   const idleAfterMs = args.idleAfterMs ?? DEFAULT_IDLE_AFTER_MS;
   const maxPerSweep = args.maxPerSweep ?? DEFAULT_MAX_PER_SWEEP;
+  const maxCandidatesInspected = Math.max(
+    maxPerSweep,
+    args.maxCandidatesInspected ?? DEFAULT_MAX_CANDIDATES_INSPECTED,
+  );
+  let candidateScanCursor = 0;
   const makeProvider = args.providerFactory ?? createCoderProvider;
   const isSessionActive = args.isSessionActive ?? (() => false);
   const { sessionStore, db, runEndMemory, agentMemoryService } = args;
@@ -242,7 +252,16 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       });
 
     const pending: MemorySweepCandidate[] = [];
-    for (const entry of entries) {
+    const scanStart = entries.length > 0
+      ? candidateScanCursor % entries.length
+      : 0;
+    let inspected = 0;
+    while (
+      inspected < entries.length
+      && inspected < maxCandidatesInspected
+    ) {
+      const entry = entries[(scanStart + inspected) % entries.length]!;
+      inspected += 1;
       // Host writes update the shared catalog. Only a non-idle/missing cached
       // state can require one authoritative read to observe that an external
       // worker has finished. Cached idle entries need no synchronous I/O; the
@@ -307,6 +326,9 @@ export function startMemorySweeper(args: StartMemorySweeperArgs): MemorySweeperH
       pending.push(candidate);
       if (pending.length >= maxPerSweep) break;
     }
+    candidateScanCursor = entries.length > 0
+      ? (scanStart + inspected) % entries.length
+      : 0;
     return pending;
   };
 

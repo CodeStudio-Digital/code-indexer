@@ -11,9 +11,10 @@
  * caller re-sorts the survivor union), so prompt-cache byte-stability is
  * preserved: same inputs → same survivors → same serialized order.
  *
- * Pin interplay (P3): a pinned tool is protected by the caller (joins the
- * never-trim bucket). At cap, pinning therefore SWAPS the lowest-priority
- * survivor out — deterministic, one prefix-cache miss, then stable.
+ * Pin interplay (P3): required/configured pins join the permanent floor.
+ * Runtime-discovered pins are a bounded LRU working set; the caller protects
+ * only its newest members, so a new promotion SWAPS an old dynamic pin or the
+ * lowest-priority ordinary survivor out without overflowing the cap.
  */
 import {
   API_TOOLS,

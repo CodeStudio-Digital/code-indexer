@@ -300,10 +300,7 @@ export function EditorChatRail({
             streaming={s.streaming}
             doneReason={s.doneReason}
             error={s.error}
-            liveReconciliation={s.liveReconciliation}
-            liveTurnDuplicatedInHistory={s.liveTurnDuplicatedInHistory}
-            persistedToolUseIds={s.persistedToolUseIds}
-            fallbackProviderId={s.provider}
+            projection={s.transcriptProjection}
             tasksState={s.tasksState}
             handlers={s.handlers}
             onLoadEarlier={s.loadEarlierMessages}
@@ -339,6 +336,8 @@ export function EditorChatRail({
           ultraControlsThinking={s.ultraControlsThinking}
           describeImages={s.describeImages}
           setDescribeImages={s.setDescribeImages}
+          blockCodeComments={s.blockCodeComments}
+          setBlockCodeComments={s.setBlockCodeComments}
           outputCapLevel={s.outputCapLevel}
           setOutputCapLevel={s.setOutputCapLevel}
           toolPermissionMode={s.toolPermissionMode}

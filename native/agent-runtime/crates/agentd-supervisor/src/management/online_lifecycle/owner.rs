@@ -30,7 +30,7 @@ where
     V: ProtectedLaunchProvisionPort,
 {
     fn next_cleanup_deadline_unix_ms(&self) -> Option<i64> {
-        self.state().next_cleanup_deadline_unix_ms()
+        self.next_physical_deadline_unix_ms()
     }
 
     fn drive_cleanup_tick(
@@ -57,7 +57,7 @@ where
     V: ProtectedLaunchProvisionPort,
 {
     fn next_cleanup_deadline_unix_ms(&self) -> Option<i64> {
-        self.state().next_cleanup_deadline_unix_ms()
+        self.core.next_physical_deadline_unix_ms()
     }
 
     fn drive_cleanup_tick(

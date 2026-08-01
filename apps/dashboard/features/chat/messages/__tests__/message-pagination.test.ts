@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MessagePage, SessionData } from '../../types.js';
 import {
-  messageListScrollPasses,
   shouldLoadEarlierAtScrollTop,
 } from '../MessageList.js';
 import { groupMessages } from '../../utils.js';
@@ -43,17 +42,13 @@ function messagePage(ids: number[], precedingUserSeq = 0): MessagePage {
       input_tokens: 0,
       output_tokens: 0,
     })),
+    next_before_seq: ids[0] ?? null,
+    has_more: ids.length > 0,
     preceding_user_seq: precedingUserSeq,
   };
 }
 
 describe('conversation scroll pagination', () => {
-  it('uses one scroll paint for token-only streaming updates', () => {
-    expect(messageListScrollPasses(true, false)).toBe(1);
-    expect(messageListScrollPasses(true, true)).toBe(3);
-    expect(messageListScrollPasses(false, false)).toBe(3);
-  });
-
   it.each([
     [-12, true],
     [0, true],
@@ -99,6 +94,51 @@ describe('conversation scroll pagination', () => {
       message.content[0]?.type === 'text' ? message.content[0].text : null
     ))).toEqual(['page-1', 'page-2', 'message-3', 'message-4']);
     expect(result.data.preceding_user_seq).toBe(99);
+  });
+
+  it('integrates arbitrary chapter anchor pages by sequence, not request order', () => {
+    const withChapter13 = mergeEarlierMessagePage(
+      sessionData(SESSION_A, [2000, 2001]),
+      messagePage([783, 841, 882], 782),
+      SESSION_A,
+    ).data;
+    const withChapter17 = mergeEarlierMessagePage(
+      withChapter13,
+      messagePage([987, 1012, 1086], 986),
+      SESSION_A,
+    ).data;
+
+    expect(withChapter17.message_rows.map((row) => row.seq)).toEqual([
+      783, 841, 882, 987, 1012, 1086, 2000, 2001,
+    ]);
+    // The middle anchor must not replace the predecessor of the earliest
+    // loaded window.
+    expect(withChapter17.preceding_user_seq).toBe(782);
+  });
+
+  it('keeps optimistic rows at the live tail after an older page is merged', () => {
+    const optimistic = appendOptimisticUserMessage(sessionData(SESSION_A, [10, 11]), {
+      sessionId: SESSION_A,
+      messageId: -900,
+      text: 'pending',
+    });
+    const result = mergeEarlierMessagePage(
+      optimistic,
+      messagePage([1, 2], 0),
+      SESSION_A,
+    );
+
+    expect(result.data.message_rows.map((row) => row.seq)).toEqual([1, 2, 10, 11, -900]);
+  });
+
+  it('retains current content when an overlapping page repeats the same row id', () => {
+    const current = sessionData(SESSION_A, [2, 3]);
+    const page = messagePage([1, 2], 0);
+    const result = mergeEarlierMessagePage(current, page, SESSION_A);
+
+    expect(result.data.messages.map((message) => (
+      message.content[0]?.type === 'text' ? message.content[0].text : null
+    ))).toEqual(['page-1', 'message-2', 'message-3']);
   });
 
   it('rejects a late page after the selected session changes', () => {

@@ -79,6 +79,21 @@ describe('current OpenAI-compatible reasoning controls', () => {
     expect(body.reasoning_effort).toBe('max');
   });
 
+  it('does not invent high effort for Copilot models with model-managed reasoning', async () => {
+    const { body } = await run('copilot', 'gemini-3.5-flash', {
+      thinking: true,
+      reasoningEffort: 'max',
+    });
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('maps the Copilot boolean toggle to high for configurable Gemini 3.6', async () => {
+    const { body } = await run('copilot', 'gemini-3.6-flash', {
+      thinking: true,
+    });
+    expect(body.reasoning_effort).toBe('high');
+  });
+
   it('keeps OpenRouter reasoning visible and surfaces reasoning_details', async () => {
     const stream = (async function* () {
       yield {

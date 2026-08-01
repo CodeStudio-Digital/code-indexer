@@ -2,11 +2,14 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use agent_platform::ipc::ProtectedEndpointError;
+use agent_protocol::pulse_channel::RunnerPulseError;
 use agent_protocol::runner_bootstrap::RunnerBootstrapTransportError;
 
 #[derive(Debug)]
 pub enum WindowsProtectedLaunchError {
     InvalidStartupTimeout,
+    InvalidPulseTimeout,
     BootstrapPrepare,
     ChildHandleAllowlist,
     CancellationBusy,
@@ -16,6 +19,11 @@ pub enum WindowsProtectedLaunchError {
     Handoff,
     HandoffSend(RunnerBootstrapTransportError),
     ReadyReceive(RunnerBootstrapTransportError),
+    PulseAuthority,
+    PulseEndpoint(ProtectedEndpointError),
+    PulseRuntime(std::io::Error),
+    Pulse(RunnerPulseError),
+    PulsePhase,
     AuthorityExpired,
     CleanupPending,
     InvalidState,

@@ -89,6 +89,10 @@ import {
   observePromptCache,
   promptCacheMissGuardMessage,
 } from '../guards/prompt-cache-miss.js';
+import {
+  promoteDynamicToolPin,
+  touchDynamicToolPin,
+} from '@mcp/code-agent/tools/tool-pin-window.js';
 
 const DEBUG = process.env.CODER_BT_DEBUG === '1';
 function dbg(...args: unknown[]): void {
@@ -529,8 +533,15 @@ export class ExecutingNode implements BehaviorNode {
     // tool-filter hook is therefore only re-read on rebuilds — mid-run hook
     // edits land on the next membership change, which matches the prompt-
     // cache contract of a stable catalog anyway.
+    const requiredPinnedToolsForBuild = ctx.opts.requiredPinnedTools
+      ? new Set(ctx.opts.requiredPinnedTools)
+      : undefined;
     const toolsMemoKey =
-      buildToolsCacheKey({ activeTiers: ctx.activeTiers, pinnedTools: ctx.pinnedTools }) +
+      buildToolsCacheKey({
+        activeTiers: ctx.activeTiers,
+        pinnedTools: ctx.pinnedTools,
+        requiredPinnedTools: requiredPinnedToolsForBuild,
+      }) +
       `|cap=${ctx.opts.sessionToolCap ?? ''}` +
       `|terse=${String(ctx.terseDescriptionsLock)}` +
       `|model=${ctx.opts.provider.model ?? ''}`;
@@ -545,6 +556,7 @@ export class ExecutingNode implements BehaviorNode {
         externalToolTiers: ctx.opts.externalToolTiers,
         activeTiers: ctx.activeTiers,
         pinnedTools: ctx.pinnedTools,
+        requiredPinnedTools: requiredPinnedToolsForBuild,
         sessionToolCap: ctx.opts.sessionToolCap,
         terseDescriptionsLock: ctx.terseDescriptionsLock,
         toolContext: ctx.opts.toolContext,
@@ -627,6 +639,14 @@ export class ExecutingNode implements BehaviorNode {
     // selector omitted either/both; roles/disabled sets lacking the pair stay
     // pairless and fail open.
     toolsForModel = enforceAtomicGoalToolPair(toolsForModel, availableTools);
+    const effectiveToolNames = new Set(toolsForModel.map((tool) => tool.name));
+    const runnerToolState = ctx.opts.toolContext.runner as
+      | {
+          visibleToolNames?: ReadonlySet<string> | null;
+          promoteTool?: (name: string) => string[];
+        }
+      | undefined;
+    if (runnerToolState) runnerToolState.visibleToolNames = effectiveToolNames;
     dbg(`tools=${toolsForModel.length} tiers=${ctx.activeTiers === null ? '*' : Array.from(ctx.activeTiers).join(',')}`);
 
     const systemPrompt = ctx.opts.systemPrompt;
@@ -1235,7 +1255,15 @@ export class ExecutingNode implements BehaviorNode {
       return events.cleanFinish();
     }
 
-    const effectiveToolNames = new Set(toolsForModel.map((tool) => tool.name));
+    const requiredPinnedTools = ctx.opts.requiredPinnedTools
+      ? new Set(ctx.opts.requiredPinnedTools)
+      : undefined;
+    // A call to an already-promoted tool is a recency signal. Reordering the
+    // Set does not change the memo key; it affects only which old pin leaves
+    // when a genuinely new capability is promoted later.
+    for (const toolUse of result.toolUses) {
+      touchDynamicToolPin(ctx.pinnedTools, requiredPinnedTools, toolUse.name);
+    }
     const dispatch = await dispatchTools({
       toolUses: result.toolUses,
       retrievalBatch: { taskText: memoryTaskText ?? undefined },
@@ -1248,7 +1276,22 @@ export class ExecutingNode implements BehaviorNode {
       // visible list next turn; disabled tools hard-block at dispatch.
       visibleToolNames: effectiveToolNames,
       pinnedTools: ctx.pinnedTools,
-      onToolPinned: (name) => ctx.pinnedTools.add(name),
+      onToolPinned: (name) => {
+        if (runnerToolState?.promoteTool) {
+          runnerToolState.promoteTool(name);
+          return;
+        }
+        const evicted = promoteDynamicToolPin(
+          ctx.pinnedTools,
+          requiredPinnedTools,
+          name,
+        );
+        if (evicted.length > 0) {
+          console.log(
+            `[coder] dynamic tool window: promoted ${name}; evicted LRU ${evicted.join(', ')}`,
+          );
+        }
+      },
       isToolBlocked: (name) => {
         if (ctx.opts.globalDisabledTools?.has(name)) {
           return `[tool-disabled] '${name}' is disabled globally by the admin — pick another tool (find_tools lists alternatives).`;

@@ -133,11 +133,12 @@ describe('find_tools — relaxed pass (closest candidates)', () => {
     expect(output).toContain('[matched: name]');
   });
 
-  it('weak candidates keep the hidden-tool pin affordance', async () => {
+  it('weak candidates stay hidden until the query identifies one strong match', async () => {
     // Empty active set: everything is hidden regardless of the real tier map.
     const output = await findTools('approval', { activeTiers: new Set<string>() });
     expect(output).toContain('No strong matches');
-    expect(output).toContain('[hidden — call it directly');
-    expect(output).toContain('Hint: call app_propose_spec_revision directly');
+    expect(output).toContain('[hidden — refine search to activate');
+    expect(output).toContain('Hint: refine the query to auto-activate one strong match.');
+    expect(output).not.toContain('Activated app_propose_spec_revision');
   });
 });

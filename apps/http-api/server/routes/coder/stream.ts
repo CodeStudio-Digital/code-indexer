@@ -103,6 +103,8 @@ interface SendMessageBody {
    * the model lacks the 'image' input modality) happens regardless of this.
    */
   describe_images?: boolean;
+  /** Override the session's default code-comment policy for this run. */
+  block_code_comments?: boolean;
   /**
    * Opt-in: when there is already a live run for this session AND it is
    * blocked inside an interactive tool (ask_user / submit_plan / submit_tasks),
@@ -994,6 +996,9 @@ export function mountCoderStreamRoutes(
     const claimSession = await sessionStore.getSession(id);
     if (!claimSession) return notFound(c);
     const thinking = body.thinking ?? claimSession.thinking_enabled ?? false;
+    const blockCodeComments = typeof body.block_code_comments === 'boolean'
+      ? body.block_code_comments
+      : claimSession.block_code_comments !== false;
     // The filesystem session is authoritative. Keep an explicit request value
     // as a compatibility override for non-dashboard callers, but never inject
     // a hidden default turn ceiling.
@@ -1297,11 +1302,15 @@ export function mountCoderStreamRoutes(
         agentSelectionId,
         customAgentPrompt: customAgent?.prompt,
         allowedToolNames: customAgent?.toolNames ?? undefined,
+        initialPinnedTools: customAgent?.pinnedToolNames,
+        initialToolTiers: customAgent?.requiredToolTiers,
+        initialVisibleToolCap: customAgent?.visibleToolCap ?? undefined,
         profile: body.profile,
         worktree: body.worktree,
         thinking,
         modelSupportsVision: await resolveModelSupportsVision(id),
         describeImages: body.describe_images,
+        blockCodeComments,
         previewAvailable: await resolvePreviewAvailable(id),
         browserAvailable: resolveBrowserAvailable(),
         selectedSkillIds,
@@ -1541,6 +1550,9 @@ export function mountCoderStreamRoutes(
           agentSelectionId,
           customAgentPrompt: customAgent?.prompt,
           allowedToolNames: customAgent?.toolNames ?? undefined,
+          initialPinnedTools: customAgent?.pinnedToolNames,
+          initialToolTiers: customAgent?.requiredToolTiers,
+          initialVisibleToolCap: customAgent?.visibleToolCap ?? undefined,
           profile: body.profile,
           resume: true,
           modelSupportsVision: await resolveModelSupportsVision(id),

@@ -33,6 +33,7 @@ import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/to
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { applyRuntimeEnv, type AgentRuntimeEnv } from '@mcp/code-agent/ports/shell-port.js';
 import { killProcessTree, trackProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { electronWindowsPtyOptions } from '@mcp/shared/utils/windows-pty.js';
 import { unsafeProcessCommandRefusal } from '@mcp/code-agent/tools/shell-command-safety.js';
 import { assertMutationFence } from '@mcp/code-agent/core/mutation-fence.js';
 import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
@@ -67,6 +68,7 @@ interface NodePtyModule {
       cwd?: string;
       env?: NodeJS.ProcessEnv;
       useConpty?: boolean;
+      useConptyDll?: boolean;
     },
   ) => NodePtyProcess;
 }
@@ -388,8 +390,6 @@ async function spawnSession(opts: {
           '  Or call again with tty=false (default) — pipe mode works for most REPLs.',
       );
     }
-    const isElectron = !!process.versions.electron;
-    const isWindows = process.platform === 'win32';
     opts.assertFence?.();
     proc = pty.spawn(process.platform === 'win32' ? 'cmd.exe' : '/bin/sh', process.platform === 'win32' ? ['/d', '/s', '/c', opts.cmd] : ['-c', opts.cmd], {
       name: 'xterm-color',
@@ -397,7 +397,7 @@ async function spawnSession(opts: {
       rows: opts.rows,
       cwd: opts.cwd,
       env,
-      ...(isWindows && isElectron ? { useConpty: false } : {}),
+      ...electronWindowsPtyOptions(),
     });
   } else {
     const isWindows = process.platform === 'win32';

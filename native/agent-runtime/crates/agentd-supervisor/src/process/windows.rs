@@ -86,10 +86,18 @@ pub fn run_inherited_windows() -> Result<(), SupervisorProcessError> {
             .await
             .map_err(SupervisorProcessError::Management)?;
         let policy = actor.session_policy().clone();
+        let pulse_timeout = std::time::Duration::from_millis(
+            policy.limits().runner_pulse_timeout_ms,
+        );
+        let provisioner = WindowsProtectedLaunchProvisioner::new_with_pulse_timeout(
+            std::time::Duration::from_secs(15),
+            pulse_timeout,
+        )
+        .map_err(SupervisorProcessError::Provisioner)?;
         let core = SupervisorLifecycleCore::new(
             policy,
             WindowsContainment::new(),
-            WindowsProtectedLaunchProvisioner::default(),
+            provisioner,
             trusted_runner,
             peer_authority,
         )

@@ -1,4 +1,4 @@
-import { open, type FileHandle } from 'node:fs/promises';
+import { open, stat, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import {
@@ -22,6 +22,7 @@ import type {
   FsMessagePage,
   FsSessionWithMessages,
 } from './types.js';
+import type { FsConversationChapterSourcePage } from './history-metrics-types.js';
 
 interface HydratedConversation {
   entry: Awaited<ReturnType<FsSessionDirectory['requireEntry']>>;
@@ -130,10 +131,56 @@ async function highestMessageSeqFromTail(
 }
 
 export class FsConversationReader {
+  private hydratedCache: {
+    key: string;
+    value: HydratedConversation;
+    expiresAt: number;
+  } | null = null;
+  private readonly hydratedInFlight = new Map<string, Promise<HydratedConversation>>();
+
   constructor(private readonly directory: FsSessionDirectory) {}
 
   private async hydrated(id: SessionId | string): Promise<HydratedConversation> {
     const entry = await this.directory.requireEntry(id);
+    const conversationPath = join(entry.location.bundle_path, 'conversation.jsonl');
+    let fileSignature = 'missing';
+    try {
+      const stats = await stat(conversationPath);
+      fileSignature = `${stats.size}:${stats.mtimeMs}`;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const key = [
+      String(entry.session.id),
+      fileSignature,
+      entry.session.updated_at,
+      entry.state?.updated_at ?? '',
+    ].join(':');
+    if (
+      this.hydratedCache?.key === key
+      && this.hydratedCache.expiresAt >= Date.now()
+    ) return this.hydratedCache.value;
+    const existing = this.hydratedInFlight.get(key);
+    if (existing) return existing;
+
+    const pending = this.hydrateEntry(entry);
+    this.hydratedInFlight.set(key, pending);
+    try {
+      const value = await pending;
+      // Keep only the most recent projection and only long enough for one HTTP
+      // detail request's tail/count/archive/preceding lookups to share it.
+      this.hydratedCache = { key, value, expiresAt: Date.now() + 1_000 };
+      return value;
+    } finally {
+      if (this.hydratedInFlight.get(key) === pending) {
+        this.hydratedInFlight.delete(key);
+      }
+    }
+  }
+
+  private async hydrateEntry(
+    entry: Awaited<ReturnType<FsSessionDirectory['requireEntry']>>,
+  ): Promise<HydratedConversation> {
     const mapped = this.directory.map(entry);
     const chapterBoundary = readChapterBoundarySync(
       entry.location.bundle_path,
@@ -260,6 +307,34 @@ export class FsConversationReader {
       next_cursor:
         selected.length > 0 && candidates[0]?.row.seq < selected[0].row.seq
           ? selected[0].row.seq
+          : null,
+    };
+  }
+
+  /**
+   * Read a bounded chronological message range from the same short-lived
+   * hydrated projection used by normal transcript pagination. Chapter source
+   * expansion previously parsed and hydrated the entire JSONL file on every
+   * page request; sharing this reader makes consecutive source pages reuse one
+   * projection and keeps cursor semantics authoritative in the backend.
+   */
+  async loadRange(
+    id: SessionId | string,
+    startSeq: number,
+    endSeq: number,
+    afterSeq: number,
+    limit: number,
+  ): Promise<FsConversationChapterSourcePage> {
+    const result = await this.hydrated(id);
+    const selected = result.rows.filter(
+      (row) => row.seq >= startSeq && row.seq <= endSeq && row.seq > afterSeq,
+    );
+    const items = selected.slice(0, Math.max(1, limit));
+    return {
+      items,
+      next_cursor:
+        selected.length > items.length && items.length > 0
+          ? `message:${items.at(-1)!.seq}`
           : null,
     };
   }

@@ -27,7 +27,11 @@ import {
 export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace';
 
 export interface SemanticCatchupHooks {
-  noteDelta(projectId: number, events: readonly DirtyEvent[]): void;
+  noteDelta(
+    projectId: number,
+    events: readonly DirtyEvent[],
+    previousItemKeys?: readonly string[],
+  ): void;
   ensureProject(projectId: number): Promise<void>;
   /** Open-project lifecycle hand-off after an integral structural baseline exists. */
   projectReady?(projectId: number): void | Promise<void>;
@@ -796,7 +800,8 @@ export class ProjectIndexService {
       maxFiles: s.maxFiles,
       allowEmptyWipe: manual,
       onProgress: (p) => this.publishStructuralProgress(projectId, p),
-      onChanges: (events) => this.semanticCatchup?.noteDelta(projectId, events),
+      onChanges: (events, previousItemKeys) =>
+        this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys),
     });
     if (result.aborted === 'too_large') {
       this.status.setPhase(projectId, 'too_large');
@@ -908,8 +913,27 @@ export class ProjectIndexService {
     while (this.dirty.size(projectId) > 0) {
       const batch = this.dirty.takeBatch(projectId, DRAIN_BATCH);
       if (batch.total === 0) break;
-      if (batch.deletes.length > 0) await this.executor.removeFiles(projectId, batch.deletes);
-      if (batch.upserts.length > 0) await this.executor.indexFiles(projectId, batch.upserts);
+      const capturePreviousItems = (
+        events: readonly DirtyEvent[],
+        previousItemKeys: readonly string[],
+      ): void => {
+        // markDirty already persisted the path fence before this worker RPC.
+        // Merge the worker-captured pre-mutation keys only when there is old
+        // structural ownership to preserve for stale-vector cleanup.
+        if (previousItemKeys.length > 0) {
+          this.semanticCatchup?.noteDelta(projectId, events, previousItemKeys);
+        }
+      };
+      if (batch.deletes.length > 0) {
+        await this.executor.removeFiles(projectId, batch.deletes, {
+          onChanges: capturePreviousItems,
+        });
+      }
+      if (batch.upserts.length > 0) {
+        await this.executor.indexFiles(projectId, batch.upserts, {
+          onChanges: capturePreviousItems,
+        });
+      }
       this.status.setDirtyPending(projectId, this.dirty.size(projectId));
       if (this.dirty.size(projectId) > 0) await yieldToEventLoop();
     }

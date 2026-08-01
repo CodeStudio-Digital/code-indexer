@@ -9,6 +9,7 @@ import {
 } from './atomic-file.js';
 import {
   assertContainedPath,
+  assertPathHasNoLinks,
   assertPathHasNoLinksSync,
   ensureDirectoryTreeNoLinks,
   UnsafeSessionPathError,
@@ -96,6 +97,7 @@ export interface ArtifactStoreOptions {
 
 export interface ArtifactReader {
   read(ref: ArtifactRef): Uint8Array;
+  readAsync(ref: ArtifactRef): Promise<Uint8Array>;
 }
 
 export class ArtifactStore implements ArtifactReader {
@@ -177,6 +179,17 @@ export class ArtifactStore implements ArtifactReader {
     assertContainedPath(this.#bundlePath, artifactPath);
     assertPathHasNoLinksSync(this.#bundlePath, artifactPath);
     const bytes = readFileSync(artifactPath);
+    if (bytes.byteLength !== ref.size || sha256(bytes) !== ref.sha256) {
+      throw new Error(`Artifact verification failed: ${ref.relative_path}`);
+    }
+    return bytes;
+  }
+
+  async readAsync(ref: ArtifactRef): Promise<Uint8Array> {
+    const artifactPath = join(this.#bundlePath, ...ref.relative_path.split('/'));
+    assertContainedPath(this.#bundlePath, artifactPath);
+    await assertPathHasNoLinks(this.#bundlePath, artifactPath);
+    const bytes = await readFile(artifactPath);
     if (bytes.byteLength !== ref.size || sha256(bytes) !== ref.sha256) {
       throw new Error(`Artifact verification failed: ${ref.relative_path}`);
     }

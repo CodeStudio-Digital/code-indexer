@@ -76,6 +76,20 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(r.results[1].content).not.toContain('[toolset]');
   });
 
+  it('re-promotes a historical pin that is no longer visible after LRU eviction', async () => {
+    const registry = new ToolRegistry();
+    registry.register(makeTool('hidden_tool'));
+    const pins = new Set(['hidden_tool']);
+    const promoted: string[] = [];
+    const args = pinArgs(registry, {
+      pinnedTools: pins,
+      onToolPinned: (name) => promoted.push(name),
+    });
+    const result = await dispatchTools(args);
+    expect(result.results[0].content).toContain('[toolset]');
+    expect(promoted).toEqual(['hidden_tool']);
+  });
+
   it('never lets the pin suffix exceed the finalizer inline cap', async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('hidden_tool', { handler: async () => ({ content: 'x'.repeat(100) }) }));

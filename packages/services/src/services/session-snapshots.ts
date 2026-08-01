@@ -311,50 +311,61 @@ export class SessionSnapshotService<
     kind: SessionKind,
     sessionId: SessionKey,
     roundMessageId: number,
+    preloadedRows?: readonly RoundSnapshotRow<SessionKey, RecordId>[],
   ): Promise<RoundFileSummary<RecordId>[]> {
-    const rows = await this.store.listRoundSnapshots(kind, sessionId, roundMessageId, {
-      includeClosed: true,
-    });
-    return Promise.all(rows.map(async (row) => {
-      const decisions = new Map(
-        (await this.store
-          .listRoundHunkDecisions(row.id))
-          .map((decision) => [decision.hunk_fingerprint, decision.decision] as const),
-      );
-      const hunks = row.oversized
-        ? []
-        : computeHunks(
-            row.existed_before ? row.content_before : null,
-            row.existed_after ? row.content_after : null,
+    const rows = preloadedRows ?? await this.store.listRoundSnapshots(
+      kind,
+      sessionId,
+      roundMessageId,
+      { includeClosed: true },
+    );
+    const summaries: RoundFileSummary<RecordId>[] = [];
+    for (let offset = 0; offset < rows.length; offset += 8) {
+      const batch = await Promise.all(
+        rows.slice(offset, offset + 8).map(async (row) => {
+          const decisions = new Map(
+            (await this.store
+              .listRoundHunkDecisions(row.id))
+              .map((decision) => [decision.hunk_fingerprint, decision.decision] as const),
           );
-      let pendingHunks = 0;
-      let addedLines = 0;
-      let removedLines = 0;
-      for (const hunk of hunks) {
-        addedLines += hunk.addedCount;
-        removedLines += hunk.removedCount;
-        if (!decisions.has(hunk.fingerprint)) pendingHunks++;
-      }
-      return {
-        baselineId: row.id,
-        roundSnapshotId: row.id,
-        roundMessageId: row.round_message_id,
-        globalBaselineId: row.global_baseline_id,
-        projectId: row.project_id,
-        filePath: row.file_path,
-        status: row.status,
-        existedBefore: !!row.existed_before,
-        oversized: !!row.oversized,
-        firstSeenAt: row.first_seen_at,
-        lastEditedAt: row.last_edited_at,
-        closedAt: row.closed_at,
-        hunkCount: hunks.length,
-        pendingHunks,
-        addedLines,
-        removedLines,
-        resolved: pendingHunks === 0,
-      };
-    }));
+          const hunks = row.oversized
+            ? []
+            : computeHunks(
+                row.existed_before ? row.content_before : null,
+                row.existed_after ? row.content_after : null,
+              );
+          let pendingHunks = 0;
+          let addedLines = 0;
+          let removedLines = 0;
+          for (const hunk of hunks) {
+            addedLines += hunk.addedCount;
+            removedLines += hunk.removedCount;
+            if (!decisions.has(hunk.fingerprint)) pendingHunks++;
+          }
+          return {
+            baselineId: row.id,
+            roundSnapshotId: row.id,
+            roundMessageId: row.round_message_id,
+            globalBaselineId: row.global_baseline_id,
+            projectId: row.project_id,
+            filePath: row.file_path,
+            status: row.status,
+            existedBefore: !!row.existed_before,
+            oversized: !!row.oversized,
+            firstSeenAt: row.first_seen_at,
+            lastEditedAt: row.last_edited_at,
+            closedAt: row.closed_at,
+            hunkCount: hunks.length,
+            pendingHunks,
+            addedLines,
+            removedLines,
+            resolved: pendingHunks === 0,
+          };
+        }),
+      );
+      summaries.push(...batch);
+    }
+    return summaries;
   }
 
   async getRoundDiff(

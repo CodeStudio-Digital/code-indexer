@@ -362,6 +362,9 @@ export const REPLAY_STATE_KINDS = new Set<string>([
   'todos_updated', 'session_agent_changed', 'session_drive_changed',
   'session_snapshot_changed', 'diagram_changed', 'context_status',
   'index_status', 'auto_continue',
+  // A queued user message starts a new visible assistant run without replacing
+  // the underlying worker/bus. Replays must retain that transcript boundary.
+  'user_message_boundary',
   // Long-running operation markers (started/finished only — progress ticks
   // re-emit within seconds and would dominate the window).
   'operation_started', 'operation_finished',

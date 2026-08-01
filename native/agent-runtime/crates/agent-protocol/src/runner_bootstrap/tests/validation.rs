@@ -19,6 +19,8 @@ fn authority_and_secret_material_are_strictly_validated() {
     assert_invalid(|value| value.runtime_instance_id.clear());
     assert_invalid(|value| value.runner_process_id = 0);
     assert_invalid(|value| value.hard_deadline_at_unix_ms = 0);
+    assert_invalid(|value| value.runner_pulse_interval_ms = 0);
+    assert_invalid(|value| value.runner_pulse_interval_ms = 3_600_001);
     assert_invalid(|value| value.launch_nonce.truncate(15));
     assert_invalid(|value| value.launch_management_payload_sha256.truncate(31));
     assert_invalid(|value| value.activation_authority_seal = None);

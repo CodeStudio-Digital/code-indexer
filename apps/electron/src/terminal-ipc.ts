@@ -37,6 +37,7 @@ import { createRequire } from 'node:module';
 import { ipcMain, MessageChannelMain, type IpcMainEvent } from 'electron';
 import type { ServerDeps } from '@apps/http-api/server/deps.js';
 import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { electronWindowsPtyOptions } from '@mcp/shared/utils/windows-pty.js';
 import { childRegistry } from './child-process-registry.js';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import { asCompanySessionId } from '@mcp/session-storage';
@@ -65,23 +66,9 @@ interface NodePtyModule {
       cwd?: string;
       env?: Record<string, string | undefined>;
       encoding?: string;
-      /**
-       * Windows-only — controls which backend node-pty uses.
-       *   true (default)  → ConPTY (modern, fast). Spawns a helper
-       *                     `conpty_console_list_agent` as a child of
-       *                     `process.execPath` to enumerate the console
-       *                     process list. In Electron, process.execPath
-       *                     is `electron.exe` which runs under the
-       *                     Windows GUI subsystem — it has NO console
-       *                     attached, so the helper's AttachConsole call
-       *                     throws and the whole renderer crashes.
-       *   false          → falls back to WinPTY (legacy). Skips the
-       *                     console-list agent entirely. Slightly slower
-       *                     and uses the bundled `winpty-agent.exe`
-       *                     binary, but works under Electron without
-       *                     console attachment hacks.
-       */
+      /** Windows-only node-pty backend selection. */
       useConpty?: boolean;
+      useConptyDll?: boolean;
     },
   ): IPty;
 }
@@ -234,14 +221,7 @@ export function mountTerminalIpc(deps: ServerDeps): void {
         cwd,
         env: cleanEnv,
         encoding: 'utf-8',
-        // Windows: force WinPTY backend inside Electron. ConPTY's
-        // helper agent calls AttachConsole on the parent's console
-        // handle; Electron is a GUI-subsystem app and has no console,
-        // so the helper crashes with "AttachConsole failed" and the
-        // whole renderer's terminal pipeline tears down. See node-pty
-        // issue #437 / Microsoft/terminal#3070 for the rationale.
-        // Non-Windows platforms ignore this flag entirely.
-        ...(isWindows ? { useConpty: false } : {}),
+        ...electronWindowsPtyOptions(),
       });
     } catch (e) {
       fail(`failed to spawn shell: ${e instanceof Error ? e.message : String(e)}`);

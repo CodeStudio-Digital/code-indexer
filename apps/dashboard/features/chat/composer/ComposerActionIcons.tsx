@@ -8,7 +8,7 @@
  * source of truth — anything wired here is available in both surfaces.
  */
 import { memo, useEffect, useRef, useState } from 'react';
-import { Brain, Eye, Paperclip, Shield, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Brain, Eye, MessageSquareOff, Paperclip, Shield, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { PipelinePicker } from './PipelinePicker.js';
@@ -29,6 +29,8 @@ interface ComposerActionIconsProps {
   thinkingManaged?: boolean;
   describeImages?: boolean;
   setDescribeImages?: (v: boolean) => void;
+  blockCodeComments?: boolean;
+  setBlockCodeComments?: (v: boolean) => void;
   outputCapLevel?: OutputCapLevel;
   setOutputCapLevel?: (v: OutputCapLevel) => void;
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
@@ -54,6 +56,8 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
   thinkingManaged = false,
   describeImages,
   setDescribeImages,
+  blockCodeComments,
+  setBlockCodeComments,
   outputCapLevel,
   setOutputCapLevel,
   toolPermissionMode,
@@ -67,6 +71,7 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
 }: ComposerActionIconsProps) {
   const { t } = useTranslation('chat');
   const attachmentsDisabled = streaming && !allowAttachmentsWhileStreaming;
+  const commentsBlocked = blockCodeComments !== false;
   // Transient "applied to the running session" pulse: the permission-mode
   // PATCH already pushes into the live runner mid-run, but that change is
   // invisible. Flash a ring on the shield when toggled while streaming so the
@@ -172,6 +177,39 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
               defaultValue:
                 'Descrever imagens: força um modelo de visão a traduzir imagens anexadas (e screenshots) para texto. Aplica-se automaticamente quando o modelo atual não enxerga imagens. Configure o modelo em Configurações → Pipelines (papel "vision").',
             })}
+          </TooltipContent>
+        </Tooltip>
+      )}
+
+      {setBlockCodeComments && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              onClick={() => setBlockCodeComments(!commentsBlocked)}
+              aria-pressed={commentsBlocked}
+              aria-label={t('toolbar.blockCodeComments', { defaultValue: 'Block code comments' })}
+              disabled={streaming}
+              className={`relative inline-flex items-center justify-center h-7 w-7 rounded-md transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                commentsBlocked
+                  ? 'bg-amber-500/15 text-amber-500 hover:bg-amber-500/25'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+              }`}
+            >
+              <MessageSquareOff className="h-3.5 w-3.5" />
+              {commentsBlocked && (
+                <span aria-hidden className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-amber-500" />
+              )}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[280px]">
+            {commentsBlocked
+              ? t('toolbar.blockCodeCommentsOn', {
+                  defaultValue: 'Enabled: the agent writes self-explanatory code without adding comments.',
+                })
+              : t('toolbar.blockCodeCommentsOff', {
+                  defaultValue: 'Disabled: the agent may add comments when useful.',
+                })}
           </TooltipContent>
         </Tooltip>
       )}

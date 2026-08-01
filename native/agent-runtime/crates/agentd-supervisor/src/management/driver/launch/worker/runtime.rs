@@ -26,8 +26,10 @@ pub(super) fn run_worker<P, V>(
     P::Group: Send + 'static,
     V: ProtectedLaunchProvisionPort + Send + Sync + 'static,
 {
-    let (launch, plan, peer_authority, contained_launch) = input.into_worker_parts();
-    let request = ProtectedLaunchRequest::new(&launch, &plan, &peer_authority);
+    let (launch, plan, peer_authority, contained_launch, runner_pulse_interval_ms) =
+        input.into_worker_parts();
+    let request =
+        ProtectedLaunchRequest::new(&launch, &plan, &peer_authority, runner_pulse_interval_ms);
     let prepared = provisioner.prepare(&request);
     drop(request);
     drop(launch);

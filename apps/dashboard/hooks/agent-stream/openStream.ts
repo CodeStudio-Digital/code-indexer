@@ -1,4 +1,3 @@
-import { createEventHandlers } from './handlers.js';
 import type { SessionId, StreamBlock, UpdateSession } from './types.js';
 import { ZERO_DELTA } from './types.js';
 import { ReconnectingSSEClient } from '@mcp/shared/sse/ReconnectingSSEClient.js';
@@ -8,6 +7,7 @@ import { noteWorkerLogBus, pushWorkerLog } from './worker-log-store.js';
 import { isAlreadyAppliedDelta } from './stream-seq-dedup.js';
 import { buildLogEntry, createWorkerLogCapturePolicy } from './worker-log-policy.js';
 import type { NotificationSourceContext } from '../../features/notifications/index.js';
+import { TurnProjector } from './turn-projector.js';
 
 /**
  * Events processed per drain batch before yielding the main thread back to
@@ -73,16 +73,8 @@ export async function openStream(
 ): Promise<void> {
   const { updateSession, abortMap, lastSeenSeqMap } = deps;
 
-  const blocks: StreamBlock[] = opts.initialBlocks ? [...opts.initialBlocks] : [];
-  const toolIndex = new Map<string, number>();
-  for (let index = 0; index < blocks.length; index++) {
-    const block = blocks[index];
-    if (block.type === 'tool') toolIndex.set(block.call.id, index);
-  }
-
   updateSession(sid, {
     streaming: true,
-    currentTurn: { blocks: [...blocks] },
     doneReason: null,
     error: null,
     runDelta: ZERO_DELTA,
@@ -126,47 +118,9 @@ export async function openStream(
   // is now producing output.
   let preflightCleared = false;
 
-  // Batch flushes to at most one per animation frame. Tokens arrive at
-  // 50+/s; without batching every token triggers a full React re-render of
-  // the persisted history. rAF collapses bursts into a single commit.
-  let flushHandle: number | null = null;
-  let flushTimeout: ReturnType<typeof setTimeout> | null = null;
-  const doFlush = () => updateSession(sid, { currentTurn: { blocks: [...blocks] } });
-  const flush = () => {
-    if (flushHandle !== null) return;
-    flushHandle = requestAnimationFrame(() => {
-      flushHandle = null;
-      if (flushTimeout !== null) { clearTimeout(flushTimeout); flushTimeout = null; }
-      doFlush();
-    });
-    // Fallback: rAF is throttled/suspended in background tabs or on machines
-    // where the browser suspends the rendering pipeline (no GPU, power-saving
-    // mode). The timeout guarantees the flush still happens in those cases.
-    flushTimeout = setTimeout(() => {
-      flushTimeout = null;
-      if (flushHandle !== null) {
-        cancelAnimationFrame(flushHandle);
-        flushHandle = null;
-        doFlush();
-      }
-    }, 50);
-  };
-  // Provider/terminal events (message_complete/done/error) call flushNow to
-  // guarantee the boundary state is committed synchronously. The block buffer
-  // itself spans the complete run and is reconciled with persisted history.
-  const flushNow = () => {
-    if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
-    if (flushTimeout !== null) { clearTimeout(flushTimeout); flushTimeout = null; }
-    doFlush();
-  };
-  doFlush();
-
-  const handlers = createEventHandlers({
-    sid,
-    blocks,
-    toolIndex,
-    flush,
-    flushNow,
+  const projector = new TurnProjector({
+    sessionId: sid,
+    initialBlocks: opts.initialBlocks,
     updateSession,
     onMessageComplete,
   });
@@ -294,8 +248,7 @@ export async function openStream(
       commitCursor();
       return;
     }
-    const handler = handlers[ev.event];
-    if (handler) handler(data, ev.event);
+    projector.dispatch(ev.event, data);
     commitCursor();
   };
 
@@ -438,14 +391,14 @@ export async function openStream(
       }
     }
   } finally {
-    if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
-    if (flushTimeout !== null) { clearTimeout(flushTimeout); flushTimeout = null; }
+    const ownsSession = abortMap.get(sid) === ctrl;
+    projector.dispose(ownsSession);
     // Only tear down if we're STILL the active controller — a newer openStream
     // for this sid may have already replaced us (rapid resubmit / session
     // switch). Clobbering the live slot's `streaming` / `preflight` here would
     // hide the replacement run's "Analyzing the task…" indicator + spinner while
     // it's still mid-preflight. A superseded stream's teardown is a no-op.
-    if (abortMap.get(sid) === ctrl) {
+    if (ownsSession) {
       // Clear streaming + the preflight indicator (safety net for an error
       // before any event arrived — the per-event clear above handles the happy path).
       updateSession(sid, { streaming: false, preflight: null });

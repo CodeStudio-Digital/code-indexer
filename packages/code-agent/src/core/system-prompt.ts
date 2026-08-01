@@ -214,6 +214,8 @@ export interface PromptContext {
    * per-session `output_style_override` column (mig 178).
    */
   outputStyle?: 'proactive' | 'explanatory' | 'learning';
+  /** When true, generated code must not introduce comment lines or blocks. */
+  blockCodeComments?: boolean;
   /**
    * True when the run is UNSUPERVISED — no human watching in real time (cron /
    * scheduled / company subordinate). Adds an `# Operating autonomously` block
@@ -618,6 +620,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   const effectiveStyle =
     ctx.unsupervised && ctx.outputStyle === 'learning' ? 'proactive' : ctx.outputStyle;
   const outputStyleBlock = outputStyleSection(effectiveStyle);
+  const codeCommentsBlock = codeCommentsSection(ctx.blockCodeComments);
   const autonomousBlock = autonomousSection(ctx.unsupervised);
   const multiAgentModeBlock = multiAgentModeSection(ctx.multiAgentMode, ctx.availableTools);
   // Permissions/sandbox policy + AGENTS.md project instructions. Both
@@ -672,7 +675,7 @@ This pipeline is more token-efficient than free agents on isolated tasks. If the
   // sessions because of trailing-newline rules.
   const boundary = `\n\n${SYSTEM_PROMPT_DYNAMIC_BOUNDARY}`;
 
-  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${permissionsBlock}${agentsMdBlock}${globalWorkspaceBlock}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${autonomousBlock}${multiAgentModeBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
+  return `${preamble}${base}${planSection}${planDepthSection}${agentSection}${permissionsBlock}${agentsMdBlock}${globalWorkspaceBlock}${interactionSection}${agentLoopBlock}${languageBlock}${outputStyleBlock}${codeCommentsBlock}${autonomousBlock}${multiAgentModeBlock}${agentlessHint}${boundary}${dynamicSuffix}`;
 }
 
 /**
@@ -768,6 +771,14 @@ Add only the codebase insight needed to understand the implementation choice; do
 Complete the task except for one meaningful, well-scoped design decision presented as \`TODO(human)\` with enough context for the user to implement it.`;
   }
   return '';
+}
+
+function codeCommentsSection(enabled?: boolean): string {
+  if (!enabled) return '';
+  return `
+
+# Code comments
+Do not add comments to generated or edited code: no line comments, block comments, doc comments, TODOs or FIXMEs. Write self-explanatory code through names and structure. Preserve existing comments unless the task explicitly requires changing them.`;
 }
 
 /**

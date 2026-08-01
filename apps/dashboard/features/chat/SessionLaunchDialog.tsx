@@ -73,9 +73,10 @@ export function SessionLaunchDialog({
   );
   const reasoningLevels = resolveReasoningLevels(value.provider, providerOptions, value.model);
   const supportsThinking = providerSupportsThinking(value.provider, providerOptions, value.model);
+  const canReason = modelCanReason(value.provider, providerOptions, value.model);
   const ultraControlsThinking = ultraManagesThinking(
     value.executionMode,
-    modelCanReason(value.provider, providerOptions, value.model),
+    canReason,
   );
   const [turnLimitEnabled, setTurnLimitEnabled] = useState(
     value.maxTurns !== null,
@@ -350,7 +351,9 @@ export function SessionLaunchDialog({
                     ? t('chat:ultra.thinkingManagedShort', { defaultValue: 'Managed by Ultra; Standard preference preserved' })
                     : supportsThinking
                       ? t('chat:sessionLaunch.thinkingHint')
-                      : t('chat:sessionLaunch.unavailable')}
+                      : canReason
+                        ? t('chat:sessionLaunch.thinkingAutomatic', { defaultValue: 'Automatic for this model' })
+                        : t('chat:sessionLaunch.unavailable')}
                 </span>
                 <Switch
                   checked={ultraControlsThinking || (supportsThinking && value.thinking)}

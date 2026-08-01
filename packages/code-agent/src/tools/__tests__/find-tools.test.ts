@@ -188,13 +188,19 @@ describe('find_tools — discovery affordances (param summary + pin awareness)',
     expect(output.indexOf('old_string:string')).toBeLessThan(output.indexOf('dry_run?:boolean'));
   });
 
-  it('tier-hidden tools advertise the direct-call-pins path', async () => {
+  it('auto-promotes a strong top hidden match for the next provider turn', async () => {
     // edit_file is navigate-tier in the real tier map; runner only has bootstrap.
+    const promoted: string[] = [];
     const output = await findWithRunner(schemaRegistry(), 'edit file', {
       activeTiers: new Set(['bootstrap']),
+      promoteTool: (name: string) => {
+        promoted.push(name);
+        return [];
+      },
     });
-    expect(output).toContain('[hidden — call it directly (it will be pinned into your toolset)');
-    expect(output).toContain("expand_toolset('navigate')");
+    expect(promoted).toEqual(['edit_file']);
+    expect(output).toContain('Activated edit_file for the next turn');
+    expect(output).toContain('expand_toolset({ tier: "navigate" })');
   });
 
   it('a pinned tool is reported visible even when its tier is inactive', async () => {
@@ -203,6 +209,22 @@ describe('find_tools — discovery affordances (param summary + pin awareness)',
       pinnedTools: new Set(['edit_file']),
     });
     expect(output).not.toContain('[hidden');
+  });
+
+  it('uses the exact last catalog when a historical pin was cap-cut', async () => {
+    const promoted: string[] = [];
+    const output = await findWithRunner(schemaRegistry(), 'edit file', {
+      activeTiers: new Set(['bootstrap']),
+      pinnedTools: new Set(['edit_file']),
+      visibleToolNames: new Set(['find_tools']),
+      promoteTool: (name: string) => {
+        promoted.push(name);
+        return ['old_tool'];
+      },
+    });
+    expect(promoted).toEqual(['edit_file']);
+    expect(output).toContain('Activated edit_file for the next turn');
+    expect(output).toContain('replaced least-recently-used: old_tool');
   });
 
   it('reports a plugin tool in its own opt-in tier', async () => {

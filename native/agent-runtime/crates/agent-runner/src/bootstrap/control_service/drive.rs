@@ -1,5 +1,5 @@
 use agent_platform::ipc::EndpointCancellation;
-use agent_platform::windows::ipc::{VerifiedWindowsEndpointStream, WindowsProtectedEndpoint};
+use agent_platform::windows::ipc::VerifiedWindowsEndpointStream;
 use agent_protocol::generated::v1 as wire;
 use agent_protocol::runner_bootstrap::ShapeValidatedRunnerLaunchHandoff;
 
@@ -9,6 +9,7 @@ use crate::control::{
 };
 
 use super::data::PendingRunnerDataHydration;
+use super::pulse::RunnerPulsePump;
 use super::{ActiveRunnerControlLaunch, ActiveRunnerResources, RunnerControlServiceError};
 
 mod hydration;
@@ -16,7 +17,7 @@ mod hydration;
 pub(super) struct PendingRunnerActivation {
     handoff: ShapeValidatedRunnerLaunchHandoff,
     data: Option<PendingRunnerDataHydration>,
-    runner_pulse: WindowsProtectedEndpoint,
+    runner_pulse: RunnerPulsePump,
     resource_budget: wire::ResourceBudget,
     effective_containment: wire::ContainmentReport,
 }
@@ -25,7 +26,7 @@ impl PendingRunnerActivation {
     pub(super) const fn new(
         handoff: ShapeValidatedRunnerLaunchHandoff,
         data: PendingRunnerDataHydration,
-        runner_pulse: WindowsProtectedEndpoint,
+        runner_pulse: RunnerPulsePump,
         resource_budget: wire::ResourceBudget,
         effective_containment: wire::ContainmentReport,
     ) -> Self {
@@ -65,6 +66,9 @@ pub(super) async fn pre_active(
                 // data transaction owns its independent stream.
             }
             ControlDriverEvent::Prepare(PrepareOutcome::HydrationRequired(token)) => {
+                pending
+                    .runner_pulse
+                    .transition(wire::RunnerPulsePhase::Hydrating, 1)?;
                 let data = pending
                     .data
                     .take()
@@ -77,8 +81,7 @@ pub(super) async fn pre_active(
                     token.expected_artifacts().to_vec(),
                     pending.resource_budget,
                 );
-                let completed = Box::pin(hydration::receive_while_control_responsive(
-                    &mut driver,
+                let completed = Box::pin(hydration::receive_with_terminal_guards(
                     cancellation,
                     data,
                     request,
@@ -102,6 +105,9 @@ pub(super) async fn pre_active(
                     }
                 }
                 hydration = Some(verified);
+                pending
+                    .runner_pulse
+                    .transition(wire::RunnerPulsePhase::Prepared, 2)?;
             }
             ControlDriverEvent::Activate(
                 ActivationOutcome::Activated | ActivationOutcome::AlreadyActive,
@@ -112,6 +118,9 @@ pub(super) async fn pre_active(
                 let data = data_channel
                     .take()
                     .ok_or(RunnerControlServiceError::MissingHydrationOwnership)?;
+                pending
+                    .runner_pulse
+                    .transition(wire::RunnerPulsePhase::Active, 3)?;
                 return Ok(ActiveRunnerControlLaunch {
                     lifetime: ActiveRunnerLifetime::new(
                         driver,

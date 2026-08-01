@@ -96,6 +96,57 @@ describe('FsSessionStore conversation journal', () => {
     expect(fullRead).not.toHaveBeenCalled();
   });
 
+  it('shares one hydrated projection across a session detail request', async () => {
+    const session = await store.createSession({
+      project_id: 7,
+      title: 'Shared detail projection',
+      provider: 'test',
+      model: 'test',
+    });
+    await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'detail-user-1',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'first' }],
+      },
+    });
+    await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'detail-assistant-1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'answer' }],
+      },
+    });
+    const readConversation = vi.spyOn(store.repository, 'readConversation');
+
+    const tail = await store.loadSessionMessagesTail(session.id, 40);
+    const count = await store.getMessageCount(session.id);
+    const archived = await store.getArchivedMessageCount(session.id);
+    const preceding = await store.previousUserMessageSeq(
+      session.id,
+      tail!.message_rows[0]!.seq,
+    );
+
+    expect(tail?.message_rows).toHaveLength(2);
+    expect(count).toBe(2);
+    expect(archived).toBe(0);
+    expect(preceding).toBeNull();
+    expect(readConversation).toHaveBeenCalledOnce();
+
+    await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'detail-user-2',
+      message: {
+        role: 'user',
+        content: [{ type: 'text', text: 'changed' }],
+      },
+    });
+    await expect(store.getMessageCount(session.id)).resolves.toBe(3);
+    expect(readConversation).toHaveBeenCalledTimes(2);
+  });
+
   it('persists every tool-bearing assistant turn from the same agent run', async () => {
     const session = await store.createSession({
       project_id: 7,

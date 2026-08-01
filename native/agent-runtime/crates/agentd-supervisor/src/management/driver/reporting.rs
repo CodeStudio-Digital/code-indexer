@@ -118,7 +118,7 @@ where
                     ),
                     PreparedLaunchOutcome::Accepted(PreparedLaunchAcceptance::Fresh {
                         failure_key: Box::new(key.clone()),
-                        _protected_receipt: protected_receipt,
+                        protected_receipt,
                     }),
                 )
             }
@@ -186,8 +186,33 @@ where
             return Err(SupervisorDriverError::FactFlowInvariant);
         }
         let outcome = emission.outcome;
+        let step = match outcome {
+            PreparedLaunchOutcome::Accepted(PreparedLaunchAcceptance::Fresh {
+                failure_key,
+                protected_receipt,
+            }) => {
+                if let Some(monitor) = protected_receipt.into_pulse_monitor() {
+                    let now_unix_ms = self
+                        .last_observed_at_unix_ms
+                        .ok_or(super::state::CleanupStateError::InvalidTime)?;
+                    self.pulse_registry
+                        .insert((*failure_key).clone(), monitor, now_unix_ms)?;
+                }
+                SupervisorDriverStep::LaunchAccepted {
+                    reused_existing: false,
+                }
+            }
+            PreparedLaunchOutcome::Accepted(PreparedLaunchAcceptance::Replay { .. }) => {
+                SupervisorDriverStep::LaunchAccepted {
+                    reused_existing: true,
+                }
+            }
+            PreparedLaunchOutcome::Rejected { reason_code } => {
+                SupervisorDriverStep::LaunchRejected { reason_code }
+            }
+        };
         self.track_fact(receipt, emission.action)?;
-        Ok(outcome.into_driver_step())
+        Ok(step)
     }
 
     pub(super) fn close_expired_launch(

@@ -1,6 +1,6 @@
 use agent_platform::windows::bootstrap::WindowsBootstrapCleanup;
 
-use super::super::ProtectedLaunchCleanupProof;
+use super::super::{ProtectedLaunchCleanupPort, ProtectedLaunchCleanupProof};
 use super::WindowsProtectedLaunchError;
 
 /// Reaper-owned set of kernel operations from one failed bootstrap.
@@ -30,5 +30,13 @@ impl WindowsProtectedLaunchCleanup {
         } else {
             Err(WindowsProtectedLaunchError::CleanupPending)
         }
+    }
+}
+
+impl ProtectedLaunchCleanupPort for WindowsProtectedLaunchCleanup {
+    type Error = WindowsProtectedLaunchError;
+
+    fn try_cleanup(&mut self) -> Result<ProtectedLaunchCleanupProof, Self::Error> {
+        self.try_cleanup()
     }
 }

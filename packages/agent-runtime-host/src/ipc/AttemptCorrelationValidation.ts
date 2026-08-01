@@ -9,6 +9,10 @@ import {
 } from './AttemptDataCorrelationValidation.js';
 import { AttemptFrameReceiverError } from './AttemptFrameReceiverError.js';
 import { OutboundFrameError } from './OutboundFrameError.js';
+import {
+  earliestLocalPeerTimestamp,
+  latestLocalPeerTimestamp,
+} from './LocalPeerClock.js';
 
 type PayloadCase = agentV1Runtime.FramePayload['body']['case'];
 type ControlOutboundRequestFacts =
@@ -71,6 +75,7 @@ export function assertOutboundResponse(
       inbound.sentAtUnixMs,
       responseSentAtUnixMs,
       outboundError,
+      timestampWithin,
     );
     return;
   }
@@ -148,6 +153,7 @@ export function assertInboundCorrelation(
       request.sentAtUnixMs,
       observedAtUnixMs,
       inboundError,
+      timestampWithinLocalPeer,
     );
     return;
   }
@@ -167,11 +173,16 @@ function assertAckFacts<T extends Error>(
   earliestAtUnixMs: bigint,
   latestAtUnixMs: bigint,
   error: (message: string) => T,
+  timestampValidator: (
+    actual: bigint,
+    earliest: bigint,
+    latest: bigint,
+  ) => boolean,
 ): void {
   if (
     ack.acknowledgedMessageId !== expectedMessageId
     || !sameDigest(ack.acknowledgedPayloadSha256, expectedDigest)
-    || !timestampWithin(
+    || !timestampValidator(
       ack.acknowledgedAtUnixMs,
       earliestAtUnixMs,
       latestAtUnixMs,
@@ -191,6 +202,15 @@ function sameDigest(
 
 function timestampWithin(actual: bigint, earliest: bigint, latest: bigint): boolean {
   return actual >= earliest && actual <= latest;
+}
+
+function timestampWithinLocalPeer(
+  actual: bigint,
+  earliest: bigint,
+  latest: bigint,
+): boolean {
+  return actual >= earliestLocalPeerTimestamp(earliest)
+    && actual <= latestLocalPeerTimestamp(latest);
 }
 
 function outboundError(message: string): OutboundFrameError {

@@ -41,9 +41,11 @@ import { ProjectCard, type ProjectCardData } from './list/ProjectCard.js';
 import {
   countProjectStatuses,
   filterProjectList,
+  filterProjectsByGroup,
   groupProjectList,
   recentProjectList,
   type ProjectListFilter,
+  UNGROUPED_PROJECTS_KEY,
 } from './list/projectListModel.js';
 import { ProjectRow } from './list/ProjectRow.js';
 
@@ -84,6 +86,7 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
   const [scaffolding, setScaffolding] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filter, setFilter] = useState<ProjectListFilter>('all');
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [grouped, setGrouped] = useState(true);
   const [layout, setLayout] = useState<LayoutMode>(readStoredLayout);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -187,9 +190,17 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     () => filterProjectList(projects ?? [], searchQuery, filter),
     [projects, searchQuery, filter],
   );
+  const visibleProjects = useMemo(
+    () => filterProjectsByGroup(filteredProjects, selectedGroup),
+    [filteredProjects, selectedGroup],
+  );
   const groupedProjects = useMemo(
-    () => (grouped ? groupProjectList(filteredProjects) : null),
-    [filteredProjects, grouped],
+    () => (grouped && selectedGroup === null ? groupProjectList(visibleProjects) : null),
+    [grouped, selectedGroup, visibleProjects],
+  );
+  const navigationGroups = useMemo(
+    () => groupProjectList(projects ?? []),
+    [projects],
   );
   const recentProjects = useMemo(
     () => recentProjectList(projects ?? [], recentIds),
@@ -199,6 +210,15 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     () => countProjectStatuses(projects ?? []),
     [projects],
   );
+
+  useEffect(() => {
+    if (selectedGroup === null || !projects) return;
+    const selectionStillExists =
+      selectedGroup === UNGROUPED_PROJECTS_KEY
+        ? projects.some((project) => !project.group_name)
+        : projects.some((project) => project.group_name === selectedGroup);
+    if (!selectionStillExists) setSelectedGroup(null);
+  }, [projects, selectedGroup]);
 
   function toggleGroup(group: string) {
     setCollapsedGroups((prev) => {
@@ -322,213 +342,288 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     );
   };
 
+  const selectedGroupLabel =
+    selectedGroup === null
+      ? t('projects:allProjects')
+      : selectedGroup === UNGROUPED_PROJECTS_KEY
+        ? t('projects:ungrouped')
+        : selectedGroup;
+
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-2xl font-bold tracking-tight">{t('projects:title')}</h2>
-            <Badge variant="muted" className="normal-case tracking-normal">
-              {projects.length}
-            </Badge>
+    <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[17rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,1fr)]">
+      <aside className="min-w-0 rounded-xl border bg-card/30 p-3 lg:sticky lg:top-0 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto">
+        <div className="space-y-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold tracking-tight">{t('projects:title')}</h2>
+              <Badge variant="muted" className="normal-case tracking-normal">
+                {projects.length}
+              </Badge>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              {t('projects:indexSummary', {
+                indexed: statusCounts.indexed,
+                total: projects.length,
+              })}
+            </p>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {t('projects:indexSummary', {
-              indexed: statusCounts.indexed,
-              total: projects.length,
-            })}
-          </p>
-        </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm">
-              <Plus className="h-4 w-4" />
-              {t('projects:addProject')}
-              <ChevronDown className="h-3.5 w-3.5 opacity-70" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem onSelect={() => setScaffolding(true)}>
-              <Sparkles className="h-4 w-4" />
-              {t('projects:newProject')}
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setCreating(true)}>
-              <FolderPlus className="h-4 w-4" />
-              {t('projects:registerExisting')}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" className="w-full justify-start">
+                <Plus className="h-4 w-4" />
+                <span className="flex-1 text-left">{t('projects:addProject')}</span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuItem onSelect={() => setScaffolding(true)}>
+                <Sparkles className="h-4 w-4" />
+                {t('projects:newProject')}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setCreating(true)}>
+                <FolderPlus className="h-4 w-4" />
+                {t('projects:registerExisting')}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[260px] flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder={t('projects:searchPlaceholderDetailed')}
-            className="h-9 w-full pl-9 pr-10 text-sm"
-            aria-label={t('projects:searchPlaceholderDetailed')}
-          />
-          {searchQuery ? (
-            <button
-              type="button"
-              onClick={() => setSearchQuery('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-              aria-label={t('projects:clearSearch')}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          ) : (
-            <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-              /
-            </kbd>
-          )}
-        </div>
-
-        <div className="flex items-center rounded-md border bg-background p-0.5">
-          {([
-            ['all', t('projects:filters.all'), projects.length],
-            ['notIndexed', t('projects:filters.notIndexed'), statusCounts.notIndexed],
-            ['indexed', t('projects:filters.indexed'), statusCounts.indexed],
-          ] as const).map(([value, label, count]) => (
-            <Button
-              key={value}
-              type="button"
-              variant={filter === value ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7 px-2.5"
-              aria-pressed={filter === value}
-              onClick={() => setFilter(value)}
-            >
-              {label}
-              <span className="text-[10px] tabular-nums text-muted-foreground">{count}</span>
-            </Button>
-          ))}
-        </div>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              aria-label={t('projects:view.title')}
-            >
-              <SlidersHorizontal className="h-4 w-4" />
-              <span className="hidden sm:inline">{t('projects:view.title')}</span>
-              <ChevronDown className="h-3.5 w-3.5 opacity-70" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-52">
-            <DropdownMenuLabel>{t('projects:view.organization')}</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => setGrouped((current) => !current)}>
-              <Check className={cn('h-4 w-4', !grouped && 'opacity-0')} />
-              {t('projects:groupByGroup')}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>{t('projects:view.layout')}</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => setLayout('compact')}>
-              <LayoutList className="h-4 w-4" />
-              <span className="flex-1">{t('projects:compactView')}</span>
-              {layout === 'compact' && <Check className="h-4 w-4" />}
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => setLayout('cards')}>
-              <LayoutGrid className="h-4 w-4" />
-              <span className="flex-1">{t('projects:cardsView')}</span>
-              {layout === 'cards' && <Check className="h-4 w-4" />}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {recentProjects.length > 0 && !searchQuery.trim() && filter === 'all' && (
-        <section className="space-y-2" aria-labelledby="recent-projects-heading">
-          <h3
-            id="recent-projects-heading"
-            className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-          >
-            {t('projects:recent')}
-          </h3>
-          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-            {recentProjects.map((project) => (
-              <Button
-                key={project.id}
-                variant="outline"
-                className="h-auto min-w-0 justify-start px-3 py-2.5 text-left"
-                onClick={() => handleSelectProject(project)}
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder={t('projects:searchPlaceholderDetailed')}
+              className="h-9 w-full pl-9 pr-10 text-sm"
+              aria-label={t('projects:searchPlaceholderDetailed')}
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+                aria-label={t('projects:clearSearch')}
               >
-                <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="min-w-0">
-                  <span className="block truncate text-sm">{project.name}</span>
-                  <span className="block truncate font-mono text-[10px] font-normal text-muted-foreground">
-                    {project.root_path}
-                  </span>
+                <X className="h-3.5 w-3.5" />
+              </button>
+            ) : (
+              <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                /
+              </kbd>
+            )}
+          </div>
+
+          <section className="space-y-1.5" aria-labelledby="project-filters-heading">
+            <h3
+              id="project-filters-heading"
+              className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+            >
+              {t('projects:filters.title')}
+            </h3>
+            <div className="grid gap-1 sm:grid-cols-3 lg:grid-cols-1">
+              {([
+                ['all', t('projects:filters.all'), projects.length],
+                ['notIndexed', t('projects:filters.notIndexed'), statusCounts.notIndexed],
+                ['indexed', t('projects:filters.indexed'), statusCounts.indexed],
+              ] as const).map(([value, label, count]) => (
+                <Button
+                  key={value}
+                  type="button"
+                  variant={filter === value ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-8 min-w-0 justify-between px-2.5"
+                  aria-pressed={filter === value}
+                  onClick={() => setFilter(value)}
+                >
+                  <span className="truncate">{label}</span>
+                  <span className="text-[10px] tabular-nums text-muted-foreground">{count}</span>
+                </Button>
+              ))}
+            </div>
+          </section>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                aria-label={t('projects:view.title')}
+              >
+                <SlidersHorizontal className="h-4 w-4" />
+                <span className="flex-1 text-left">{t('projects:view.title')}</span>
+                <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-52">
+              <DropdownMenuLabel>{t('projects:view.organization')}</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => setGrouped((current) => !current)}>
+                <Check className={cn('h-4 w-4', !grouped && 'opacity-0')} />
+                {t('projects:groupByGroup')}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>{t('projects:view.layout')}</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => setLayout('compact')}>
+                <LayoutList className="h-4 w-4" />
+                <span className="flex-1">{t('projects:compactView')}</span>
+                {layout === 'compact' && <Check className="h-4 w-4" />}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setLayout('cards')}>
+                <LayoutGrid className="h-4 w-4" />
+                <span className="flex-1">{t('projects:cardsView')}</span>
+                {layout === 'cards' && <Check className="h-4 w-4" />}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <section className="min-w-0 space-y-1.5" aria-labelledby="project-groups-heading">
+            <div className="flex items-center justify-between gap-2 px-1">
+              <h3
+                id="project-groups-heading"
+                className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+              >
+                {t('projects:groups.title')}
+              </h3>
+              <span className="text-[10px] tabular-nums text-muted-foreground">
+                {navigationGroups.size}
+              </span>
+            </div>
+            <nav
+              className="flex min-w-0 gap-1 overflow-x-auto pb-1 lg:flex-col lg:overflow-visible lg:pb-0"
+              aria-label={t('projects:groups.title')}
+            >
+              <Button
+                type="button"
+                variant={selectedGroup === null ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 shrink-0 justify-between px-2.5 lg:w-full"
+                aria-pressed={selectedGroup === null}
+                onClick={() => setSelectedGroup(null)}
+              >
+                <span className="truncate">{t('projects:allProjects')}</span>
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  {projects.length}
                 </span>
               </Button>
-            ))}
-          </div>
-        </section>
-      )}
-
-      <div className="flex items-center justify-between gap-3">
-        <h3 className="text-sm font-semibold">{t('projects:allProjects')}</h3>
-        <span className="text-xs tabular-nums text-muted-foreground">
-          {searchQuery.trim() || filter !== 'all'
-            ? t('projects:searchFiltered', {
-                filtered: filteredProjects.length,
-                total: projects.length,
-              })
-            : t('projects:visibleCount', { count: filteredProjects.length })}
-        </span>
-      </div>
-
-      {!grouped && renderProjects(filteredProjects)}
-
-      {grouped && groupedProjects && (
-        <div className="space-y-5">
-          {groupedProjects.size === 0 && (
-            <p className="text-center py-12 text-sm text-muted-foreground">
-              {searchQuery.trim()
-                ? t('projects:noMatch', { query: searchQuery })
-                : t('projects:noProjectsForFilter')}
-            </p>
-          )}
-          {[...groupedProjects.entries()].map(([group, groupProjects]) => {
-            const isUngrouped = group === '__ungrouped__';
-            const isOpen = searchQuery.trim().length > 0 || !collapsedGroups.has(group);
-            const notIndexedCount = groupProjects.filter(
-              (project) => !project.last_indexed,
-            ).length;
-            return (
-              <Collapsible key={group} open={isOpen} onOpenChange={() => toggleGroup(group)}>
-                <div className="mb-2">
-                  <CollapsibleTrigger asChild>
-                    <button className="flex w-full items-center gap-2 border-b pb-2 text-left text-sm font-semibold transition-colors hover:text-primary">
-                      <ChevronRight
-                        className={cn('h-4 w-4 transition-transform', isOpen && 'rotate-90')}
-                      />
-                      <span className={cn(isUngrouped && 'text-muted-foreground italic')}>
-                        {isUngrouped ? t('projects:ungrouped') : group}
-                      </span>
-                      <Badge variant="muted" className="normal-case tracking-normal">
-                        {groupProjects.length}
-                      </Badge>
-                      <span className="ml-auto text-xs font-normal text-muted-foreground">
-                        {notIndexedCount > 0
-                          ? t('projects:groupNotIndexed', { count: notIndexedCount })
-                          : t('projects:groupAllIndexed')}
-                      </span>
-                    </button>
-                  </CollapsibleTrigger>
-                </div>
-                <CollapsibleContent>{renderProjects(groupProjects)}</CollapsibleContent>
-              </Collapsible>
-            );
-          })}
+              {[...navigationGroups.entries()].map(([group, groupProjects]) => {
+                const isUngrouped = group === UNGROUPED_PROJECTS_KEY;
+                const isSelected = selectedGroup === group;
+                return (
+                  <Button
+                    key={group}
+                    type="button"
+                    variant={isSelected ? 'secondary' : 'ghost'}
+                    size="sm"
+                    className="h-8 shrink-0 justify-between px-2.5 lg:w-full"
+                    aria-pressed={isSelected}
+                    onClick={() => setSelectedGroup(group)}
+                  >
+                    <span className={cn('truncate', isUngrouped && 'italic text-muted-foreground')}>
+                      {isUngrouped ? t('projects:ungrouped') : group}
+                    </span>
+                    <span className="text-[10px] tabular-nums text-muted-foreground">
+                      {groupProjects.length}
+                    </span>
+                  </Button>
+                );
+              })}
+            </nav>
+          </section>
         </div>
-      )}
+      </aside>
+
+      <section className="min-w-0 space-y-5">
+        {recentProjects.length > 0 &&
+          selectedGroup === null &&
+          !searchQuery.trim() &&
+          filter === 'all' && (
+            <section className="space-y-2" aria-labelledby="recent-projects-heading">
+              <h3
+                id="recent-projects-heading"
+                className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              >
+                {t('projects:recent')}
+              </h3>
+              <div className="grid gap-2 sm:grid-cols-2 2xl:grid-cols-4">
+                {recentProjects.map((project) => (
+                  <Button
+                    key={project.id}
+                    variant="outline"
+                    className="h-auto min-w-0 justify-start px-3 py-2.5 text-left"
+                    onClick={() => handleSelectProject(project)}
+                  >
+                    <FolderGit2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm">{project.name}</span>
+                      <span className="block truncate font-mono text-[10px] font-normal text-muted-foreground">
+                        {project.root_path}
+                      </span>
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            </section>
+          )}
+
+        <div className="flex min-w-0 items-center justify-between gap-3 border-b pb-3">
+          <h3 className="truncate text-base font-semibold">{selectedGroupLabel}</h3>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {searchQuery.trim() || filter !== 'all' || selectedGroup !== null
+              ? t('projects:searchFiltered', {
+                  filtered: visibleProjects.length,
+                  total: projects.length,
+                })
+              : t('projects:visibleCount', { count: visibleProjects.length })}
+          </span>
+        </div>
+
+        {(!grouped || selectedGroup !== null) && renderProjects(visibleProjects)}
+
+        {grouped && selectedGroup === null && groupedProjects && (
+          <div className="space-y-5">
+            {groupedProjects.size === 0 && (
+              <p className="py-12 text-center text-sm text-muted-foreground">
+                {searchQuery.trim()
+                  ? t('projects:noMatch', { query: searchQuery })
+                  : t('projects:noProjectsForFilter')}
+              </p>
+            )}
+            {[...groupedProjects.entries()].map(([group, groupProjects]) => {
+              const isUngrouped = group === UNGROUPED_PROJECTS_KEY;
+              const isOpen = searchQuery.trim().length > 0 || !collapsedGroups.has(group);
+              const notIndexedCount = groupProjects.filter(
+                (project) => !project.last_indexed,
+              ).length;
+              return (
+                <Collapsible key={group} open={isOpen} onOpenChange={() => toggleGroup(group)}>
+                  <div className="mb-2">
+                    <CollapsibleTrigger asChild>
+                      <button className="flex w-full items-center gap-2 border-b pb-2 text-left text-sm font-semibold transition-colors hover:text-primary">
+                        <ChevronRight
+                          className={cn('h-4 w-4 transition-transform', isOpen && 'rotate-90')}
+                        />
+                        <span className={cn(isUngrouped && 'italic text-muted-foreground')}>
+                          {isUngrouped ? t('projects:ungrouped') : group}
+                        </span>
+                        <Badge variant="muted" className="normal-case tracking-normal">
+                          {groupProjects.length}
+                        </Badge>
+                        <span className="ml-auto text-xs font-normal text-muted-foreground">
+                          {notIndexedCount > 0
+                            ? t('projects:groupNotIndexed', { count: notIndexedCount })
+                            : t('projects:groupAllIndexed')}
+                        </span>
+                      </button>
+                    </CollapsibleTrigger>
+                  </div>
+                  <CollapsibleContent>{renderProjects(groupProjects)}</CollapsibleContent>
+                </Collapsible>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {editing && (
         <Suspense fallback={null}>

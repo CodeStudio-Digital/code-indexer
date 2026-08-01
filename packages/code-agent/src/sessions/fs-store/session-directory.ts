@@ -52,6 +52,7 @@ function initialRuntimeState(
     | 'execution_mode_override'
     | 'reasoning_effort_override'
     | 'thinking_enabled'
+    | 'block_code_comments'
     | 'max_turns'
     | 'max_auto_continues'
   >,
@@ -67,6 +68,7 @@ function initialRuntimeState(
         reasoning_effort_override:
           input.reasoning_effort_override?.trim() || null,
         thinking_enabled: input.thinking_enabled === true,
+        block_code_comments: input.block_code_comments !== false,
       }),
     },
   };

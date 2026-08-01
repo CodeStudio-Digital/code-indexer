@@ -47,6 +47,7 @@ export function runtimeFromState(state: SessionState): FsRuntimeSessionState {
     execution_mode_override:
       runtime.execution_mode_override === 'ultra' ? 'ultra' : 'standard',
     thinking_enabled: runtime.thinking_enabled === true,
+    block_code_comments: runtime.block_code_comments !== false,
     plan_depth_override: nullableString(runtime.plan_depth_override),
     response_language_override: nullableString(
       runtime.response_language_override,

@@ -23,6 +23,7 @@ pub(super) fn windows_handoff() -> wire::RunnerLaunchHandoff {
         }),
         activation_authority_seal: Some(activation_authority_seal()),
         runtime_provenance: Some(runtime_provenance()),
+        runner_pulse_interval_ms: 100,
     }
 }
 

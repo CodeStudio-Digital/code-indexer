@@ -148,6 +148,8 @@ fn golden_handoff_for_platform(unix: bool) -> wire::RunnerLaunchHandoff {
         }),
         // V1 golden predates this compatible additive field.
         runtime_provenance: None,
+        // V1 golden predates this compatible additive field.
+        runner_pulse_interval_ms: 0,
     }
 }
 

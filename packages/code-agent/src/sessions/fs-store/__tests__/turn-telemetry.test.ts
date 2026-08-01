@@ -1,8 +1,9 @@
-import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsSessionStore } from '../fs-session-store.js';
+import { listFilesystemTurnTelemetry } from '../telemetry-dashboard.js';
 import { FsTurnTelemetryRepository } from '../turn-telemetry.js';
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
@@ -144,6 +145,49 @@ describe('FsTurnTelemetryRepository', () => {
         ),
       ),
     ).toEqual([]);
+  });
+
+  it('reads only UUID telemetry records and incrementally caches immutable files', async () => {
+    const session = await store.createSession({
+      project_id: 7,
+      title: 'Telemetry cache',
+      provider: 'test',
+      model: 'test',
+    });
+    const telemetry = new FsTurnTelemetryRepository(store);
+    const input = {
+      session_id: session.id,
+      run_id: RUN_ID,
+      turn: 1,
+      is_subagent: false,
+      provider: 'test',
+      model: 'test',
+      input_tokens: 10,
+      output_tokens: 2,
+      cache_read_input_tokens: 1,
+      cache_creation_input_tokens: 0,
+      thinking_tokens: null,
+      history_chars: 20,
+      tool_count: 0,
+      tools_called: [],
+      largest_tool_result_chars: null,
+      compaction_triggered: false,
+      summarizer_ran: false,
+      paginate_count: 0,
+    };
+    await telemetry.recordTurnTelemetry(input);
+    const location = await store.getSessionLocation(session.id);
+    expect(location).not.toBeNull();
+    await writeFile(
+      join(location!.bundle_path, 'metrics', 'turns', 'turn-999.json'),
+      '{legacy file must not be parsed',
+      'utf8',
+    );
+
+    await expect(listFilesystemTurnTelemetry(store, session.id)).resolves.toHaveLength(1);
+    await telemetry.recordTurnTelemetry({ ...input, turn: 2 });
+    const rows = await listFilesystemTurnTelemetry(store, session.id);
+    expect(rows.map((row) => row.turn)).toEqual([1, 2]);
   });
 
   it('records background subagent usage once per operation key', async () => {

@@ -1,5 +1,5 @@
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agent_protocol::generated::v1 as wire;
 use agent_protocol::management_channel::ManagementChannelError;
@@ -8,6 +8,9 @@ use super::support::{
     FENCE_DUE, GRACE, LEASE_DEADLINE, NOW, cancel, fence, launch, launch_identity, launched_from,
     launched_pair_with_cancel, launched_with, launched_with_termination_failure, lifecycle_frame,
     reap,
+};
+use crate::management::driver::provision::pulse::{
+    ProtectedRunnerPulseMonitor, RunnerPulseMonitorState, RunnerPulseObservation,
 };
 use crate::management::driver::tests::support::{TestWriter, decoded_bodies, launch_attempt};
 use crate::management::driver::{SupervisorDriverError, SupervisorDriverStep};
@@ -67,6 +70,36 @@ fn launch_installs_an_idle_lease_watchdog_without_closing_admission() {
         .drive_cleanup_at(LEASE_DEADLINE, Duration::ZERO)
         .expect("at lease");
     assert_eq!(due.termination_attempts, 1);
+    assert_eq!(state.terminate_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn failed_runner_pulse_schedules_immediate_target_cleanup() {
+    let (mut driver, state, _) = launched_with(Vec::new(), TestWriter::default());
+    launch(&mut driver);
+    let key = driver
+        .launch_registry
+        .ownership_key_for_test("launch:test")
+        .expect("owned launch")
+        .clone();
+    let (monitor, updates) = ProtectedRunnerPulseMonitor::new_for_test(
+        Duration::from_millis(100),
+        NOW + 1_000,
+        RunnerPulseObservation::new_for_test(1, Instant::now()),
+    );
+    driver
+        .core
+        .pulse_registry
+        .insert(key, monitor, NOW)
+        .expect("pulse monitor");
+    updates
+        .send(RunnerPulseMonitorState::Failed)
+        .expect("monitor retained");
+
+    let report = driver
+        .drive_cleanup_at(NOW, Duration::ZERO)
+        .expect("pulse expiry cleanup");
+    assert_eq!(report.termination_attempts, 1);
     assert_eq!(state.terminate_calls.load(Ordering::SeqCst), 1);
 }
 

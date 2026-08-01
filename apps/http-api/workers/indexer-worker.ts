@@ -31,6 +31,7 @@ import {
   indexFilesStructural,
   removeFilesStructural,
 } from '../../../packages/indexer/src/indexer/structural-incremental.js';
+import { semanticItemKeysForIndexedPaths } from '../../../packages/indexer/src/indexer/indexer/embedding-candidates.js';
 import { registerPerfStatsHandler } from './perf-stats.js';
 
 interface IndexerWorkerData {
@@ -79,10 +80,10 @@ bridge.handle('structuralIndex', async (payload) => {
     allowEmptyWipe,
     waitForInteractivePriority: () => priorityGate.wait(projectId),
     onChanges: reportChanges
-      ? async (events) => {
+      ? async (events, previousItemKeys) => {
           await bridge.request(
             'structural.changes',
-            { projectId, events },
+            { projectId, events, previousItemKeys },
             { timeoutMs: 30_000 },
           );
         }
@@ -97,7 +98,18 @@ bridge.handle('structuralIndex', async (payload) => {
 });
 
 bridge.handle('indexFiles', async (payload) => {
-  const { projectId, relPaths } = payload as { projectId: number; relPaths: string[] };
+  const { projectId, relPaths, reportChanges } = payload as {
+    projectId: number;
+    relPaths: string[];
+    reportChanges?: boolean;
+  };
+  if (reportChanges) {
+    await bridge.request('structural.changes', {
+      projectId,
+      events: relPaths.map((path) => ({ path, kind: 'upsert' as const })),
+      previousItemKeys: semanticItemKeysForIndexedPaths(db, projectId, relPaths),
+    }, { timeoutMs: 30_000 });
+  }
   return indexFilesStructural(db, projectId, relPaths, {
     ignorePatterns,
     maxFileSizeKB,
@@ -106,7 +118,18 @@ bridge.handle('indexFiles', async (payload) => {
 });
 
 bridge.handle('removeFiles', async (payload) => {
-  const { projectId, relPaths } = payload as { projectId: number; relPaths: string[] };
+  const { projectId, relPaths, reportChanges } = payload as {
+    projectId: number;
+    relPaths: string[];
+    reportChanges?: boolean;
+  };
+  if (reportChanges) {
+    await bridge.request('structural.changes', {
+      projectId,
+      events: relPaths.map((path) => ({ path, kind: 'delete' as const })),
+      previousItemKeys: semanticItemKeysForIndexedPaths(db, projectId, relPaths),
+    }, { timeoutMs: 30_000 });
+  }
   return removeFilesStructural(db, projectId, relPaths);
 });
 

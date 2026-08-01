@@ -87,6 +87,8 @@ interface RailComposerBarProps {
   ultraControlsThinking?: boolean;
   describeImages?: boolean;
   setDescribeImages?: (v: boolean) => void;
+  blockCodeComments?: boolean;
+  setBlockCodeComments?: (v: boolean) => void;
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
   setToolPermissionMode?: (v: 'ask' | 'auto' | 'unrestricted') => void;
   /** When streaming + queueable, show the queue split button beside Stop. */
@@ -116,6 +118,8 @@ export function RailComposerBar(props: RailComposerBarProps) {
           thinkingManaged={props.ultraControlsThinking}
           describeImages={props.describeImages}
           setDescribeImages={props.setDescribeImages}
+          blockCodeComments={props.blockCodeComments}
+          setBlockCodeComments={props.setBlockCodeComments}
           outputCapLevel={props.outputCapLevel}
           setOutputCapLevel={props.setOutputCapLevel}
           toolPermissionMode={props.toolPermissionMode}
@@ -201,7 +205,7 @@ export function RailComposerBar(props: RailComposerBarProps) {
         )}
 
         {/* Prominent Think pill. */}
-        {props.setThinking && (
+        {(props.supportsThinking || props.ultraControlsThinking) && props.setThinking && (
           <button
             type="button"
             onClick={() => props.setThinking?.(!props.thinking)}

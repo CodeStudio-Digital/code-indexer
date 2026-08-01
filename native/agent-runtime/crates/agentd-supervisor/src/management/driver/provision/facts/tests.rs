@@ -14,6 +14,7 @@ fn canonical_owner_redacts_and_zeroizes_all_secret_bearing_buffers() {
         runtime_instance_id: "runtime-sensitive".into(),
         hard_deadline_at_unix_ms: 10,
         authority_lease_expires_at_unix_ms: 9,
+        runner_pulse_interval_ms: 100,
         reserved_resource_budget: wire::ResourceBudget::default(),
         endpoints: vec![wire::ProtectedAttemptEndpoint {
             endpoint_id: "endpoint-sensitive".into(),

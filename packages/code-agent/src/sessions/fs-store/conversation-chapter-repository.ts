@@ -33,6 +33,7 @@ import type {
   FsRebuiltConversationChapterInput,
 } from './history-metrics-types.js';
 import { FsSessionDirectory } from './session-directory.js';
+import type { FsConversationReader } from './conversation-reader.js';
 
 export class FsConversationChapterRepository {
   private readonly rebuilds: FsConversationChapterRebuildRepository;
@@ -40,6 +41,7 @@ export class FsConversationChapterRepository {
   constructor(
     private readonly directory: FsSessionDirectory,
     private readonly entities: FsSessionEntityFiles,
+    private readonly sourceReader?: Pick<FsConversationReader, 'loadRange'>,
   ) {
     this.rebuilds = new FsConversationChapterRebuildRepository(
       directory,
@@ -437,6 +439,17 @@ export class FsConversationChapterRepository {
   ): Promise<FsConversationChapterSourcePage> {
     const chapter = await this.get(sessionId, chapterId);
     if (!chapter) return { items: [], next_cursor: null };
+    const afterSeq = parseChapterCursor(options.cursor, 'message') ?? 0;
+    const limit = pageLimit(options.limit);
+    if (this.sourceReader) {
+      return this.sourceReader.loadRange(
+        sessionId,
+        chapter.start_message_seq,
+        chapter.end_message_seq,
+        afterSeq,
+        limit,
+      );
+    }
     const entry = await this.directory.requireEntry(sessionId);
     const conversation = projectConversation(
       this.directory.repository.readConversationSync(entry.location),
@@ -451,9 +464,6 @@ export class FsConversationChapterRepository {
         messages[index],
       ),
     );
-    const afterSeq =
-      parseChapterCursor(options.cursor, 'message') ?? 0;
-    const limit = pageLimit(options.limit);
     const selected = rows.filter(
       (row) =>
         row.seq >= chapter.start_message_seq &&

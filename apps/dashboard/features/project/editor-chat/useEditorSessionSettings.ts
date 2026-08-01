@@ -24,6 +24,7 @@ export function useEditorSessionSettings(
 ) {
   // Describe-images is a per-send flag (not persisted), matching AgentChat.
   const [describeImages, setDescribeImages] = useState(false);
+  const [blockCodeComments, setBlockCodeComments] = useState(true);
   const [outputCapLevel, setOutputCapLevel] = useState<OutputCapLevel>('economic');
   const [toolPermissionMode, setToolPermissionMode] = useState<'ask' | 'auto' | 'unrestricted'>('auto');
   const [fallbackProvider, setFallbackProvider] = useState<string | null>(null);
@@ -39,9 +40,13 @@ export function useEditorSessionSettings(
   // Hydrate the persisted toggles from the session row.
   useEffect(() => {
     const s = sessionData?.session;
-    if (!s || s.id !== selectedId) return;
+    if (!s || s.id !== selectedId) {
+      setBlockCodeComments(true);
+      return;
+    }
     setOutputCapLevel(levelFromSession(s));
     setToolPermissionMode(s.tool_permission_mode ?? 'auto');
+    setBlockCodeComments(s.block_code_comments !== false);
   }, [selectedId, sessionData?.session]);
 
   // Fallback lives behind its own endpoint.
@@ -75,6 +80,14 @@ export function useEditorSessionSettings(
     try { await apiPatch(`/coder/sessions/${selectedId}/tool-permission-mode`, { mode: next }); } catch { /* optimistic */ }
   }, [selectedId]);
 
+  const changeBlockCodeComments = useCallback(async (next: boolean) => {
+    setBlockCodeComments(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/block-code-comments`, { enabled: next });
+    } catch { /* optimistic */ }
+  }, [selectedId]);
+
   const changeFallback = useCallback(async (provider: string | null, model: string | null) => {
     setFallbackProvider(provider);
     setFallbackModel(model);
@@ -91,6 +104,8 @@ export function useEditorSessionSettings(
   return {
     describeImages,
     setDescribeImages,
+    blockCodeComments,
+    setBlockCodeComments: changeBlockCodeComments,
     outputCapLevel,
     setOutputCapLevel: changeOutputCapLevel,
     toolPermissionMode,

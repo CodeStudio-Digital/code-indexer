@@ -1,10 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Bot, Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, RotateCcw, Sparkles, User } from 'lucide-react';
+import { Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, RotateCcw, Sparkles } from 'lucide-react';
 import type { DecisionAnswers, DecisionQuestion, StreamTask, ToolCallEvent } from '../../../hooks/useAgentStream.js';
-import { Avatar, AvatarFallback } from '../../../components/ui/avatar.js';
 import { cn } from '../../../lib/utils.js';
-import { providerAccent } from '../constants.js';
 import { PlanPromptView } from '../prompts/PlanPromptView.js';
 import { QuestionPromptView } from '../prompts/QuestionPromptView.js';
 import { DecisionGateView } from '../prompts/DecisionGateView.js';
@@ -71,7 +69,6 @@ interface MessageViewProps {
   sessionId?: string;
   toolResultsById: Map<string, ToolResultView>;
   usage?: MessageRow;
-  providerId: string;
   onAnswer: PromptHandlers['onAnswer'];
   onPlanResponse: PromptHandlers['onPlanResponse'];
   onTasksResponse: PromptHandlers['onTasksResponse'];
@@ -99,7 +96,6 @@ export const MessageView = React.memo(MessageViewInner, (prev, next) => {
     prev.toolResultsById === next.toolResultsById &&
     prev.tasksState === next.tasksState &&
     prev.activeTasksToolUseId === next.activeTasksToolUseId &&
-    prev.providerId === next.providerId &&
     prev.onAnswer === next.onAnswer &&
     prev.onPlanResponse === next.onPlanResponse &&
     prev.onTasksResponse === next.onTasksResponse &&
@@ -115,7 +111,6 @@ function MessageViewInner({
   sessionId,
   toolResultsById,
   usage,
-  providerId,
   onAnswer,
   onPlanResponse,
   onTasksResponse,
@@ -126,7 +121,6 @@ function MessageViewInner({
   tasksState,
   activeTasksToolUseId,
 }: MessageViewProps) {
-  const { t } = useTranslation('chat');
   const cacheRead = usage?.cache_read_tokens ?? 0;
   const tokenBadge =
     usage && (usage.input_tokens > 0 || usage.output_tokens > 0) ? (
@@ -163,21 +157,13 @@ function MessageViewInner({
     .join('\n\n');
 
   return (
-    <div className="group/msg w-full">
-      <article className="w-full min-w-0 px-3 py-2 transition-colors hover:bg-muted/[0.018]">
-        <div className="mb-1 flex items-center justify-between gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/70">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <Avatar className="h-4 w-4 shrink-0 opacity-90">
-              <AvatarFallback className={cn('text-white', providerAccent(providerId))}>
-                <Bot className="h-2.5 w-2.5" />
-              </AvatarFallback>
-            </Avatar>
-            <span className="font-semibold text-foreground/60">{t('messages.assistant')}</span>
-            {tokenBadge}
-          </div>
+    <div className="group/msg w-full py-1">
+      <article className="relative w-full min-w-0 py-1 text-foreground">
+        <div className="absolute right-0 top-0 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100">
+          {tokenBadge}
           {assistantMarkdown && <CopyMarkdownButton text={assistantMarkdown} />}
         </div>
-        <div>
+        <div className="min-w-0 pr-1">
           {message.content.map((b, i) =>
             renderAssistantBlock(
               b,
@@ -268,9 +254,9 @@ function UserMessage({
   const hasUserBody = !!text || docs.length > 0 || !!fetchError;
 
   return (
-    <div className="group/user group/msg w-full">
-      <article className="w-full min-w-0 px-3 py-2">
-        <div className="mb-1 flex items-center justify-end gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/75">
+    <div className="group/user group/msg flex w-full justify-end py-2">
+      <article className="min-w-0 max-w-[min(82%,42rem)]">
+        <div className="mb-1 flex min-h-5 items-center justify-end gap-2 text-[10px] text-muted-foreground/75">
           <div className={cn(
             'flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/user:opacity-100 focus-within:opacity-100',
             rollbackPending && 'opacity-100',
@@ -303,20 +289,12 @@ function UserMessage({
             )}
             {text && <CopyMarkdownButton text={text} />}
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="font-semibold text-primary/80">{t('messages.you')}</span>
-            {tokenBadge}
-            <Avatar className="h-4 w-4 shrink-0 opacity-90">
-              <AvatarFallback className="bg-primary/10 text-primary">
-                <User className="h-2.5 w-2.5" />
-              </AvatarFallback>
-            </Avatar>
-          </div>
+          {tokenBadge}
         </div>
         {hasUserBody && (
-          <div className="rounded-xl bg-primary/[0.055] px-3 py-2 text-foreground shadow-[inset_0_0_0_1px_rgba(255,255,255,0.025)]">
+          <div className="rounded-2xl bg-muted/70 px-4 py-2.5 text-foreground shadow-[inset_0_0_0_1px_hsl(var(--border)/0.35)]">
             {text && (
-              <div className="text-[13px] leading-5">
+              <div className="text-[13px] leading-[1.45rem]">
                 <Markdown text={text} />
               </div>
             )}
@@ -971,7 +949,7 @@ function ThinkingBlockView({ text }: { text: string }) {
         {!open && <span className="italic truncate max-w-[300px]">{preview}</span>}
       </button>
       {open && (
-        <div className="mt-1 ml-5 rounded-lg border border-dashed bg-muted/30 px-3 py-2 max-h-[40vh] overflow-y-auto">
+        <div className="mt-1 ml-4 max-h-[40vh] overflow-y-auto border-l border-border/60 py-1 pl-3">
           <Markdown
             text={displayText}
             className="text-xs leading-5 text-muted-foreground italic prose-p:my-1 prose-strong:text-muted-foreground prose-code:text-muted-foreground"

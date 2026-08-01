@@ -132,21 +132,29 @@ export function CustomAgentsPanel() {
                   <div className="flex items-center gap-2">
                     <span className="truncate text-sm font-semibold">{agent.name}</span>
                     <Badge variant="outline" className="h-5 text-[10px]">{preset?.label ?? agent.baseAgentId}</Badge>
+                    {agent.managedBy && (
+                      <Badge variant="secondary" className="h-5 text-[10px]">
+                        {t('admin:customAgents.pluginManaged', { version: agent.managedVersion ?? '?' })}
+                      </Badge>
+                    )}
                   </div>
                   <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{agent.description || preset?.description}</p>
                   <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
                     <span>{t('admin:customAgents.skillCount', { count: agent.skillIds.length })}</span>
                     <span>·</span>
                     <span>{agent.toolNames === null ? t('admin:customAgents.toolsInherited') : t('admin:customAgents.toolCount', { count: agent.toolNames.length })}</span>
+                    {agent.requiredToolTiers.length > 0 && <><span>·</span><span>{t('admin:customAgents.requiredTiers', { tiers: agent.requiredToolTiers.join(', ') })}</span></>}
+                    {agent.pinnedToolNames.length > 0 && <><span>·</span><span>{t('admin:customAgents.pinnedToolCount', { count: agent.pinnedToolNames.length })}</span></>}
+                    {agent.visibleToolCap != null && <><span>·</span><span>{t('admin:customAgents.visibleToolCap', { count: agent.visibleToolCap })}</span></>}
                     {agent.prompt && <><span>·</span><span>{t('admin:customAgents.customPrompt')}</span></>}
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <Switch checked={agent.enabled} onCheckedChange={(enabled) => void toggleEnabled(agent, enabled)} />
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditing(agent)} title={t('common:actions.edit')}>
+                  <Switch disabled={agent.managedBy !== null} checked={agent.enabled} onCheckedChange={(enabled) => void toggleEnabled(agent, enabled)} />
+                  <Button disabled={agent.managedBy !== null} variant="ghost" size="icon" className="h-8 w-8" onClick={() => setEditing(agent)} title={agent.managedBy ? t('admin:customAgents.pluginManagedHint', { plugin: agent.managedBy }) : t('common:actions.edit')}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => void remove(agent)} title={t('common:actions.delete')}>
+                  <Button disabled={agent.managedBy !== null} variant="ghost" size="icon" className="h-8 w-8 text-destructive" onClick={() => void remove(agent)} title={agent.managedBy ? t('admin:customAgents.pluginManagedHint', { plugin: agent.managedBy }) : t('common:actions.delete')}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
                 </div>

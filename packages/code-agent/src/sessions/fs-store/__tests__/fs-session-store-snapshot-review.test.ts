@@ -4,6 +4,7 @@ import {
   readFile,
   readdir,
   rm,
+  writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -401,6 +402,52 @@ describe('FsSessionStore snapshot and review repositories', () => {
     expect(await store.listReviewEvidenceEdits(session.id)).toEqual([
       expect.objectContaining({ file_path: 'src/review.ts' }),
     ]);
+  });
+
+  it('reads one snapshot by UUID without scanning unrelated entity files', async () => {
+    const session = await store.createSession({
+      project_id: 7,
+      title: 'Direct snapshot lookup',
+      provider: 'test',
+      model: 'test',
+    });
+    const record = (file_path: string, operation_id: string) =>
+      store.recordBaselineAndEdit(
+        {
+          session_kind: 'coder',
+          session_id: session.id,
+          project_id: 7,
+          file_path,
+          content_before: 'before',
+          existed_before: true,
+          baseline_hash: `hash-${file_path}`,
+          oversized: false,
+        },
+        {
+          turn_number: 1,
+          tool_name: 'edit_file',
+          content_after_hash: `after-${file_path}`,
+          was_delete: false,
+          operation_id,
+        },
+      );
+    const first = await record('src/first.ts', 'direct-first');
+    const sibling = await record('src/sibling.ts', 'direct-sibling');
+    const location = await store.getSessionLocation(session.id);
+    expect(location).not.toBeNull();
+    await writeFile(
+      join(location!.bundle_path, 'snapshots', `${sibling.baseline.id}.json`),
+      '{corrupt sibling',
+      'utf8',
+    );
+
+    await expect(store.getBaselineById(first.baseline.id)).resolves.toMatchObject({
+      id: first.baseline.id,
+      file_path: 'src/first.ts',
+    });
+    await expect(
+      store.listBaselines('coder', session.id, { includeClosed: true }),
+    ).rejects.toThrow();
   });
 
   it('rejects snapshot paths that escape the owning project', async () => {

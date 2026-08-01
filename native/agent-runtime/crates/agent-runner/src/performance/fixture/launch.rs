@@ -36,6 +36,7 @@ pub(super) fn launch_handoff(deadline_at_unix_ms: i64) -> wire::RunnerLaunchHand
             activation_nonce_sha256: activation_nonce_sha256(ACTIVATION_NONCE).to_vec(),
         }),
         runtime_provenance: agent_hello_draft().provenance,
+        runner_pulse_interval_ms: 100,
     }
 }
 

@@ -625,6 +625,11 @@ export function mountCoderSessionsRoutes(
           baseAgentId: agent.baseAgentId,
           skillCount: agent.skillIds.length,
           toolMode: agent.toolNames === null ? 'inherit' : 'allowlist',
+          pinnedToolCount: agent.pinnedToolNames.length,
+          requiredToolTiers: agent.requiredToolTiers,
+          visibleToolCap: agent.visibleToolCap,
+          managedBy: agent.managedBy,
+          managedVersion: agent.managedVersion,
         };
       });
     return c.json({
@@ -1026,6 +1031,25 @@ export function mountCoderSessionsRoutes(
     return c.json(updated);
   });
 
+  app.patch('/api/coder/sessions/:id/block-code-comments', async (c) => {
+    const id = parseSessionIdParam(c);
+    const body = await parseJsonBody<{ enabled?: unknown }>(c);
+    if (typeof body.enabled !== 'boolean') {
+      return c.json({ error: 'enabled:boolean required' }, 400);
+    }
+    const enabled = body.enabled;
+    const updated = await withSessionLock(id, async () => {
+      const session = await sessionStore.getSession(id);
+      if (!session) return null;
+      const persistedByWorker = await workerPool.setBlockCodeComments(id, enabled);
+      if (persistedByWorker) return sessionStore.refreshSession(id);
+      await sessionStore.setSessionBlockCodeComments(id, enabled);
+      return sessionStore.getSession(id);
+    });
+    if (!updated) return notFound(c);
+    return c.json(updated);
+  });
+
   /**
    * Persist this conversation's execution budget. Null max_turns is the
    * default and means "run until natural completion". Auto-continues are
@@ -1341,6 +1365,8 @@ export function mountCoderSessionsRoutes(
     return c.json({
       messages: preview ? trimMessageBlocks(data.messages) : data.messages,
       message_rows: data.message_rows,
+      next_before_seq: data.next_cursor,
+      has_more: data.next_cursor != null,
       preceding_user_seq,
       tool_results,
     });

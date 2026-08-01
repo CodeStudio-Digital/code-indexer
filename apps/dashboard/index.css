@@ -243,6 +243,12 @@ html[data-app-runtime='electron'] :where(
   border: 1px solid var(--workbench-border);
   border-radius: 6px;
 }
+.chat-transcript {
+  scrollbar-gutter: stable;
+  background:
+    linear-gradient(to bottom, hsl(var(--background) / 0.12), transparent 120px),
+    var(--workbench-surface);
+}
 .workbench-panel-header {
   height: 32px;
   flex: 0 0 32px;

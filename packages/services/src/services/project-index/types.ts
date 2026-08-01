@@ -116,6 +116,12 @@ export interface StructuralProgressFrame {
   phase?: 'scanning' | 'indexing';
 }
 
+export type StructuralChangeHandler = (
+  events: readonly DirtyEvent[],
+  /** Logical semantic items owned by these paths before structural mutation. */
+  previousItemKeys: readonly string[],
+) => void | Promise<void>;
+
 /**
  * The three structural operations the service needs. Implementations:
  * in-process (fallback, always available) and the indexer worker client
@@ -130,11 +136,19 @@ export interface StructuralExecutor {
       allowEmptyWipe?: boolean;
       onProgress?: (p: StructuralProgressFrame) => void;
       /** Exact scanner delta, acknowledged before structural rows mutate. */
-      onChanges?: (events: readonly DirtyEvent[]) => void | Promise<void>;
+      onChanges?: StructuralChangeHandler;
     },
   ): Promise<StructuralRunSummary>;
-  indexFiles(projectId: number, relPaths: string[]): Promise<IndexFilesSummary>;
-  removeFiles(projectId: number, relPaths: string[]): Promise<{ removed: number }>;
+  indexFiles(
+    projectId: number,
+    relPaths: string[],
+    opts?: { onChanges?: StructuralChangeHandler },
+  ): Promise<IndexFilesSummary>;
+  removeFiles(
+    projectId: number,
+    relPaths: string[],
+    opts?: { onChanges?: StructuralChangeHandler },
+  ): Promise<{ removed: number }>;
   /**
    * Background structural work yields while an interactive filesystem
    * mutation (for example Git stage/commit) owns priority for this project.

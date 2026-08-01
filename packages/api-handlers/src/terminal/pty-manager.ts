@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { delimiter } from 'node:path';
 import { ApiError, type TerminalOutputChunk } from '@mcp/api-bus';
 import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { electronWindowsPtyOptions } from '@mcp/shared/utils/windows-pty.js';
 import { OutputCoalescer, trimReplayBuffer } from './output-coalescer.js';
 import { shValue } from './shell-quote.js';
 
@@ -41,8 +42,9 @@ interface NodePtyModule {
       cwd?: string;
       env?: Record<string, string | undefined>;
       encoding?: string;
-      /** Windows-only — force WinPTY backend under Electron (see below). */
+      /** Windows-only node-pty backend selection. */
       useConpty?: boolean;
+      useConptyDll?: boolean;
     },
   ): IPty;
 }
@@ -180,14 +182,6 @@ export class PtyManager {
       delete env.Path;
       env.PATH = `${prepend.join(delimiter)}${delimiter}${prev}`;
     }
-    // Force WinPTY backend on Windows-under-Electron. ConPTY's
-    // `conpty_console_list_agent` helper spawns a child of
-    // `process.execPath` and calls AttachConsole on the parent's
-    // console; Electron is GUI-subsystem and has no console attached,
-    // so the helper crashes with "AttachConsole failed" and tears down
-    // the renderer. WinPTY uses a dedicated agent binary instead.
-    const inElectron = !!process.versions.electron;
-    const isWindows = process.platform === 'win32';
     const child = pty.spawn(file, args, {
       name: 'xterm-color',
       cols: opts.cols,
@@ -195,7 +189,7 @@ export class PtyManager {
       cwd: opts.cwd,
       env,
       encoding: 'utf8',
-      ...(isWindows && inElectron ? { useConpty: false } : {}),
+      ...electronWindowsPtyOptions(),
     });
 
     return this.register(child, opts.retainOnExit === true, opts.meta ?? {

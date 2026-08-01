@@ -851,11 +851,15 @@ interface RunFreshPayload {
   agentSelectionId?: string;
   customAgentPrompt?: string;
   allowedToolNames?: string[];
+  initialPinnedTools?: string[];
+  initialToolTiers?: string[];
+  initialVisibleToolCap?: number;
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   worktree?: { name?: string; branch?: string };
   thinking?: boolean;
   modelSupportsVision?: boolean;
   describeImages?: boolean;
+  blockCodeComments?: boolean;
   previewAvailable?: boolean;
   browserAvailable?: boolean;
   selectedSkillIds?: string[];
@@ -922,11 +926,15 @@ bridge.handle('runFresh', async (payload) => {
       agentSelectionId: opts.agentSelectionId,
       customAgentPrompt: opts.customAgentPrompt,
       allowedToolNames: opts.allowedToolNames,
+      initialPinnedTools: opts.initialPinnedTools,
+      initialToolTiers: opts.initialToolTiers,
+      initialVisibleToolCap: opts.initialVisibleToolCap,
       profile: opts.profile,
       worktree: opts.worktree,
       thinking: opts.thinking,
       modelSupportsVision: opts.modelSupportsVision,
       describeImages: opts.describeImages,
+      blockCodeComments: opts.blockCodeComments,
       previewAvailable: opts.previewAvailable,
       browserAvailable: opts.browserAvailable,
       selectedSkillIds: opts.selectedSkillIds,
@@ -1116,6 +1124,16 @@ bridge.handle('setThinking', (payload) => {
   const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
   runner.setThinking(thinking);
+  return { ok: true };
+});
+
+bridge.handle('setBlockCodeComments', async (payload) => {
+  recordRpc('setBlockCodeComments');
+  const { enabled } = payload as { enabled: boolean };
+  await getSharedSessionStore(
+    dbPath,
+    sessionContext.writerOwnerId,
+  ).setSessionBlockCodeComments(sessionId, enabled);
   return { ok: true };
 });
 

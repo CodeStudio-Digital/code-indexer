@@ -54,6 +54,7 @@
     "agent:rust:addon:electron-smoke": "node scripts/smoke-rust-agent-host-bridge-electron.mjs",
     "agent:rust:perf:spawn": "node scripts/benchmark-rust-agent-startup.mjs --warmup 10 --samples 100 --threshold-ms 250",
     "agent:rust:installed-smoke": "tsx scripts/rust-agent-installed-smoke.ts",
+    "agent:rust:e2e:active": "node scripts/run-rust-agent-process-real-e2e.mjs",
     "agent:host:test": "vitest run packages/agent-runtime-contracts packages/agent-runtime-host",
     "audit:env": "tsx scripts/audit-env-vars.ts",
     "audit:env:check": "tsx scripts/audit-env-vars.ts --check",

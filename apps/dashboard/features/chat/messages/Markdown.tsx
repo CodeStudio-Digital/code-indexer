@@ -14,7 +14,7 @@ interface MarkdownProps {
 }
 
 const baseClasses =
-  'prose prose-sm max-w-none text-[13px] leading-5 prose-pre:rounded-md prose-pre:p-2 prose-code:before:content-none prose-code:after:content-none prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-normal prose-table:text-[11px] prose-th:px-1.5 prose-td:px-1.5 prose-headings:mt-2 prose-headings:mb-1 prose-p:my-1 prose-ul:my-1 prose-ol:my-1 prose-li:my-0.5';
+  'prose prose-sm max-w-none text-[13.5px] leading-[1.45rem] prose-pre:rounded-lg prose-pre:p-3 prose-code:before:content-none prose-code:after:content-none prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:font-normal prose-table:text-[11px] prose-th:px-1.5 prose-td:px-1.5 prose-headings:mt-4 prose-headings:mb-2 prose-p:my-2 prose-ul:my-2 prose-ol:my-2 prose-li:my-0.5';
 
 const defaultClasses =
   'dark:prose-invert prose-pre:bg-card prose-pre:border prose-pre:text-foreground prose-code:bg-muted prose-code:text-foreground prose-a:text-primary prose-strong:text-foreground';

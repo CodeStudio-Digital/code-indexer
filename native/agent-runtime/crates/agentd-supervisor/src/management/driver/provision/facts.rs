@@ -4,6 +4,7 @@ use agent_protocol::generated::v1 as wire;
 use zeroize::Zeroize;
 
 use super::peer::ProtectedLaunchPeerAuthority;
+use super::pulse::ProtectedRunnerPulseAuthority;
 use super::request::ProtectedLaunchRequest;
 use super::scrub::zeroize_identity;
 
@@ -23,6 +24,7 @@ pub(in crate::management::driver) struct ProtectedLaunchHandoffFacts {
     runtime_instance_id: String,
     hard_deadline_at_unix_ms: i64,
     authority_lease_expires_at_unix_ms: i64,
+    runner_pulse_interval_ms: u64,
     reserved_resource_budget: wire::ResourceBudget,
     endpoints: Vec<wire::ProtectedAttemptEndpoint>,
     launch_nonce: Vec<u8>,
@@ -46,6 +48,7 @@ impl ProtectedLaunchHandoffFacts {
             runtime_instance_id: request.runtime_instance_id().to_owned(),
             hard_deadline_at_unix_ms: request.hard_deadline_at_unix_ms(),
             authority_lease_expires_at_unix_ms: request.authority_lease_expires_at_unix_ms(),
+            runner_pulse_interval_ms: request.runner_pulse_interval_ms(),
             reserved_resource_budget: request.reserved_resource_budget(),
             endpoints: request.endpoints().to_vec(),
             launch_nonce: request.launch_nonce().to_vec(),
@@ -74,6 +77,11 @@ impl ProtectedLaunchHandoffFacts {
     #[must_use]
     pub(in crate::management::driver) const fn authority_lease_expires_at_unix_ms(&self) -> i64 {
         self.authority_lease_expires_at_unix_ms
+    }
+
+    #[must_use]
+    pub(in crate::management::driver) const fn runner_pulse_interval_ms(&self) -> u64 {
+        self.runner_pulse_interval_ms
     }
 
     #[must_use]
@@ -129,6 +137,25 @@ impl ProtectedLaunchHandoffFacts {
     ) -> &ProtectedLaunchPeerAuthority {
         &self.peer_authority
     }
+
+    pub(in crate::management::driver) fn take_runner_pulse_authority(
+        &mut self,
+    ) -> Option<
+        Result<ProtectedRunnerPulseAuthority, agent_protocol::pulse_channel::RunnerPulseError>,
+    > {
+        let endpoint = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.kind == wire::AttemptEndpointKind::RunnerPulse as i32)?;
+        let token = std::mem::take(&mut endpoint.connection_token);
+        Some(ProtectedRunnerPulseAuthority::new(
+            self.identity.clone(),
+            self.runtime_instance_id.clone(),
+            endpoint.address.clone(),
+            &endpoint.connection_id,
+            token,
+        ))
+    }
 }
 
 impl Zeroize for ProtectedLaunchHandoffFacts {
@@ -171,6 +198,7 @@ impl Debug for ProtectedLaunchHandoffFacts {
                 "authority_lease_expires_at_unix_ms",
                 &self.authority_lease_expires_at_unix_ms,
             )
+            .field("runner_pulse_interval_ms", &self.runner_pulse_interval_ms)
             .field("reserved_resource_budget", &self.reserved_resource_budget)
             .field("endpoint_count", &self.endpoints.len())
             .field("endpoint_secrets", &"[REDACTED]")

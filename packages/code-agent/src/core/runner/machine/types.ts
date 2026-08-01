@@ -85,7 +85,9 @@ export interface RunContext {
    * Tools the model called by name while they were hidden (tier-hidden or
    * cap-cut). They join the visible list from the next turn (`buildTools`
    * unions them past the tier filter and protects them from the cap).
-   * Shared BY REFERENCE with the host runner; monotone — only grows.
+   * Shared BY REFERENCE with the host runner. Runtime pins are a bounded LRU
+   * window: new capabilities may evict older dynamic pins, while configured
+   * pins remain required through RunnerOptions.requiredPinnedTools.
    */
   pinnedTools: Set<string>;
   /**

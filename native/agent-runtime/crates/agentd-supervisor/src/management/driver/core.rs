@@ -7,6 +7,7 @@ use super::completion_cleanup::{CompletionCleanupRegistry, ManagedLaunchCleanup}
 use super::fact_flow::FactFlow;
 use super::launch_registry::LaunchRegistry;
 use super::provision::{ProtectedLaunchPeerAuthority, ProtectedLaunchProvisionPort};
+use super::pulse_registry::PulseRegistry;
 use super::shutdown::ShutdownRegistry;
 use super::{SupervisorDriverCreateError, SupervisorDriverState, TrustedRunnerConfig};
 use crate::admission::SupervisorCapacity;
@@ -32,6 +33,7 @@ where
     pub(super) launch_registry: LaunchRegistry,
     pub(super) shutdown_registry: ShutdownRegistry,
     pub(super) completion_cleanup: CompletionCleanupRegistry<ManagedLaunchCleanup<V::Cleanup>>,
+    pub(super) pulse_registry: PulseRegistry,
     pub(super) last_observed_at_unix_ms: Option<i64>,
 }
 
@@ -98,6 +100,7 @@ where
             launch_registry: LaunchRegistry::new(maximum_launches),
             shutdown_registry: ShutdownRegistry::default(),
             completion_cleanup: CompletionCleanupRegistry::new(maximum_active),
+            pulse_registry: PulseRegistry::new(maximum_active),
             last_observed_at_unix_ms: None,
         })
     }
@@ -129,5 +132,16 @@ where
 
     pub(in crate::management) fn physical_ports(&self) -> (Arc<P>, Arc<V>) {
         (Arc::clone(&self.containment), Arc::clone(&self.provisioner))
+    }
+
+    pub(in crate::management) fn next_physical_deadline_unix_ms(&self) -> Option<i64> {
+        match (
+            self.state.next_cleanup_deadline_unix_ms(),
+            self.pulse_registry.next_deadline_unix_ms(),
+        ) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (Some(value), None) | (None, Some(value)) => Some(value),
+            (None, None) => None,
+        }
     }
 }

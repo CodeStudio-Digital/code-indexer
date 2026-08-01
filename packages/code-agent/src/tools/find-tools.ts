@@ -23,17 +23,15 @@ import {
  *
  * `find_tools(query)` lets the agent ask: "what tool do I need for X?" and
  * receive a small list of candidates with their tier, source, and full
- * description. The model can then call `expand_toolset(<tier>)` confidently
- * (or skip it entirely if the candidate is already visible).
+ * description. A strong top hidden match is promoted automatically so its
+ * full provider schema is available on the NEXT turn. The model can instead
+ * call `expand_toolset(<tier>)` when it needs a whole family of tools.
  *
- * Discovery does NOT promote any tier — it's read-only. From here the agent
- * has two paths: call the discovered tool DIRECTLY (dispatch executes hidden
- * registered tools and pins them into the visible list — see the pin
- * mechanism in executing-dispatch.ts), or `expand_toolset(<tier>)` to unlock
- * the whole tier. Both grow the tool array monotonically between turns, so
- * prefix-cache stability is preserved either way. Known imprecision: a
- * tier-visible tool that was cap-cut for a small-catalog model still shows
- * as visible here — harmless, a direct call works and pins it.
+ * Discovery does NOT promote a whole tier. It promotes at most one strong
+ * hidden result into a bounded LRU working set: a new capability replaces the
+ * least-recently-used dynamic pin when the window is full, while configured
+ * agent pins remain permanent. Dispatch can still execute and pin an explicit
+ * hidden call for providers that permit undeclared tool names.
  *
  * Implementation notes:
  *  - Cheap lexical match over three fields — name parts, TOP-LEVEL parameter
@@ -64,8 +62,8 @@ export function buildFindToolsTool(
       '(lazy discovery for tools NOT in your visible list).\n\n' +
       'Use when you suspect a tool exists for a task but cannot see it in your current tools array. ' +
       'Returns up to 5 candidates with their `name`, `tier`, `source`, argument summary, and a ' +
-      'short description. You can call a discovered tool DIRECTLY even while hidden — it executes ' +
-      'and is pinned into your visible list from the next turn. `expand_toolset(<tier>)` unlocks a ' +
+      'short description. A strong top hidden match is activated automatically for your next turn. ' +
+      '`expand_toolset(<tier>)` unlocks a ' +
       'whole tier at once when you need several of its tools.\n\n' +
       'QUERY TIPS: concept nouns ("worktree", "spec revision"), verbs ("edit", "spawn"), and exact ' +
       'argument names seen in other tool results ("evolution_id") all match; filler words are ' +
@@ -102,10 +100,16 @@ export function buildFindToolsTool(
       // Subagents and tests may not have a runner — in that case treat all
       // tiers as visible (no "hidden" tag) so the result is still useful.
       const runner = ctx.runner as
-        | { activeTiers?: ReadonlySet<ToolTier> | null; pinnedTools?: ReadonlySet<string> }
+        | {
+          activeTiers?: ReadonlySet<ToolTier> | null;
+          pinnedTools?: ReadonlySet<string>;
+          visibleToolNames?: ReadonlySet<string> | null;
+          promoteTool?: (name: string) => string[];
+          }
         | undefined;
       const active = runner?.activeTiers ?? null;
       const pinned = runner?.pinnedTools;
+      const visibleToolNames = runner?.visibleToolNames;
 
       const tokens = tokenizeQuery(query);
       if (tokens.length === 0) {
@@ -138,7 +142,11 @@ export function buildFindToolsTool(
           description: t.description ?? '',
           params: paramSummary(t.parameters),
           score,
-          visible: active ? active.has(tier) || !!pinned?.has(t.name) : true,
+          visible: visibleToolNames
+            ? visibleToolNames.has(t.name)
+            : active
+              ? active.has(tier) || !!pinned?.has(t.name)
+              : true,
         });
       }
 
@@ -168,6 +176,18 @@ export function buildFindToolsTool(
       });
       const top = pool.slice(0, limit);
 
+      // A provider can only emit tool calls whose schemas it received. The
+      // old "call a hidden tool directly" hint therefore created a catch-22
+      // on strict providers: discovery named the tool, but never put its
+      // schema into the next request. Promote only the strong top result —
+      // never weak/ambiguous matches — keeping discovery precise and bounded.
+      const autoPromoted = !weak && top[0] && !top[0].visible && runner?.promoteTool
+        ? top[0]
+        : null;
+      const evicted = autoPromoted && runner?.promoteTool
+        ? runner.promoteTool(autoPromoted.name)
+        : [];
+
       // Compact rendering — one line per candidate. The agent reads this in
       // its tool result; verbose multi-paragraph output here would defeat the
       // economy goal of Camada 3. Weak candidates always say WHY they matched
@@ -175,7 +195,9 @@ export function buildFindToolsTool(
       const renderCandidate = (r: Scored): string => {
         const visTag = r.visible
           ? ''
-          : ` [hidden — call it directly (it will be pinned into your toolset) or expand_toolset('${r.tier}')]`;
+          : autoPromoted?.name === r.name
+            ? ' [activated for next turn]'
+            : ` [hidden — refine search to activate or expand_toolset('${r.tier}')]`;
         // Trim description to one sentence-ish for compactness.
         const shortDesc = r.description.split(/(?<=[.!?])\s+/)[0]?.slice(0, 180) ?? '';
         const argsTag = r.params ? ` (args: ${r.params})` : '';
@@ -195,14 +217,23 @@ export function buildFindToolsTool(
       ];
       for (const r of top) lines.push(renderCandidate(r));
       // Steer the follow-up when the top candidate is hidden.
-      const firstHidden = top.find((r) => !r.visible);
-      if (firstHidden) {
+      if (autoPromoted) {
         lines.push('');
         lines.push(
-          `Hint: call ${firstHidden.name} directly with the args above — it executes and joins your ` +
-            `toolset next turn. Use \`expand_toolset({ tier: "${firstHidden.tier}" })\` instead if you ` +
-            `need several ${firstHidden.tier}-tier tools.`,
+          `Activated ${autoPromoted.name} for the next turn` +
+            (evicted.length > 0 ? ` (replaced least-recently-used: ${evicted.join(', ')})` : '') +
+            `. Call it directly with the args above. Use \`expand_toolset({ tier: "${autoPromoted.tier}" })\` ` +
+            `instead if you need several ${autoPromoted.tier}-tier tools.`,
         );
+      } else {
+        const firstHidden = top.find((r) => !r.visible);
+        if (firstHidden) {
+          lines.push('');
+          lines.push(firstHidden.tier === 'bootstrap'
+            ? 'Hint: refine the query to auto-activate one strong match.'
+            : `Hint: use \`expand_toolset({ tier: "${firstHidden.tier}" })\` if you need several ` +
+              `${firstHidden.tier}-tier tools. Refine the query to auto-activate one strong match.`);
+        }
       }
       if (weak) {
         lines.push('');

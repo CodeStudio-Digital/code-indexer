@@ -371,6 +371,35 @@ describe('buildTools — pinned tools', () => {
     expect(res.tools.length).toBeLessThanOrEqual(29); // cap 28 + at most the pin overflow
   });
 
+  it('uses dynamic pins as a recency-ordered swap window without overflowing the cap', () => {
+    const dynamicNames = ['ext_old', 'ext_warm', 'ext_new'];
+    const catalog = [
+      named('find_tools'),
+      named('code_exec'),
+      named('ordinary_a'),
+      named('ordinary_b'),
+      ...dynamicNames.map(named),
+    ];
+    const tierMap = new Map<string, ToolTier>(
+      dynamicNames.map((name) => [name, 'unity' as ToolTier]),
+    );
+    const result = buildTools({
+      registry: { list: () => catalog } as unknown as ToolRegistry,
+      activeTiers: new Set<ToolTier>(['bootstrap']),
+      externalToolTiers: tierMap,
+      pinnedTools: new Set(dynamicNames), // insertion order: old → new
+      sessionToolCap: 4,
+      toolContext: { cwd: tmpdir(), projectName: 'pin-window' } as unknown as ToolContext,
+      provider: { name: 'zai', model: 'claude-opus-4-7' } as unknown as ChatProvider,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual([
+      'code_exec', 'ext_new', 'ext_warm', 'find_tools',
+    ]);
+    expect(result.tools).toHaveLength(4);
+    expect(result.protectedToolNames.has('ext_old')).toBe(false);
+  });
+
   it('a disabled tool can never re-enter via a pin', () => {
     const args = {
       ...makeArgs('claude-opus-4-7'),
@@ -438,6 +467,7 @@ describe('buildTools — session tool cap (task preflight)', () => {
     const names = buildTools({
       ...makeArgs('glm-4.5-flash'),
       pinnedTools: new Set(pins),
+      requiredPinnedTools: new Set(pins),
     }).tools.map((t) => t.name);
     for (const pin of pins) {
       expect(names, `preflight pin ${pin} must survive the cap`).toContain(pin);

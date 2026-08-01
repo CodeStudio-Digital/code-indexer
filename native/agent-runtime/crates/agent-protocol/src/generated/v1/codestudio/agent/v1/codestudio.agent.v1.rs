@@ -1307,6 +1307,11 @@ pub struct RunnerLaunchHandoff {
     /// bound to the physical spawn before this protected handoff is committed.
     #[prost(message, optional, tag="14")]
     pub runtime_provenance: ::core::option::Option<RuntimeProvenance>,
+    /// Derived by the supervisor from its negotiated runner pulse timeout. The
+    /// runner may emit more frequently, but never less frequently than this
+    /// interval while the attempt remains alive.
+    #[prost(uint64, tag="15")]
+    pub runner_pulse_interval_ms: u64,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RunnerReadyEndpoint {

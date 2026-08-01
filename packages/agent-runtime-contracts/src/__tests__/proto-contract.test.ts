@@ -222,6 +222,7 @@ describe('Rust agent V1 Protobuf contract', () => {
       expected_supervisor_peer: 12,
       activation_authority_seal: 13,
       runtime_provenance: 14,
+      runner_pulse_interval_ms: 15,
     });
     expect(Object.fromEntries(fieldTags(messages.get('RunnerEndpointsReady')!))).toEqual({
       schema_version: 1,

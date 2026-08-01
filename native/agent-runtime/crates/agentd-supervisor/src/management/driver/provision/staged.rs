@@ -7,6 +7,7 @@ use agent_protocol::runner_bootstrap::MatchedRunnerEndpointsReady;
 
 use super::facts::ProtectedLaunchHandoffFacts;
 use super::peer::ProtectedLaunchPeerAuthority;
+use super::pulse::{ProtectedRunnerPulseAuthority, ProtectedRunnerPulseReceipt};
 #[cfg(any(test, windows))]
 use super::receipt::ProtectedLaunchReceipt;
 use super::request::ProtectedLaunchRequest;
@@ -89,6 +90,14 @@ impl<P> PendingProtectedLaunch<P> {
         &self.handoff_facts
     }
 
+    pub(in crate::management::driver) fn take_runner_pulse_authority(
+        &mut self,
+    ) -> Option<
+        Result<ProtectedRunnerPulseAuthority, agent_protocol::pulse_channel::RunnerPulseError>,
+    > {
+        self.handoff_facts.take_runner_pulse_authority()
+    }
+
     #[must_use]
     pub(in crate::management::driver) const fn provider(&self) -> &P {
         &self.provider
@@ -105,8 +114,9 @@ impl<P> PendingProtectedLaunch<P> {
         self,
         physical: &ProtectedLaunchPhysicalFacts,
         _ready: MatchedRunnerEndpointsReady,
+        pulse: ProtectedRunnerPulseReceipt,
     ) -> ProtectedLaunchReceipt {
-        ProtectedLaunchReceipt::new(self.seal, physical.clone())
+        ProtectedLaunchReceipt::new(self.seal, physical.clone(), pulse)
     }
 
     #[must_use]

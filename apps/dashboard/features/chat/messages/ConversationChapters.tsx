@@ -13,7 +13,6 @@ import {
   Search,
   WandSparkles,
 } from 'lucide-react';
-import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import { cn } from '../../../lib/utils.js';
 import type {
   ContentBlock,
@@ -28,6 +27,13 @@ import type {
 
 const CHAPTER_PAGE_SIZE = 10;
 const SOURCE_PAGE_SIZE = 40;
+
+interface ChapterIndexOptions {
+  pageSize?: number;
+  /** Transcript timelines need every lightweight chapter marker in order. */
+  loadAll?: boolean;
+  detail?: 'full' | 'preview';
+}
 
 interface ChapterIndexState {
   chapters: ConversationChapter[];
@@ -76,7 +82,14 @@ export function chapterPreviewText(chapter: ConversationChapter): string {
   ].find((value) => typeof value === 'string' && value.trim().length > 0)?.trim() ?? '';
 }
 
-export function useConversationChapters(sessionId: string, query = ''): ChapterIndexState {
+export function useConversationChapters(
+  sessionId: string,
+  query = '',
+  options: ChapterIndexOptions = {},
+): ChapterIndexState {
+  const pageSize = options.pageSize ?? CHAPTER_PAGE_SIZE;
+  const loadAll = options.loadAll ?? false;
+  const detail = options.detail ?? 'full';
   const [chapters, setChapters] = useState<ConversationChapter[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -85,27 +98,50 @@ export function useConversationChapters(sessionId: string, query = ''): ChapterI
   const [revision, setRevision] = useState(0);
 
   const fetchPage = useCallback(async (cursor?: string, signal?: AbortSignal) => {
-    const qs = new URLSearchParams({ limit: String(CHAPTER_PAGE_SIZE) });
+    const qs = new URLSearchParams({ limit: String(pageSize) });
+    if (detail === 'preview') qs.set('detail', 'preview');
     if (cursor) qs.set('cursor', cursor);
     if (query.trim()) qs.set('q', query.trim());
     const response = await fetch(`/api/coder/sessions/${sessionId}/chapters?${qs}`, { signal });
     if (!response.ok) throw new Error(`chapters request failed (${response.status})`);
     return await response.json() as ConversationChapterPage;
-  }, [query, sessionId]);
+  }, [detail, pageSize, query, sessionId]);
 
   useEffect(() => {
+    if (!sessionId) {
+      setChapters([]);
+      setNextCursor(null);
+      setLoading(false);
+      setError(false);
+      setStatus(null);
+      return;
+    }
     const controller = new AbortController();
     setChapters([]);
     setNextCursor(null);
     setLoading(true);
     setError(false);
     setStatus(null);
-    void fetchPage(undefined, controller.signal)
-      .then((page) => {
-        setChapters(Array.isArray(page.items) ? page.items : []);
-        setNextCursor(page.next_cursor ?? null);
-        setStatus(page.status ?? null);
-      })
+    void (async () => {
+      const collected: ConversationChapter[] = [];
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      let latestStatus: ConversationChapterStatus | null = null;
+      do {
+        const page = await fetchPage(cursor, controller.signal);
+        for (const chapter of Array.isArray(page.items) ? page.items : []) {
+          if (seen.has(chapter.id)) continue;
+          seen.add(chapter.id);
+          collected.push(chapter);
+        }
+        latestStatus = page.status ?? latestStatus;
+        cursor = page.next_cursor ?? undefined;
+      } while (loadAll && cursor && !controller.signal.aborted);
+      if (controller.signal.aborted) return;
+      setChapters(collected);
+      setNextCursor(cursor ?? null);
+      setStatus(latestStatus);
+    })()
       .catch((err: unknown) => {
         if ((err as { name?: string })?.name !== 'AbortError') setError(true);
       })
@@ -113,7 +149,17 @@ export function useConversationChapters(sessionId: string, query = ''): ChapterI
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [fetchPage, revision]);
+  }, [fetchPage, loadAll, revision]);
+
+  useEffect(() => {
+    const handleChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
+      if (detail?.sessionId && detail.sessionId !== sessionId) return;
+      setRevision((value) => value + 1);
+    };
+    window.addEventListener('coder:chapters-changed', handleChanged);
+    return () => window.removeEventListener('coder:chapters-changed', handleChanged);
+  }, [sessionId]);
 
   const loadMore = useCallback(async () => {
     if (!nextCursor || loading) return;
@@ -216,7 +262,7 @@ export function ConversationChaptersTimeline({
   error,
   status: _status,
   loadMore,
-  refresh,
+  refresh: _refresh,
   fallbackSummary,
   embedded = false,
 }: ConversationChaptersTimelineProps) {
@@ -239,13 +285,13 @@ export function ConversationChaptersTimeline({
         body: JSON.stringify({ archived_only: true }),
       });
       if (!response.ok) throw new Error(String(response.status));
-      refresh();
+      window.dispatchEvent(new CustomEvent('coder:chapters-changed', { detail: { sessionId } }));
     } catch {
       setRebuildError(true);
     } finally {
       setRebuilding(false);
     }
-  }, [refresh, sessionId]);
+  }, [sessionId]);
 
   const latestChapterId = chapters[0]?.id;
   useEffect(() => {
@@ -525,6 +571,7 @@ export function ConversationChaptersTimeline({
                           chapterId: item.id,
                           startMessageSeq: item.start_message_seq,
                           endMessageSeq: item.end_message_seq,
+                          expandConversation: true,
                         },
                       }))}
                       className="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary/10 px-2 text-[10px] font-medium text-primary transition-colors hover:bg-primary/15"
@@ -600,7 +647,7 @@ export function ConversationChaptersPanel({
   const [query, setQuery] = useState('');
   const [action, setAction] = useState<'summarize' | 'rebuild' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const chapterIndex = useConversationChapters(sessionId, query);
+  const chapterIndex = useConversationChapters(sessionId, query, { pageSize: 50 });
   const status = chapterIndex.status;
   const runActive = sessionStatus != null && sessionStatus !== 'idle' && sessionStatus !== 'error';
 
@@ -622,13 +669,13 @@ export function ConversationChaptersPanel({
         const body = await response.json().catch(() => null) as { error?: string } | null;
         throw new Error(body?.error || `HTTP ${response.status}`);
       }
-      chapterIndex.refresh();
+      window.dispatchEvent(new CustomEvent('coder:chapters-changed', { detail: { sessionId } }));
     } catch (error) {
       setActionError(error instanceof Error ? error.message : String(error));
     } finally {
       setAction(null);
     }
-  }, [chapterIndex.refresh, sessionId]);
+  }, [sessionId]);
 
   return (
     <div className="flex h-full min-h-0 flex-1 flex-col">
@@ -716,112 +763,135 @@ export function ConversationChaptersPanel({
   );
 }
 
-/** Interactive timeline marker rendered when a chapter's original range is loaded. */
+/** Compact chapter node used by the main chronological transcript timeline. */
 export function ConversationChapterDivider({
   chapter,
   active = false,
+  expanded = false,
+  detail,
+  detailLoading = false,
+  conversationExpanded = false,
+  conversationLoading = false,
+  conversationError = false,
   onActivate,
+  onToggle,
+  onToggleConversation,
 }: {
   chapter: ConversationChapter;
   active?: boolean;
+  expanded?: boolean;
+  detail?: ConversationChapter;
+  detailLoading?: boolean;
+  conversationExpanded?: boolean;
+  conversationLoading?: boolean;
+  conversationError?: boolean;
   onActivate?: (chapterId: string) => void;
+  onToggle?: (chapter: ConversationChapter) => void;
+  onToggleConversation?: (chapter: ConversationChapter) => void;
 }) {
   const { t } = useTranslation('chat');
-  const kind = resolvedChapterKind(chapter);
-  const preview = chapterPreviewText(chapter);
-  const title = chapter.title || t('messages.chapterNumber', { ordinal: chapter.ordinal });
+  const resolved = detail ?? chapter;
+  const kind = resolvedChapterKind(resolved);
+  const preview = chapterPreviewText(resolved);
+  const title = resolved.title || t('messages.chapterNumber', { ordinal: resolved.ordinal });
+  const parsed = safeJson<ConversationChapterContent>(resolved.chapter_json);
+  const resume = safeJson<ConversationResumeContent>(resolved.resume_json);
+  const fileValues = parsed?.files?.map((file) => (
+    file.state ? `${file.path} — ${file.state}` : file.path
+  ));
 
   const activate = () => {
     onActivate?.(chapter.id);
+    onToggle?.(chapter);
     window.dispatchEvent(new CustomEvent('coder:chapter-selected', {
       detail: { sessionId: chapter.session_id, chapterId: chapter.id },
     }));
   };
 
   return (
-    <div
-      className="group/chapter-marker relative my-2 grid grid-cols-[22px_minmax(0,auto)_1fr] items-center gap-2 py-1"
+    <article
+      className="group/chapter-marker relative py-1.5 pl-8"
       data-chapter-id={chapter.id}
       data-active={active || undefined}
     >
-      <span className="relative block h-9 w-[22px]" aria-hidden="true">
-        <span className="absolute bottom-0 left-[10px] top-0 w-px bg-border/65" />
-        <span className={cn(
-          'absolute left-[6px] top-[14px] h-[9px] w-[9px] rounded-full border-2 border-background shadow-sm transition-all',
+      <span className={cn(
+          'absolute left-[10px] top-[27px] z-10 h-[9px] w-[9px] rounded-full border-2 border-background shadow-sm transition-all',
           active
             ? 'scale-110 bg-primary ring-4 ring-primary/10'
             : 'bg-muted-foreground/45 group-hover/chapter-marker:bg-primary/70',
-        )} />
-        <span className={cn(
-          'absolute left-[10px] top-[18px] h-px w-3 transition-colors',
-          active ? 'bg-primary' : 'bg-border group-hover/chapter-marker:bg-primary/60',
-        )} />
-      </span>
-
-      <Tooltip delayDuration={180}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={activate}
-            aria-pressed={active}
-            aria-label={t('messages.chapterOpenPanel', { title })}
-            className={cn(
-              'flex min-w-0 max-w-[440px] items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left shadow-sm transition-all',
-              active
-                ? 'border-primary/40 bg-primary/10 text-foreground shadow-[0_7px_22px_-16px_hsl(var(--primary))]'
-                : 'border-border/60 bg-background/80 text-muted-foreground hover:-translate-y-px hover:border-primary/30 hover:bg-background hover:text-foreground hover:shadow-md',
-            )}
-          >
-            <span className={cn(
-              'grid h-5 w-5 shrink-0 place-items-center rounded-md',
-              kind === 'milestone' ? 'bg-violet-500/10 text-violet-500' : kind === 'rebuild' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500',
-            )}>
-              {kind === 'milestone' ? <Flag className="h-3 w-3" /> : kind === 'rebuild' ? <RefreshCw className="h-3 w-3" /> : <BookOpen className="h-3 w-3" />}
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-[10px] font-semibold leading-4 text-foreground/90">{title}</span>
-              <span className="block text-[8px] uppercase tracking-[0.1em] text-muted-foreground/70">
-                {t(`messages.chapterKind.${kind}`)} · #{chapter.ordinal}
-              </span>
-            </span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent
-          side="right"
-          align="center"
-          sideOffset={10}
-          className="w-[min(330px,calc(100vw-32px))] overflow-hidden rounded-xl border border-border/70 bg-popover p-0 text-popover-foreground shadow-2xl"
-        >
-          <div className="border-b border-border/60 bg-gradient-to-br from-primary/10 via-transparent to-transparent px-3 py-2.5">
-            <div className="mb-1.5 flex items-center gap-1.5">
-              <span className="rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
-                {t(`messages.chapterKind.${kind}`)}
-              </span>
-              <span className="text-[9px] tabular-nums text-muted-foreground">
-                #{chapter.start_message_seq}–#{chapter.end_message_seq}
-              </span>
-            </div>
-            <p className="text-xs font-semibold leading-5 text-foreground">{title}</p>
-          </div>
-          <div className="px-3 py-2.5">
-            <p className="mb-1 text-[9px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-              {t('messages.chapterPreviewLabel')}
-            </p>
-            <p className="line-clamp-4 whitespace-pre-wrap text-[11px] leading-4 text-foreground/80">
-              {preview || t('messages.chapterPreviewEmpty')}
-            </p>
-            <p className="mt-2 flex items-center gap-1 text-[9px] font-medium text-primary">
-              {t('messages.chapterOpenHint')}
-              <ArrowUpRight className="h-2.5 w-2.5" />
-            </p>
-          </div>
-        </TooltipContent>
-      </Tooltip>
-
+        )} aria-hidden="true" />
       <span className={cn(
-        'h-px min-w-4 bg-gradient-to-r transition-colors',
-        active ? 'from-primary/70 to-primary/0' : 'from-border/80 to-border/0',
-      )} />
-    </div>
+          'absolute left-[18px] top-[31px] h-px w-5 transition-colors',
+          active ? 'bg-primary' : 'bg-border group-hover/chapter-marker:bg-primary/60',
+        )} aria-hidden="true" />
+
+      <div className={cn(
+        'overflow-hidden rounded-lg border bg-background/80 shadow-sm transition-colors',
+        active || expanded ? 'border-primary/35 bg-primary/[0.045]' : 'border-border/60 hover:border-primary/25',
+      )}>
+        <button
+          type="button"
+          onClick={activate}
+          aria-expanded={expanded}
+          aria-label={t('messages.chapterOpenPanel', { title })}
+          className="flex w-full min-w-0 items-center gap-2.5 px-3 py-2.5 text-left"
+        >
+          <span className={cn(
+            'grid h-7 w-7 shrink-0 place-items-center rounded-md',
+            kind === 'milestone' ? 'bg-violet-500/10 text-violet-500' : kind === 'rebuild' ? 'bg-amber-500/10 text-amber-500' : 'bg-sky-500/10 text-sky-500',
+          )}>
+            {kind === 'milestone' ? <Flag className="h-3.5 w-3.5" /> : kind === 'rebuild' ? <RefreshCw className="h-3.5 w-3.5" /> : <BookOpen className="h-3.5 w-3.5" />}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[11px] font-semibold leading-4 text-foreground/95">{title}</span>
+            <span className="block text-[8px] uppercase tracking-[0.1em] text-muted-foreground/70">
+              {t(`messages.chapterKind.${kind}`)} · #{chapter.ordinal}
+            </span>
+          </span>
+          <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', expanded && 'rotate-180')} />
+        </button>
+
+        {expanded && (
+          <div className="space-y-3 border-t border-border/55 px-3 py-3">
+            {detailLoading ? (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {t('messages.chapterLoading')}
+              </div>
+            ) : (
+              <>
+                <p className="whitespace-pre-wrap break-words border-l-2 border-primary/40 pl-2.5 text-xs leading-relaxed text-foreground/85">
+                  {parsed?.summary || resolved.chapter_text || preview || t('messages.chapterPreviewEmpty')}
+                </p>
+                <DetailSection label={t('messages.chapterUserRequests')} values={parsed?.user_requests} />
+                <DetailSection label={t('messages.chapterDecisions')} values={parsed?.decisions} />
+                <DetailSection label={t('messages.chapterWorkCompleted')} values={parsed?.work_completed} />
+                <DetailSection label={t('messages.chapterFiles')} values={fileValues} />
+                <DetailSection label={t('messages.chapterOpenIssues')} values={parsed?.open_issues} />
+                <DetailSection label={t('messages.chapterResolvedIssues')} values={parsed?.resolved_issues} />
+                {(resume?.current_focus || resume?.next_step) && (
+                  <section className="rounded-md border border-border/50 bg-muted/30 p-2.5 text-xs text-foreground/75">
+                    {resume.current_focus && <p>{resume.current_focus}</p>}
+                    {resume.next_step && <p className="mt-1"><strong>{t('messages.chapterNextStep')}:</strong> {resume.next_step}</p>}
+                  </section>
+                )}
+              </>
+            )}
+            <button
+              type="button"
+              disabled={conversationLoading}
+              onClick={() => onToggleConversation?.(chapter)}
+              className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border/60 bg-muted/30 px-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+            >
+              {conversationLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <MessageSquareText className="h-3 w-3" />}
+              {conversationExpanded ? t('messages.chapterHideSource') : t('messages.chapterShowSource')}
+            </button>
+            {conversationError && (
+              <p className="text-[10px] text-destructive">{t('messages.chapterSourceLoadError')}</p>
+            )}
+          </div>
+        )}
+      </div>
+    </article>
   );
 }

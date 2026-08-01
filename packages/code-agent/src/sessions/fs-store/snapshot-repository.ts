@@ -263,7 +263,14 @@ export class FsSessionSnapshotRepository
         (opts.includeClosed || data.status === 'active')
       );
     });
-    return Promise.all(records.map((record) => this.#baselineRow(sessionId, record)));
+    const rows: Baseline[] = [];
+    for (let offset = 0; offset < records.length; offset += 8) {
+      rows.push(...await Promise.all(
+        records.slice(offset, offset + 8).map((record) =>
+          this.#baselineRow(sessionId, record)),
+      ));
+    }
+    return rows;
   }
 
   async listEdits(baselineId: string): Promise<EditRow<string>[]> {

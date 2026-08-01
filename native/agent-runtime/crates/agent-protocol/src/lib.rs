@@ -14,6 +14,7 @@ pub mod identity;
 pub mod management_channel;
 pub mod management_frame;
 mod management_secrets;
+pub mod pulse_channel;
 pub mod runner_bootstrap;
 pub mod semantic_hash;
 pub mod supervisor_bootstrap;

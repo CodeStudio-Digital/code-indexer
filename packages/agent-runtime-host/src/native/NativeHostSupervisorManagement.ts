@@ -13,6 +13,7 @@ import type {
   VerifiedRuntimePackage,
 } from '../packaging/RuntimePackageTypes.js';
 import type {
+  NativeHostSupervisorCloseReceipt,
   NativeHostBridgeBinding,
 } from './NativeHostBridgeBinding.js';
 import {
@@ -33,12 +34,27 @@ export interface NativeHostSupervisorManagementOptions {
 }
 
 /**
+ * Process owner for one native supervisor management session.
+ *
+ * The semantic bootstrap is deliberately single-use, while this owner remains
+ * available until native close has returned process-reap evidence. Keeping the
+ * two lifetimes together prevents a detached launch capability from hiding the
+ * only authority able to terminate the supervisor and its runner Job Object.
+ */
+export interface NativeHostSupervisorManagementOwner {
+  readonly supervisorProcessId: number;
+  establish(): ReturnType<HostSupervisorManagementBootstrap['establish']>;
+  abort(cause?: unknown): void;
+  close(): Promise<NativeHostSupervisorCloseReceipt>;
+}
+
+/**
  * Launches the process-real supervisor and transfers its exact native stream
  * into the existing semantic management bootstrap.
  */
 export async function createNativeHostSupervisorManagementBootstrap(
   options: NativeHostSupervisorManagementOptions,
-): Promise<HostSupervisorManagementBootstrap> {
+): Promise<NativeHostSupervisorManagementOwner> {
   const request = encodeNativeHostSupervisorBridgeOpenRequest({
     runtimePackage: options.runtimePackage,
     provision: options.provision,
@@ -75,9 +91,14 @@ export async function createNativeHostSupervisorManagementBootstrap(
         readTimeoutMs: safeNumber(limits.readTimeoutMs, 'readTimeoutMs'),
         writeTimeoutMs: safeNumber(limits.writeTimeoutMs, 'writeTimeoutMs'),
       });
-      return new HostSupervisorManagementBootstrap(
+      const bootstrap = new HostSupervisorManagementBootstrap(
         transport,
         options.provision,
+      );
+      return new OwnedNativeHostSupervisorManagement(
+        bootstrap,
+        authority,
+        channel.supervisorProcessId,
       );
     } catch (cause) {
       await authority.close().catch(() => undefined);
@@ -87,6 +108,39 @@ export async function createNativeHostSupervisorManagementBootstrap(
     if (!transferred) {
       abortNativeHostSupervisorBridgeOpenRequest(request);
     }
+  }
+}
+
+class OwnedNativeHostSupervisorManagement
+implements NativeHostSupervisorManagementOwner {
+  readonly supervisorProcessId: number;
+  readonly #bootstrap: HostSupervisorManagementBootstrap;
+  readonly #authority: NativeHostSupervisorCloseAuthority;
+
+  constructor(
+    bootstrap: HostSupervisorManagementBootstrap,
+    authority: NativeHostSupervisorCloseAuthority,
+    supervisorProcessId: number,
+  ) {
+    this.#bootstrap = bootstrap;
+    this.#authority = authority;
+    this.supervisorProcessId = supervisorProcessId;
+  }
+
+  establish(): ReturnType<HostSupervisorManagementBootstrap['establish']> {
+    return this.#bootstrap.establish();
+  }
+
+  abort(cause?: unknown): void {
+    this.#bootstrap.abort(cause);
+    void this.#authority.close().catch(() => undefined);
+  }
+
+  close(): Promise<NativeHostSupervisorCloseReceipt> {
+    this.#bootstrap.abort(new Error(
+      'native Host supervisor owner closed before bootstrap completion',
+    ));
+    return this.#authority.close();
   }
 }
 

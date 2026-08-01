@@ -3,11 +3,9 @@
  * (user-initiated) load when the selection changes, plus the live refetch that
  * reacts to `session_snapshot_changed` pings while the agent edits.
  *
- * The live refetch is debounced (trailing 300ms) and guarded by a request
+ * The live refetch is debounced (trailing 750ms) and guarded by a request
  * token + a selection mirror, so a burst of edits collapses into one
- * fetch+render and a late result can never overwrite a newer selection. The
- * list/reviews refresh fires immediately (cheap); only the heavy diff fetch is
- * throttled.
+ * list+diff refresh and a late result can never overwrite a newer selection.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchFileDiff } from '../api.js';
@@ -77,26 +75,27 @@ export function useSelectedDiff({
     void reloadDiff(selectedBaselineId);
   }, [selectedBaselineId, reloadDiff]);
 
-  // Live pings: refresh list/reviews now, debounce the heavy diff refetch.
+  // Live pings: debounce the complete refresh. The list is not intrinsically
+  // cheap: it verifies persisted baselines and computes current-file diffs.
   useEffect(() => {
     if (refreshKey === undefined) return;
     if (lastRefreshKey.current === refreshKey) return;
     lastRefreshKey.current = refreshKey;
-    onReload();
-    onReloadReviews();
     const baselineId = selectedBaselineId;
-    if (baselineId == null) return;
     const reqToken = ++token.current;
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => {
       if (reqToken !== token.current) return; // superseded before firing
+      onReload();
+      onReloadReviews();
+      if (baselineId == null) return;
       void fetchFileDiff(scope, sessionId, baselineId, { context: 3, contextBefore, contextAfter })
         .then((d) => {
           if (reqToken !== token.current || selectedRef.current !== baselineId) return;
           setDiff(d);
         })
         .catch(() => { /* swallow — UI shows stale */ });
-    }, 300);
+    }, 750);
     return () => {
       if (timer.current) {
         clearTimeout(timer.current);

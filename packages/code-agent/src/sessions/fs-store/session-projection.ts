@@ -266,6 +266,7 @@ export function mapCatalogEntry(
     reasoning_effort_override: runtimeState.reasoning_effort_override,
     execution_mode_override: runtimeState.execution_mode_override,
     thinking_enabled: runtimeState.thinking_enabled,
+    block_code_comments: runtimeState.block_code_comments,
     plan_depth_override: runtimeState.plan_depth_override,
     response_language_override: runtimeState.response_language_override,
     output_style_override: runtimeState.output_style_override,

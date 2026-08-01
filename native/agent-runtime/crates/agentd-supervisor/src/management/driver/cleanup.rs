@@ -212,6 +212,12 @@ where
         maximum_per_phase: usize,
     ) -> Result<CleanupDriveReport, CleanupStateError> {
         let started_at = clock.sample()?;
+        for key in self.pulse_registry.take_expired(started_at)? {
+            if self.ownership.state(&key).is_ok() {
+                self.state
+                    .schedule_attempt_cleanup(started_at, 0, true, [key])?;
+            }
+        }
         self.state.ensure_cleanup_deadlines(started_at)?;
         let mut report = CleanupDriveReport::default();
         self.drive_termination_phase_with_clock(clock, maximum_per_phase, &mut report)

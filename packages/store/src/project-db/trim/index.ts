@@ -14,7 +14,12 @@
  */
 import type { DB } from '../../db/types.js';
 import { projectDbFlags } from '@mcp/shared/utils/config.js';
-import { CENTRAL_FTS_VTABS, assertDisjointFromProject, centralTablesIn } from './drop-list.js';
+import {
+  CENTRAL_FTS_VTABS,
+  assertDisjointFromProject,
+  centralTablesIn,
+  projectKeepTables,
+} from './drop-list.js';
 import { recreateFkEdgeTables } from './fk-recreate.js';
 
 const MARKER_KEY = 'trim_version';
@@ -44,8 +49,21 @@ function alreadyTrimmed(db: DB, central: readonly string[]): boolean {
   const present = new Set((db.prepare(
     `SELECT name FROM sqlite_master WHERE type = 'table'`,
   ).all() as Array<{ name: string }>).map((entry) => entry.name));
-  return !central.some((table) => present.has(table))
+  const requiredProjectTables = [...projectKeepTables()]
+    .filter((table) => table !== 'sqlite_sequence');
+  return requiredProjectTables.every((table) => present.has(table))
+    && !central.some((table) => present.has(table))
     && !CENTRAL_FTS_VTABS.some((table) => present.has(table));
+}
+
+/** Cheap reopen guard used before the shared central bootstrap. */
+export function isProjectSchemaTrimCurrent(db: DB): boolean {
+  if (!projectDbFlags().trim) return false;
+  try {
+    return alreadyTrimmed(db, centralTablesIn(db));
+  } catch {
+    return false;
+  }
 }
 
 /** Drop the central FTS vtabs first (removes their shadow tables) so the base

@@ -7,8 +7,8 @@ use crate::frame::{BootstrapAttemptChannel, BootstrapChannelError, BootstrapErro
 use crate::generated::v1 as wire;
 
 use super::secrets::{
-    ProtectedLaunchSecrets, RunnerEndpointTokenVerifier, ScrubbedBytes, ScrubbedHandoff,
-    scrub_agent_hello, scrub_and_clear_handoff,
+    ProtectedLaunchSecrets, ScrubbedBytes, ScrubbedHandoff, scrub_agent_hello,
+    scrub_and_clear_handoff,
 };
 use super::validation::validate_handoff;
 use super::{
@@ -17,6 +17,7 @@ use super::{
 };
 
 mod asynchronous;
+mod authority;
 mod preflight;
 
 pub struct ShapeValidatedRunnerLaunchHandoff {
@@ -128,8 +129,9 @@ impl ShapeValidatedRunnerLaunchHandoff {
     /// Returns shape-checked non-secret launch metadata.
     ///
     /// `launch_nonce` and every `connection_token` are empty. The raw nonce
-    /// remains in a private single-use owner; only endpoint-bound token hashes
-    /// are retained.
+    /// remains in a private single-use owner. Control/data retain only
+    /// endpoint-bound token hashes; pulse retains only an endpoint-derived HMAC
+    /// key because the runner is the sender on that channel.
     #[must_use]
     pub const fn metadata(&self) -> &wire::RunnerLaunchHandoff {
         &self.metadata
@@ -153,32 +155,6 @@ impl ShapeValidatedRunnerLaunchHandoff {
         self.secrets
             .take_launch_nonce()
             .map(|bytes| PendingRunnerLaunchNonce { bytes })
-    }
-
-    /// Moves one endpoint-bound token verifier out of this handoff.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an unknown/unspecified kind or an already-consumed verifier.
-    pub fn take_endpoint_token_verifier(
-        &mut self,
-        kind: wire::AttemptEndpointKind,
-    ) -> Result<RunnerEndpointTokenVerifier, RunnerBootstrapError> {
-        let index = self
-            .metadata
-            .endpoints
-            .iter()
-            .position(|endpoint| endpoint.kind == kind as i32)
-            .ok_or(RunnerBootstrapError::InvalidField {
-                message: "ShapeValidatedRunnerLaunchHandoff",
-                field: "endpoint_kind",
-            })?;
-        self.secrets
-            .take_endpoint_token_verifier(index)
-            .ok_or(RunnerBootstrapError::InvalidField {
-                message: "ShapeValidatedRunnerLaunchHandoff",
-                field: "endpoint_token_authority",
-            })
     }
 
     #[cfg(test)]

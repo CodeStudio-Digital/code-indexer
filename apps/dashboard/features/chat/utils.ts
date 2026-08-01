@@ -601,6 +601,93 @@ function persistedLiveReconciliation(
     : history;
 }
 
+const CROSS_USER_BOUNDARY_BLOCK_TYPES = new Set<StreamBlock['type']>([
+  'activity',
+  'agents',
+  'task_run',
+  'workflow',
+]);
+
+function liveBlocksCoverPersistedAssistantRun(
+  blocks: StreamBlock[],
+  reconciliation: PersistedLiveReconciliation,
+  anywhere: boolean,
+): boolean {
+  if (blocks.length === 0 || reconciliation.assistantRun.length === 0) return false;
+  const liveText = normalizeRunText(getCurrentTurnText({ blocks }));
+  const liveThinking = normalizeRunText(getCurrentTurnThinkingText({ blocks }));
+  if (!normalizedCovers(
+    liveText,
+    reconciliation.persistedTextNormalized,
+    anywhere,
+  )) return false;
+  if (!normalizedCovers(
+    liveThinking,
+    reconciliation.persistedThinkingNormalized,
+    anywhere,
+  )) return false;
+
+  const liveIds = new Set<string>();
+  const liveSignatures = new Set<string>();
+  for (const block of blocks) {
+    const id = liveBlockPersistedId(block);
+    if (id) liveIds.add(id);
+    const signature = liveBlockPersistedSignature(block);
+    if (signature) liveSignatures.add(signature);
+  }
+  for (const message of reconciliation.assistantRun) {
+    for (const block of message.content) {
+      if (block.type !== 'tool_use') continue;
+      if (block.id && liveIds.has(block.id)) continue;
+      const signature = persistedInteractivePromptSignature(block.name, block.input);
+      if (
+        signature
+        && reconciliation.pendingInteractivePromptSignatures.has(signature)
+        && liveSignatures.has(signature)
+      ) continue;
+      return false;
+    }
+  }
+
+  return Boolean(
+    reconciliation.persistedText
+    || reconciliation.persistedThinking
+    || reconciliation.assistantRunToolUseCount > 0
+  );
+}
+
+/**
+ * Scope an accumulated live buffer to the assistant run after the latest user.
+ *
+ * `/inject` deliberately keeps the same worker and SSE stream alive. Older
+ * workers did not emit a user-boundary event, so their `currentTurn` can still
+ * contain the preceding user's text/tools when the durable history already has
+ * a newer user row. Find the latest suffix that covers the newest persisted
+ * assistant run and retain only it plus cross-turn live visualizations.
+ */
+export function scopeLiveTurnToLatestUser(
+  turn: AssistantTurn | null,
+  reconciliation: PersistedLiveReconciliation,
+): AssistantTurn | null {
+  if (
+    !turn
+    || turn.blocks.length === 0
+    || reconciliation.startsMidTurn
+    || reconciliation.assistantRun.length === 0
+    || liveBlocksCoverPersistedAssistantRun(turn.blocks, reconciliation, false)
+  ) return turn;
+
+  for (let start = turn.blocks.length - 1; start > 0; start--) {
+    const suffix = turn.blocks.slice(start);
+    if (!liveBlocksCoverPersistedAssistantRun(suffix, reconciliation, false)) continue;
+    const crossTurnBlocks = turn.blocks
+      .slice(0, start)
+      .filter((block) => CROSS_USER_BOUNDARY_BLOCK_TYPES.has(block.type));
+    return { blocks: [...crossTurnBlocks, ...suffix] };
+  }
+  return turn;
+}
+
 /** Live blocks NOT yet represented in persisted history (dedup by id or prompt signature). */
 export function visibleLiveBlocks(
   blocks: StreamBlock[],
@@ -610,14 +697,17 @@ export function visibleLiveBlocks(
   preferCompleteLiveRun = false,
   reconciliation?: PersistedLiveReconciliation,
 ): StreamBlock[] {
-  const hasTaskRun = blocks.some((block) => block.type === 'task_run');
+  const effectiveBlocks = reconciliation
+    ? (scopeLiveTurnToLatestUser({ blocks }, reconciliation)?.blocks ?? blocks)
+    : blocks;
+  const hasTaskRun = effectiveBlocks.some((block) => block.type === 'task_run');
   const liveAgentToolUseIds = new Set(
-    blocks.flatMap((block) => (
+    effectiveBlocks.flatMap((block) => (
       block.type === 'agents' && block.group.toolUseId ? [block.group.toolUseId] : []
     )),
   );
   const hasPresentationOverlap = hasTaskRun || liveAgentToolUseIds.size > 0
-    || blocks.some((block) => block.type === 'agents' && block.group.groupId.startsWith('tasks-wave-'));
+    || effectiveBlocks.some((block) => block.type === 'agents' && block.group.groupId.startsWith('tasks-wave-'));
   const hasPersistedRunContent = Boolean(
     reconciliation?.persistedTextNormalized || reconciliation?.persistedThinkingNormalized,
   );
@@ -626,7 +716,7 @@ export function visibleLiveBlocks(
     && persistedInteractivePromptSignatures.size === 0
     && !hasPresentationOverlap
     && !hasPersistedRunContent
-  ) return blocks;
+  ) return effectiveBlocks;
   // Whatever the durable transcript already renders must not render a second
   // time here. Cut the proven persisted prefix at its last ordered match and
   // append only the genuinely new live suffix after it.
@@ -637,7 +727,7 @@ export function visibleLiveBlocks(
   // bottom of this filter — a text/thinking-only ghost of the same turn.
   let persistedOverlapPrefixEnd = -1;
   if (!preferCompleteLiveRun && reconciliation) {
-    persistedOverlapPrefixEnd = persistedCoveragePrefixEnd(blocks, {
+    persistedOverlapPrefixEnd = persistedCoveragePrefixEnd(effectiveBlocks, {
       persistedTextNormalized: reconciliation.persistedTextNormalized,
       persistedThinkingNormalized: reconciliation.persistedThinkingNormalized,
       persistedIds,
@@ -646,7 +736,7 @@ export function visibleLiveBlocks(
       blockSignature: liveBlockPersistedSignature,
     });
   }
-  return blocks.filter((b, index) => {
+  return effectiveBlocks.filter((b, index) => {
     // `agents`/`task_run` are rich live cards that stay canonical while they
     // run (see below), so a covered prefix must not sweep them out by position
     // just because their spawn tool_use already checkpointed.
@@ -703,19 +793,21 @@ export function isLiveTurnDuplicatedInHistory(
   if (!turn || turn.blocks.length === 0) return false;
   const reconciliation = persistedLiveReconciliation(history, precedingUserMessageId);
   if (reconciliation.assistantRun.length === 0) return false;
+  const scopedTurn = scopeLiveTurnToLatestUser(turn, reconciliation);
+  if (!scopedTurn || scopedTurn.blocks.length === 0) return false;
   const effectivePersistedIds = persistedIds ?? reconciliation.persistedToolUseIds;
 
   // Normalized on both sides — same block-boundary mismatch as the coverage
   // check above. Until this returns true `onClearCurrentTurn()` never fires, so
   // a raw-string miss leaves the live buffer on screen after the turn ended.
-  const liveText = normalizeRunText(getCurrentTurnText(turn));
+  const liveText = normalizeRunText(getCurrentTurnText(scopedTurn));
   const persistedText = reconciliation.persistedTextNormalized;
-  const liveThinking = normalizeRunText(getCurrentTurnThinkingText(turn));
+  const liveThinking = normalizeRunText(getCurrentTurnThinkingText(scopedTurn));
   const persistedThinking = reconciliation.persistedThinkingNormalized;
   let checkedText = false;
   let checkedThinking = false;
 
-  for (const block of turn.blocks) {
+  for (const block of scopedTurn.blocks) {
     // Running agents remain live-canonical. A completed group whose tool result
     // is already durable is fully reconstructable in persisted history and
     // must not keep the accumulated live run appended after newer content.
@@ -788,46 +880,14 @@ export function liveTurnCoversPersistedAssistantRun(
 ): boolean {
   if (!turn || turn.blocks.length === 0) return false;
   const reconciliation = persistedLiveReconciliation(history, precedingUserMessageId);
-  if (reconciliation.assistantRun.length === 0) return false;
-  const persistedText = reconciliation.persistedText;
-  const persistedThinking = reconciliation.persistedThinking;
-  // Normalized: the backend concatenates a round's reasoning into one block
-  // while the live coalescer splits it at every tool boundary, so the raw
-  // strings differ by separators even for an identical run.
-  const liveText = normalizeRunText(getCurrentTurnText(turn));
-  const liveThinking = normalizeRunText(getCurrentTurnThinkingText(turn));
-  const anywhere = reconciliation.startsMidTurn;
-  if (!normalizedCovers(liveText, reconciliation.persistedTextNormalized, anywhere)) return false;
-  if (!normalizedCovers(liveThinking, reconciliation.persistedThinkingNormalized, anywhere)) {
-    return false;
-  }
-
-  const liveIds = new Set<string>();
-  const liveSignatures = new Set<string>();
-  for (const block of turn.blocks) {
-    const id = liveBlockPersistedId(block);
-    if (id) liveIds.add(id);
-    const signature = liveBlockPersistedSignature(block);
-    if (signature) liveSignatures.add(signature);
-  }
-  for (const message of reconciliation.assistantRun) {
-    for (const block of message.content) {
-      if (block.type !== 'tool_use') continue;
-      if (block.id && liveIds.has(block.id)) continue;
-      const signature = persistedInteractivePromptSignature(block.name, block.input);
-      if (
-        signature
-        && reconciliation.pendingInteractivePromptSignatures.has(signature)
-        && liveSignatures.has(signature)
-      ) continue;
-      return false;
-    }
-  }
-
+  const scopedTurn = scopeLiveTurnToLatestUser(turn, reconciliation);
   return Boolean(
-    persistedText
-    || persistedThinking
-    || reconciliation.assistantRunToolUseCount > 0
+    scopedTurn
+    && liveBlocksCoverPersistedAssistantRun(
+      scopedTurn.blocks,
+      reconciliation,
+      reconciliation.startsMidTurn,
+    )
   );
 }
 

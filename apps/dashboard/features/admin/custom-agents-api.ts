@@ -8,8 +8,13 @@ export interface CustomAgent {
   baseAgentId: BuiltInAgentPreset;
   prompt: string;
   skillIds: string[];
+  pinnedToolNames: string[];
+  requiredToolTiers: string[];
+  visibleToolCap: number | null;
   toolNames: string[] | null;
   enabled: boolean;
+  managedBy: string | null;
+  managedVersion: string | null;
   createdAt: string;
   updatedAt: string;
 }

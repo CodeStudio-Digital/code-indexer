@@ -366,6 +366,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     result: DispatchedToolResult;
     count: number;
   }>();
+  // A tool may have been pinned in an earlier turn but later evicted from the
+  // bounded visible working set. Visibility, not historical pin membership,
+  // decides whether it needs re-promotion. This batch-local set still avoids
+  // duplicate suffixes when the same hidden tool is called twice together.
+  const activatedHiddenThisBatch = new Set<string>();
 
   for (const requestedToolUse of args.toolUses) {
     const retrievalDecision = retrievalPlan.get(requestedToolUse.id);
@@ -461,7 +466,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       !!tool &&
       !!args.visibleToolNames &&
       !args.visibleToolNames.has(tu.name) &&
-      !args.pinnedTools?.has(tu.name);
+      !activatedHiddenThisBatch.has(tu.name);
 
     // Pre-dispatch gate (plan/spec/policy refusal). Synthesises an error
     // tool_result without touching the dedup counter — the call never
@@ -1101,6 +1106,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         finalShaped += compactSuffix;
       }
       args.onToolPinned?.(tu.name);
+      activatedHiddenThisBatch.add(tu.name);
     }
 
     args.onToolCallFinalized?.(tu.id, finalShaped.length);

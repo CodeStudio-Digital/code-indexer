@@ -76,6 +76,7 @@ export interface FsCoderSession {
   reasoning_effort_override: string | null;
   execution_mode_override: 'standard' | 'ultra';
   thinking_enabled: boolean;
+  block_code_comments: boolean;
   plan_depth_override: string | null;
   response_language_override: string | null;
   output_style_override: string | null;
@@ -133,6 +134,7 @@ export interface FsCreateSessionInput {
   execution_mode_override?: 'standard' | 'ultra';
   reasoning_effort_override?: string | null;
   thinking_enabled?: boolean;
+  block_code_comments?: boolean;
   max_turns?: number | null;
   max_auto_continues?: number;
   metadata?: Readonly<Record<string, JsonValue>>;
@@ -149,6 +151,7 @@ export interface FsCreateGlobalSessionInput {
   execution_mode_override?: 'standard' | 'ultra';
   reasoning_effort_override?: string | null;
   thinking_enabled?: boolean;
+  block_code_comments?: boolean;
   max_turns?: number | null;
   max_auto_continues?: number;
   owner_project_id?: ProjectId | null;

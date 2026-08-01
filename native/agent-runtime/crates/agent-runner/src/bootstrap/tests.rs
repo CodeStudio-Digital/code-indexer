@@ -293,6 +293,7 @@ fn windows_handoff() -> wire::RunnerLaunchHandoff {
             operating_system: "windows".into(),
             architecture: "x86_64".into(),
         }),
+        runner_pulse_interval_ms: 100,
     }
 }
 

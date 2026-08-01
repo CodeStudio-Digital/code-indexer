@@ -46,6 +46,8 @@ export interface BuildToolsArgs {
    * tool-filter hook and atomic goal-tool pairing still apply every turn.
    */
   pinnedTools?: ReadonlySet<string>;
+  /** Explicit agent/host pins. Unlike runtime promotions, these are permanent. */
+  requiredPinnedTools?: ReadonlySet<string>;
   /**
    * Session-level visible-tool ceiling (task preflight). Effective cap is
    * `min(model cap, sessionToolCap)`. Terse-description behavior stays tied
@@ -212,23 +214,26 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
 
   const eligibleBeforeCap = [...filtered];
 
-  // Protection partition BEFORE truncation: company orchestration tools
-  // (master / subordinate) and the session-class-agnostic NEVER_TRIM floor
-  // (discovery core, minimal reads, interaction/lifecycle) must NEVER be
-  // sliced by maxTools.
+  // Protection partition BEFORE truncation. Required/configured pins are a
+  // permanent floor. Runtime-discovered pins form a bounded LRU working set:
+  // they bypass tier filtering, but only the newest ones consume remaining
+  // cap slots and displace low-priority ordinary tools.
   const isMasterRunner = !!args.toolContext.companyContext?.isMaster;
   const isCompanyRunner = !!args.toolContext.companyContext;
-  const protectedBucket: typeof filtered = [];
+  const hardProtectedBucket: typeof filtered = [];
+  const dynamicPinnedByName = new Map<string, typeof filtered[number]>();
   const others: typeof filtered = [];
   for (const t of filtered) {
-    const isProtected =
+    const isHardProtected =
       NEVER_TRIM.has(t.name) ||
       (specModeBlocksPlan && t.name === 'submit_spec') ||
       PREVIEW_WORKFLOW_FLOOR.has(t.name) ||
       ROLE_CAPABILITY_FLOOR.has(t.name) ||
-      !!args.pinnedTools?.has(t.name) ||
+      !!args.requiredPinnedTools?.has(t.name) ||
       (isCompanyRunner && isEssentialCompanyTool(t.name, isMasterRunner));
-    (isProtected ? protectedBucket : others).push(t);
+    if (isHardProtected) hardProtectedBucket.push(t);
+    else if (args.pinnedTools?.has(t.name)) dynamicPinnedByName.set(t.name, t);
+    else others.push(t);
   }
   const modelMaxTools = getModelMaxTools(args.provider.model ?? '');
   // Perf W3 — default session ceiling. `getModelMaxTools` falls back to 200
@@ -253,9 +258,17 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
       ? defaultSessionCap
       : 0;
   const maxTools = sessionCap > 0 ? Math.min(modelMaxTools, sessionCap) : modelMaxTools;
-  const totalBefore = protectedBucket.length + others.length;
+  const dynamicPinnedNewestFirst = [...(args.pinnedTools ?? [])]
+    .reverse()
+    .map((name) => dynamicPinnedByName.get(name))
+    .filter((tool): tool is typeof filtered[number] => tool !== undefined);
+  const totalBefore = hardProtectedBucket.length + dynamicPinnedByName.size + others.length;
+  let protectedBucket: typeof filtered = hardProtectedBucket;
   let capInfo: BuildToolsCapInfo | null = null;
   if (totalBefore > maxTools) {
+    const dynamicRoom = Math.max(0, maxTools - hardProtectedBucket.length);
+    const keptDynamicPins = dynamicPinnedNewestFirst.slice(0, dynamicRoom);
+    protectedBucket = [...hardProtectedBucket, ...keptDynamicPins];
     const room = Math.max(0, maxTools - protectedBucket.length);
     const legacy = process.env.CODER_PRIORITY_TRIM_DISABLE === '1';
     let keptOthers: typeof filtered;
@@ -270,8 +283,13 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
       keptOthers = sel.kept;
       cutNames = sel.dropped;
     }
+    const droppedDynamicPins = dynamicPinnedNewestFirst.slice(keptDynamicPins.length);
     filtered = [...protectedBucket, ...keptOthers];
-    capInfo = { total: totalBefore, cap: maxTools, dropped: cutNames.length };
+    capInfo = {
+      total: totalBefore,
+      cap: maxTools,
+      dropped: cutNames.length + droppedDynamicPins.length,
+    };
     // Soft-cap: the protected set is never dropped even when it alone
     // exceeds the cap (e.g. company master on a 32-tool model).
     const overflow = protectedBucket.length > maxTools
@@ -284,10 +302,13 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
         : 'default session cap';
     console.log(
       `[coder] tool cap: ${totalBefore} → ${filtered.length} (${capSource} ${maxTools} for ${args.provider.model}, strategy=${legacy ? 'legacy' : 'priority'}) — ` +
-        `${protectedBucket.length} protected kept, ${keptOthers.length}/${others.length} others kept, ${cutNames.length} dropped${overflow}. ` +
-        `Dropped: ${cutNames.slice(0, 20).join(', ')}${cutNames.length > 20 ? `, … (+${cutNames.length - 20})` : ''}`,
+        `${hardProtectedBucket.length} hard protected, ${keptDynamicPins.length}/${dynamicPinnedByName.size} dynamic pins kept, ` +
+        `${keptOthers.length}/${others.length} others kept, ${capInfo.dropped} dropped${overflow}. ` +
+        `Dropped: ${[...droppedDynamicPins.map((tool) => tool.name), ...cutNames].slice(0, 20).join(', ')}` +
+        `${capInfo.dropped > 20 ? `, … (+${capInfo.dropped - 20})` : ''}`,
     );
   } else {
+    protectedBucket = [...hardProtectedBucket, ...dynamicPinnedNewestFirst];
     filtered = [...protectedBucket, ...others];
   }
   // Presentation invariant: globally alphabetical, byte-stable for the
@@ -349,6 +370,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
 export interface BuildToolsCacheKeyArgs {
   activeTiers: Set<ToolTier> | null;
   pinnedTools?: ReadonlySet<string>;
+  requiredPinnedTools?: ReadonlySet<string>;
 }
 
 /**
@@ -356,13 +378,16 @@ export interface BuildToolsCacheKeyArgs {
  * part of the key: `create_goal` now stays visible for the whole run, so the
  * tool membership no longer depends on goal lifecycle. Keeping the key
  * goal-independent keeps the provider prompt-cache prefix byte-stable.
- * Pins contribute their sorted names: a new pin = a new key (one rebuild,
- * then stable).
+ * Pins contribute their sorted names: a promotion/eviction swap = a new key
+ * (one rebuild, then stable). LRU touches alone do not change membership.
  */
 export function buildToolsCacheKey(args: BuildToolsCacheKeyArgs): string {
   const tierKey = args.activeTiers ? Array.from(args.activeTiers).sort().join(',') : '*';
   const pinKey = args.pinnedTools?.size ? Array.from(args.pinnedTools).sort().join(',') : '';
-  return `${tierKey}|pins=${pinKey}`;
+  const requiredKey = args.requiredPinnedTools?.size
+    ? Array.from(args.requiredPinnedTools).sort().join(',')
+    : '';
+  return `${tierKey}|pins=${pinKey}|required=${requiredKey}`;
 }
 
 /**

@@ -84,6 +84,11 @@ export class FsOperationalSessionStore {
       self.advanced.setThinkingEnabled(id, value),
     this,
   );
+  setSessionBlockCodeComments = thisCall(
+    (self, id: SessionId | string, value: boolean) =>
+      self.advanced.setBlockCodeComments(id, value),
+    this,
+  );
   setSessionRunLimits = thisCall(
     (
       self,
@@ -226,6 +231,7 @@ export class FsOperationalSessionStore {
       patch: {
         addExtraTiers?: readonly string[];
         addPins?: readonly string[];
+        pins?: readonly string[];
         visibleCap?: number | null;
       },
     ) => self.advanced.mergeToolsetState(id, patch),

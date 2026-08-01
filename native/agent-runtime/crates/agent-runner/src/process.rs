@@ -1,8 +1,8 @@
 //! Production process composition for the Windows protected bootstrap.
 //!
-//! The process accepts exactly the protected Host and completes Hello. Attempt
-//! preparation remains fail-closed until the authenticated data-channel
-//! hydration adapter lands.
+//! The process accepts exactly the protected Host, hydrates one attempt,
+//! commits activation, and retains the active lifetime until a terminal guard
+//! or the supervisor ends the single-tenant process.
 
 use std::convert::Infallible;
 use std::error::Error;
@@ -23,14 +23,14 @@ pub enum RunnerProcessStartError {
     PhysicalBootstrap(RunnerPhysicalBootstrapError),
     ControlTransition(RunnerControlTransitionError),
     Control(Box<dyn Error + Send + Sync>),
-    UnexpectedActivation,
+    ActiveLifetimeEnded,
 }
 
 /// Consumes the inherited protected handoff and starts the Host control pump.
 ///
-/// Successful execution does not return before the supervisor terminates the
-/// single-tenant process. Hello, data binding, and bounded hydration are real;
-/// productive effect dispatch remains fail-closed after activation.
+/// Successful execution does not return before the active lifetime terminates
+/// or the supervisor reaps the single-tenant process. Productive provider,
+/// tool, and effect dispatch remains fail-closed after activation.
 ///
 /// # Errors
 ///
@@ -55,15 +55,20 @@ pub fn run_inherited_windows() -> Result<Infallible, RunnerProcessStartError> {
         .map_err(RunnerProcessStartError::ControlTransition)?;
     let (cancellation_authority, mut cancellation) = endpoint_cancellation();
     let outcome = runtime.block_on(async move {
-        let outcome = Box::pin(prepared.accept_and_activate(agent_hello, &mut cancellation)).await;
-        drop(cancellation_authority);
-        outcome
+        match Box::pin(prepared.accept_and_activate(agent_hello, &mut cancellation)).await {
+            Ok(active) => {
+                active.run_until_cleanup(&mut cancellation).await;
+                drop(cancellation_authority);
+                Ok(())
+            }
+            Err(error) => {
+                drop(cancellation_authority);
+                Err(error)
+            }
+        }
     });
     match outcome {
-        Ok(active) => {
-            drop(active.revoke());
-            Err(RunnerProcessStartError::UnexpectedActivation)
-        }
+        Ok(()) => Err(RunnerProcessStartError::ActiveLifetimeEnded),
         Err(error) => Err(RunnerProcessStartError::Control(Box::new(error))),
     }
 }
@@ -77,9 +82,7 @@ impl Display for RunnerProcessStartError {
                 formatter.write_str("runner control authority transition failed")
             }
             Self::Control(_) => formatter.write_str("runner control service stopped"),
-            Self::UnexpectedActivation => {
-                formatter.write_str("runner activated without a production hydration port")
-            }
+            Self::ActiveLifetimeEnded => formatter.write_str("active runner lifetime ended"),
         }
     }
 }
@@ -91,7 +94,7 @@ impl Error for RunnerProcessStartError {
             Self::PhysicalBootstrap(source) => Some(source),
             Self::ControlTransition(source) => Some(source),
             Self::Control(source) => Some(source.as_ref()),
-            Self::UnexpectedActivation => None,
+            Self::ActiveLifetimeEnded => None,
         }
     }
 }

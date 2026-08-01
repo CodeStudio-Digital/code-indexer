@@ -1,6 +1,7 @@
 use std::fmt::{self, Debug, Formatter};
 
 use crate::generated::v1 as wire;
+use crate::pulse_channel::RunnerPulseAuthenticationKey;
 use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -123,6 +124,7 @@ impl Drop for RunnerEndpointTokenVerifier {
 pub(super) struct ProtectedLaunchSecrets {
     launch_nonce: Option<ScrubbedBytes>,
     endpoint_token_verifiers: Vec<Option<RunnerEndpointTokenVerifier>>,
+    runner_pulse_key: Option<RunnerPulseAuthenticationKey>,
 }
 
 impl ProtectedLaunchSecrets {
@@ -131,10 +133,22 @@ impl ProtectedLaunchSecrets {
         handoff_digest: [u8; 32],
     ) -> Self {
         let launch_nonce = ScrubbedBytes::new(std::mem::take(&mut value.launch_nonce));
+        let mut runner_pulse_key = None;
         let endpoint_token_verifiers = value
             .endpoints
-            .iter()
-            .map(|endpoint| Some(RunnerEndpointTokenVerifier::new(endpoint, handoff_digest)))
+            .iter_mut()
+            .map(|endpoint| {
+                if endpoint.kind == wire::AttemptEndpointKind::RunnerPulse as i32 {
+                    let token = std::mem::take(&mut endpoint.connection_token);
+                    runner_pulse_key = Some(RunnerPulseAuthenticationKey::from_validated(
+                        &endpoint.connection_id,
+                        token,
+                    ));
+                    None
+                } else {
+                    Some(RunnerEndpointTokenVerifier::new(endpoint, handoff_digest))
+                }
+            })
             .collect();
         for endpoint in &mut value.endpoints {
             scrub::scrub_and_clear_endpoint(endpoint);
@@ -142,6 +156,7 @@ impl ProtectedLaunchSecrets {
         Self {
             launch_nonce: Some(launch_nonce),
             endpoint_token_verifiers,
+            runner_pulse_key,
         }
     }
 
@@ -160,6 +175,10 @@ impl ProtectedLaunchSecrets {
         index: usize,
     ) -> Option<RunnerEndpointTokenVerifier> {
         self.endpoint_token_verifiers.get_mut(index)?.take()
+    }
+
+    pub(super) const fn take_runner_pulse_key(&mut self) -> Option<RunnerPulseAuthenticationKey> {
+        self.runner_pulse_key.take()
     }
 }
 

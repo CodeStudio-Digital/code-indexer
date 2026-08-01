@@ -186,9 +186,16 @@ export interface RunnerOptions {
    * Seed for the runner's pinned-tool set — hidden tools the model called
    * by name in a PRIOR run of this session (re-derived from history on
    * resume AND unioned with the session-persisted pins, mig 142). Pinned
-   * tools bypass the tier filter and survive the model's maxTools cap.
+   * tools bypass the tier filter and enter the bounded dynamic working set.
    */
   initialPinnedTools?: Iterable<string>;
+  /**
+   * Host/configured pins that define the agent's permanent capability floor.
+   * Runtime-discovered pins are managed as a bounded LRU working set and may
+   * be replaced; required pins never leave the visible catalog because of
+   * that replacement policy.
+   */
+  requiredPinnedTools?: Iterable<string>;
   /**
    * Fired when `expand_toolset` promotes a tier mid-run. The host persists
    * the widen (mig 142) so the next resume rebuilds the SAME tool array —
@@ -196,6 +203,13 @@ export interface RunnerOptions {
    * prompt-cache prefix busts on the next round's first turn.
    */
   onTierPromoted?: (tier: ToolTier) => void;
+  /**
+   * Fired whenever bounded runtime-pin membership changes. Receives the
+   * runner's exact current set (required pins included); the host persists
+   * only the dynamic subset as an exact replacement, so LRU evictions survive
+   * crashes and resumes instead of being resurrected by append-only state.
+   */
+  onPinnedToolsChanged?: (pins: readonly string[]) => void;
   /**
    * Task-preflight seed (fresh sessions only). `preflightHint` is the
    * rendered `<preflight>` block injected on turn 1 and re-injected after

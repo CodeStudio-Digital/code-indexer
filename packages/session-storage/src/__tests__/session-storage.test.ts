@@ -743,6 +743,8 @@ describe('idempotency and crash recovery', () => {
       });
       expect(artifacts.read(committed.artifacts[0]))
         .toEqual(Buffer.from('fault-safe artifact'));
+      await expect(artifacts.readAsync(committed.artifacts[0]))
+        .resolves.toEqual(Buffer.from('fault-safe artifact'));
       expect(repository.readConversationSync(created.location)).toHaveLength(1);
     });
   }

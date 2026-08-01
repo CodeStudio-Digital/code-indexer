@@ -1,4 +1,5 @@
 import type { ConversationChapter, VisualGroup } from '../types.js';
+import { sortChaptersChronologically } from './chapter-transcript.js';
 
 function groupMessageIds(group: VisualGroup): number[] {
   if (group.kind === 'user') return group.messageId == null ? [] : [group.messageId];
@@ -11,7 +12,7 @@ export function loadedChapterMarkers(
   groups: VisualGroup[],
 ): Map<number, ConversationChapter[]> {
   const markers = new Map<number, ConversationChapter[]>();
-  for (const chapter of chapters) {
+  for (const chapter of sortChaptersChronologically(chapters)) {
     const groupIndex = groups.findIndex((group) => groupMessageIds(group).some(
       (id) => id >= chapter.start_message_seq && id <= chapter.end_message_seq,
     ));

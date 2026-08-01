@@ -91,6 +91,11 @@ export function wireRunnerEventsToBus(
   runner.on('message_complete', (message, usage) => {
     publish(bus, 'message_complete', { message, usage });
   });
+  runner.on('user_message_boundary', ({ roundMessageIds }) => {
+    publish(bus, 'user_message_boundary', {
+      round_message_ids: roundMessageIds,
+    });
+  });
   runner.on('plan_posted', (block) => {
     publish(bus, 'plan', block);
   });

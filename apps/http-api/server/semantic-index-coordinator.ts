@@ -253,6 +253,7 @@ export class SemanticIndexCoordinator {
   private projectRemovalRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private projectRemovalRecoveryRun: Promise<number> | null = null;
   private readonly pendingCodeDeltas = new Map<number, Map<string, DirtyEvent>>();
+  private readonly pendingCodeDeltaPreviousKeys = new Map<number, Set<string>>();
   private readonly codeDeltaRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private readonly codeDeltaRetryAttempts = new Map<number, number>();
   private disposed = false;
@@ -1043,12 +1044,16 @@ export class SemanticIndexCoordinator {
   /** File changes arriving during a build become a persistent delta count.
    * The builder drains it before activation; changes after activation are
    * handled by the ordinary incremental embedding path. */
-  noteCodeDelta(projectId: number, events: readonly DirtyEvent[] = []): void {
+  noteCodeDelta(
+    projectId: number,
+    events: readonly DirtyEvent[] = [],
+    previousItemKeys: readonly string[] = [],
+  ): void {
     if (this.disposed || this.embeddingDisabled('code')) return;
     if (this.pendingCodeDeltas.has(projectId)) {
       // Preserve event order while an earlier busy write is waiting to retry;
       // a newer same-path event must win inside that queued batch.
-      this.queueCodeDeltaRetry(projectId, events);
+      this.queueCodeDeltaRetry(projectId, events, previousItemKeys);
       return;
     }
     try {
@@ -1056,16 +1061,20 @@ export class SemanticIndexCoordinator {
       // Never inherit the worker-oriented 5s busy timeout here: fail fast,
       // coalesce in memory, and retry after the central writer yields.
       this.deps.semanticStore.withBusyTimeout(CODE_DELTA_BUSY_TIMEOUT_MS, () => {
-        this.persistCodeDelta(projectId, events);
+        this.persistCodeDelta(projectId, events, previousItemKeys);
       });
       this.codeDeltaRetryAttempts.delete(projectId);
     } catch (error) {
       if (!isSqliteBusyError(error)) throw error;
-      this.queueCodeDeltaRetry(projectId, events);
+      this.queueCodeDeltaRetry(projectId, events, previousItemKeys);
     }
   }
 
-  private persistCodeDelta(projectId: number, events: readonly DirtyEvent[]): void {
+  private persistCodeDelta(
+    projectId: number,
+    events: readonly DirtyEvent[],
+    previousItemKeys: readonly string[],
+  ): void {
     const namespace = codeNamespace(projectId);
     if (!this.allowsNamespaceMutation(namespace)) return;
     const state = this.deps.semanticStore.listNamespaceGenerations({ namespace })[0];
@@ -1075,12 +1084,6 @@ export class SemanticIndexCoordinator {
           { kind: event.kind, path: event.path.replace(/\\/g, '/') },
         ])).values())
       : [{ kind: 'upsert' as const, path: '*' }];
-    const concretePaths = normalized
-      .filter((event) => event.path !== '*')
-      .map((event) => event.path);
-    const previousItemKeys = concretePaths.length > 0
-      ? semanticItemKeysForIndexedPaths(this.deps.db, projectId, concretePaths)
-      : [];
     const generationId = state?.building_generation_id ?? state?.active_generation_id ?? null;
     const kind = generationId === null ? 'backfill' as const : 'delta' as const;
     const existing = this.deps.semanticStore.listJobs({ namespace }).find((job) =>
@@ -1125,7 +1128,11 @@ export class SemanticIndexCoordinator {
     }
   }
 
-  private queueCodeDeltaRetry(projectId: number, events: readonly DirtyEvent[]): void {
+  private queueCodeDeltaRetry(
+    projectId: number,
+    events: readonly DirtyEvent[],
+    previousItemKeys: readonly string[],
+  ): void {
     let pending = this.pendingCodeDeltas.get(projectId);
     if (!pending) {
       pending = new Map();
@@ -1143,6 +1150,16 @@ export class SemanticIndexCoordinator {
         pending.set(path, { kind: event.kind, path });
       }
     }
+    if (!pending.has('*') && previousItemKeys.length > 0) {
+      let keys = this.pendingCodeDeltaPreviousKeys.get(projectId);
+      if (!keys) {
+        keys = new Set();
+        this.pendingCodeDeltaPreviousKeys.set(projectId, keys);
+      }
+      for (const key of previousItemKeys) keys.add(key);
+    } else if (pending.has('*')) {
+      this.pendingCodeDeltaPreviousKeys.delete(projectId);
+    }
     if (this.codeDeltaRetryTimers.has(projectId) || this.disposed) return;
 
     const attempt = (this.codeDeltaRetryAttempts.get(projectId) ?? 0) + 1;
@@ -1155,8 +1172,10 @@ export class SemanticIndexCoordinator {
       this.codeDeltaRetryTimers.delete(projectId);
       const queued = this.pendingCodeDeltas.get(projectId);
       if (!queued || queued.size === 0 || this.disposed) return;
+      const queuedKeys = [...(this.pendingCodeDeltaPreviousKeys.get(projectId) ?? [])];
       this.pendingCodeDeltas.delete(projectId);
-      this.noteCodeDelta(projectId, [...queued.values()]);
+      this.pendingCodeDeltaPreviousKeys.delete(projectId);
+      this.noteCodeDelta(projectId, [...queued.values()], queuedKeys);
     }, delayMs);
     timer.unref?.();
     this.codeDeltaRetryTimers.set(projectId, timer);
@@ -1321,6 +1340,7 @@ export class SemanticIndexCoordinator {
     for (const timer of this.codeDeltaRetryTimers.values()) clearTimeout(timer);
     this.codeDeltaRetryTimers.clear();
     this.pendingCodeDeltas.clear();
+    this.pendingCodeDeltaPreviousKeys.clear();
     this.codeDeltaRetryAttempts.clear();
     await this.docsBackfillRun?.catch(() => undefined);
     await this.projectRemovalRecoveryRun?.catch(() => undefined);

@@ -95,6 +95,7 @@ import type {
   AgentChatProps,
   CoderSession,
   CoderSessionGroup,
+  EarlierMessagePageResult,
   MessagePage,
   PromptHandlers,
   SessionData,
@@ -305,6 +306,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
    * `{describe_images: true}` → runCoder → runner.opts.describeImages.
    */
   const [describeImages, setDescribeImages] = useState(false);
+  const [blockCodeComments, setBlockCodeComments] = useState(true);
   /** PR-4: when set, the Composer's send button flips to "Run pipeline". */
   const [selectedPipelineId, setSelectedPipelineId] = useState<number | null>(null);
 
@@ -445,7 +447,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   // Builder/DS studio: gate the preview's auto-fix loop while this chat runs.
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
-  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats, persistedToolUseIds } =
+  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, stats } =
     useAgentChatState({
       selectedId,
       doneReason,
@@ -458,8 +460,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     });
 
   // Pending-snapshot count — refetched on selection change and whenever the
-  // SSE stream pings `session_snapshot_changed`. Used as a badge on the
-  // Snapshots button in the chat header.
+  // user performs an explicit snapshot action. Live edit pings only mark the
+  // badge dirty below; the full diff inventory is intentionally loaded by the
+  // snapshot dialog, not recomputed after every agent filesystem write.
   useEffect(() => {
     if (!selectedId) {
       setSnapshotPending(0);
@@ -487,7 +490,14 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     return () => {
       cancelled = true;
     };
-  }, [selectedId, snapshotTick, snapshotRefreshNonce]);
+  }, [selectedId, snapshotRefreshNonce]);
+
+  const previousSnapshotTick = useRef(snapshotTick);
+  useEffect(() => {
+    if (previousSnapshotTick.current === snapshotTick) return;
+    previousSnapshotTick.current = snapshotTick;
+    if (selectedId) setSnapshotPending((current) => Math.max(1, current));
+  }, [selectedId, snapshotTick]);
 
   // Honor initialSessionId on mount and whenever it changes (e.g. the user
   // clicks a different recent-session entry while the same project is open).
@@ -544,6 +554,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       await Promise.resolve(refetchSessions());
       if (!cancelled) {
         window.dispatchEvent(new CustomEvent('coder:sessions-changed'));
+        window.dispatchEvent(new CustomEvent('coder:chapters-changed', {
+          detail: { sessionId: selectedId },
+        }));
       }
     })();
     return () => {
@@ -713,8 +726,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
-    const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
-    if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
+    let autoTitlePending = pendingAutoTitle.current.has(selectedId);
+    if (autoTitlePending) pendingAutoTitle.current.delete(selectedId);
     // Builder studio: prepend the selected-element block(s) and drain any
     // region-select screenshot(s) into the attachments (then clear both).
     const prefix = selectionPrefixSessionId ? consumeSelectionPrefix(selectionPrefixSessionId) : '';
@@ -737,7 +750,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     ]);
     await sendMessage(outgoing, async () => {
       refetchSession();
-      if (shouldAutoTitle) {
+      if (autoTitlePending) {
+        // Stream refetch notifications can occur at interactive/user
+        // boundaries as well as provider completion. Title generation belongs
+        // to the first notification only.
+        autoTitlePending = false;
         apiPost<{ title: string }>(`/coder/sessions/${selectedId}/generate-title`, { content: text })
           .then(() => {
             refetchSessions();
@@ -750,8 +767,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
             console.warn('[auto-title] generate-title failed:', err);
           });
       }
-    }, { attachments: allAtts, agent: getAgent(), maxTurns, maxAutoContinues, thinking, describeImages, selectedSkillIds, freshSession: persistedMessageCount === 0 });
-  }, [selectedId, updateSessionData, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, refetchSessions, getAgent, maxTurns, maxAutoContinues, thinking, describeImages, selectionPrefixSessionId, persistedMessageCount]);
+    }, { attachments: allAtts, agent: getAgent(), maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments, selectedSkillIds, freshSession: persistedMessageCount === 0 });
+  }, [selectedId, updateSessionData, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, refetchSessions, getAgent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments, selectionPrefixSessionId, persistedMessageCount]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Delivery is run-state-aware and serves BOTH queue modes:
@@ -777,7 +794,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           selected_skill_ids: skillIds,
         },
       );
-      if (r?.injected) { refetchSession(); return; }
+      // The persisted user row must become visible only after the live runner
+      // emits user_message_boundary and clears the preceding turn buffer. The
+      // stream handler performs that ordered refetch; doing it here creates a
+      // brief duplicated transcript between POST /inject and the next turn.
+      if (r?.injected) return;
     } catch { /* fall through to a fresh streamed send */ }
     await Promise.all([
       awaitPendingExecutionMode(),
@@ -790,10 +811,11 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       maxAutoContinues,
       thinking,
       describeImages,
+      blockCodeComments,
       selectedSkillIds: skillIds,
       interject,
     });
-  }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, getAgent, maxTurns, maxAutoContinues, thinking, describeImages]);
+  }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, getAgent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments]);
   const queue = useMessageQueue({ streaming, deliver: deliverQueued });
   const handleQueue = useCallback((
     text: string,
@@ -839,8 +861,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     ]);
     await sendMessage(message, async () => {
       refetchSession();
-    }, { agent: reviewAgent, maxTurns, maxAutoContinues, thinking, describeImages });
-  }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, agent, maxTurns, maxAutoContinues, thinking, describeImages]);
+    }, { agent: reviewAgent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments });
+  }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, agent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments]);
 
   /**
    * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
@@ -862,14 +884,13 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   }, [selectedId, openPipelineStream]);
 
 
-  /**
-   * Load earlier messages from the backend and prepend them to sessionData.
-   * Called by MessageList when the user clicks "Load earlier".
-   * Returns the number of message rows fetched (0 = nothing more to load).
-   */
-  const loadEarlierMessages = useCallback(async (beforeSeq: number | undefined, limit = 40, includeArchived = false): Promise<number> => {
+  const loadEarlierMessages = useCallback(async (
+    beforeSeq: number | undefined,
+    limit = 40,
+    includeArchived = false,
+  ): Promise<EarlierMessagePageResult> => {
     const requestedSessionId = selectedId;
-    if (!requestedSessionId) return 0;
+    if (!requestedSessionId) return { ok: false, reason: 'stale' };
     const controller = new AbortController();
     messagePageAbortControllersRef.current.add(controller);
     try {
@@ -880,19 +901,32 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       const res = await fetch(`/api/coder/sessions/${requestedSessionId}/messages?${qs}`, {
         signal: controller.signal,
       });
-      if (!res.ok) return 0;
+      if (!res.ok) {
+        return { ok: false, reason: 'error', error: `HTTP ${res.status}` };
+      }
       const page = (await res.json()) as MessagePage;
-      if (!page.message_rows.length) return 0;
-      if (selectedIdRef.current !== requestedSessionId) return 0;
+      if (selectedIdRef.current !== requestedSessionId) return { ok: false, reason: 'stale' };
       const current = sessionDataRef.current;
-      if (!current || current.session.id !== requestedSessionId) return 0;
+      if (!current || current.session.id !== requestedSessionId) return { ok: false, reason: 'stale' };
       const preview = mergeEarlierMessagePage(current, page, requestedSessionId);
-      if (preview.addedRows === 0) return 0;
-      updateSessionData((prev) => mergeEarlierMessagePage(prev, page, requestedSessionId).data);
-      return preview.addedRows;
+      if (preview.addedRows > 0) {
+        updateSessionData((prev) => mergeEarlierMessagePage(prev, page, requestedSessionId).data);
+      }
+      return {
+        ok: true,
+        addedRows: preview.addedRows,
+        nextBeforeSeq: page.next_before_seq,
+        hasMore: page.has_more,
+      };
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') return 0;
-      return 0;
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return { ok: false, reason: 'aborted' };
+      }
+      return {
+        ok: false,
+        reason: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       messagePageAbortControllersRef.current.delete(controller);
     }
@@ -975,6 +1009,13 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     const session = sessionData?.session;
     if (!session || session.id !== selectedId) return;
     setThinking(session.thinking_enabled === true);
+  }, [selectedId, sessionData?.session]);
+
+  useEffect(() => {
+    const session = sessionData?.session;
+    setBlockCodeComments(
+      session?.id === selectedId ? session.block_code_comments !== false : true,
+    );
   }, [selectedId, sessionData?.session]);
 
   // Plan-depth override (migration 151). Sticky per session; only surfaced in
@@ -1068,6 +1109,16 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     if (!selectedId) return;
     try {
       await apiPatch(`/coder/sessions/${selectedId}/thinking`, { thinking: next });
+    } catch {
+      /* optimistic; the persisted value is restored on the next session load */
+    }
+  }, [selectedId]);
+
+  const handleBlockCodeCommentsChange = useCallback(async (next: boolean) => {
+    setBlockCodeComments(next);
+    if (!selectedId) return;
+    try {
+      await apiPatch(`/coder/sessions/${selectedId}/block-code-comments`, { enabled: next });
     } catch {
       /* optimistic; the persisted value is restored on the next session load */
     }
@@ -1168,6 +1219,9 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       await apiPost(`/coder/sessions/${selectedId}/summarize-and-clear`, {});
       await Promise.resolve(refetchSession());
       await Promise.resolve(refetchSessions());
+      window.dispatchEvent(new CustomEvent('coder:chapters-changed', {
+        detail: { sessionId: selectedId },
+      }));
     } catch (e) {
       await confirm({
         title: t('chat:header.summarizeClearFailed'),
@@ -1756,8 +1810,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                   preflight={preflight}
                   doneReason={doneReason}
                   error={error}
-                  persistedToolUseIds={persistedToolUseIds}
-                  fallbackProviderId={provider}
                   tasksState={tasksState}
                   handlers={handlers}
                   onLoadEarlier={loadEarlierMessages}
@@ -1800,6 +1852,8 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 ultraControlsThinking={ultraControlsThinking}
                 describeImages={describeImages}
                 setDescribeImages={setDescribeImages}
+                blockCodeComments={blockCodeComments}
+                setBlockCodeComments={handleBlockCodeCommentsChange}
                 fallbackProvider={fallbackProvider}
                 fallbackModel={fallbackModel}
                 onFallbackChange={handleFallbackChange}

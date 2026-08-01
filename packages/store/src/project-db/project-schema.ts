@@ -23,11 +23,25 @@
  */
 import type { DB } from '../db/types.js';
 import { initSchema } from '../db/schema/index.js';
-import { runMigrations, getSchemaVersion } from '../migrations/index.js';
-import { trimProjectSchema } from './trim/index.js';
+import { MIGRATIONS, runMigrations, getSchemaVersion } from '../migrations/index.js';
+import { isProjectSchemaTrimCurrent, trimProjectSchema } from './trim/index.js';
 import { assertSessionScopedSqliteAbsent } from '../session-layout-guard.js';
 
 export function initProjectSchema(db: DB): void {
+  const latestVersion = MIGRATIONS.reduce(
+    (latest, migration) => Math.max(latest, migration.version),
+    0,
+  );
+  // A normal reopen used to recreate the complete central schema and then drop
+  // ~110 tables again. If both migration and trim markers are current, the
+  // project-only schema is already authoritative and no bootstrap is needed.
+  if (
+    getSchemaVersion(db) >= latestVersion
+    && isProjectSchemaTrimCurrent(db)
+  ) {
+    assertSessionScopedSqliteAbsent(db);
+    return;
+  }
   initSchema(db);
   runMigrations(db);
   trimProjectSchema(db);

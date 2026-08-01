@@ -234,6 +234,14 @@ export interface RunCoderOptions {
    */
   initialPinnedTools?: string[];
   /**
+   * Extra registered tool tiers activated at run start by a managed agent.
+   * This changes visibility only; policy, permissions and registry ownership
+   * remain authoritative.
+   */
+  initialToolTiers?: string[];
+  /** Managed-agent visible tool ceiling; overrides the generic preflight/default cap. */
+  initialVisibleToolCap?: number;
+  /**
    * Create and enter an isolated git worktree at session start. When set on
    * a fresh session (no prior `worktree_path` persisted), runCoder creates
    * `.mcp-indexer/worktrees/<name>/` and scopes the runner into it BEFORE
@@ -267,6 +275,8 @@ export interface RunCoderOptions {
    */
   modelSupportsVision?: boolean;
   describeImages?: boolean;
+  /** Keep generated code free of line, block and documentation comments. */
+  blockCodeComments?: boolean;
   /**
    * Task-preflight seed — produced by the host (`TaskPreflightService` in
    * @mcp/services) from the FIRST user prompt of a fresh session and passed

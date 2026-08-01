@@ -21,11 +21,8 @@ import {
 } from '../../../hooks/useAgentStream.js';
 import { useMessageQueue, type QueueDeliver, type QueueMode } from '../../chat/composer/useMessageQueue.js';
 import { useAgentChatState } from '../../chat/useAgentChatState.js';
-import {
-  buildPersistedLiveReconciliation,
-  isLiveTurnDuplicatedInHistory,
-  liveTurnReconciliationRevision,
-} from '../../chat/utils.js';
+import { liveTurnReconciliationRevision } from '../../chat/utils.js';
+import { buildTranscriptProjection } from '../../chat/transcript-projection.js';
 import { providerSupportsThinking, resolveReasoningLevels } from '../../chat/composer/provider-caps.js';
 import {
   executionModeChangeLocked,
@@ -44,7 +41,7 @@ import {
   mergeEarlierMessagePage,
   sessionDataForSelection,
 } from '../../chat/messages/session-message-data.js';
-import type { CoderSession, CoderSessionGroup, MessagePage, PromptHandlers, SessionData } from '../../chat/types.js';
+import type { CoderSession, CoderSessionGroup, EarlierMessagePageResult, MessagePage, PromptHandlers, SessionData } from '../../chat/types.js';
 import {
   editorChatContextActions,
   formatSelections,
@@ -153,6 +150,8 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   }, [agentLock, changeAgentAndWait, setSessionAgent]);
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
+  const selectedSessionDataRef = useRef(selectedSessionData);
+  selectedSessionDataRef.current = selectedSessionData;
   const messagePageAbortControllersRef = useRef<Set<AbortController>>(new Set());
   useEffect(() => () => {
     for (const controller of messagePageAbortControllersRef.current) controller.abort();
@@ -174,13 +173,13 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const stream = useAgentStream(selectedId, notificationContext);
   const {
-    streaming, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn, tasksRefreshTick, snapshotTick,
+    streaming, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn, tasksRefreshTick,
     answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider, pendingApprovals,
   } = stream;
   const currentTurn = useAgentCurrentTurn(selectedId);
   usePublishAgentBusy(selectionPrefixSessionId, streaming);
 
-  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState, persistedToolUseIds } =
+  const { providerOptions, currentProviderModels, getModelsForProvider, tasksState } =
     useAgentChatState({
       selectedId,
       doneReason,
@@ -191,28 +190,20 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       setProvider,
       setModel,
     });
-  const liveReconciliation = useMemo(
-    () => buildPersistedLiveReconciliation(
-      selectedSessionData?.messages ?? [],
-      selectedSessionData?.preceding_user_message_id,
-      (selectedSessionData?.tool_results ?? []).map((result) => result.tool_use_id),
-    ),
-    [selectedSessionData],
+  const historyProjection = useMemo(
+    () => buildTranscriptProjection(selectedSessionData, null, tasksState),
+    [selectedSessionData, tasksState],
   );
   const currentTurnRef = useRef(currentTurn);
   currentTurnRef.current = currentTurn;
   const liveReconciliationRevision = liveTurnReconciliationRevision(
     currentTurn,
-    liveReconciliation.tailTextLength,
-    liveReconciliation.tailThinkingLength,
+    historyProjection.reconciliation.tailTextLength,
+    historyProjection.reconciliation.tailThinkingLength,
   );
-  const liveTurnDuplicatedInHistory = useMemo(
-    () => isLiveTurnDuplicatedInHistory(
-      currentTurnRef.current,
-      liveReconciliation,
-      persistedToolUseIds,
-    ),
-    [liveReconciliation, liveReconciliationRevision, persistedToolUseIds],
+  const transcriptProjection = useMemo(
+    () => buildTranscriptProjection(selectedSessionData, currentTurnRef.current, tasksState),
+    [selectedSessionData, tasksState, liveReconciliationRevision],
   );
 
   const settings = useEditorSessionSettings(selectedId, selectedSessionData, {
@@ -347,8 +338,8 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   // Avoid double-rendering the live turn once it lands in the DB.
   useEffect(() => {
-    if (liveTurnDuplicatedInHistory) clearCurrentTurn();
-  }, [clearCurrentTurn, liveTurnDuplicatedInHistory]);
+    if (transcriptProjection.live.duplicated) clearCurrentTurn();
+  }, [clearCurrentTurn, transcriptProjection.live.duplicated]);
 
   const refreshSnapshots = useCallback(() => setSnapshotRefreshNonce((n) => n + 1), []);
   const snapshotActions = useMemo<SnapshotActions | null>(
@@ -380,7 +371,9 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     return () => {
       cancelled = true;
     };
-  }, [selectedId, snapshotTick, snapshotRefreshNonce, doneReason]);
+  // A live snapshot ping can arrive for every file write. Refresh the complete
+  // map at the run boundary (or after an explicit review action), not per edit.
+  }, [selectedId, snapshotRefreshNonce, doneReason]);
 
   const createSession = useCallback(async (
     config: Partial<SessionLaunchConfig> & { useLastModel?: boolean } = {},
@@ -503,8 +496,8 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
 
   const handleSend = useCallback(async (text: string, atts: AgentAttachment[], selectedSkillIds?: string[]) => {
     if (!text.trim() || !selectedId) return;
-    const shouldAutoTitle = pendingAutoTitle.current.has(selectedId);
-    if (shouldAutoTitle) pendingAutoTitle.current.delete(selectedId);
+    let autoTitlePending = pendingAutoTitle.current.has(selectedId);
+    if (autoTitlePending) pendingAutoTitle.current.delete(selectedId);
     // Prepend staged code selections as <selected-code> blocks — pinned
     // (Ctrl/Cmd+I) plus the current live editor selection (deduped) — then
     // clear ALL staged context (file refs are already inlined by the
@@ -546,13 +539,14 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     await awaitPendingAgentChange();
     await sendMessage(outgoing, async () => {
       refetchSession();
-      if (shouldAutoTitle) {
+      if (autoTitlePending) {
+        autoTitlePending = false;
         apiPost<{ title: string }>(`/coder/sessions/${selectedId}/generate-title`, { content: text })
           .then(() => { refetchSessions(); window.dispatchEvent(new CustomEvent('coder:sessions-changed')); })
           .catch((err) => console.warn('[editor-chat] generate-title failed:', err));
       }
-    }, { attachments: allAtts, agent: getAgent(), maxTurns, maxAutoContinues, thinking, describeImages: settings.describeImages, selectedSkillIds });
-  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, projectId, updateSessionData, sendMessage, refetchSession, refetchSessions, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages]);
+    }, { attachments: allAtts, agent: getAgent(), maxTurns, maxAutoContinues, thinking, describeImages: settings.describeImages, blockCodeComments: settings.blockCodeComments, selectedSkillIds });
+  }, [selectedId, settings.awaitPendingExecutionMode, includeEditorContext, selectionPrefixSessionId, selections, projectId, updateSessionData, sendMessage, refetchSession, refetchSessions, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages, settings.blockCodeComments]);
 
   // ─── Message queue (compose/enqueue while streaming) ───────────────
   // Live run → POST /inject (no new stream; the open SSE renders the injected
@@ -574,7 +568,9 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
           selected_skill_ids: skillIds,
         },
       );
-      if (r?.injected) { refetchSession(); return; }
+      // Defer the persisted-history refresh to user_message_boundary so the
+      // new user row cannot render beside the preceding live-turn buffer.
+      if (r?.injected) return;
     } catch { /* fall through to a fresh streamed send */ }
     await settings.awaitPendingExecutionMode();
     await ensureAgentLock();
@@ -586,10 +582,11 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       maxAutoContinues,
       thinking,
       describeImages: settings.describeImages,
+      blockCodeComments: settings.blockCodeComments,
       selectedSkillIds: skillIds,
       interject,
     });
-  }, [selectedId, settings.awaitPendingExecutionMode, sendMessage, refetchSession, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages]);
+  }, [selectedId, settings.awaitPendingExecutionMode, sendMessage, refetchSession, ensureAgentLock, awaitPendingAgentChange, getAgent, maxTurns, maxAutoContinues, thinking, settings.describeImages, settings.blockCodeComments]);
   const queue = useMessageQueue({ streaming, deliver: deliverQueued });
   const handleQueue = useCallback((
     text: string,
@@ -684,32 +681,52 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     try { await apiPatch(`/coder/sessions/${selectedId}/plan-depth`, { depth: next }); } catch { /* optimistic */ }
   }, [selectedId]);
 
-  const loadEarlierMessages = useCallback(async (beforeId: number, limit = 40, includeArchived = false): Promise<number> => {
+  const loadEarlierMessages = useCallback(async (
+    beforeSeq: number | undefined,
+    limit = 40,
+    includeArchived = false,
+  ): Promise<EarlierMessagePageResult> => {
     const requestedSessionId = selectedId;
-    if (!requestedSessionId) return 0;
+    if (!requestedSessionId) return { ok: false, reason: 'stale' };
     const controller = new AbortController();
     messagePageAbortControllersRef.current.add(controller);
     try {
-      const archivedQs = includeArchived ? '&include_archived=1' : '';
-      const res = await fetch(`/api/coder/sessions/${requestedSessionId}/messages?before_id=${beforeId}&limit=${limit}${archivedQs}`, {
+      const qs = new URLSearchParams({ limit: String(limit), detail: 'preview' });
+      if (beforeSeq != null) qs.set('before_seq', String(beforeSeq));
+      if (includeArchived) qs.set('include_archived', '1');
+      const res = await fetch(`/api/coder/sessions/${requestedSessionId}/messages?${qs}`, {
         signal: controller.signal,
       });
-      if (!res.ok) return 0;
+      if (!res.ok) return { ok: false, reason: 'error', error: `HTTP ${res.status}` };
       const page = (await res.json()) as MessagePage;
-      if (!page.message_rows.length) return 0;
-      if (selectedIdRef.current !== requestedSessionId) return 0;
-      const preview = selectedSessionData
-        ? mergeEarlierMessagePage(selectedSessionData, page, requestedSessionId)
+      if (selectedIdRef.current !== requestedSessionId) return { ok: false, reason: 'stale' };
+      const current = selectedSessionDataRef.current;
+      const preview = current
+        ? mergeEarlierMessagePage(current, page, requestedSessionId)
         : null;
-      if (!preview || preview.addedRows === 0) return 0;
-      updateSessionData((prev) => mergeEarlierMessagePage(prev, page, requestedSessionId).data);
-      return preview.addedRows;
-    } catch {
-      return 0;
+      if (!preview) return { ok: false, reason: 'stale' };
+      if (preview.addedRows > 0) {
+        updateSessionData((prev) => mergeEarlierMessagePage(prev, page, requestedSessionId).data);
+      }
+      return {
+        ok: true,
+        addedRows: preview.addedRows,
+        nextBeforeSeq: page.next_before_seq,
+        hasMore: page.has_more,
+      };
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return { ok: false, reason: 'aborted' };
+      }
+      return {
+        ok: false,
+        reason: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      };
     } finally {
       messagePageAbortControllersRef.current.delete(controller);
     }
-  }, [selectedId, selectedSessionData, updateSessionData]);
+  }, [selectedId, updateSessionData]);
 
   const handlers: PromptHandlers = useMemo(() => ({
     onAnswer: (answer) => answerQuestion(answer),
@@ -724,7 +741,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     createSession, creating, archiveSession, deleteSession, favoriteSession, renameSession, duplicateSession,
     moveSessionToGroup, createGroup,
     sessionData: selectedSessionData, streaming, currentTurn, doneReason, error, pendingApprovals, respondToToolApproval,
-    liveReconciliation, liveTurnDuplicatedInHistory, persistedToolUseIds, tasksState, handlers, loadEarlierMessages, abort, handleSend,
+    transcriptProjection, tasksState, handlers, loadEarlierMessages, abort, handleSend,
     snapshotActions, snapshotFiles,
     queue, handleQueue,
     provider, model, setModel, agent, setAgent: handleAgentChange,

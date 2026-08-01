@@ -1,16 +1,21 @@
-import { lstat, readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   asAgentRunId,
   asSessionId,
   assertContainedPath,
-  assertPathHasNoLinksSync,
+  assertPathHasNoLinks,
   type JsonValue,
   type SessionId,
 } from '@mcp/session-storage';
 import type { FsSessionStore } from './fs-session-store.js';
 
 type JsonRecord = Record<string, JsonValue | undefined>;
+
+const TURN_TELEMETRY_FILE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$/i;
+const telemetryFileCache = new Map<string, Map<string, JsonRecord>>();
+const MAX_CACHED_TELEMETRY_SESSIONS = 256;
 
 export interface FsTurnTelemetryRow extends JsonRecord {
   id: string;
@@ -71,25 +76,46 @@ async function telemetryFiles(
   store: FsSessionStore,
   sessionId: SessionId | string,
 ): Promise<JsonRecord[]> {
-  await store.getSession(sessionId);
+  await store.ensureCatalog();
   const entry = store.catalog.get(sessionId);
   if (!entry) return [];
   const root = join(entry.location.bundle_path, 'metrics', 'turns');
   assertContainedPath(entry.location.bundle_path, root);
-  assertPathHasNoLinksSync(entry.location.bundle_path, root);
-  const values: JsonRecord[] = [];
-  for (const name of (await readdir(root)).filter((item) => item.endsWith('.json')).sort()) {
-    const path = join(root, name);
-    assertContainedPath(root, path);
-    assertPathHasNoLinksSync(entry.location.bundle_path, path);
-    const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new Error(`Telemetry entry is not a regular file: ${path}`);
+  await assertPathHasNoLinks(entry.location.bundle_path, root);
+  const entries = (await readdir(root, { withFileTypes: true }))
+    .filter((item) => TURN_TELEMETRY_FILE.test(item.name))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  let cached = telemetryFileCache.get(root);
+  if (!cached) {
+    cached = new Map();
+    telemetryFileCache.set(root, cached);
+    if (telemetryFileCache.size > MAX_CACHED_TELEMETRY_SESSIONS) {
+      telemetryFileCache.delete(telemetryFileCache.keys().next().value!);
     }
-    const value = telemetryRecord(JSON.parse(await readFile(path, 'utf8')));
-    if (value) values.push(value);
+  } else {
+    telemetryFileCache.delete(root);
+    telemetryFileCache.set(root, cached);
   }
-  return values;
+  const present = new Set(entries.map((item) => item.name));
+  for (const name of cached.keys()) {
+    if (!present.has(name)) cached.delete(name);
+  }
+  const missing = entries.filter((item) => !cached!.has(item.name));
+  for (let offset = 0; offset < missing.length; offset += 16) {
+    await Promise.all(missing.slice(offset, offset + 16).map(async (item) => {
+      const path = join(root, item.name);
+      assertContainedPath(root, path);
+      if (!item.isFile() || item.isSymbolicLink()) {
+        throw new Error(`Telemetry entry is not a regular file: ${path}`);
+      }
+      const value = telemetryRecord(JSON.parse(await readFile(path, 'utf8')));
+      if (value?.metric_kind === 'turn_telemetry') cached!.set(item.name, value);
+    }));
+  }
+  return entries.flatMap((item) => {
+    const value = cached!.get(item.name);
+    return value ? [value] : [];
+  });
 }
 
 export async function listFilesystemTurnTelemetry(

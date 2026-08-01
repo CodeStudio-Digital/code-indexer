@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Check, ClipboardList, X } from 'lucide-react';
+import { Check, ChevronDown, ClipboardList, X } from 'lucide-react';
 import type { StreamTask, StreamTaskExecutionMode, TasksPrompt } from '../../../hooks/useAgentStream.js';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
@@ -39,6 +39,7 @@ export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
   const [feedback, setFeedback] = useState('');
   const [executionMode, setExecutionMode] = useState<StreamTaskExecutionMode>('inline');
   const [resolved, setResolved] = useState<'approved' | 'rejected' | undefined>(prompt.resolved);
+  const [open, setOpen] = useState(() => !prompt.resolved);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   /**
    * Per-task mode overrides — only meaningful when global executionMode is
@@ -70,93 +71,103 @@ export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
         : undefined;
     await onResponse({ approved: true, feedback, execution_mode: executionMode, tasks: tasksOut });
     setResolved('approved');
+    setOpen(false);
   };
 
   return (
-    <div className="my-3 rounded-xl border border-info/40 bg-info/5 p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <div className="h-7 w-7 rounded-md bg-info/15 text-info flex items-center justify-center">
-          <ClipboardList className="h-4 w-4" />
-        </div>
-        <div className="text-xs font-semibold text-info uppercase tracking-wider flex-1">
+    <div className="my-3 overflow-hidden rounded-xl border border-border/70 bg-card/45">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left"
+        aria-expanded={open}
+      >
+        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', !open && '-rotate-90')} />
+        <ClipboardList className="h-4 w-4 shrink-0 text-info" />
+        <div className="flex-1 text-xs font-medium text-foreground/85">
           {t('chat:tasks.header', { count: tasksForRender.length })}
-          {resolved && ` · ${resolved}`}
+          {resolved && ` · ${t(resolved === 'approved' ? 'chat:plan.approved' : 'chat:plan.rejected')}`}
         </div>
-      </div>
+      </button>
 
-      {prompt.summary && (
-        <div className="text-sm text-foreground/90 mb-3 px-1">
-          <Markdown text={prompt.summary} />
-        </div>
-      )}
+      {open && (
+        <div className="border-t border-border/60 px-3 py-3">
+          {prompt.summary && (
+            <div className="mb-3 px-1 text-sm text-foreground/90">
+              <Markdown text={prompt.summary} />
+            </div>
+          )}
 
-      <div className="space-y-2 mb-3">
-        {tasksForRender.map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            isExpanded={expanded.has(task.id)}
-            onToggle={() => toggleExpand(task.id)}
-            executionMode={executionMode}
-            resolved={resolved}
-            perTaskMode={perTaskMode[task.id]}
-            onPerTaskModeChange={(mode) => setPerTaskMode((m) => ({ ...m, [task.id]: mode }))}
-          />
-        ))}
-      </div>
-
-      {!resolved ? (
-        <>
-          <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <span className="text-xs text-muted-foreground">Execution mode:</span>
-            {EXECUTION_MODES.map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => setExecutionMode(mode)}
-                className={cn(
-                  'text-[11px] px-2 py-1 rounded border transition-colors',
-                  executionMode === mode
-                    ? 'border-info bg-info/10 text-info'
-                    : 'border-border text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {mode}
-              </button>
+          <div className="mb-3 space-y-2">
+            {tasksForRender.map((task) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                isExpanded={expanded.has(task.id)}
+                onToggle={() => toggleExpand(task.id)}
+                executionMode={executionMode}
+                resolved={resolved}
+                perTaskMode={perTaskMode[task.id]}
+                onPerTaskModeChange={(mode) => setPerTaskMode((m) => ({ ...m, [task.id]: mode }))}
+              />
             ))}
           </div>
-          <Textarea
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            placeholder={t('chat:plan.feedbackPlaceholder')}
-            rows={2}
-            className="mb-2 text-xs"
-          />
-          <div className="flex gap-2">
-            <Button size="sm" variant="success" onClick={handleApprove}>
-              <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={async () => {
-                await onResponse({ approved: false, feedback });
-                setResolved('rejected');
-              }}
+
+          {!resolved ? (
+            <>
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs text-muted-foreground">Execution mode:</span>
+                {EXECUTION_MODES.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setExecutionMode(mode)}
+                    className={cn(
+                      'rounded border px-2 py-1 text-[11px] transition-colors',
+                      executionMode === mode
+                        ? 'border-info bg-info/10 text-info'
+                        : 'border-border text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+              <Textarea
+                value={feedback}
+                onChange={(e) => setFeedback(e.target.value)}
+                placeholder={t('chat:plan.feedbackPlaceholder')}
+                rows={2}
+                className="mb-2 text-xs"
+              />
+              <div className="flex gap-2">
+                <Button size="sm" variant="success" onClick={handleApprove}>
+                  <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={async () => {
+                    await onResponse({ approved: false, feedback });
+                    setResolved('rejected');
+                    setOpen(false);
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" /> {t('common:actions.reject')}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <div
+              className={cn(
+                'flex items-center gap-1.5 text-xs',
+                resolved === 'approved' ? 'text-success' : 'text-destructive',
+              )}
             >
-              <X className="h-3.5 w-3.5" /> {t('common:actions.reject')}
-            </Button>
-          </div>
-        </>
-      ) : (
-        <div
-          className={cn(
-            'text-xs flex items-center gap-1.5',
-            resolved === 'approved' ? 'text-success' : 'text-destructive',
+              {resolved === 'approved' ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
+              {t(resolved === 'approved' ? 'chat:plan.approved' : 'chat:plan.rejected')}
+            </div>
           )}
-        >
-          {resolved === 'approved' ? <Check className="h-3.5 w-3.5" /> : <X className="h-3.5 w-3.5" />}
-          {resolved}
         </div>
       )}
     </div>

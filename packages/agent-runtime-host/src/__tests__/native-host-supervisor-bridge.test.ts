@@ -116,13 +116,25 @@ describe('native Host supervisor bridge', () => {
       runtimePackage: runtimePackage(),
       provision: provision(),
     });
+    expect(bootstrap.supervisorProcessId).toBe(47);
     const capability = await bootstrap.establish();
     expect(binding.openHostSupervisorBridge).toHaveBeenCalledOnce();
     expect(writes).toHaveLength(2);
     expect(writes.every((bytes) => bytes.byteLength > 0)).toBe(true);
 
     capability.abort();
-    await vi.waitFor(() => expect(close).toHaveBeenCalledOnce());
+    await expect(bootstrap.close()).resolves.toEqual({
+      processId: 47,
+      exitCode: 0,
+      forced: false,
+    });
+    expect(close).toHaveBeenCalledOnce();
+    await expect(bootstrap.close()).resolves.toEqual({
+      processId: 47,
+      exitCode: 0,
+      forced: false,
+    });
+    expect(close).toHaveBeenCalledOnce();
   });
 });
 

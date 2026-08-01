@@ -380,15 +380,22 @@ export function parseRoundReview(value: JsonValue): StoredRoundReview {
   };
 }
 
-function content(store: ArtifactReader, ref: ArtifactRef | null): string | null {
-  return ref ? Buffer.from(store.read(ref)).toString('utf8') : null;
+async function content(
+  store: ArtifactReader,
+  ref: ArtifactRef | null,
+): Promise<string | null> {
+  return ref ? Buffer.from(await store.readAsync(ref)).toString('utf8') : null;
 }
 
-export function baselineRow(
+export async function baselineRow(
   envelope: FsEntityEnvelope<JsonValue>,
   store: ArtifactReader,
-): BaselineRow<SessionId, string> {
+): Promise<BaselineRow<SessionId, string>> {
   const data = parseBaseline(envelope.data);
+  const [contentBefore, rollbackContent] = await Promise.all([
+    content(store, data.content_before),
+    content(store, data.rollback_content),
+  ]);
   return {
     id: envelope.id,
     seq: envelope.seq,
@@ -396,8 +403,8 @@ export function baselineRow(
     session_id: asSessionId(data.session_id),
     project_id: data.project_id,
     file_path: data.file_path,
-    content_before: content(store, data.content_before),
-    rollback_content: content(store, data.rollback_content),
+    content_before: contentBefore,
+    rollback_content: rollbackContent,
     existed_before: data.existed_before ? 1 : 0,
     baseline_hash: data.baseline_hash,
     oversized: data.oversized ? 1 : 0,
@@ -408,11 +415,15 @@ export function baselineRow(
   };
 }
 
-export function roundRow(
+export async function roundRow(
   envelope: FsEntityEnvelope<JsonValue>,
   store: ArtifactReader,
-): RoundSnapshotRow<SessionId, string> {
+): Promise<RoundSnapshotRow<SessionId, string>> {
   const data = parseRound(envelope.data);
+  const [contentBefore, contentAfter] = await Promise.all([
+    content(store, data.content_before),
+    content(store, data.content_after),
+  ]);
   return {
     id: envelope.id,
     seq: envelope.seq,
@@ -422,9 +433,9 @@ export function roundRow(
     global_baseline_id: data.global_baseline_id,
     project_id: data.project_id,
     file_path: data.file_path,
-    content_before: content(store, data.content_before),
+    content_before: contentBefore,
     existed_before: data.existed_before ? 1 : 0,
-    content_after: content(store, data.content_after),
+    content_after: contentAfter,
     existed_after: data.existed_after ? 1 : 0,
     oversized: data.oversized ? 1 : 0,
     status: data.status,

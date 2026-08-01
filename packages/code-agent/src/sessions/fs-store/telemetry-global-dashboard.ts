@@ -12,6 +12,25 @@ interface Aggregate {
   estimated_cost_usd: number;
 }
 
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  limit: number,
+  map: (value: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let next = 0;
+  await Promise.all(Array.from(
+    { length: Math.min(limit, values.length) },
+    async () => {
+      while (next < values.length) {
+        const index = next++;
+        results[index] = await map(values[index]!);
+      }
+    },
+  ));
+  return results;
+}
+
 export async function getFilesystemGlobalTelemetrySummary(
   store: FsSessionStore,
   options: {
@@ -27,7 +46,10 @@ export async function getFilesystemGlobalTelemetrySummary(
     entry.session.owner_project_id === options.project_id ||
     entry.session.linked_projects.some(
       (project) => project.project_id === options.project_id));
-  const sessions = await Promise.all(entries.map(async (entry) => {
+  // Do not start one filesystem traversal per historical session at once.
+  // Each traversal has its own bounded file-reader pool; four sessions keeps
+  // total libuv pressure predictable on Electron's host process.
+  const sessions = await mapWithConcurrency(entries, 4, async (entry) => {
     const [summary, allTurns] = await Promise.all([
       store.getMetricsSummary(entry.session.id),
       listFilesystemTurnTelemetry(store, entry.session.id),
@@ -39,7 +61,7 @@ export async function getFilesystemGlobalTelemetrySummary(
         ? allTurns.filter((turn) => Date.parse(turn.created_at) >= since)
         : allTurns,
     };
-  }));
+  });
 
   const providers = new Map<string, Aggregate>();
   const models = new Map<string, Aggregate>();
@@ -165,8 +187,8 @@ export async function getFilesystemGlobalTelemetrySummary(
  */
 export async function inspectFilesystemCostCoverage(store: FsSessionStore) {
   await store.ensureCatalog();
-  const rows = (await Promise.all(store.catalog.list().map((entry) =>
-    listFilesystemTurnTelemetry(store, entry.session.id)))).flat();
+  const rows = (await mapWithConcurrency(store.catalog.list(), 4, (entry) =>
+    listFilesystemTurnTelemetry(store, entry.session.id))).flat();
   const priced = rows.filter((row) => row.estimated_cost_usd != null).length;
   return {
     scanned: rows.length,

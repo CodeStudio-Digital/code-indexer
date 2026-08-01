@@ -84,6 +84,7 @@ pub struct ProtectedLaunchRequest<'a> {
     runtime_instance_id: &'a str,
     hard_deadline_at_unix_ms: i64,
     authority_lease_expires_at_unix_ms: i64,
+    runner_pulse_interval_ms: u64,
     reserved_resource_budget: wire::ResourceBudget,
     endpoints: &'a [wire::ProtectedAttemptEndpoint],
     launch_nonce: &'a [u8],
@@ -104,6 +105,7 @@ impl Debug for ProtectedLaunchRequest<'_> {
                 "authority_lease_expires_at_unix_ms",
                 &self.authority_lease_expires_at_unix_ms,
             )
+            .field("runner_pulse_interval_ms", &self.runner_pulse_interval_ms)
             .field("reserved_resource_budget", &self.reserved_resource_budget)
             .field("endpoint_count", &self.endpoints.len())
             .field("endpoint_secrets", &"[REDACTED]")
@@ -144,12 +146,14 @@ impl<'a> ProtectedLaunchRequest<'a> {
         launch: &'a wire::LaunchAttemptProcess,
         plan: &'a LaunchPlan,
         peer_authority: &'a ProtectedLaunchPeerAuthority,
+        runner_pulse_interval_ms: u64,
     ) -> Self {
         Self {
             identity: identity_to_wire(plan.identity()),
             runtime_instance_id: plan.runtime_instance_id(),
             hard_deadline_at_unix_ms: plan.hard_deadline_at_unix_ms(),
             authority_lease_expires_at_unix_ms: plan.authority_lease_expires_at_unix_ms(),
+            runner_pulse_interval_ms,
             reserved_resource_budget: plan.budget_wire(),
             endpoints: &launch.protected_endpoints,
             launch_nonce: &launch.launch_nonce,
@@ -181,6 +185,11 @@ impl<'a> ProtectedLaunchRequest<'a> {
     #[must_use]
     pub(in crate::management::driver) const fn authority_lease_expires_at_unix_ms(&self) -> i64 {
         self.authority_lease_expires_at_unix_ms
+    }
+
+    #[must_use]
+    pub(in crate::management::driver) const fn runner_pulse_interval_ms(&self) -> u64 {
+        self.runner_pulse_interval_ms
     }
 
     #[must_use]

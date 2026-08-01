@@ -395,6 +395,12 @@ export interface RunFreshOpts {
   customAgentPrompt?: string;
   /** Exact custom-agent tool allowlist. Undefined inherits the preset/profile catalog. */
   allowedToolNames?: string[];
+  /** Managed-agent pins that stay visible without narrowing the registry. */
+  initialPinnedTools?: string[];
+  /** Managed-agent runtime tiers activated from turn one. */
+  initialToolTiers?: string[];
+  /** Managed-agent visible catalog ceiling. */
+  initialVisibleToolCap?: number;
   profile?: 'bootstrap' | 'navigate' | 'full' | 'auto';
   /** POJO worktree opts — survives structuredClone across MessagePort. */
   worktree?: { name?: string; branch?: string };
@@ -403,6 +409,7 @@ export interface RunFreshOpts {
    *  describe; `describeImages` (composer flag) forces it. Forwarded to runCoder. */
   modelSupportsVision?: boolean;
   describeImages?: boolean;
+  blockCodeComments?: boolean;
   /** Auto-activate the `preview` DevTools tier (builder/dev-server sessions). */
   previewAvailable?: boolean;
   /** Auto-activate the isolated public-web tier for the research preset. */
@@ -898,6 +905,16 @@ export class CoderWorkerPool {
     await entry.host.requireBridge().request('setThinking', { thinking });
   }
 
+  async setBlockCodeComments(sessionId: SessionId, enabled: boolean): Promise<boolean> {
+    const entry = this.entries.get(sessionId);
+    if (!entry) return false;
+    const result = await entry.host.requireBridge().request(
+      'setBlockCodeComments',
+      { enabled },
+    ) as { ok?: boolean };
+    return result.ok === true;
+  }
+
   /**
    * Persist a manual picker change through the worker that currently owns the
    * filesystem writer. This deliberately does not mutate the warm runner: a
@@ -989,10 +1006,24 @@ export class CoderWorkerPool {
    * Persist and apply a provider change inside the active worker authority.
    * Returns false when no worker owns the session, allowing the caller to use
    * the main-process repository before the next writer handoff.
-   */
+  */
   async swapProvider(sessionId: SessionId, provider: string, model: string): Promise<boolean> {
+    // A post-run eviction may already have crossed the timer boundary. Wait
+    // for that owner to release its writer before telling the route to persist
+    // through the main-process repository; never race an RPC against teardown.
+    const eviction = this.evictions.get(sessionId);
+    if (eviction) {
+      await eviction;
+      return false;
+    }
     const entry = this.entries.get(sessionId);
     if (!entry) return false;
+    // Model selection is fresh session activity. Without cancelling the
+    // post-run linger timer, a switch near the 30s boundary can succeed and
+    // then evict the worker before the next /messages request, leaving its
+    // residual writer lease to reject request setup.
+    this.cancelPostRunEvict(entry);
+    entry.lastTouchedAt = Date.now();
     const result = await entry.host.requireBridge().request(
       'swapProvider',
       { provider, model },
@@ -1062,18 +1093,55 @@ export class CoderWorkerPool {
       closePreviewSession(sessionId);
       entry.detachBusMirror();
       const aliveMs = Date.now() - entry.lastTouchedAt;
+      let hostEvicted = false;
       try {
         await entry.host.evict(5_000);
-        if (this.entries.get(sessionId) === entry) {
-          this.entries.delete(sessionId);
-        }
-        this.log('info', `[coder-pool] worker evicted session=${sessionId} (idle=${aliveMs}ms)`);
+        hostEvicted = true;
       } catch (err) {
         this.log(
           'warn',
           `[coder-pool] evict session=${sessionId} failed: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+      if (!hostEvicted) return;
+      if (this.entries.get(sessionId) === entry) {
+        this.entries.delete(sessionId);
+      }
+
+      // The release RPC is a pre-stop drain barrier, not proof that no later
+      // worker task reopened the repository before the isolate exited. Once
+      // WorkerHost has observed/forced the actual exit, the coordinator can
+      // safely remove only this isolate's residual owner lease. A replacement
+      // has a different owner id and is fenced behind the eviction promise.
+      const ownerId = entry.sessionContext.writerOwnerId;
+      if (ownerId) {
+        try {
+          const released = await releaseSessionWriterLeaseForOwner({
+            bundlePath: entry.sessionContext.bundlePath,
+            ownerId,
+          });
+          this.lifecycleFailures.delete(sessionId);
+          if (released) {
+            this.log(
+              'warn',
+              `[coder-pool] reclaimed residual evicted worker lease session=${sessionId}`,
+            );
+          }
+        } catch (error) {
+          const failure = error instanceof Error ? error : new Error(String(error));
+          const lifecycleFailure = new Error(
+            `coder-pool: failed to recover evicted writer for session ${sessionId}: ${failure.message}`,
+            { cause: failure },
+          );
+          this.lifecycleFailures.set(sessionId, lifecycleFailure);
+          this.log(
+            'error',
+            `[coder-pool] evicted writer recovery failed session=${sessionId}: ${failure.message}`,
+          );
+          throw lifecycleFailure;
+        }
+      }
+      this.log('info', `[coder-pool] worker evicted session=${sessionId} (idle=${aliveMs}ms)`);
     } finally {
       exitBackgroundActivity(activityId);
     }

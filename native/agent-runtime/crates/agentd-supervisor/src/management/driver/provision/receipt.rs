@@ -2,6 +2,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use super::ProtectedLaunchProvisionError;
 use super::peer::ProtectedLaunchPeerAuthority;
+use super::pulse::ProtectedRunnerPulseReceipt;
 use super::seal::ProtectedLaunchSeal;
 use super::staged::ProtectedLaunchPhysicalFacts;
 use crate::management::driver::plan::LaunchPlan;
@@ -16,10 +17,10 @@ use crate::management::driver::plan::LaunchPlan;
 ///
 /// let _forged = ProtectedLaunchReceipt {};
 /// ```
-#[derive(PartialEq, Eq)]
 pub struct ProtectedLaunchReceipt {
     seal: ProtectedLaunchSeal,
     physical: ProtectedLaunchPhysicalFacts,
+    pulse: ProtectedRunnerPulseReceipt,
 }
 
 #[cfg_attr(
@@ -34,8 +35,13 @@ impl ProtectedLaunchReceipt {
     pub(super) const fn new(
         seal: ProtectedLaunchSeal,
         physical: ProtectedLaunchPhysicalFacts,
+        pulse: ProtectedRunnerPulseReceipt,
     ) -> Self {
-        Self { seal, physical }
+        Self {
+            seal,
+            physical,
+            pulse,
+        }
     }
 
     #[cfg(test)]
@@ -43,7 +49,11 @@ impl ProtectedLaunchReceipt {
         seal: ProtectedLaunchSeal,
         physical: ProtectedLaunchPhysicalFacts,
     ) -> Self {
-        Self { seal, physical }
+        Self {
+            seal,
+            physical,
+            pulse: ProtectedRunnerPulseReceipt::new_for_test(),
+        }
     }
 
     pub(in crate::management::driver) fn validate(
@@ -57,6 +67,12 @@ impl ProtectedLaunchReceipt {
         }
         Ok(())
     }
+
+    pub(in crate::management::driver) fn into_pulse_monitor(
+        self,
+    ) -> Option<super::pulse::ProtectedRunnerPulseMonitor> {
+        self.pulse.into_monitor()
+    }
 }
 
 impl Debug for ProtectedLaunchReceipt {
@@ -65,6 +81,7 @@ impl Debug for ProtectedLaunchReceipt {
             .debug_struct("ProtectedLaunchReceipt")
             .field("seal", &self.seal)
             .field("physical", &self.physical)
+            .field("pulse", &self.pulse)
             .finish()
     }
 }

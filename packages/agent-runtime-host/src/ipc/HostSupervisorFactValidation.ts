@@ -14,6 +14,9 @@ import {
   validateAttemptIdentity,
 } from './FrameHeaderValidation.js';
 import {
+  latestLocalPeerTimestamp,
+} from './LocalPeerClock.js';
+import {
   validateSupervisorLifecycleFact,
 } from './HostSupervisorLifecycleValidation.js';
 import {
@@ -90,7 +93,11 @@ export function validateSupervisorFact(
     throw failure('payload_direction', 'payload is not a supervisor lifecycle fact');
   }
   validateReplyShape(body.case, header.replyToMessageId, handoff);
-  validateSupervisorLifecycleFact(body, observedAtUnixMs, handoff);
+  validateSupervisorLifecycleFact(
+    body,
+    latestLocalPeerTimestamp(observedAtUnixMs),
+    handoff,
+  );
   return body;
 }
 
@@ -103,9 +110,20 @@ export function validateSupervisorEnvelopeHeader(
   if (
     observedAtUnixMs <= 0n
     || observedAtUnixMs > MAX_INT64
-    || header.sentAtUnixMs > observedAtUnixMs
   ) {
     throw failure('invalid_header', 'management owner clock is invalid');
+  }
+  const latestPeer = latestLocalPeerTimestamp(observedAtUnixMs);
+  if (header.sentAtUnixMs > latestPeer) {
+    throw failure(
+      'invalid_header',
+      'management frame timestamp exceeds owner clock',
+      new RangeError(
+        `future management frame delta=${
+          header.sentAtUnixMs - observedAtUnixMs
+        }ms`,
+      ),
+    );
   }
   if (header.protocolVersion !== handoff.protocolVersion) {
     throw failure('protocol_mismatch', 'management protocol does not match handoff');

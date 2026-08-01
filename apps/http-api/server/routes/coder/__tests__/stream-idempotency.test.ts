@@ -813,8 +813,13 @@ describe('POST /messages idempotency', () => {
       baseAgentId: 'plan',
       prompt: 'Focus on trust boundaries.',
       skillIds: ['security-review'],
+      pinnedToolNames: ['read_file'],
+      requiredToolTiers: ['unity'],
+      visibleToolCap: 64,
       toolNames: ['read_file', 'grep'],
       enabled: true,
+      managedBy: null,
+      managedVersion: null,
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
@@ -834,6 +839,9 @@ describe('POST /messages idempotency', () => {
       agentSelectionId: selectionId,
       customAgentPrompt: custom.prompt,
       allowedToolNames: custom.toolNames,
+      initialPinnedTools: custom.pinnedToolNames,
+      initialToolTiers: custom.requiredToolTiers,
+      initialVisibleToolCap: custom.visibleToolCap,
       selectedSkillIds: ['security-review', 'repo-review'],
     });
   });

@@ -151,6 +151,9 @@ interface ComposerProps {
    *  vision-capable models. Auto-applies for blind models regardless. */
   describeImages?: boolean;
   setDescribeImages?: (v: boolean) => void;
+  /** Session rule: generated code should contain no newly added comments. */
+  blockCodeComments?: boolean;
+  setBlockCodeComments?: (v: boolean) => void;
   /** Fallback configuration. */
   fallbackProvider?: string | null;
   fallbackModel?: string | null;
@@ -668,6 +671,8 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               ultraControlsThinking={props.ultraControlsThinking}
               describeImages={props.describeImages}
               setDescribeImages={props.setDescribeImages}
+              blockCodeComments={props.blockCodeComments}
+              setBlockCodeComments={props.setBlockCodeComments}
               toolPermissionMode={props.toolPermissionMode}
               setToolPermissionMode={props.setToolPermissionMode}
               queueable={!!props.queueable}
@@ -691,10 +696,14 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               allowAttachmentsWhileStreaming={!!props.queueable}
               handleFiles={handleFiles}
               thinking={props.thinking}
-              setThinking={props.setThinking}
+              setThinking={props.supportsThinking || props.ultraControlsThinking
+                ? props.setThinking
+                : undefined}
               thinkingManaged={props.ultraControlsThinking}
               describeImages={props.describeImages}
               setDescribeImages={props.setDescribeImages}
+              blockCodeComments={props.blockCodeComments}
+              setBlockCodeComments={props.setBlockCodeComments}
               outputCapLevel={props.outputCapLevel ?? 'economic'}
               setOutputCapLevel={props.setOutputCapLevel}
               toolPermissionMode={props.toolPermissionMode}

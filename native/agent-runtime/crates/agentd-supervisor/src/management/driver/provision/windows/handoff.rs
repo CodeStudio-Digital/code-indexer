@@ -22,6 +22,7 @@ pub(super) fn build_windows_handoff(
         expected_supervisor_peer: Some(facts.peer_authority().expected_supervisor_peer()),
         activation_authority_seal: Some(facts.activation_authority_seal().clone()),
         runtime_provenance: Some(facts.runtime_provenance(physical.process_id())),
+        runner_pulse_interval_ms: facts.runner_pulse_interval_ms(),
     }
 }
 

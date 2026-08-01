@@ -7,8 +7,10 @@ import {
   CustomAgentValidationError,
   deleteCustomAgent,
   listCustomAgents,
+  upsertManagedAgent,
   updateCustomAgent,
   type CustomAgentInput,
+  type ManagedAgentInput,
 } from '../custom-agents.js';
 
 export function customAgentsRouter(store: ProviderStore): Hono {
@@ -47,6 +49,17 @@ export function customAgentsRouter(store: ProviderStore): Hono {
     if (!body) return c.json({ error: 'invalid JSON body' }, 400);
     try {
       return c.json(createCustomAgent(store, body), 201);
+    } catch (error) {
+      if (error instanceof CustomAgentValidationError) return c.json({ error: error.message }, 400);
+      throw error;
+    }
+  });
+
+  app.put('/custom-agents/managed/:id', async (c) => {
+    const body = await c.req.json<ManagedAgentInput>().catch(() => null);
+    if (!body) return c.json({ error: 'invalid JSON body' }, 400);
+    try {
+      return c.json(upsertManagedAgent(store, c.req.param('id'), body));
     } catch (error) {
       if (error instanceof CustomAgentValidationError) return c.json({ error: error.message }, 400);
       throw error;

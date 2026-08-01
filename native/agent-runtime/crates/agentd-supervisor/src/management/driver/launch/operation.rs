@@ -35,6 +35,7 @@ pub(in crate::management) struct PhysicalLaunchWorkerInput {
     pub(super) plan: LaunchPlan,
     pub(super) peer_authority: ProtectedLaunchPeerAuthority,
     pub(super) contained_launch: ContainedLaunch,
+    pub(super) runner_pulse_interval_ms: u64,
 }
 
 impl PhysicalLaunchState {
@@ -51,12 +52,14 @@ impl PhysicalLaunchWorkerInput {
         LaunchPlan,
         ProtectedLaunchPeerAuthority,
         ContainedLaunch,
+        u64,
     ) {
         (
             self.launch,
             self.plan,
             self.peer_authority,
             self.contained_launch,
+            self.runner_pulse_interval_ms,
         )
     }
 }
@@ -176,6 +179,9 @@ where
             plan,
             peer_authority: self.peer_authority.clone(),
             contained_launch: self.trusted_runner.contained_launch(),
+            runner_pulse_interval_ms: super::super::provision::runner_pulse_interval_ms(
+                self.policy.limits().runner_pulse_timeout_ms,
+            ),
         };
         Ok(AsyncLaunchStart::Physical {
             state,

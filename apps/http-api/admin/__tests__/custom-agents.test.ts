@@ -5,6 +5,7 @@ import {
   deleteCustomAgent,
   listCustomAgents,
   resolveAgentSelection,
+  upsertManagedAgent,
   updateCustomAgent,
 } from '../../custom-agents.js';
 import { customAgentsRouter } from '../custom-agents.routes.js';
@@ -94,5 +95,56 @@ describe('custom agent definitions', () => {
       .toThrow(CustomAgentValidationError);
     expect(() => createCustomAgent(store, { name: 'x'.repeat(81), baseAgentId: 'build' }))
       .toThrow('name supports at most 80 characters');
+  });
+
+  it('idempotently installs an extension-managed build agent with pins and required tiers', async () => {
+    const store = memoryStore();
+    const input = {
+      managedBy: 'com.example.unity',
+      managedVersion: '1.2.3',
+      name: 'Unity Build',
+      description: 'Builds through the live editor',
+      baseAgentId: 'build',
+      prompt: 'Use Unity MCP.',
+      skillIds: ['unity-project-scout'],
+      pinnedToolNames: ['ext_unity__get_server_health', 'ext_unity__create_scene'],
+      requiredToolTiers: ['unity'],
+      visibleToolCap: 64,
+      toolNames: null,
+      enabled: true,
+    };
+
+    const created = upsertManagedAgent(store, 'unity-build', input);
+    expect(created.selectionId).toBe('custom:unity-build');
+    expect(created.managedBy).toBe('com.example.unity');
+    expect(created.requiredToolTiers).toEqual(['unity']);
+    expect(created.pinnedToolNames).toContain('ext_unity__get_server_health');
+    expect(created.visibleToolCap).toBe(64);
+
+    const updated = upsertManagedAgent(store, 'unity-build', {
+      ...input,
+      managedVersion: '1.2.4',
+      prompt: 'Use the live Unity MCP route.',
+    });
+    expect(updated.id).toBe(created.id);
+    expect(updated.createdAt).toBe(created.createdAt);
+    expect(updated.managedVersion).toBe('1.2.4');
+    expect(listCustomAgents(store)).toHaveLength(1);
+    expect(() => updateCustomAgent(store, 'unity-build', { name: 'Hijacked' }))
+      .toThrow('must be updated by that extension');
+
+    const response = await customAgentsRouter(store as never).request(
+      '/custom-agents/managed/unity-build',
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...input, managedVersion: '1.2.5' }),
+      },
+    );
+    expect(response.status).toBe(200);
+    expect((await response.json() as { selectionId: string; managedVersion: string })).toMatchObject({
+      selectionId: 'custom:unity-build',
+      managedVersion: '1.2.5',
+    });
   });
 });

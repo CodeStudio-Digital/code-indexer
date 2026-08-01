@@ -49,7 +49,7 @@ export const LiveTextBlock = memo(function LiveTextBlock({ text }: { text: strin
  */
 export const LiveThinkingBlock = memo(function LiveThinkingBlock({ text }: { text: string }) {
   const { t } = useTranslation('chat');
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   // Same throttle as the answer text: reasoning traces stream just as fast and
   // `cleanThinkingMarkdown` walks the whole accumulator before the parse even
   // starts. Collapsed blocks skip both — only the cheap header reconciles.
@@ -57,18 +57,18 @@ export const LiveThinkingBlock = memo(function LiveThinkingBlock({ text }: { tex
   const deferred = useDeferredValue(throttled);
   const displayText = open ? cleanThinkingMarkdown(deferred) : '';
   return (
-    <div className="my-1 rounded-md border border-dashed border-border/40 bg-muted/15">
+    <div className="my-1">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+        className="flex w-full items-center gap-1.5 py-1 text-left text-[11px] text-muted-foreground transition-colors hover:text-foreground"
       >
         <Brain className="h-3 w-3 animate-pulse" />
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         <span className="font-medium">{t('messages.thinking')}</span>
       </button>
       {open && (
-        <div className="border-t border-dashed border-border/40 px-2.5 py-1.5 max-h-[32vh] overflow-y-auto">
+        <div className="ml-4 max-h-[32vh] overflow-y-auto border-l border-border/60 py-1 pl-3">
           <Markdown
             text={displayText}
             className="text-[11px] leading-[1.15rem] text-muted-foreground italic prose-p:my-1 prose-strong:text-muted-foreground prose-code:text-muted-foreground"

@@ -296,6 +296,28 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   if (currentText) textBlocks.push(currentText);
   if (currentThinking) thinkingBlocks.push(currentThinking);
 
+  // A terminal marker commits the transport, but it does not by itself make
+  // the model turn usable. Some OpenAI-compatible endpoints occasionally
+  // return HTTP 200 + finish_reason with no assistant text and no tool call.
+  // Treat that as a retryable protocol failure instead of persisting a clean
+  // completion that leaves the user with an empty turn. Thinking alone is not
+  // a deliverable: the model still owes either visible text or a tool request.
+  const hasVisibleText = textBlocks.some((text) => text.trim().length > 0);
+  if (!hasVisibleText && toolUses.length === 0) {
+    const error = new Error(
+      'provider committed an empty terminal response (provider_empty_result)',
+    );
+    error.name = 'ProviderStreamProtocolError';
+    Object.assign(error, {
+      status: 502,
+      code: 'provider_empty_result',
+      reason: 'provider_empty_result',
+      responseMeta,
+      generationId: responseId,
+    });
+    throw error;
+  }
+
   return {
     textBlocks,
     toolUses,

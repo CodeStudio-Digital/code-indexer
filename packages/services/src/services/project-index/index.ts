@@ -11,6 +11,7 @@ export {
   type ProjectIndexStatus,
   type ScheduledIndexRun,
   type StructuralExecutor,
+  type StructuralChangeHandler,
   type StructuralProgressFrame,
   type StructuralRunSummary,
 } from './types.js';

@@ -31,17 +31,17 @@ export const ActivityLineBlock = memo(function ActivityLineBlock({ activity }: A
   return (
     <div
       className={cn(
-        'my-1 flex min-w-0 items-center gap-2 rounded-md border px-2 py-1 text-[11px]',
+        'group/activity my-1 flex min-w-0 items-center gap-1.5 py-1 text-[11px]',
         activity.status === 'running'
-          ? 'border-warning/25 bg-warning/[0.05] text-warning-foreground'
+          ? 'text-muted-foreground'
           : activity.status === 'completed'
-            ? 'border-success/25 bg-success/[0.05] text-success'
-            : 'border-destructive/25 bg-destructive/[0.05] text-destructive',
+            ? 'text-muted-foreground'
+            : 'text-destructive',
       )}
     >
-      <Icon className={cn('h-3.5 w-3.5 shrink-0', running && 'animate-spin')} />
-      <span className="min-w-0 truncate font-mono font-medium">{activity.label}</span>
-      <span className="shrink-0 text-muted-foreground">{phase}</span>
+      <Icon className={cn('h-3 w-3 shrink-0', running && 'animate-spin')} />
+      <span className="min-w-0 truncate font-medium">{activity.label}</span>
+      <span className="hidden shrink-0 text-muted-foreground/60 group-hover/activity:inline">{phase}</span>
       {activity.note && (
         <span className="min-w-0 truncate text-muted-foreground">{activity.note}</span>
       )}

@@ -137,6 +137,37 @@ describe('memory sweeper relational writes', () => {
     expect(exitBackgroundActivity).toHaveBeenNthCalledWith(1, 71);
   });
 
+  it('bounds candidate tail checks per sweep and rotates through the catalog', async () => {
+    const ids = Array.from({ length: 10 }, (_, index) => sessionId(100 + index));
+    const { sessionStore } = shortSpanStore(ids[0]!);
+    vi.mocked(sessionStore.catalog.list).mockReturnValue(ids.map(catalogEntry));
+    vi.mocked(sessionStore.maxMessageSeq).mockResolvedValue(0);
+    const sweeper = startMemorySweeper({
+      sessionStore,
+      db: {
+        getProjectMemoryEnabled: vi.fn(() => true),
+      } as unknown as CodeIndexDB,
+      runEndMemory: {
+        isConfigured: vi.fn(async () => true),
+      } as unknown as RunEndMemory,
+      intervalMs: 60_000,
+      idleAfterMs: 0,
+      maxPerSweep: 1,
+      maxCandidatesInspected: 3,
+    });
+    try {
+      expect(await sweeper.runOnce()).toBe(0);
+      expect(await sweeper.runOnce()).toBe(0);
+    } finally {
+      sweeper.stop();
+    }
+
+    expect(sessionStore.maxMessageSeq).toHaveBeenCalledTimes(6);
+    expect(vi.mocked(sessionStore.maxMessageSeq).mock.calls.flat()).toEqual(
+      ids.slice(0, 6),
+    );
+  });
+
   it('does not distill an apparently idle session while its worker is alive', async () => {
     const id = sessionId(40);
     const { sessionStore, setBoundary } = shortSpanStore(id);

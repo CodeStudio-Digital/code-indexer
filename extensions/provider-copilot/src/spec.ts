@@ -52,8 +52,8 @@ export const copilotSpec: ProviderSpec = {
     'gemini-3.6-flash': {
       canReason: true,
       supportsAttachments: true,
-      supportedReasoningLevels: null,
-      defaultReasoningLevel: null,
+      supportedReasoningLevels: ['low', 'medium', 'high'],
+      defaultReasoningLevel: 'medium',
     },
     'kimi-k2.7': {
       canReason: true,

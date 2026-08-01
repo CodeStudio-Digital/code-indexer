@@ -2,6 +2,8 @@ import type { ProjectCardData } from './ProjectCard.js';
 
 export type ProjectListFilter = 'all' | 'notIndexed' | 'indexed';
 
+export const UNGROUPED_PROJECTS_KEY = '__ungrouped__';
+
 const projectNameCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
@@ -78,10 +80,21 @@ export function groupProjectList(
   );
 
   if (ungrouped.length > 0) {
-    sorted.set('__ungrouped__', sortProjectsByName(ungrouped));
+    sorted.set(UNGROUPED_PROJECTS_KEY, sortProjectsByName(ungrouped));
   }
 
   return sorted;
+}
+
+export function filterProjectsByGroup(
+  projects: ProjectCardData[],
+  group: string | null,
+): ProjectCardData[] {
+  if (group === null) return projects;
+  if (group === UNGROUPED_PROJECTS_KEY) {
+    return projects.filter((project) => !project.group_name);
+  }
+  return projects.filter((project) => project.group_name === group);
 }
 
 export function recentProjectList(

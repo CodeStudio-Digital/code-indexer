@@ -41,6 +41,30 @@ describe('RecentFilesSource', () => {
     expect(src.size()).toBe(2);
   });
 
+  it('accepts a path-only editor touch without losing a later indexed id', () => {
+    const src = new RecentFilesSource();
+    src.touch({
+      projectId: PROJECT,
+      fileId: null,
+      filePath: 'src\\core\\runner.ts',
+      kind: 'view',
+    });
+    src.touch(file(7, 'src/core/runner.ts', 'edit'));
+    src.touch({
+      projectId: PROJECT,
+      fileId: null,
+      filePath: 'src/core/runner.ts',
+      kind: 'view',
+    });
+
+    expect(src.size()).toBe(1);
+    expect(src.match(PROJECT, 'runner')[0]).toMatchObject({
+      fileId: 7,
+      filePath: 'src/core/runner.ts',
+      kind: 'edit',
+    });
+  });
+
   it('evicts least-recently-touched when over maxSize', () => {
     const src = new RecentFilesSource({ maxSize: 3 });
     src.touch(file(1, 'a.ts'));

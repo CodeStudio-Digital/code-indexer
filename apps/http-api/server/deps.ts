@@ -1687,7 +1687,8 @@ export function createDeps(): ServerDeps {
     }
   });
   projectIndexService.setSemanticCatchup({
-    noteDelta: (projectId, events) => semanticCoordinator.noteCodeDelta(projectId, events),
+    noteDelta: (projectId, events, previousItemKeys) =>
+      semanticCoordinator.noteCodeDelta(projectId, events, previousItemKeys),
     ensureProject: (projectId) => semanticCoordinator.catchUpCodeProject(projectId),
     projectReady: (projectId) => { semanticCoordinator.activateCodeProject(projectId); },
     projectInactive: (projectId) => { semanticCoordinator.deactivateCodeProject(projectId); },

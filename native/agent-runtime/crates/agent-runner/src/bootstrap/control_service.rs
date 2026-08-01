@@ -2,7 +2,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agent_platform::ipc::{EndpointCancellation, ExpectedLocalPeer, ProtectedEndpointError};
-use agent_platform::windows::ipc::{VerifiedWindowsEndpointStream, WindowsProtectedEndpoint};
+use agent_platform::windows::ipc::VerifiedWindowsEndpointStream;
 use agent_protocol::frame::AsyncEstablishedAttemptChannel;
 use agent_protocol::generated::v1 as wire;
 use agent_protocol::runner_bootstrap::ShapeValidatedRunnerLaunchHandoff;
@@ -17,11 +17,14 @@ mod data;
 mod drive;
 mod error;
 mod hydration;
+mod pulse;
 
 use data::PendingRunnerDataHydration;
 use drive::PendingRunnerActivation;
 pub use error::RunnerControlServiceError;
 use hydration::VerifiedRunnerHydration;
+use pulse::PendingRunnerPulse;
+use pulse::RunnerPulsePump;
 
 type WindowsActiveLifetime =
     ActiveRunnerLifetime<VerifiedWindowsEndpointStream, ActiveRunnerResources>;
@@ -49,7 +52,7 @@ pub struct ActiveRunnerControlLaunch {
 pub struct ActiveRunnerResources {
     handoff: ShapeValidatedRunnerLaunchHandoff,
     data: AsyncEstablishedAttemptChannel<VerifiedWindowsEndpointStream>,
-    runner_pulse: WindowsProtectedEndpoint,
+    runner_pulse: RunnerPulsePump,
     hydration: VerifiedRunnerHydration,
 }
 
@@ -84,6 +87,22 @@ impl ActiveRunnerControlLaunch {
         cancellation: &mut EndpointCancellation,
     ) -> impl Future<Output = ActiveRunnerControlAdvance> + '_ {
         self.lifetime.advance(cancellation)
+    }
+
+    /// Owns the active attempt until a terminal control, deadline, local
+    /// cancellation, transport failure, or supervisor reap ends its lifetime.
+    pub(crate) async fn run_until_cleanup(mut self, cancellation: &mut EndpointCancellation) {
+        loop {
+            match self.lifetime.advance(cancellation).await {
+                ActiveRunnerLifetimeAdvance::Continue(next) => {
+                    self.lifetime = next;
+                }
+                ActiveRunnerLifetimeAdvance::CleanupRequired(cleanup) => {
+                    cleanup.close_local();
+                    return;
+                }
+            }
+        }
     }
 
     /// Revokes locally; the returned owner still requires supervisor reap.
@@ -133,6 +152,12 @@ impl PreparedRunnerControlLaunch {
             physical_deadline,
         )
         .map_err(RunnerControlServiceError::hydration)?;
+        let pending_pulse = PendingRunnerPulse::from_handoff(
+            self.runner_pulse,
+            &mut self.handoff,
+            physical_deadline,
+        )?;
+        let runner_pulse = pending_pulse.accept_and_probe(cancellation).await?;
         let stream = self
             .control
             .accept(expected_host, physical_deadline, cancellation)
@@ -155,7 +180,7 @@ impl PreparedRunnerControlLaunch {
             PendingRunnerActivation::new(
                 self.handoff,
                 pending_data,
-                self.runner_pulse,
+                runner_pulse,
                 resource_budget,
                 effective_containment,
             ),

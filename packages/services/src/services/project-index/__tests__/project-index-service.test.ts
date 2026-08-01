@@ -15,6 +15,7 @@ import type {
   DirtyEvent,
   ProjectIndexSettings,
   StructuralExecutor,
+  StructuralChangeHandler,
   StructuralProgressFrame,
 } from '../types.js';
 
@@ -56,6 +57,7 @@ class FakeExecutor implements StructuralExecutor {
     { path: 'src/changed.ts', kind: 'upsert' },
     { path: 'src/deleted.ts', kind: 'delete' },
   ];
+  previousItemKeys: string[] = [];
   /** Frames emitted via onProgress during the run (scan/index liveness). */
   progressFrames: StructuralProgressFrame[] = [];
   priorityEvents: Array<{ projectId: number; busy: boolean }> = [];
@@ -68,7 +70,7 @@ class FakeExecutor implements StructuralExecutor {
       maxFiles?: number;
       allowEmptyWipe?: boolean;
       onProgress?: (p: StructuralProgressFrame) => void;
-      onChanges?: (events: readonly DirtyEvent[]) => void | Promise<void>;
+      onChanges?: StructuralChangeHandler;
     },
   ) {
     this.runs++;
@@ -81,17 +83,33 @@ class FakeExecutor implements StructuralExecutor {
     if (this.abortEmptyScan) {
       return { totalFiles: 0, indexed: 0, removed: 0, skipped: 0, errorCount: 0, durationMs: 1, aborted: 'empty_scan' as const };
     }
-    await opts.onChanges?.(this.runChanges);
+    await opts.onChanges?.(this.runChanges, this.previousItemKeys);
     this.onRun?.();
     for (const f of this.progressFrames) opts.onProgress?.(f);
     return { totalFiles: 2, indexed: 2, removed: 0, skipped: 0, errorCount: 0, durationMs: 1 };
   }
-  async indexFiles(_projectId: number, relPaths: string[]) {
+  async indexFiles(
+    _projectId: number,
+    relPaths: string[],
+    opts?: { onChanges?: StructuralChangeHandler },
+  ) {
+    await opts?.onChanges?.(
+      relPaths.map((path) => ({ path, kind: 'upsert' as const })),
+      this.previousItemKeys,
+    );
     this.indexCalls.push([...relPaths]);
     if (this.delayMs) await sleep(this.delayMs);
     return { indexed: relPaths.length, skippedUnchanged: 0, skippedIgnored: 0, removed: 0, errors: 0 };
   }
-  async removeFiles(_projectId: number, relPaths: string[]) {
+  async removeFiles(
+    _projectId: number,
+    relPaths: string[],
+    opts?: { onChanges?: StructuralChangeHandler },
+  ) {
+    await opts?.onChanges?.(
+      relPaths.map((path) => ({ path, kind: 'delete' as const })),
+      this.previousItemKeys,
+    );
     this.removeCalls.push([...relPaths]);
     return { removed: relPaths.length };
   }
@@ -528,6 +546,38 @@ describe('ProjectIndexService', () => {
     await sleep(50);
     expect(exec.indexCalls).toEqual([['src/new.ts']]);
     expect(events).toEqual(['delta:1', 'ensure:1']);
+    await svc.dispose();
+  });
+
+  it('merges worker-captured semantic keys before an incremental mutation', async () => {
+    const exec = new FakeExecutor();
+    exec.previousItemKeys = ['file:7', 'symbol:11'];
+    const svc = makeService(exec);
+    const fences: Array<{ paths: string[]; keys: readonly string[]; indexed: number }> = [];
+    svc.setSemanticCatchup({
+      noteDelta: (_projectId, changes, previousKeys = []) => {
+        fences.push({
+          paths: changes.map((change) => change.path),
+          keys: previousKeys,
+          indexed: exec.indexCalls.length,
+        });
+      },
+      ensureProject: async () => undefined,
+    });
+
+    svc.markDirty(1, [{ path: 'src/existing.ts', kind: 'upsert' }]);
+    expect(fences).toEqual([{
+      paths: ['src/existing.ts'],
+      keys: [],
+      indexed: 0,
+    }]);
+    await sleep(30);
+
+    expect(fences).toEqual([
+      { paths: ['src/existing.ts'], keys: [], indexed: 0 },
+      { paths: ['src/existing.ts'], keys: ['file:7', 'symbol:11'], indexed: 0 },
+    ]);
+    expect(exec.indexCalls).toEqual([['src/existing.ts']]);
     await svc.dispose();
   });
 

@@ -97,6 +97,22 @@ describe('wireRunnerEventsToBus terminal ordering', () => {
     runner.emit('done', 'completed');
   });
 
+  it('publishes injected user-message boundaries without exposing message content', () => {
+    const runner = fakeRunner();
+    const bus = createBus(new AbortController());
+    wireRunnerEventsToBus(runner, bus);
+
+    runner.emit('user_message_boundary', { roundMessageIds: [1222] });
+
+    expect(bus.buffer).toMatchObject([
+      {
+        event: 'user_message_boundary',
+        data: { round_message_ids: [1222] },
+      },
+    ]);
+    runner.emit('done', 'completed');
+  });
+
   it('keeps text before a non-text ordering boundary without duplicating it', () => {
     const runner = fakeRunner();
     const bus = createBus(new AbortController());

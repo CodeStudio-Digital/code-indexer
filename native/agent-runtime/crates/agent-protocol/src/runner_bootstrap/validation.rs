@@ -11,6 +11,7 @@ mod resources;
 
 const HANDOFF: &str = "RunnerLaunchHandoff";
 const SHA256_BYTES: usize = 32;
+const MAX_RUNNER_PULSE_INTERVAL_MS: u64 = 60 * 60 * 1_000;
 
 pub(super) fn validate_handoff(
     value: &wire::RunnerLaunchHandoff,
@@ -30,6 +31,9 @@ pub(super) fn validate_handoff(
     }
     if value.hard_deadline_at_unix_ms <= 0 {
         return Err(invalid(HANDOFF, "hard_deadline_at_unix_ms"));
+    }
+    if !(1..=MAX_RUNNER_PULSE_INTERVAL_MS).contains(&value.runner_pulse_interval_ms) {
+        return Err(invalid(HANDOFF, "runner_pulse_interval_ms"));
     }
     if !(BOOTSTRAP_SECRET_MIN_BYTES..=LAUNCH_NONCE_MAX_BYTES).contains(&value.launch_nonce.len()) {
         return Err(invalid(HANDOFF, "launch_nonce"));

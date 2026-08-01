@@ -90,7 +90,7 @@ export class FsSessionStore {
     this.chatPipelines = new FsChatPipelineRepository(entities);
     installOrchestrationSubagentApi(this, this.#directory, entities);
     installOperationalSessionApi(this, new FsOperationalSessionStore(this.#directory));
-    installHistoryMetricsApi(this, this.#directory);
+    installHistoryMetricsApi(this, this.#directory, this.#reader);
     installSnapshotReviewApi(this, this.#directory);
     installSessionOperationsApi(this, this.#directory);
     installSessionRollbackApi(this, this.#directory);

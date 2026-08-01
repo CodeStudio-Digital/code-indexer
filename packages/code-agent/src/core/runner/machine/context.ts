@@ -38,7 +38,8 @@ export interface CreateRunContextArgs {
    * Pinned tools — registered tools the model called while they were
    * hidden (tier-hidden or cap-cut). Shared BY REFERENCE with the host
    * runner so dispatch-time pins are visible to the next `buildTools`.
-   * Monotone: names are only ever added.
+   * The host bounds this Set as an LRU working set; configured pins are kept
+   * separately in RunnerOptions.requiredPinnedTools.
    */
   initialPins?: Set<string>;
   /**

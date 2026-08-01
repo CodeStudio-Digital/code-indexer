@@ -116,6 +116,15 @@ export interface RunnerEvents {
   message_complete: (message: AgentMessage, usage: ChatUsage | null) => void;
   turn_start: (turn: number) => void;
   /**
+   * A dashboard-injected user message was drained into the runner history at
+   * the start of a provider turn. This is a real conversation boundary even
+   * though the surrounding runner/SSE process stays alive.
+   *
+   * Live transcript consumers use it to stop carrying the preceding user's
+   * accumulated text/tool blocks into the new assistant turn.
+   */
+  user_message_boundary: (payload: { roundMessageIds: number[] }) => void;
+  /**
    * Fired right before the runner parks on `waitForUserInput` (submit_tasks /
    * submit_plan / ask_user / execute_tasks budget / PermissionGate approval).
    * The turn blocks indefinitely here WITHOUT a following `turn_start`, so the

@@ -85,6 +85,26 @@ describe('coder conversation chapter routes', () => {
     });
   });
 
+  it('returns lightweight timeline markers and keeps full detail on demand', async () => {
+    const { app } = setup();
+    const preview = await app.request(
+      `/api/coder/sessions/${SESSION_ID}/chapters?detail=preview`,
+    );
+    const previewBody = await preview.json() as { items: Array<Record<string, unknown>> };
+    expect(previewBody.items[0]).toMatchObject({ id: CHAPTER_ID, title: 'A useful chapter' });
+    expect(previewBody.items[0]).not.toHaveProperty('chapter_json');
+    expect(previewBody.items[0]).not.toHaveProperty('resume_json');
+    expect(previewBody.items[0]).not.toHaveProperty('metrics_json');
+
+    const detail = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters/${CHAPTER_ID}`);
+    expect(await detail.json()).toMatchObject({
+      chapter_json: '{}',
+      chapter_text: 'summary',
+      resume_json: '{}',
+      resume_text: 'resume',
+    });
+  });
+
   it('gets a session-scoped chapter and its paginated source messages', async () => {
     const { app, calls } = setup();
     const detail = await app.request(`/api/coder/sessions/${SESSION_ID}/chapters/${CHAPTER_ID}`);

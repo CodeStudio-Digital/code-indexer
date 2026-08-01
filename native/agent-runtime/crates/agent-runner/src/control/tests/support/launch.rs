@@ -44,6 +44,7 @@ fn test_handoff() -> wire::RunnerLaunchHandoff {
         }),
         activation_authority_seal: Some(activation_authority_seal()),
         runtime_provenance: Some(agent_hello().provenance.expect("fixture provenance")),
+        runner_pulse_interval_ms: 100,
     }
 }
 

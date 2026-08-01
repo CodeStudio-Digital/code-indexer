@@ -782,6 +782,28 @@ describe('SemanticIndexCoordinator code generations', () => {
     }));
   });
 
+  it('persists worker-captured previous item keys without reading the project DB on main', () => {
+    const h = makeHarness();
+    h.db.getFile.mockClear();
+    h.db.getSymbolsByFile.mockClear();
+
+    h.coordinator.noteCodeDelta(
+      1,
+      [{ kind: 'upsert', path: 'src/file-1.ts' }],
+      ['file:7', 'symbol:11', 'symbol_body:11', 'symbol_group:11'],
+    );
+
+    expect(h.db.getFile).not.toHaveBeenCalled();
+    expect(h.db.getSymbolsByFile).not.toHaveBeenCalled();
+    const job = [...h.jobs.values()].find((row) => row.namespace === 'code:p1');
+    expect(job?.cursor?.previous_item_keys).toEqual([
+      'file:7',
+      'symbol:11',
+      'symbol_body:11',
+      'symbol_group:11',
+    ]);
+  });
+
   it('coalesces explicit project markers and dispatches the latest requested force mode', async () => {
     const h = makeHarness();
     const run = vi.spyOn(h.coordinator, 'reindexCodeProject').mockResolvedValue({
@@ -862,7 +884,7 @@ describe('SemanticIndexCoordinator code generations', () => {
 
       expect(() => h.coordinator.noteCodeDelta(1, [
         { kind: 'upsert', path: 'src/retry.ts' },
-      ])).not.toThrow();
+      ], ['file:7'])).not.toThrow();
       h.coordinator.noteCodeDelta(1, [
         { kind: 'delete', path: 'src/retry.ts' },
         { kind: 'upsert', path: 'src/other.ts' },
@@ -876,6 +898,7 @@ describe('SemanticIndexCoordinator code generations', () => {
         { kind: 'delete', path: 'src/retry.ts' },
         { kind: 'upsert', path: 'src/other.ts' },
       ]);
+      expect(job?.cursor?.previous_item_keys).toEqual(['file:7']);
     } finally {
       vi.useRealTimers();
     }
