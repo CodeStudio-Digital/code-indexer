@@ -34,6 +34,7 @@ pub(super) struct ConnectionContext {
     )]
     pub read_timeout_ms: u64,
     pub write_timeout_ms: u64,
+    pub heartbeat_interval_ms: u64,
 }
 
 pub(super) fn validate_agent_hello_draft(
@@ -149,6 +150,7 @@ pub(super) fn validate_host_hello(
         max_frame_bytes: frame_limits.maximum_frame_bytes,
         read_timeout_ms: frame_limits.read_timeout_ms,
         write_timeout_ms: frame_limits.write_timeout_ms,
+        heartbeat_interval_ms: hello.heartbeat_interval_ms,
     })
 }
 

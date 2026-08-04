@@ -44,8 +44,8 @@ export const INDEX_TABLES: ManifestEntry[] = [
 
 /**
  * FEATURE-class tables (R1). All project-scoped, in dependency order. Hybrids
- * (pipelines, design_system) copy ONLY the project rows. Operational pipeline
- * executions and QA live in filesystem session bundles, not either SQLite
+ * (`design_system`) copy ONLY the project rows. Operational QA state lives in
+ * filesystem session bundles, not either SQLite
  * database. `file_history_blobs` is a content-addressed shared
  * pool — copy only the blobs referenced by THIS project's local history.
  */
@@ -66,8 +66,6 @@ export const FEATURE_TABLES: ManifestEntry[] = [
   // File local history (160) — history direct; blobs are the referenced pool.
   { table: 'file_local_history', cls: 'FEATURE' },
   { table: 'file_history_blobs', cls: 'FEATURE', where: "hash IN (SELECT DISTINCT content_hash FROM legacy.file_local_history WHERE project_id = @pid AND content_hash IS NOT NULL)" },
-  // Reusable pipeline definitions only. Operational executions are bundle files.
-  { table: 'pipelines', cls: 'FEATURE' },
   // Design System sessions, versions, and components are operational session
   // state. They are exported to filesystem bundles by the big-bang migrator
   // and must never be copied into a project SQLite database.

@@ -47,7 +47,7 @@ describe('notification route visibility', () => {
     })).toBe(true);
   });
 
-  it('matches company routes by canonical board or pipeline path', () => {
+  it('matches company routes by canonical board path', () => {
     const board: NotificationRouteTarget = {
       kind: 'company',
       route: `/company/sessions/${COMPANY_SESSION_ID}/main/work/board`,
@@ -60,10 +60,6 @@ describe('notification route visibility', () => {
       visibilityState: 'visible',
     })).toBe(true);
 
-    expect(isNotificationRouteVisibleForLocation(board, {
-      pathname: `/company/sessions/${COMPANY_SESSION_ID}/main/work/pipelines`,
-      visibilityState: 'visible',
-    })).toBe(false);
   });
 
   it('never treats hidden documents as visible', () => {

@@ -10,7 +10,6 @@ const appCapabilities = {
   workSource: 'app_workflow' as const,
   allowAppTools: true,
   allowCompanyKanban: false,
-  allowCompanyPipelines: false,
   allowCompanyScheduler: false,
   allowAppScheduler: true,
   allowFreeSubordinateSpawn: false,

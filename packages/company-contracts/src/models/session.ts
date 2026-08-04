@@ -15,7 +15,6 @@ export interface CompanySessionCapabilities {
   workSource: 'company_kanban' | 'app_workflow';
   allowAppTools: boolean;
   allowCompanyKanban: boolean;
-  allowCompanyPipelines: boolean;
   allowCompanyScheduler: boolean;
   allowAppScheduler: boolean;
   allowFreeSubordinateSpawn: boolean;
@@ -33,7 +32,7 @@ export interface CompanySession {
   /**
    * Multi-front via sub-sessions (migration 067): when set, this row is
    * a child "tab" of `parent_session_id` and shares
-   * sandbox/projects/kanban/pipelines with the parent. NULL = root
+   * sandbox/projects/kanban with the parent. NULL = root
    * session (a parent or a standalone single-tab session).
    */
   parent_session_id: string | null;

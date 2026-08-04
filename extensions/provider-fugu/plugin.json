@@ -1,6 +1,6 @@
 {
   "name": "provider-fugu",
-  "version": "0.1.0+codex.local-20260731000000",
+  "version": "0.1.0+codex.local-20260801200335",
   "description": "Sakana AI Fugu (Fugu + Fugu Ultra) as a provider plugin",
   "author": { "name": "mcp" },
   "apps": ".app.json",

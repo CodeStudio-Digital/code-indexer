@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsSessionStore } from '../fs-session-store.js';
 
 const UUID_PATTERN =
@@ -234,6 +234,11 @@ describe('FsSessionStore operational state', () => {
         access: 'write',
       }),
     ]);
+    expect(await store.getSessionEventByOperationId(
+      session.id,
+      'event:policy:1',
+      'policy_decision',
+    )).toEqual(firstEvent);
     expect((await store.consumePendingAgentTransition(session.id))?.id).toBe(
       transition?.id,
     );
@@ -538,6 +543,13 @@ describe('FsSessionStore operational state', () => {
       started_at: createdAt,
       operation_id: 'task-run:create:1',
     });
+    const taskRunPage = await store.listTaskRunsPage(session.id, 0, 1);
+    expect(taskRunPage).toMatchObject({
+      totalCount: 1,
+      nextOffset: null,
+      items: [expect.objectContaining({ run_id: runId, mode: 'auto' })],
+    });
+    expect(taskRunPage.revision).toBeGreaterThan(0);
     await store.upsertTaskRunItem({
       session_id: session.id,
       run_id: runId,
@@ -669,6 +681,14 @@ describe('FsSessionStore operational state', () => {
       semanticSavedChars: 75,
     });
     expect(stats.recent[0].id).toMatch(UUID_PATTERN);
+
+    const readConversationSync = vi.spyOn(store.repository, 'readConversationSync');
+    const toolPage = await store.listToolCallSummaries(session.id, 0, 2);
+    expect(toolPage.totalCount).toBe(3);
+    expect(toolPage.items).toHaveLength(2);
+    expect(toolPage.nextOffset).toBe(2);
+    expect(toolPage.revision).toBeGreaterThan(0);
+    expect(readConversationSync).not.toHaveBeenCalled();
 
     const aggregate = await store.getDriveAggregate(session.id);
     expect(aggregate.fileMap.changed).toContain('src/a.ts');

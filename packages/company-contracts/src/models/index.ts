@@ -4,6 +4,5 @@ export * from './agent-run.js';
 export * from './board.js';
 export * from './master-prompt.js';
 export * from './kanban.js';
-export * from './pipeline.js';
 export * from './inbox.js';
 export * from './sandbox.js';

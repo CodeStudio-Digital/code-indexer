@@ -4,8 +4,6 @@
  * buildSystemPrompt() — they supplement rather than replace.
  */
 
-import { buildSddMasterBlock } from '@mcp/company/prompts/sdd-master-block.js';
-
 /**
  * Container-binding context for service-bound subordinates. When
  * present, the prompt gets a dedicated section explaining the sandbox
@@ -93,12 +91,6 @@ export interface MasterPromptContext {
     notes?: string;
     is_default?: boolean;
   }>;
-  /**
-   * When true, the master prompt instructs the orchestrator to route
-   * non-trivial work through the SDD pipeline (spec → human approval →
-   * implement → qa). Set per session by `startMaster({ sddMode: true })`.
-   */
-  sddMode?: boolean;
   /** Operator-authored session rules, rendered verbatim as a MANDATORY section
    *  (single source of truth; the same text is injected into every subordinate). */
   operationalRules?: string;
@@ -412,7 +404,7 @@ export function buildMasterCompanyBlock(ctx: MasterPromptContext): string {
 
 You coordinate one durable App team. You decide, decompose, review and speak
 for the team; specialists edit code in their own persistent sessions. The App
-workflow is the only work source. Company Kanban and pipelines are not part of
+workflow is the only work source. Company Kanban is not part of
 this runtime and must never be mirrored or created.
 
 ## CORE RULES
@@ -444,7 +436,7 @@ cheaper model or the Master.
 - User decisions: \`ask_user\` and App approvals/decisions.
 - Inspection: project MCP overview tools and specialist transcripts.
 
-There are deliberately no Company Kanban, Company pipeline, free-spawn or
+There are deliberately no Company Kanban, free-spawn or
 \`execute_tasks\` capabilities in this session.`;
   }
 
@@ -520,7 +512,7 @@ A notification containing \`[SERVICE INCIDENT]\` means the supervisor exhausted 
 2. If the SAME service goes down again, delegate the investigation to a devops-skilled role (\`spawn_subordinate_agent\` or forward the incident through the inbox).
 3. If it persists — or no devops role exists — escalate to the user via \`ask_user\` with the evidence. Never silently drop an incident.
 Services with id \`local:<n>\` are host processes: \`service_restart\` cannot restart them — go straight to steps 2–3.
-${buildQaTeamBlock(ctx.roster)}${ctx.sddMode ? buildSddMasterBlock() : ''}`;
+${buildQaTeamBlock(ctx.roster)}`;
 
 }
 
@@ -554,7 +546,7 @@ ${projectList}
 
 - Work only on the card in the current task and honor its dependencies, file scope and acceptance criteria.
 - Use code tools for implementation and role-scoped \`app_*\` tools for durable context/artifacts.
-- Do not create Company Kanban cards, start pipelines, dispatch agents or widen scope.
+- Do not create Company Kanban cards, dispatch agents or widen scope.
 - Before finishing, call \`app_record_work_evidence\` with concrete files, commands, tests or artifact ids. If blocked, record the exact blocker.
 - Use the board/inbox to coordinate with the Master and peers; do not ask the human directly.
 

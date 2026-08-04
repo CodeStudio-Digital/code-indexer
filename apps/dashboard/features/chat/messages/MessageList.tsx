@@ -46,6 +46,7 @@ import {
   sortChaptersChronologically,
   visualGroupKey,
 } from './chapter-transcript.js';
+import { activeChapterIdAtScrollOffset } from './chapter-markers.js';
 
 const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
 const LOAD_EARLIER_SCROLL_THRESHOLD = 200;
@@ -55,6 +56,15 @@ const MAX_DUPLICATE_PAGE_HOPS = 8;
 /** Negative values cover elastic overscroll on touch devices. */
 export function shouldLoadEarlierAtScrollTop(scrollTop: number): boolean {
   return scrollTop <= LOAD_EARLIER_SCROLL_THRESHOLD;
+}
+
+/**
+ * `total_messages` follows the client-visible transcript and is incremented
+ * when an optimistic user row is appended. Count that row here as loaded too,
+ * otherwise a brand-new session briefly looks like an exhausted 0/1 history.
+ */
+export function loadedMessageCount(sessionData: SessionData | null): number {
+  return sessionData?.message_rows.length ?? 0;
 }
 
 export interface MessageListProps {
@@ -346,7 +356,7 @@ export const MessageList = React.memo(function MessageList({
   const totalMessages = sessionData?.total_messages ?? sessionData?.message_rows.length ?? 0;
   const archivedCount = sessionData?.archived_count ?? 0;
   const fullTotal = totalMessages + archivedCount;
-  const loadedCount = sessionData?.message_rows.filter((row) => !row.optimistic).length ?? 0;
+  const loadedCount = loadedMessageCount(sessionData);
   const initialCursor = earliestPersistedSeq(sessionData);
   const initialHasMore = totalMessages > loadedCount;
   const [pagination, setPagination] = useState<PaginationState>(() => ({
@@ -663,17 +673,12 @@ export const MessageList = React.memo(function MessageList({
     useAnimationFrameWithResizeObserver: true,
     onChange: (instance) => {
       atEndRef.current = instance.isAtEnd(80);
-      const firstIndex = instance.getVirtualItems()[0]?.index;
-      if (firstIndex == null) return;
-      let visibleChapter: string | null = null;
-      for (let index = firstIndex; index >= 0; index--) {
-        const row = rowsRef.current[index];
-        if (row?.kind === 'chapter') {
-          visibleChapter = row.chapter.id;
-          break;
-        }
-      }
-      if (visibleChapter && visibleChapter !== activeChapterRef.current) {
+      const visibleChapter = activeChapterIdAtScrollOffset(
+        rowsRef.current,
+        instance.getVirtualItems(),
+        instance.scrollOffset ?? 0,
+      );
+      if (visibleChapter !== activeChapterRef.current) {
         activeChapterRef.current = visibleChapter;
         setActiveChapterId(visibleChapter);
       }

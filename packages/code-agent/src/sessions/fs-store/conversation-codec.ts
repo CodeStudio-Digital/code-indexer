@@ -181,6 +181,7 @@ export function prepareMessage(
     stored: {
       schema_version: 1,
       role: message.role,
+      ...(message.phase ? { phase: message.phase } : {}),
       content,
       usage: usageRecord(usage),
       is_meta: message.isMeta === true,
@@ -295,6 +296,7 @@ export function hydrateMessage(
   }
   return {
     role: stored.role,
+    ...(stored.phase ? { phase: stored.phase } : {}),
     content: content.map((block) => hydrateContentBlock(artifactStore, block)),
     ...(stored.is_meta ? { isMeta: true } : {}),
     ...(stored.selected_skill_ids.length > 0
@@ -313,6 +315,7 @@ function validateStoredMessage(
     !Number.isSafeInteger(message.seq) ||
     message.seq < 1 ||
     !['system', 'user', 'assistant', 'tool'].includes(message.role) ||
+    (message.phase !== undefined && !['commentary', 'final_answer'].includes(message.phase)) ||
     !Array.isArray(message.content) ||
     !Array.isArray(message.selected_skill_ids) ||
     !Array.isArray(message.artifact_refs)
@@ -462,6 +465,7 @@ export function messageRow(
     turn_seq: stored.turn_seq,
     operation_id: stored.operation_id,
     role: stored.role,
+    phase: hydrated.phase ?? null,
     content_json: JSON.stringify(hydrated.content),
     input_tokens: stored.usage.input_tokens,
     output_tokens: stored.usage.output_tokens,

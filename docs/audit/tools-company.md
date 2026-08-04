@@ -1,4 +1,4 @@
-# Tabela — company (65 tools extraídas estaticamente)
+# Tabela — company (63 tools extraídas estaticamente)
 
 > Snapshot 2026-07-01 · rubrica e flags: [TOOL_AUDIT.md](TOOL_AUDIT.md)
 > Caveat: tools company só existem em sessões company/builder — ZERO-CALL reflete quantas sessões company rodaram na janela, não a qualidade da tool. Descrições passam pelo terse da assembly (bootstrap/modelo compacto): terse-safety verificada mecanicamente em 2026-07-01 (2 violações corrigidas: set_agent_status, ds_docs; +docs_index_update, env_delete nas estáticas).
@@ -18,8 +18,6 @@
 | resume_subordinate | master | master-tools.ts | 1 | 0 | 182 | U1 | D2 | OK |
 | review_subordinate_work | master | review-subordinate.ts | 0 | 0 | 474 | U0 | D2 | ZERO-CALL |
 | spawn_subordinate_agent | master | master-tools.ts | 4 | 0 | 498 | U1 | D2 | OK |
-| start_pipeline | master | pipeline-tools.ts | 0 | 0 | 252 | U0 | D2 | ZERO-CALL |
-| stop_pipeline | master | pipeline-tools.ts | 0 | 0 | 175 | U0 | D2 | ZERO-CALL |
 | wait_for_subordinates | master | master-tools.ts | 15 | 0 | 225 | U1 | D2 | OK |
 | kanban_add_dependency | kanban | kanban-tools.ts | 19 | 0 | 252 | U1 | D2 | OK |
 | kanban_assign_agent | kanban | kanban-tools.ts | 17 | 0 | 178 | U1 | D2 | OK |

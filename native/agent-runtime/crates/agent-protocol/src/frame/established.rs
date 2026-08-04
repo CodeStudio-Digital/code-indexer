@@ -13,7 +13,9 @@ use super::{
 mod asynchronous;
 mod outbound;
 
-pub use asynchronous::{AsyncEstablishedAttemptChannel, AsyncEstablishedChannelError};
+pub use asynchronous::{
+    ActiveFrameReceiveOutcome, AsyncEstablishedAttemptChannel, AsyncEstablishedChannelError,
+};
 #[derive(Debug)]
 pub enum EstablishedChannelError {
     PhysicalCapMismatch { physical: u32, negotiated: usize },

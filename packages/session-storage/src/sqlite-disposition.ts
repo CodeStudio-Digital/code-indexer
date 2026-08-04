@@ -170,8 +170,6 @@ const companyTables = [
   'agent_board_watermarks',
   'agent_supervision',
   'agent_supervision_incidents',
-  'pipeline_executions',
-  'pipeline_node_executions',
   'qa_test_runs',
   'qa_test_results',
   'docs_research_sessions',
@@ -230,13 +228,6 @@ export const TABLE_DISPOSITIONS: readonly TableDisposition[] = [
     whereSql: 'project_id IS NULL AND session_id IS NOT NULL',
     dropColumns: ['session_id'],
     reason: 'project investigation ledger rows remain reusable; only truly session-only rows move to a bundle',
-  },
-  {
-    kind: 'delete_rows',
-    table: 'pipelines',
-    whereSql: 'company_session_id IS NOT NULL',
-    dropColumns: ['company_session_id'],
-    reason: 'global reusable pipeline definitions remain; Company-session pipeline instances move to the bundle',
   },
   {
     kind: 'delete_rows',
@@ -660,7 +651,6 @@ export const SQLITE_ESSENTIAL_EXPLICIT_KEEP = [
   'skill_definitions',
   'coder_phase_profiles',
   'coder_investigations',
-  'pipelines',
   'pipeline_provider_bindings',
   'capability_descriptors',
   'agent_memory',
@@ -684,7 +674,6 @@ export const SQLITE_ESSENTIAL_EXPLICIT_KEEP = [
 
 const forbiddenColumnRules: Readonly<Record<string, readonly string[]>> = {
   coder_investigations: ['session_id'],
-  pipelines: ['company_session_id'],
   agent_memory_events: ['session_id'],
   pipeline_telemetry: ['session_id', 'company_session_id'],
   sub_agent_result_cache: ['session_id'],

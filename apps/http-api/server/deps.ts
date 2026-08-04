@@ -1189,7 +1189,7 @@ export function createDeps(): ServerDeps {
     searchableVectorStore,
     memoryQueryEmbeddingService,
   );
-  const companyStore = new CompanyStore(db.raw(), sessionStore);
+  const companyStore = new CompanyStore(db.raw());
   const companySandboxStore = new CompanySandboxStore(sessionStore);
   const companySandboxServicesStore = new CompanySandboxServicesStore(sessionStore);
   const companyServiceTransitionsStore = new CompanyServiceTransitionsStore(sessionStore);

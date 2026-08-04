@@ -354,15 +354,21 @@ export class FsConversationChapterRepository {
   ): Promise<FsConversationChapterPage<FsConversationChapterRow>> {
     const limit = pageLimit(options.limit);
     const beforeSeq = parseChapterCursor(options.cursor, 'chapter');
-    const rows = (await this.rows(
+    const allRows = (await this.rows(
       sessionId,
       options.includeSuperseded === true,
-    ))
+    )).sort((left, right) => right.seq - left.seq);
+    const rows = allRows
       .filter((chapter) => beforeSeq == null || chapter.seq < beforeSeq)
       .sort((left, right) => right.seq - left.seq);
     const items = rows.slice(0, limit);
+    const timestamps = allRows
+      .map((row) => Date.parse(row.created_at))
+      .filter(Number.isFinite);
     return {
       items,
+      total_count: allRows.length,
+      revision: Math.max(1, ...timestamps),
       next_cursor:
         rows.length > limit && items.length > 0
           ? chapterCursor('chapter', items.at(-1)!.seq)
@@ -385,7 +391,9 @@ export class FsConversationChapterRepository {
     FsConversationChapterPage<FsConversationChapterSearchResult>
   > {
     const terms = normalizeSearchTerms(query);
-    if (terms.length === 0) return { items: [], next_cursor: null };
+    if (terms.length === 0) {
+      return { items: [], next_cursor: null, total_count: 0, revision: 1 };
+    }
     const limit = pageLimit(options.limit);
     const offset = parseChapterCursor(options.cursor, 'search') ?? 0;
     const candidates = (await this.rows(sessionId))
@@ -409,8 +417,13 @@ export class FsConversationChapterRepository {
       )
       .map(({ all: _all, any: _any, ...row }) => row);
     const items = selected.slice(offset, offset + limit);
+    const timestamps = selected
+      .map((row) => Date.parse(row.created_at))
+      .filter(Number.isFinite);
     return {
       items,
+      total_count: selected.length,
+      revision: Math.max(1, ...timestamps),
       next_cursor:
         selected.length > offset + limit
           ? chapterCursor('search', offset + limit)

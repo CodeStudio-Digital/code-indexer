@@ -2,7 +2,7 @@
  * Three-zone IA for the company-mode view. Each zone groups related
  * inner tabs that REPLACE the central content area when selected:
  *
- *   - Work:  team day-to-day work (Board, Kanban, Pipelines)
+ *   - Work:  team day-to-day work (Board, Kanban, Memory)
  *   - Build: artefacts the team produces (Docs, Tests, Files, Git, API)
  *   - Data:  per-session persistence surfaces (Drive, Snapshots, Archived)
  *
@@ -13,7 +13,7 @@
  */
 export type Zone = 'work' | 'build' | 'data';
 
-export type WorkTab = 'board' | 'kanban' | 'memory' | 'pipelines';
+export type WorkTab = 'board' | 'kanban' | 'memory';
 export type BuildTab = 'docs' | 'tests' | 'files' | 'git' | 'api';
 export type DataTab = 'drive' | 'snapshots' | 'archived';
 
@@ -23,7 +23,7 @@ export type ZoneTab =
   | { zone: 'data'; tab: DataTab };
 
 export const ZONE_TABS: { [Z in Zone]: readonly Extract<ZoneTab, { zone: Z }>['tab'][] } = {
-  work: ['board', 'kanban', 'memory', 'pipelines'] as const,
+  work: ['board', 'kanban', 'memory'] as const,
   build: ['docs', 'tests', 'files', 'git', 'api'] as const,
   data: ['drive', 'snapshots', 'archived'] as const,
 };

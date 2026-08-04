@@ -282,11 +282,10 @@ describe('tier contract — Phase A/B placements are locked', () => {
     expect(getToolTier('review_subordinate_work')).toBe('master');
   });
 
-  it('master tier covers every master factory family, including batch and pipeline tools', () => {
+  it('master tier covers every master factory family, including batch tools', () => {
     for (const name of [
       'approve_subordinate_plans', 'recommend_role', 'broadcast_to_roles',
       'kanban_plan_graph', 'list_containers', 'read_container_logs',
-      'list_pipelines', 'start_pipeline', 'get_pipeline_status', 'stop_pipeline',
     ]) {
       expect(MASTER_TOOLS.has(name), name).toBe(true);
       expect(getToolTier(name), name).toBe('master');

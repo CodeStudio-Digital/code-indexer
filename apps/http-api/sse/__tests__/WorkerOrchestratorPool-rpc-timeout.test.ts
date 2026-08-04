@@ -13,6 +13,5 @@ describe('company worker RPC timeout policy', () => {
 
   it('keeps ordinary RPCs on the bounded default', () => {
     expect(resolveCompanyRpcTimeoutMs(['dispatchCard'])).toBe(60_000);
-    expect(resolveCompanyRpcTimeoutMs(['pipelineStart'])).toBe(60_000);
   });
 });

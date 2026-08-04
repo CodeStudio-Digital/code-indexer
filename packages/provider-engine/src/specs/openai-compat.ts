@@ -425,6 +425,7 @@ export const fuguSpec: ProviderSpec = {
     responsesApi: true,
     responsesStateless: true,
     responsesReasoningSummaryModels: [
+      'fugu',
       'fugu-ultra',
       'fugu-ultra-v1.1',
       'fugu-ultra-v1.0',

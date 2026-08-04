@@ -57,6 +57,8 @@ export * from './electron-bridge.js';
 export * from './cloud/contract.js';
 export * from './cloud/route-map.js';
 export * from './coder.js';
+export * from './coder-session-workbench.js';
+export * from './coder-session-workbench-validation.js';
 export * from './projects.js';
 export * from './files.js';
 export * from './lsp.js';

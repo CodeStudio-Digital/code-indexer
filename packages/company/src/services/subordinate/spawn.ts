@@ -213,8 +213,8 @@ export async function spawnSubordinate(
   }
 
   // ── Authoritative role runtime resolution ────────────────────────
-  // Every caller (Master, scheduler/manual dispatch, pipeline, fan-out and
-  // App Studio) converges here. The persisted role assignment wins over any
+  // Every caller (Master, scheduler/manual dispatch and App Studio) converges
+  // here. The persisted role assignment wins over any
   // caller-supplied model and never consults the global subagent override.
   let masterRuntime: { provider: string; model: string } | null = null;
   try {

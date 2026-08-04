@@ -1,13 +1,13 @@
 /**
  * Bottom row of the full chat composer: the agent picker (left) + the
- * send / stop / run-pipeline button (right). The model-scoped pickers
+ * send / stop button (right). The model-scoped pickers
  * (provider / model / turns / temperature / reasoning / plan-depth /
  * fallback) moved behind the `ModelSettingsDialog`, opened from a text chip
  * in the action-icons strip above — keeping this row calm.
  */
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import { Gauge, Layers, Network, Send, Square } from 'lucide-react';
+import { Gauge, Layers, Send, Square } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { AgentPicker } from './AgentPicker.js';
 import { QueueSplitButton } from './QueueSplitButton.js';
@@ -39,8 +39,6 @@ interface ComposerToolbarProps {
   sendBlocked?: boolean;
   planDepth?: string | null;
   setPlanDepth?: (v: string | null) => void;
-  /** Currently-selected pipeline id, or null when not in pipeline mode. */
-  selectedPipelineId: number | null;
   /** When streaming + queueable, show the queue split button beside Abort. */
   queueable?: boolean;
   onQueueSend?: (mode: QueueMode) => void;
@@ -62,7 +60,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
   sendBlocked,
   planDepth,
   setPlanDepth,
-  selectedPipelineId,
   queueable,
   onQueueSend,
 }: ComposerToolbarProps) {
@@ -126,10 +123,6 @@ export const ComposerToolbar = React.memo(function ComposerToolbar({
               <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
             </Button>
           </>
-        ) : selectedPipelineId != null ? (
-          <Button onClick={onSend} disabled={!hasInput || sendBlocked} size="sm" variant="default">
-            <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}
-          </Button>
         ) : (
           <Button onClick={onSend} disabled={!hasInput || sendBlocked} size="sm">
             <Send className="h-3.5 w-3.5" /> {t('common:actions.send')}

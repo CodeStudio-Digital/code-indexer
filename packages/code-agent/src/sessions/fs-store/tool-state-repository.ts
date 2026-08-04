@@ -1,16 +1,23 @@
 import {
+  stat,
+} from 'node:fs/promises';
+import { join } from 'node:path';
+import {
   type JsonValue,
   type SessionId,
 } from '@mcp/session-storage';
 import {
+  parseCoderTurnPayload,
   projectConversation,
   toJsonValue,
 } from './conversation-codec.js';
+import { reverseCommittedConversationCommits } from './conversation-reader.js';
 import { FsSessionEntityFiles } from './entity-files.js';
 import { FsSessionDirectory } from './session-directory.js';
 import type {
   FsSessionEvent,
   FsToolCallStats,
+  FsToolCallSummaryPage,
 } from './operational-types.js';
 import type { FsToolCallRecord } from './types.js';
 
@@ -184,6 +191,7 @@ export class FsToolStateRepository {
     return {
       id: event.id,
       seq: event.seq,
+      operation_id: event.operation_id,
       type: data.type,
       created_at: event.created_at,
       payload: data.payload,
@@ -202,11 +210,36 @@ export class FsToolStateRepository {
       .map((event) => ({
         id: event.id,
         seq: event.seq,
+        operation_id: event.operation_id,
         type: event.data.type,
         created_at: event.created_at,
         payload: event.data.payload,
       }))
       .filter((event) => type == null || event.type === type);
+  }
+
+  async getEventByOperationId(
+    id: SessionId | string,
+    operationId: string,
+    type?: string,
+  ): Promise<FsSessionEvent | null> {
+    const events = await this.entities.list<{
+      type: string;
+      payload: JsonValue;
+    }>(id, 'events', 'session_event');
+    const event = events.find((candidate) =>
+      candidate.operation_id === operationId
+      && (type == null || candidate.data.type === type),
+    );
+    if (!event) return null;
+    return {
+      id: event.id,
+      seq: event.seq,
+      operation_id: event.operation_id,
+      type: event.data.type,
+      created_at: event.created_at,
+      payload: event.data.payload,
+    };
   }
 
   async listCalls(
@@ -216,6 +249,77 @@ export class FsToolStateRepository {
     return projectConversation(
       this.directory.repository.readConversationSync(entry.location),
     ).toolCalls;
+  }
+
+  /**
+   * Metadata-only, streaming projection for the Workbench. Unlike stats(), it
+   * never materializes the complete conversation or hydrates tool artifacts.
+   * Reverse traversal applies later rollback markers to older tool calls.
+   */
+  async listSummaryPage(
+    id: SessionId | string,
+    offset: number,
+    limit: number,
+  ): Promise<FsToolCallSummaryPage> {
+    const entry = await this.directory.requireEntry(id);
+    const conversationPath = join(entry.location.bundle_path, 'conversation.jsonl');
+    const byName = new Map<string, FsToolCallStats['byName'][number]>();
+    let visibleBeforeSeq = Number.POSITIVE_INFINITY;
+    let newestCommitAt: string | null = null;
+
+    for await (const commit of reverseCommittedConversationCommits(conversationPath)) {
+      newestCommitAt ??= commit.committed_at;
+      const payload = parseCoderTurnPayload(commit);
+      for (const call of payload.tool_calls) {
+        if (call.message_seq >= visibleBeforeSeq) continue;
+        const kind = outcome(call);
+        const current = byName.get(call.tool_name) ?? {
+          name: call.tool_name,
+          count: 0,
+          errorCount: 0,
+          refusedCount: 0,
+          propagatedFailureCount: 0,
+          reuseCount: 0,
+          shadowCount: 0,
+          lastAt: null,
+        };
+        current.count += 1;
+        current.lastAt ??= call.output.created_at;
+        if (kind === 'genuine_error') current.errorCount += 1;
+        if (kind === 'root_refusal') current.refusedCount += 1;
+        if (kind === 'propagated_parent_failure') current.propagatedFailureCount += 1;
+        if (kind === 'reuse') current.reuseCount += 1;
+        if (kind === 'shadow') current.shadowCount += 1;
+        byName.set(call.tool_name, current);
+      }
+      if (payload.truncate_from_seq !== undefined) {
+        visibleBeforeSeq = Math.min(visibleBeforeSeq, payload.truncate_from_seq);
+      }
+    }
+
+    const rows = [...byName.values()].sort(
+      (left, right) => right.count - left.count || left.name.localeCompare(right.name),
+    );
+    const boundedOffset = Math.max(0, Math.trunc(offset));
+    const boundedLimit = Math.max(0, Math.trunc(limit));
+    const items = rows.slice(boundedOffset, boundedOffset + boundedLimit);
+    const nextOffset = boundedOffset + items.length;
+    let fileRevision = 1;
+    try {
+      fileRevision = Math.max(1, Math.trunc((await stat(conversationPath)).mtimeMs));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    const commitRevision = Date.parse(newestCommitAt ?? '');
+    return {
+      items,
+      totalCount: rows.length,
+      nextOffset: nextOffset < rows.length ? nextOffset : null,
+      revision: Math.max(
+        fileRevision,
+        Number.isFinite(commitRevision) ? commitRevision : 1,
+      ),
+    };
   }
 
   async stats(

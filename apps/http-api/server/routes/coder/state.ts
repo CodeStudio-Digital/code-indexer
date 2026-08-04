@@ -2,7 +2,6 @@ import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js'
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { CoderRunBus } from '../../../coder-bus.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
-import { CoderPipelineRegistry } from './pipelines-state.js';
 import { RecentMessageKeys } from '../recent-message-keys.js';
 
 /**
@@ -10,8 +9,6 @@ import { RecentMessageKeys } from '../recent-message-keys.js';
  * in-flight buses through the `activeRuns` compatibility facade and walks the
  * persisted message log when a worker runner is no longer alive.
  *
- * `coderPipelineRegistry` holds chat-pipeline executors that outlive a
- * single chat turn. See `pipelines-state.ts`.
  */
 export interface CoderRuntime {
   activeRuns: Map<SessionId, CoderRunBus>;
@@ -28,7 +25,6 @@ export interface CoderRuntime {
     sessionId: SessionId,
     toolUseId: string,
   ): Promise<{ toolUseId: string; name: string } | null>;
-  coderPipelineRegistry: CoderPipelineRegistry;
   /**
    * Idempotency store for streaming POSTs (/messages, /continue). A retry that
    * re-sends the same `client_msg_id` is answered by replaying the original
@@ -38,7 +34,6 @@ export interface CoderRuntime {
 }
 
 export function createCoderRuntime(sessionStore: FsSessionStore): CoderRuntime {
-  const coderPipelineRegistry = new CoderPipelineRegistry();
   const recentMessageKeys = new RecentMessageKeys();
 
   // Compatibility Map facade for route consumers. Its state is exclusively
@@ -161,7 +156,6 @@ export function createCoderRuntime(sessionStore: FsSessionStore): CoderRuntime {
     activeRuns,
     findPendingInteraction,
     findDanglingToolUse,
-    coderPipelineRegistry,
     recentMessageKeys,
   };
 }

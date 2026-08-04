@@ -32,8 +32,14 @@ export function wireRunnerEventsToBus(
     publishRaw(target, event, data);
   };
 
-  runner.on('text_delta', (text) => {
-    if (text.length > 0) publish(bus, 'text', { text });
+  runner.on('text_delta', (text, meta) => {
+    if (text.length > 0) {
+      publish(bus, 'text', {
+        text,
+        ...(meta?.itemId ? { item_id: meta.itemId } : {}),
+        ...(meta?.phase ? { phase: meta.phase } : {}),
+      });
+    }
   });
   runner.on('thinking_delta', (text) => {
     publish(bus, 'thinking', { text });

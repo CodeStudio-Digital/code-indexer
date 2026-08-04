@@ -13,8 +13,9 @@
  * COLUMN` is safe and cheap; we deliberately do NOT rebuild `pipelines`
  * just to add a table-level CHECK — that table is the parent of two FK
  * children and a rebuild would need `foreign_keys=OFF`. The scope
- * invariant ("at most one of project_id / company_session_id is set") is
- * enforced in the store layer (`packages/store/src/company/pipelines.ts`).
+ * invariant ("at most one of project_id / company_session_id is set") was
+ * enforced by the original store layer. Migration 265 later retires these
+ * tables while keeping the historical upgrade chain intact.
  */
 import type DatabaseConstructor from 'better-sqlite3';
 import type { Migration } from './index.js';

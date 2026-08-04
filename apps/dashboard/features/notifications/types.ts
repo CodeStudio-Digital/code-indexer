@@ -14,7 +14,6 @@ export interface NotificationRouteTarget {
 
 export interface NotificationSourceContext {
   target: NotificationRouteTarget;
-  pipelineTarget?: NotificationRouteTarget;
   /** Stable identity of the source event, independent of its semantic label. */
   dedupeKey?: string;
 }

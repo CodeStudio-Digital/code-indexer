@@ -3,6 +3,7 @@ mod compare;
 mod handle;
 mod job;
 mod process;
+mod resource;
 #[cfg(test)]
 mod test_pipe;
 #[cfg(test)]
@@ -16,6 +17,7 @@ pub(super) use job::{
 pub(super) use process::{
     ProcessSpawnFailure, SpawnFault, WaitState, exit_code, spawn_in_job, wait_process,
 };
+pub(super) use resource::sample_current_process;
 
 #[cfg(test)]
 pub(super) use process::{is_member, open_process_for_wait};

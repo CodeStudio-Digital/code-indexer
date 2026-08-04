@@ -24,7 +24,7 @@ use drive::PendingRunnerActivation;
 pub use error::RunnerControlServiceError;
 use hydration::VerifiedRunnerHydration;
 use pulse::PendingRunnerPulse;
-use pulse::RunnerPulsePump;
+use pulse::{RunnerPulsePump, resource_sample};
 
 type WindowsActiveLifetime =
     ActiveRunnerLifetime<VerifiedWindowsEndpointStream, ActiveRunnerResources>;
@@ -86,14 +86,19 @@ impl ActiveRunnerControlLaunch {
         self,
         cancellation: &mut EndpointCancellation,
     ) -> impl Future<Output = ActiveRunnerControlAdvance> + '_ {
-        self.lifetime.advance(cancellation)
+        self.lifetime
+            .advance_with_resource_sample(cancellation, heartbeat_resource_sample)
     }
 
     /// Owns the active attempt until a terminal control, deadline, local
     /// cancellation, transport failure, or supervisor reap ends its lifetime.
     pub(crate) async fn run_until_cleanup(mut self, cancellation: &mut EndpointCancellation) {
         loop {
-            match self.lifetime.advance(cancellation).await {
+            match self
+                .lifetime
+                .advance_with_resource_sample(cancellation, heartbeat_resource_sample)
+                .await
+            {
                 ActiveRunnerLifetimeAdvance::Continue(next) => {
                     self.lifetime = next;
                 }
@@ -109,6 +114,11 @@ impl ActiveRunnerControlLaunch {
     pub fn revoke(self) -> ActiveRunnerControlCleanup {
         self.lifetime.revoke()
     }
+}
+
+fn heartbeat_resource_sample() -> Result<wire::ResourceSample, crate::control::AsyncControlDriverError>
+{
+    resource_sample().map_err(|_| crate::control::AsyncControlDriverError::HeartbeatResourceSampleFailed)
 }
 
 impl PreparedRunnerControlLaunch {

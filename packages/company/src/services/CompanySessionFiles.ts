@@ -184,7 +184,6 @@ function stringValue(value: unknown, fallback = ''): string {
 function dispatchSource(value: unknown): CompanyAgentDispatchSource {
   return value === 'scheduler' ||
     value === 'manual' ||
-    value === 'pipeline' ||
     value === 'fanout' ||
     value === 'app_studio' ||
     value === 'retry'

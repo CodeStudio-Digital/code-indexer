@@ -12,6 +12,12 @@ pub enum AsyncControlDriverError {
     NoPrepareInFlight,
     PreparedResponseMissing,
     ReceiveTimestampMissing,
+    InvalidHeartbeatProgress {
+        progress: i64,
+        alive: i64,
+    },
+    InvalidHeartbeatSchedule,
+    HeartbeatResourceSampleFailed,
     InvalidClockReading(i64),
     ClockRegressed {
         operation: &'static str,
@@ -41,6 +47,16 @@ impl Display for AsyncControlDriverError {
             }
             Self::ReceiveTimestampMissing => {
                 formatter.write_str("inbound frame has no trusted receive timestamp")
+            }
+            Self::InvalidHeartbeatProgress { progress, alive } => write!(
+                formatter,
+                "heartbeat progress timestamp {progress} exceeds alive timestamp {alive}",
+            ),
+            Self::InvalidHeartbeatSchedule => {
+                formatter.write_str("heartbeat interval cannot be represented by the owner clock")
+            }
+            Self::HeartbeatResourceSampleFailed => {
+                formatter.write_str("heartbeat resource sample failed")
             }
             Self::InvalidClockReading(value) => {
                 write!(

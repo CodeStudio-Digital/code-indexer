@@ -4,14 +4,12 @@ import { AlertCircle, Check, Circle, ListChecks, Loader2, Target } from 'lucide-
 import { cn } from '../../lib/utils.js';
 import type {
   ActiveProcess,
-  PipelineRuntimeState,
   TodoItem,
 } from '../../hooks/agent-stream/types.js';
 import { ActiveProcessesSection } from './sidebar/ActiveProcessesSection.js';
 import { CollapsibleSection } from './sidebar/CollapsibleSection.js';
 import { ProjectFilesSection } from './sidebar/ProjectFilesSection.js';
 import { SkillsSection } from './sidebar/SkillsSection.js';
-import { PipelineRuntimeSection } from './sidebar/PipelineRuntimeSection.js';
 
 interface GoalSummary {
   text: string;
@@ -58,12 +56,6 @@ interface SessionStateSidebarProps {
   /** Skill IDs the user has pre-selected for injection on the next send. */
   skillPicks: string[];
   onToggleSkillPick: (id: string) => void;
-  /**
-   * PR-3/4: live runtime state of the active chat pipeline. Null when no
-   * pipeline has been started in this session yet. Comes from
-   * `usePipelineStream` in AgentChat.
-   */
-  pipelineRuntime?: PipelineRuntimeState | null;
   /** Transient processes from the live session stream. */
   activeProcesses?: ActiveProcess[];
   /**
@@ -90,7 +82,6 @@ export function SessionStateSidebar({
   onSetManyPicks,
   skillPicks,
   onToggleSkillPick,
-  pipelineRuntime,
   activeProcesses = [],
   embedded,
 }: SessionStateSidebarProps) {
@@ -132,19 +123,11 @@ export function SessionStateSidebar({
   // NOTE: choose a *stable host element* by the `embedded` flag instead of
   // defining a `Wrapper` component inside render. An inline component is a
   // new type every render, which makes React unmount+remount the whole
-  // subtree each render — that remount storm (with the always-mounted,
-  // useApi-driven PipelineRuntimeSection below) tripped React's
+  // subtree each render — that remount storm tripped React's
   // "Maximum update depth exceeded" guard.
   const sections = (
     <>
       <ActiveProcessesSection sessionId={sessionId} processes={activeProcesses} />
-      {/* Always mounted: self-hides when the session has no pipeline run.
-          DB-driven so past/running executions persist across reload/restart
-          even when no live SSE runtime exists. */}
-      <PipelineRuntimeSection
-        sessionId={sessionId}
-        pipelineRuntime={pipelineRuntime ?? null}
-      />
       {goal && (
         <CollapsibleSection
           id="goal"

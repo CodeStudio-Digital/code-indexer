@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { open, rename, unlink } from 'node:fs/promises';
+import { copyFile, open, rename, unlink } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { JsonValue, SessionStorageFaultContext, SessionStorageFaultInjector } from './types.js';
@@ -114,6 +114,42 @@ export async function atomicWriteFile(
     handle = await open(temporaryPath, 'wx', options.mode ?? 0o600);
     await injectFault(options, 'atomic:before-temp-write', targetPath);
     await handle.writeFile(data);
+    await injectFault(options, 'atomic:after-temp-write-before-fsync', targetPath);
+    await handle.sync();
+    await injectFault(options, 'atomic:after-temp-fsync-before-rename', targetPath);
+    await handle.close();
+    handle = undefined;
+    await retryTransientRename(() => rename(temporaryPath, targetPath));
+    await injectFault(options, 'atomic:after-rename-before-directory-fsync', targetPath);
+    await fsyncDirectory(parent);
+    await injectFault(options, 'atomic:after-directory-fsync', targetPath);
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    await unlink(temporaryPath).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Copy a potentially large file without buffering it in JavaScript, then
+ * publish it with the same fsync + atomic-rename guarantees as
+ * atomicWriteFile. Callers remain responsible for validating the source path.
+ */
+export async function atomicCopyFile(
+  sourcePath: string,
+  targetPath: string,
+  options: AtomicFileOptions = {},
+): Promise<void> {
+  const parent = dirname(targetPath);
+  const temporaryPath = join(
+    parent,
+    `.${basename(targetPath)}.tmp-${process.pid}-${randomUUID()}`,
+  );
+  let handle;
+  try {
+    await injectFault(options, 'atomic:before-temp-write', targetPath);
+    await copyFile(sourcePath, temporaryPath);
+    handle = await open(temporaryPath, 'r+');
     await injectFault(options, 'atomic:after-temp-write-before-fsync', targetPath);
     await handle.sync();
     await injectFault(options, 'atomic:after-temp-fsync-before-rename', targetPath);

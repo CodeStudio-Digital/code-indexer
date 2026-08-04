@@ -12,6 +12,7 @@ import type {
   FsCompleteSubagentRunInput,
   FsStartSubagentRunInput,
   FsSubagentRunFence,
+  FsSubagentRunPage,
   FsSubagentToolCallInput,
   FsWorkflowStepRunReconciliation,
   SubagentRunData,
@@ -27,6 +28,7 @@ export type {
   FsCompleteSubagentRunInput,
   FsStartSubagentRunInput,
   FsSubagentRunFence,
+  FsSubagentRunPage,
   FsSubagentToolCallInput,
   FsWorkflowStepRunReconciliation,
 } from './subagent-types.js';
@@ -58,6 +60,41 @@ export class FsSubagentRepository {
           validatedRunData(item).run_id === normalizedRunId,
       ) ?? null
     );
+  }
+
+  async listPage(
+    sessionId: SessionId | string,
+    offset: number,
+    limit: number,
+  ): Promise<FsSubagentRunPage> {
+    const boundedOffset = Math.max(0, Math.trunc(offset));
+    const boundedLimit = Math.max(0, Math.trunc(limit));
+    const rows = (await this.entities.list<JsonValue>(
+      sessionId,
+      'subagents',
+      'subagent_run',
+    ))
+      .map((item) => ({
+        id: item.id,
+        seq: item.seq,
+        revision: item.revision,
+        ...validatedRunData(item),
+      }))
+      .sort((left, right) =>
+        Date.parse(right.started_at) - Date.parse(left.started_at) ||
+        right.seq - left.seq,
+      );
+    const items = rows.slice(boundedOffset, boundedOffset + boundedLimit);
+    const nextOffset = boundedOffset + items.length;
+    const timestamps = rows
+      .map((row) => Date.parse(row.completed_at ?? row.heartbeat_at))
+      .filter(Number.isFinite);
+    return {
+      items,
+      totalCount: rows.length,
+      nextOffset: nextOffset < rows.length ? nextOffset : null,
+      revision: Math.max(1, ...timestamps),
+    };
   }
 
   private async requireFence(

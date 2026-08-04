@@ -458,6 +458,14 @@ export interface RunFreshOpts {
 export const DEFAULT_CODER_WORKER_HEAP_MB = 1_024;
 /** Keep a wide safety margin below the 10-minute executor lease. */
 export const CONTROL_PLANE_LEASE_RENEW_INTERVAL_MS = 60_000;
+/**
+ * Opening a filesystem session validates the full metadata/artifact graph
+ * before the worker may write. Large, long-lived sessions legitimately take
+ * longer than the generic 15-second bridge budget, especially on cold disk
+ * caches. Keep this bounded, but align it with the worker's long-running
+ * request budget so valid recovery is not mistaken for a failed startup.
+ */
+export const SESSION_WRITER_ACQUIRE_TIMEOUT_MS = 120_000;
 
 export class CoderWorkerPool {
   private readonly entries = new Map<SessionId, PoolEntry>();
@@ -1267,9 +1275,10 @@ export class CoderWorkerPool {
 
   private async createEntry(sessionId: SessionId): Promise<PoolEntry> {
     const resolvedContext = await this.resolveRuntimeContext(sessionId);
+    const writerOwnerId = `coder-worker:${randomUUID()}`;
     const sessionContext: SessionRuntimeContext = {
       ...resolvedContext,
-      writerOwnerId: `coder-worker:${randomUUID()}`,
+      writerOwnerId,
     };
     await this.opts.handoffSessionWriter?.(sessionContext);
 
@@ -1422,8 +1431,10 @@ export class CoderWorkerPool {
     });
     const startedAt = Date.now();
     const activityId = enterBackgroundActivity(`coder-worker:spawn:${sessionId}`);
+    let hostStarted = false;
     try {
       await host.start();
+      hostStarted = true;
       // Worker boot can overlap best-effort main-process metadata jobs (for
       // example title/model persistence) that started before the session lock
       // was acquired. Drain that repository once more, then require the worker
@@ -1432,10 +1443,54 @@ export class CoderWorkerPool {
       await host.requireBridge().request(
         'acquireSessionWriter',
         {},
-        { timeoutMs: 15_000 },
+        { timeoutMs: SESSION_WRITER_ACQUIRE_TIMEOUT_MS },
       );
     } catch (error) {
-      await host.evict().catch(() => undefined);
+      let evicted = false;
+      try {
+        await host.evict();
+        // Before `worker.ready`, WorkerHost may still be in `starting`; its
+        // generic eviction path cannot yet guarantee isolate exit. Only a host
+        // that completed start() is safe for coordinator-side lease recovery.
+        evicted = hostStarted;
+      } catch (evictionError) {
+        this.log(
+          'error',
+          `[coder-pool] failed-start eviction failed session=${sessionId}: ${evictionError instanceof Error ? evictionError.message : String(evictionError)}`,
+        );
+      }
+
+      // `createEntry()` fails before the host is published in `entries`, so the
+      // normal `evictEntry()` residual-lease recovery cannot run. Once
+      // WorkerHost.evict() has observed/forced the isolate exit, reclaim only
+      // the pool-minted owner lease. This is essential for worker_threads:
+      // their lease PID is the still-live Electron PID and can never be proven
+      // dead while the app remains open.
+      if (evicted) {
+        try {
+          const released = await releaseSessionWriterLeaseForOwner({
+            bundlePath: sessionContext.bundlePath,
+            ownerId: writerOwnerId,
+          });
+          this.lifecycleFailures.delete(sessionId);
+          if (released) {
+            this.log(
+              'warn',
+              `[coder-pool] reclaimed residual failed-start worker lease session=${sessionId}`,
+            );
+          }
+        } catch (recoveryError) {
+          const failure = recoveryError instanceof Error
+            ? recoveryError
+            : new Error(String(recoveryError));
+          const lifecycleFailure = new Error(
+            `coder-pool: failed to recover writer after worker startup failure for session ${sessionId}: ${failure.message}`,
+            { cause: failure },
+          );
+          this.lifecycleFailures.set(sessionId, lifecycleFailure);
+          this.log('error', `[coder-pool] ${lifecycleFailure.message}`);
+        }
+      }
       throw error;
     } finally {
       exitBackgroundActivity(activityId);
@@ -1587,7 +1642,7 @@ export class CoderWorkerPool {
           connectedCount: 0,
         };
       }
-      return pool.getSnapshot();
+      return pool.getReadySnapshot();
     });
     const offMcpCallTool = bridge.handle('mcpExt.callTool', async (payload) => {
       const pool = this.opts.getMcpExternalPool?.() ?? null;

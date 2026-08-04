@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { asSessionId } from '@mcp/session-storage';
 import { FsSessionStore } from '../fs-session-store.js';
 
 let temporaryRoot: string;
@@ -90,6 +91,8 @@ describe('filesystem session operations', () => {
         content: [{ type: 'text', text: 'Edit this request' }],
       },
     });
+    const sourceLocation = (await store.getSessionLocation(source.id))!;
+    const sourceCommits = store.repository.readConversationSync(sourceLocation);
 
     const duplicate = await store.duplicateSession(source.id);
     expect(duplicate.id).not.toBe(source.id);
@@ -105,6 +108,23 @@ describe('filesystem session operations', () => {
         (await store.getToolOutput(duplicate.id, 'call-1'))!.shaped!,
       ).toString('utf8'),
     ).toBe('shaped-output');
+    const duplicateLocation = (await store.getSessionLocation(duplicate.id))!;
+    expect(
+      store.repository.readConversationSync(duplicateLocation),
+    ).toEqual(sourceCommits);
+
+    const deterministicId = asSessionId('99999999-9999-4999-8999-999999999999');
+    const deterministic = await store.duplicateSession(source.id, {
+      targetId: deterministicId,
+      title: 'Command copy',
+    });
+    const retried = await store.duplicateSession(source.id, {
+      targetId: deterministicId,
+      title: 'Command copy',
+    });
+    expect(retried.id).toBe(deterministic.id);
+    expect(retried.title).toBe('Command copy');
+    expect((await store.loadAllSessionMessages(retried.id))?.messages).toHaveLength(4);
 
     const fork = await store.forkSessionBeforeSeq(source.id, targetSeq);
     expect(fork.seed_text).toBe('Edit this request');
@@ -112,6 +132,10 @@ describe('filesystem session operations', () => {
     expect(
       (await store.loadAllSessionMessages(fork.session.id))?.messages,
     ).toHaveLength(3);
+    const forkLocation = (await store.getSessionLocation(fork.session.id))!;
+    const forkCommits = store.repository.readConversationSync(forkLocation);
+    expect(forkCommits.slice(0, sourceCommits.length)).toEqual(sourceCommits);
+    expect(forkCommits).toHaveLength(sourceCommits.length + 1);
 
     const stats = await store.getSessionStats(source.id);
     expect(stats).toMatchObject({
@@ -148,6 +172,15 @@ describe('filesystem session operations', () => {
       },
       usage: { input_tokens: 5, output_tokens: 2 },
       tool_calls: [],
+      nested_tool_calls: [{
+        tool_use_id: 'kept-tool',
+        tool_name: 'read_file',
+        args: { path: 'kept.ts' },
+        raw_result: 'kept',
+        result_text: 'kept',
+        is_error: false,
+        duration_ms: 3,
+      }],
     });
     const targetSeq = await store.appendMessage({
       session_id: session.id,
@@ -174,6 +207,15 @@ describe('filesystem session operations', () => {
       },
       usage: { input_tokens: 11, output_tokens: 7 },
       tool_calls: [],
+      nested_tool_calls: [{
+        tool_use_id: 'discarded-tool',
+        tool_name: 'write_file',
+        args: { path: 'discarded.ts' },
+        raw_result: 'discarded',
+        result_text: 'discarded',
+        is_error: false,
+        duration_ms: 5,
+      }],
     });
     await store.recordPlan({
       session_id: session.id,
@@ -237,6 +279,10 @@ describe('filesystem session operations', () => {
       message_count: 2,
       assistant_turns: 1,
     });
+    const toolPage = await store.listToolCallSummaries(session.id, 0, 10);
+    expect(toolPage.items).toEqual([
+      expect.objectContaining({ name: 'read_file', count: 1 }),
+    ]);
 
     // A replay returns the original seed without appending another marker.
     expect(

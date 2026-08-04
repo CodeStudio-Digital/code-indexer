@@ -67,7 +67,7 @@ Extraído de `.reference/codex/codex-rs/core/src/tools/handlers/` + `spec_plan.r
 ### Tools que NÓS temos e Codex NÃO tem
 - LSP integration (`lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_diagnostics`)
 - Worktrees (`enter_worktree`, `exit_worktree`)
-- Company orchestration (master/subordinate, kanban, pipelines)
+- Company orchestration (master/subordinate and Kanban)
 - Skills framework (`invoke_skill`, `list_skill_namespaces`)
 - RAG (`rag_search_docs`)
 - Plan/tasks approval gating com `submit_tasks`, `execute_task`, `task_complete`, `update_task`

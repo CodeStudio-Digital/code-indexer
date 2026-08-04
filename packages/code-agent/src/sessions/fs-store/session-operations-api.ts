@@ -1,4 +1,3 @@
-import { randomUUID } from 'node:crypto';
 import type { AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { CoderSessionStats } from '@mcp/code-agent/sessions/types.js';
 import {
@@ -15,6 +14,7 @@ import { FsConversationChapterRepository } from './conversation-chapter-reposito
 import { FsConversationWriter } from './conversation-writer.js';
 import { FsSessionDirectory } from './session-directory.js';
 import { FsSessionEntityFiles } from './entity-files.js';
+import { FsSessionRollbackRepository } from './session-rollback-api.js';
 import { FsToolOutputReader } from './tool-output-reader.js';
 import type {
   FsAppendMessageUsage,
@@ -25,7 +25,7 @@ import type {
 } from './types.js';
 
 type CopyMode =
-  | { kind: 'duplicate' }
+  | { kind: 'duplicate'; targetId?: SessionId; title?: string }
   | { kind: 'fork'; beforeSeq: number };
 
 function record(value: JsonValue): Record<string, unknown> {
@@ -132,8 +132,11 @@ export class FsSessionOperations {
     };
   }
 
-  duplicateSession(id: SessionId | string): Promise<FsCoderSession> {
-    return this.#copy(id, { kind: 'duplicate' }).then((result) => result.session);
+  duplicateSession(
+    id: SessionId | string,
+    options: { targetId?: SessionId; title?: string } = {},
+  ): Promise<FsCoderSession> {
+    return this.#copy(id, { kind: 'duplicate', ...options }).then((result) => result.session);
   }
 
   forkSessionBeforeSeq(
@@ -150,9 +153,9 @@ export class FsSessionOperations {
     return this.directory.runMutation(id, async () => {
       const entry = await this.directory.requireEntry(id);
       const source = this.directory.map(entry);
-      const projection = projectConversation(
-        this.directory.repository.readConversationSync(entry.location),
-      );
+      const sourceCommits =
+        this.directory.repository.readConversationSync(entry.location);
+      const projection = projectConversation(sourceCommits);
       const targetMessage =
         mode.kind === 'fork'
           ? projection.storedMessages.find(
@@ -173,15 +176,65 @@ export class FsSessionOperations {
           : projection.storedMessages.filter(
               (message) => message.seq < mode.beforeSeq,
             );
-      const created = await this.#createTarget(source, entry.session.metadata, mode);
-      await this.#replay(
-        entry.location,
-        created.id,
-        sourceMessages,
-        projection.toolCalls,
-      );
-      await this.#copyChapters(source.id, created.id, mode);
-      await this.#copyState(entry.state, created.id, mode);
+      const existingTarget = mode.kind === 'duplicate' && mode.targetId
+        ? await this.directory.getSession(mode.targetId)
+        : null;
+      if (existingTarget && existingTarget.id === source.id) {
+        throw new Error('duplicate target must differ from its source session');
+      }
+      if (
+        existingTarget
+        && existingTarget.metadata.workbench_copy_source_session_id !== source.id
+      ) {
+        throw new Error(`duplicate target ${existingTarget.id} belongs to another command`);
+      }
+      const created = existingTarget
+        ?? await this.#createTarget(source, entry.session.metadata, mode);
+      const targetEntry = await this.directory.requireEntry(created.id);
+      const targetCommits =
+        this.directory.repository.readConversationSync(targetEntry.location);
+      const targetProjection = projectConversation(targetCommits);
+      const targetAlreadyComplete =
+        targetProjection.storedMessages.length === sourceMessages.length &&
+        targetProjection.storedMessages.every((message, index) => {
+          const expected = sourceMessages[index];
+          return expected != null &&
+            message.seq === expected.seq &&
+            message.role === expected.role &&
+            JSON.stringify(message.content) === JSON.stringify(expected.content);
+        });
+      if (targetCommits.length === 0) {
+        // The canonical commits already contain the exact projected messages,
+        // tool calls and append-only rollback history. Clone them once instead
+        // of rebuilding the target with one fsync and one full projection scan
+        // per message. A fork is the same snapshot plus one rollback marker.
+        await this.directory.repository.cloneConversationProjection(
+          entry.location,
+          targetEntry.location,
+          sourceCommits,
+        );
+        await this.#copyState(entry.state, created.id, mode);
+        if (mode.kind === 'fork') {
+          await new FsSessionRollbackRepository(this.directory)
+            .rollbackSessionToSeq(created.id, mode.beforeSeq);
+        }
+      } else if (!targetAlreadyComplete) {
+        // Deterministic workbench copies may retry a target created by an older
+        // build or interrupted during the legacy replay. Preserve that recovery
+        // path without penalizing every new duplicate/fork.
+        await this.#replay(
+          entry.location,
+          created.id,
+          sourceMessages,
+          projection.toolCalls,
+        );
+        await this.#copyChapters(source.id, created.id, mode);
+        await this.#copyState(entry.state, created.id, mode);
+      } else {
+        // Idempotent retry of an already-published snapshot. State is cheap to
+        // reapply and may be the phase that failed in the previous request.
+        await this.#copyState(entry.state, created.id, mode);
+      }
       return {
         session: (await this.directory.getSession(created.id)) ?? created,
         seed_text: targetMessage
@@ -197,10 +250,20 @@ export class FsSessionOperations {
     mode: CopyMode,
   ): Promise<FsCoderSession> {
     const suffix = mode.kind === 'fork' ? ' (fork)' : ' (cópia)';
+    const title = mode.kind === 'duplicate' && mode.title
+      ? mode.title
+      : `${source.title}${suffix}`;
+    const metadataWithCopySource = mode.kind === 'duplicate' && mode.targetId
+      ? {
+          ...metadata,
+          workbench_copy_source_session_id: source.id,
+        }
+      : metadata;
     if (source.is_global) {
       return this.directory.createGlobalSession({
+        ...(mode.kind === 'duplicate' && mode.targetId ? { id: mode.targetId } : {}),
         parent_session_id: source.id,
-        title: `${source.title}${suffix}`,
+        title,
         provider: source.provider,
         model: source.model,
         agent: source.agent,
@@ -211,20 +274,21 @@ export class FsSessionOperations {
           isPrimary: project.is_primary,
           label: project.label,
         })),
-        metadata,
+        metadata: metadataWithCopySource,
       });
     }
     if (source.project_id == null) {
       throw new Error(`Session ${source.id} has no owning project`);
     }
     return this.directory.createSession({
+      ...(mode.kind === 'duplicate' && mode.targetId ? { id: mode.targetId } : {}),
       parent_session_id: source.id,
       project_id: source.project_id,
-      title: `${source.title}${suffix}`,
+      title,
       provider: source.provider,
       model: source.model,
       agent: source.agent,
-      metadata,
+      metadata: metadataWithCopySource,
     });
   }
 
@@ -235,6 +299,12 @@ export class FsSessionOperations {
     calls: readonly FsToolCallRecord[],
   ): Promise<void> {
     const generatedToolResultIds = new Set<string>();
+    const callsByMessageSeq = new Map<number, FsToolCallRecord[]>();
+    for (const call of calls) {
+      const bucket = callsByMessageSeq.get(call.message_seq);
+      if (bucket) bucket.push(call);
+      else callsByMessageSeq.set(call.message_seq, [call]);
+    }
     for (const stored of messages) {
       const hydrated = hydrateMessage(sourceLocation, stored);
       if (
@@ -252,13 +322,11 @@ export class FsSessionOperations {
           session_id: targetId,
           message: hydrated,
           usage: usage(stored),
-          operation_id: `copy:${randomUUID()}`,
+          operation_id: `copy:${targetId}:message:${stored.seq}`,
         });
         continue;
       }
-      const attached = calls.filter(
-        (call) => call.message_seq === stored.seq,
-      );
+      const attached = callsByMessageSeq.get(stored.seq) ?? [];
       const converted = await Promise.all(
         attached.map((call) => this.#toolInput(sourceLocation.session_id, call)),
       );
@@ -271,7 +339,7 @@ export class FsSessionOperations {
         usage: usage(stored),
         tool_calls: converted.filter((_, index) => !attached[index].nested),
         nested_tool_calls: converted.filter((_, index) => attached[index].nested),
-        operation_id: `copy:${randomUUID()}`,
+        operation_id: `copy:${targetId}:assistant:${stored.seq}`,
       });
     }
   }

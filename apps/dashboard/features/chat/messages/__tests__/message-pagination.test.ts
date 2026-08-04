@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MessagePage, SessionData } from '../../types.js';
 import {
+  loadedMessageCount,
   shouldLoadEarlierAtScrollTop,
 } from '../MessageList.js';
 import { groupMessages } from '../../utils.js';
@@ -197,6 +198,20 @@ describe('conversation scroll pagination', () => {
     const groups = groupMessages(updated.messages, updated.message_rows);
     expect(groups[0]?.kind).toBe('user');
     if (groups[0]?.kind === 'user') expect(groups[0].messageId).toBeUndefined();
+  });
+
+  it('counts an optimistic first turn as loaded history', () => {
+    const updated = appendOptimisticUserMessage(
+      { ...sessionData(SESSION_A, []), total_messages: 0 },
+      {
+        sessionId: SESSION_A,
+        messageId: -103,
+        text: 'first turn',
+      },
+    );
+
+    expect(loadedMessageCount(updated)).toBe(1);
+    expect(loadedMessageCount(updated)).toBe(updated.total_messages);
   });
 
   it('rejects an optimistic row for a stale session updater', () => {

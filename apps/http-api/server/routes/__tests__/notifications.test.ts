@@ -83,9 +83,6 @@ describe('notification route context', () => {
     expect(context?.target.route).toBe(
       `/company/sessions/${COMPANY_ROOT_ID}/${COMPANY_ID}/work/board`,
     );
-    expect(context?.pipelineTarget?.route).toBe(
-      `/company/sessions/${COMPANY_ROOT_ID}/${COMPANY_ID}/work/pipelines`,
-    );
     expect(context?.target.scopeId).toBe(COMPANY_ROOT_ID);
   });
 

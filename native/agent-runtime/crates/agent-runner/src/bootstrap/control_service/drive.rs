@@ -130,7 +130,8 @@ pub(super) async fn pre_active(
                             runner_pulse: pending.runner_pulse,
                             hydration,
                         },
-                    ),
+                    )
+                    .map_err(RunnerControlServiceError::Driver)?,
                 });
             }
             ControlDriverEvent::Cancel(_) | ControlDriverEvent::Fence(_) => {

@@ -18,7 +18,6 @@ import { FsSessionDirectory, type FsSessionDirectoryOptions } from './session-di
 import { FsSessionMutations } from './session-mutations.js';
 import { FsToolOutputReader } from './tool-output-reader.js';
 import { FsSessionEntityFiles } from './entity-files.js';
-import { FsChatPipelineRepository } from './chat-pipeline-repository.js';
 import { recordStandaloneSubagentUsage } from './standalone-usage-metric.js';
 import { installSessionOperationsApi, type FsSessionOperationsApi } from './session-operations-api.js';
 import { installSessionRollbackApi, type FsSessionRollbackApi } from './session-rollback-api.js';
@@ -74,7 +73,6 @@ export interface FsSessionStoreFromRootsOptions {
  * compatibility reads and no dual-write path.
  */
 export class FsSessionStore {
-  readonly chatPipelines: FsChatPipelineRepository;
   readonly #directory: FsSessionDirectory;
   readonly #mutations: FsSessionMutations;
   readonly #writer: FsConversationWriter;
@@ -87,7 +85,6 @@ export class FsSessionStore {
     this.#reader = new FsConversationReader(this.#directory);
     this.#toolOutputs = new FsToolOutputReader(this.#directory);
     const entities = new FsSessionEntityFiles(this.#directory);
-    this.chatPipelines = new FsChatPipelineRepository(entities);
     installOrchestrationSubagentApi(this, this.#directory, entities);
     installOperationalSessionApi(this, new FsOperationalSessionStore(this.#directory));
     installHistoryMetricsApi(this, this.#directory, this.#reader);

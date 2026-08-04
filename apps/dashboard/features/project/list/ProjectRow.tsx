@@ -16,7 +16,7 @@ import { Ellipsis, FolderGit2, LoaderCircle } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { Button } from '../../../components/ui/button.js';
 import { useContextMenu } from '../../../components/ui/context-menu.js';
-import { formatRelativeTime } from '../../../lib/utils.js';
+import { cn, formatRelativeTime } from '../../../lib/utils.js';
 import type { ProjectCardData } from './ProjectCard.js';
 import { buildProjectContextMenuItems } from './projectContextMenu.js';
 
@@ -26,7 +26,10 @@ export interface ProjectRowProps {
   onSelect: (project: ProjectCardData) => void;
   onEdit: (project: ProjectCardData) => void;
   onIndex: (project: ProjectCardData) => void;
+  onToggleSelected?: (project: ProjectCardData) => void;
   indexing?: boolean;
+  selecting?: boolean;
+  selected?: boolean;
 }
 
 export const ProjectRow = memo(function ProjectRow({
@@ -34,7 +37,10 @@ export const ProjectRow = memo(function ProjectRow({
   onSelect,
   onEdit,
   onIndex,
+  onToggleSelected,
   indexing = false,
+  selecting = false,
+  selected = false,
 }: ProjectRowProps) {
   const { t } = useTranslation(['projects', 'common']);
   const indexed = !!p.last_indexed;
@@ -72,17 +78,39 @@ export const ProjectRow = memo(function ProjectRow({
 
   return (
     <div
-      onClick={() => onSelect(p)}
-      {...triggerProps}
-      className="group flex min-w-0 cursor-pointer items-center gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0 hover:bg-accent/45 focus-within:bg-accent/45"
+      onClick={() => selecting ? onToggleSelected?.(p) : onSelect(p)}
+      {...(selecting ? {} : triggerProps)}
+      className={cn(
+        'group flex min-w-0 cursor-pointer items-center gap-3 border-b px-3 py-2.5 transition-colors last:border-b-0 hover:bg-accent/45 focus-within:bg-accent/45',
+        selected && 'bg-primary/10 hover:bg-primary/15',
+      )}
     >
+      {selecting && (
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelected?.(p)}
+          onClick={(event) => event.stopPropagation()}
+          aria-label={t(
+            selected ? 'projects:selection.deselectProject' : 'projects:selection.selectProject',
+            { name: p.name },
+          )}
+          className="h-4 w-4 shrink-0 accent-primary"
+        />
+      )}
       <button
         type="button"
         className="flex min-w-0 flex-1 items-center gap-3 rounded-sm text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={t('projects:openProject', { name: p.name })}
+        aria-label={
+          selecting
+            ? t(selected ? 'projects:selection.deselectProject' : 'projects:selection.selectProject', {
+                name: p.name,
+              })
+            : t('projects:openProject', { name: p.name })
+        }
         onClick={(event) => {
           event.stopPropagation();
-          onSelect(p);
+          selecting ? onToggleSelected?.(p) : onSelect(p);
         }}
       >
         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground transition-colors group-hover:text-foreground">
@@ -130,7 +158,7 @@ export const ProjectRow = memo(function ProjectRow({
         </Badge>
       </div>
 
-      {!indexed && (
+      {!selecting && !indexed && (
         <Button
           variant="ghost"
           size="sm"
@@ -148,20 +176,22 @@ export const ProjectRow = memo(function ProjectRow({
         </Button>
       )}
 
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="shrink-0 text-muted-foreground opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-        onClick={(event) => {
-          event.stopPropagation();
-          const rect = event.currentTarget.getBoundingClientRect();
-          openAt(Math.max(4, rect.right - 180), rect.bottom + 4);
-        }}
-        aria-label={t('projects:moreActions', { name: p.name })}
-      >
-        <Ellipsis className="h-4 w-4" />
-      </Button>
-      {Menu}
+      {!selecting && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="shrink-0 text-muted-foreground opacity-70 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+          onClick={(event) => {
+            event.stopPropagation();
+            const rect = event.currentTarget.getBoundingClientRect();
+            openAt(Math.max(4, rect.right - 180), rect.bottom + 4);
+          }}
+          aria-label={t('projects:moreActions', { name: p.name })}
+        >
+          <Ellipsis className="h-4 w-4" />
+        </Button>
+      )}
+      {!selecting && Menu}
     </div>
   );
 });

@@ -28,17 +28,7 @@ import type {
   KanbanTag,
   SubordinateHandle,
 } from '@mcp/company/types.js';
-import type {
-  AgentInboxMessage,
-  InboxStatus,
-  Pipeline,
-  PipelineExecution,
-  PipelineExecutionStatus,
-  PipelineGraph,
-  PipelineId,
-  PipelineNodeExecution,
-  SandboxBinding,
-} from '@mcp/company/types.js';
+import type { AgentInboxMessage, InboxStatus, SandboxBinding } from '@mcp/company/types.js';
 
 import type { SessionContext } from './services/SessionContext.js';
 import type { MetaBusPublisher } from './services/MetaBusPublisher.js';
@@ -51,8 +41,6 @@ import type { SubordinateLifecycle, SpawnSubordinateSpec } from './services/Subo
 import type { MasterLifecycle, RoleConfig } from './services/MasterLifecycle.js';
 import type { MasterAttention, AttentionListener } from './services/MasterAttention.js';
 import type { SandboxService } from './services/SandboxService.js';
-import type { PipelineService, PipelineValidationResult } from './services/PipelineService.js';
-import type { PipelineExecutor } from './services/PipelineExecutor.js';
 import type { InboxQueue, SendArgs as InboxSendArgs, SendResult as InboxSendResult } from './services/InboxQueue.js';
 import type { MasterInboxRouter } from './services/MasterInboxRouter.js';
 import type { RuntimeReconciler } from './services/RuntimeReconciler.js';
@@ -96,7 +84,7 @@ export class CompanyOrchestrator {
   readonly companySessionId: CompanySessionId;
   /**
    * When non-null, this orchestrator is a sub-session ("front tab") of the
-   * parent. Sandbox / projects / kanban / pipelines / services / env are
+   * parent. Sandbox / projects / kanban / services / env are
    * read from the parent so all sub-sessions share the same project
    * context. Board / agent_runs / master_prompts / inbox stay isolated.
    */
@@ -129,8 +117,6 @@ export class CompanyOrchestrator {
   private readonly watchdog: IdleWatchdog;
   private readonly subordinates: SubordinateLifecycle;
   private readonly master: MasterLifecycle;
-  private readonly pipelines: PipelineService | null;
-  private readonly pipelineExecutor: PipelineExecutor | null;
   private readonly inbox: InboxQueue;
   private readonly masterInbox: MasterInboxRouter;
   private readonly reconciler: RuntimeReconciler;
@@ -157,8 +143,6 @@ export class CompanyOrchestrator {
     this.watchdog = w.watchdog;
     this.subordinates = w.subordinates;
     this.master = w.master;
-    this.pipelines = w.pipelines;
-    this.pipelineExecutor = w.pipelineExecutor;
     this.inbox = w.inbox;
     this.masterInbox = w.masterInbox;
     this.reconciler = w.reconciler;
@@ -169,7 +153,7 @@ export class CompanyOrchestrator {
   }
 
   /**
-   * Effective session id for SHARED resources (kanban, pipelines, env,
+   * Effective session id for SHARED resources (kanban, env,
    * services, drive, docs, databases, design-system). Sub-sessions resolve
    * to the parent's id so all tabs see the same project-wide artefacts.
    */
@@ -186,20 +170,6 @@ export class CompanyOrchestrator {
       throw new CompanyCapabilityUnavailableError('kanban', this.ctx.runtimeKind);
     }
     return this.kanban;
-  }
-
-  private requireCompanyPipelines(): {
-    pipelines: PipelineService;
-    executor: PipelineExecutor;
-  } {
-    if (
-      !this.ctx.capabilities.allowCompanyPipelines ||
-      !this.pipelines ||
-      !this.pipelineExecutor
-    ) {
-      throw new CompanyCapabilityUnavailableError('pipelines', this.ctx.runtimeKind);
-    }
-    return { pipelines: this.pipelines, executor: this.pipelineExecutor };
   }
 
   /**
@@ -232,11 +202,6 @@ export class CompanyOrchestrator {
     reasoningEffort?: string;
     /** Ordered explicit fallback chain; consumed only by App lifecycle. */
     fallbackModels?: import('@mcp/company/types.js').AllowedModel[];
-    /**
-     * When true the master prompt routes non-trivial work through the
-     * built-in SDD pipeline. Threaded into `MasterPromptContext.sddMode`.
-     */
-    sddMode?: boolean;
   }): Promise<MasterStartResult> {
     // The lifecycle returns the ack as soon as the run is registered; the
     // sandbox provision + runCoder boot run in the background (so this RPC
@@ -647,44 +612,6 @@ export class CompanyOrchestrator {
       projects: this.ctx.projects,
     });
   }
-
-  // ─── Pipelines ─────────────────────────────────────────────────
-  async pipelineList(opts?: { scope?: 'this' | 'global' | 'all'; templateId?: number | null }): Promise<Pipeline[]> {
-    if (!this.pipelines) return [];
-    if (opts?.scope === 'this') return this.pipelines.list({ companySessionId: this.companySessionId, templateId: opts.templateId ?? undefined });
-    if (opts?.scope === 'global') return this.pipelines.list({ companySessionId: null, templateId: opts.templateId ?? undefined });
-    return this.pipelines.list({ companySessionId: this.companySessionId, templateId: opts?.templateId ?? undefined });
-  }
-  async pipelineGet(id: PipelineId): Promise<Pipeline | null> { return this.pipelines?.get(id) ?? null; }
-  async pipelineCreate(input: { name: string; description?: string; graph: PipelineGraph; scope?: 'this' | 'global'; templateId?: number | null }): Promise<Pipeline> {
-    return this.requireCompanyPipelines().pipelines.create({
-      name: input.name, description: input.description, graph: input.graph,
-      companySessionId: input.scope === 'global' ? null : this.companySessionId,
-      templateId: input.templateId ?? null,
-    });
-  }
-  async pipelineUpdate(id: PipelineId, patch: { name?: string; description?: string; graph?: PipelineGraph }, opts?: { expectedVersion?: number }): Promise<Pipeline | null> { return this.requireCompanyPipelines().pipelines.update(id, patch, opts); }
-  async pipelineDelete(id: PipelineId): Promise<boolean> { return this.requireCompanyPipelines().pipelines.delete(id); }
-  /** Validate a graph against the session's role roster. */
-  pipelineValidate(graph: PipelineGraph): PipelineValidationResult {
-    return this.requireCompanyPipelines().pipelines.validate(graph, new Set(this.master.roleConfigs.map((r) => r.role)));
-  }
-  async pipelineStart(pipelineId: PipelineId, initialInput: string, startedBy?: string): Promise<PipelineExecution> { return this.requireCompanyPipelines().executor.start(pipelineId, initialInput, startedBy); }
-  pipelineAbort(executionId: string, reason?: string): Promise<boolean> { return this.requireCompanyPipelines().executor.abort(executionId, reason); }
-  pipelinePause(executionId: string): Promise<boolean> { return this.requireCompanyPipelines().executor.pause(executionId); }
-  async pipelineResume(executionId: string): Promise<boolean> { return this.requireCompanyPipelines().executor.resume(executionId); }
-  /** Approve a `requires_confirmation` pause (re-runs the gated next node). */
-  async pipelineConfirm(executionId: string): Promise<boolean> { return this.requireCompanyPipelines().executor.confirm(executionId); }
-  /** Boot-time recovery: any run still `running` in DB has no in-memory listener → flip to `paused` and emit. */
-  async pipelineRecoverRunning(): Promise<{ paused: number }> {
-    // Recovery is a boot hook and callers intentionally fire-and-forget it.
-    // App runtimes have no Company pipeline executor, so the only safe and
-    // deterministic result is a no-op (never touch persisted executions).
-    if (!this.pipelineExecutor) return { paused: 0 };
-    return this.pipelineExecutor.recoverRunning();
-  }
-  async pipelineStatus(executionId: string): Promise<{ execution: PipelineExecution; nodes: PipelineNodeExecution[] } | null> { return this.pipelineExecutor?.status(executionId) ?? null; }
-  async pipelineListExecutions(opts?: { pipelineId?: PipelineId; status?: PipelineExecutionStatus; limit?: number }): Promise<PipelineExecution[]> { return this.pipelineExecutor?.listExecutions(opts) ?? []; }
 
   // ─── Agent inbox ───────────────────────────────────────────────
   inboxSend(args: InboxSendArgs): InboxSendResult { return this.inbox.send(args); }

@@ -18,7 +18,6 @@ export type CompanyAgentDispatchSource =
   | 'company'
   | 'manual'
   | 'scheduler'
-  | 'pipeline'
   | 'fanout'
   | 'app_studio'
   | 'retry';

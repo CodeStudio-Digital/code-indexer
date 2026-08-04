@@ -28,8 +28,6 @@ export function asSessionGroupId(value: string): SessionGroupId {
  *  - apps/http-api/server/routes/coder/interaction.ts
  *  - apps/http-api/server/routes/coder/stream.ts (streaming run + attach)
  *  - apps/http-api/server/routes/coder/snapshot.ts
- *  - apps/http-api/server/routes/coder/pipelines.ts
- *  - apps/http-api/server/routes/coder/pipelines-state.ts
  *  - apps/http-api/server/routes/coder/active-skills.ts
  *  - apps/http-api/server/routes/coder/project-tree.routes.ts
  *  - apps/http-api/server/routes/coder/project-files.ts

@@ -4,9 +4,11 @@ import {
   AgentStreamOwnership,
   agentStreamLastSeenBusIdMap,
   agentStreamLastSeenSeqMap,
+  getActiveAgentSessionIdsSnapshot,
   getAgentCurrentTurnSnapshot,
   getAgentSessionSnapshot,
   readAgentStreamCursor,
+  subscribeActiveAgentSessions,
   subscribeAgentCurrentTurn,
   subscribeAgentSession,
   updateAgentSession,
@@ -152,6 +154,23 @@ describe('agent stream cursor lifetime', () => {
 });
 
 describe('shared session state', () => {
+  it('publishes every live session for navigation surfaces', () => {
+    const navigation = vi.fn();
+    subscribeActiveAgentSessions(navigation);
+
+    updateAgentSession(sid(31), { streaming: true });
+    updateAgentSession(sid(32), { streaming: true });
+    expect(getActiveAgentSessionIdsSnapshot()).toEqual([sid(31), sid(32)]);
+
+    // Unrelated stream state does not make the sessions list churn.
+    updateAgentSession(sid(31), { error: 'recoverable warning' });
+    expect(navigation).toHaveBeenCalledTimes(2);
+
+    updateAgentSession(sid(31), { streaming: false });
+    expect(getActiveAgentSessionIdsSnapshot()).toEqual([sid(32)]);
+    expect(navigation).toHaveBeenCalledTimes(3);
+  });
+
   it('publishes one session state to two surfaces without teardown coupling', () => {
     const fullChat = vi.fn();
     const editorRail = vi.fn();

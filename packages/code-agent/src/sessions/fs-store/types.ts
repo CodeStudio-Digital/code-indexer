@@ -246,6 +246,8 @@ export interface FsCoderMessageRow {
   turn_seq: number;
   operation_id: string;
   role: AgentMessage['role'];
+  /** Additive public assistant phase; absent on legacy/test row fixtures. */
+  phase?: AgentMessage['phase'] | null;
   content_json: string;
   input_tokens: number;
   output_tokens: number;
@@ -307,6 +309,7 @@ export interface FsStoredMessage {
   id: string;
   seq: number;
   role: AgentMessage['role'];
+  phase?: AgentMessage['phase'];
   content: JsonValue;
   usage: {
     input_tokens: number;

@@ -13,7 +13,7 @@ export const NOTIFICATION_SETTINGS: readonly SettingDef[] = [
   {
     key: 'MCP_DESKTOP_NOTIFY_ACTION_REQUIRED',
     label: 'Notify action required',
-    description: 'Notify when a session or pipeline is blocked waiting for human input.',
+    description: 'Notify when a session is blocked waiting for human input.',
     type: 'bool',
     category: 'notifications',
     default: '1',
@@ -21,7 +21,7 @@ export const NOTIFICATION_SETTINGS: readonly SettingDef[] = [
   {
     key: 'MCP_DESKTOP_NOTIFY_SESSION_FINISHED',
     label: 'Notify session finished',
-    description: 'Notify when a coder, pipeline, or company session finishes, pauses, fails, or aborts.',
+    description: 'Notify when a coder or company session finishes, pauses, fails, or aborts.',
     type: 'bool',
     category: 'notifications',
     default: '1',

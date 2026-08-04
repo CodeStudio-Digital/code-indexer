@@ -147,6 +147,32 @@ describe('FsSessionStore conversation journal', () => {
     expect(readConversation).toHaveBeenCalledTimes(2);
   });
 
+  it('persists the public assistant phase through journal hydration and rows', async () => {
+    const session = await store.createSession({
+      project_id: 7,
+      title: 'Assistant phase',
+      provider: 'openai-chatgpt',
+      model: 'gpt-5.6-sol',
+    });
+    await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'phase-assistant-1',
+      message: {
+        role: 'assistant',
+        phase: 'commentary',
+        content: [{ type: 'text', text: 'Checking the backend.' }],
+      },
+    });
+
+    const loaded = await store.loadSessionMessagesTail(session.id, 10);
+    expect(loaded?.messages).toEqual([{
+      role: 'assistant',
+      phase: 'commentary',
+      content: [{ type: 'text', text: 'Checking the backend.' }],
+    }]);
+    expect(loaded?.message_rows[0]?.phase).toBe('commentary');
+  });
+
   it('persists every tool-bearing assistant turn from the same agent run', async () => {
     const session = await store.createSession({
       project_id: 7,

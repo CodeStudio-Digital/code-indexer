@@ -14,7 +14,7 @@
  * snapshot the exact ordering past position 1 (which is fragile and not
  * the point of these tests).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { buildFindToolsTool } from '../find-tools.js';
@@ -260,5 +260,37 @@ describe('find_tools — discovery affordances (param summary + pin awareness)',
     const output = await findTools(buildRegistry(), 'kubernetes deployment yaml');
     // Either no matches at all, or the "No tools matched" sentinel.
     expect(output).toMatch(/No tools matched|^Top 0/);
+  });
+
+  it('refreshes and searches a Unity catalogue that became ready after runner startup', async () => {
+    const registry = new ToolRegistry();
+    const tiers = new Map<string, string>();
+    const beforeSearch = vi.fn(async () => {
+      registry.register(tool(
+        'ext_unity__get_server_health',
+        'Get Unity editor broker server health.',
+        { source: 'mcp_external', mutates: false },
+      ));
+      tiers.set('ext_unity__get_server_health', 'unity');
+    });
+    const found = buildFindToolsTool(
+      registry,
+      tiers,
+      { beforeSearch },
+    );
+
+    const result = await found.handler(
+      { query: 'unity server health' },
+      {
+        cwd: '/tmp',
+        projectName: 'test',
+        runner: { activeTiers: new Set(['bootstrap']) },
+      } as never,
+    );
+    const output = typeof result.content === 'string' ? result.content : '';
+
+    expect(beforeSearch).toHaveBeenCalledTimes(1);
+    expect(output).toContain('ext_unity__get_server_health');
+    expect(output).toContain('tier=unity');
   });
 });

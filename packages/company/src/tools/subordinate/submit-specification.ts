@@ -12,7 +12,7 @@ import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
 const SUBMIT_SPECIFICATION_TO_MASTER_DESC =
   'Submit a feature/epic specification to the Master orchestrator for human approval.\n' +
   'Required in spec mode before any mutating tool — writes `.mcp/specs/<slug>-<unix>.md`, mirrors into the company drive, and BLOCKS until the human (via Master) approves or requests changes.\n' +
-  "USE: as a spec-writer subordinate (SDD pipeline) once you've drafted the full 5-section spec.\n" +
+  "USE: as a spec-writer subordinate once you've drafted the full 5-section spec.\n" +
   "DON'T: skip exploration and submit a thin spec — explore FIRST.";
 
 /**

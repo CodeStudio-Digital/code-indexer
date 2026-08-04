@@ -45,10 +45,6 @@ const CODER_EVENTS = new Set([
   'agents_group_start',
   'agent_progress',
   'agents_group_end',
-  'pipeline_paused',
-  'pipeline_completed',
-  'pipeline_aborted',
-  'pipeline_failed',
 ]);
 
 const COMPANY_EVENTS = new Set([
@@ -57,10 +53,6 @@ const COMPANY_EVENTS = new Set([
   'session_idle',
   'done',
   'error',
-  'pipeline_paused',
-  'pipeline_completed',
-  'pipeline_aborted',
-  'pipeline_failed',
 ]);
 
 class NotificationEventBus {
@@ -140,7 +132,6 @@ function hasNotifiablePayload(event: string, value: unknown): boolean {
   if (event === 'tool_loop_intervention') {
     return !(data.kind === 'dup-result-marker' && data.severity === 'informational');
   }
-  if (event === 'pipeline_paused') return data.awaitingConfirmation === true;
   return true;
 }
 

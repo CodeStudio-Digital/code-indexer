@@ -20,8 +20,6 @@ import { SubordinateLifecycle } from '../services/SubordinateLifecycle.js';
 import { MasterLifecycle } from '../services/MasterLifecycle.js';
 import { MasterAttention } from '../services/MasterAttention.js';
 import { SandboxService } from '../services/SandboxService.js';
-import { PipelineService } from '../services/PipelineService.js';
-import { PipelineExecutor } from '../services/PipelineExecutor.js';
 import { InboxQueue } from '../services/InboxQueue.js';
 import { MasterInboxRouter } from '../services/MasterInboxRouter.js';
 import { RuntimeReconciler } from '../services/RuntimeReconciler.js';
@@ -56,8 +54,6 @@ export interface WiredServices {
   watchdog: IdleWatchdog;
   subordinates: SubordinateLifecycle;
   master: MasterLifecycle;
-  pipelines: PipelineService | null;
-  pipelineExecutor: PipelineExecutor | null;
   inbox: InboxQueue;
   masterInbox: MasterInboxRouter;
   reconciler: RuntimeReconciler;
@@ -224,20 +220,6 @@ export function wireServices(args: {
   publisher.setActivityListener((event) => watchdog.recordActivity(event));
   watchdog.start();
 
-  // Pipelines: thin CRUD + executor that drives subordinates through a stored
-  // graph. Constructed last because the executor needs already-wired services.
-  const pipelines = servicePlan.initializeCompanyPipelines
-    ? new PipelineService(ctx)
-    : null;
-  // A Company pipeline materializes nodes as Company Kanban cards, therefore
-  // both capabilities must be present. App sessions intentionally construct
-  // neither service.
-  const pipelineExecutor = pipelines && kanban
-    ? new PipelineExecutor({
-        ctx, pipelines, kanban, subordinates, attention, publisher,
-      })
-    : null;
-
   // Inbox: persistent message queue between subordinates. The lifecycle's
   // idle hook is wired here (late-bound) because the queue needs
   // `subordinates.reactivate` and the lifecycle was constructed before.
@@ -325,7 +307,7 @@ export function wireServices(args: {
   return {
     ctx, publisher, wirer, kanban, board, status, attention,
     sandboxService, eventBus, humanInLoop, idle, watchdog,
-    subordinates, master, pipelines, pipelineExecutor,
+    subordinates, master,
     inbox, masterInbox, reconciler, serviceSupervisor, scheduler,
     autonomy, driveStore, metaBus, parentSessionId, appStudioScheduler,
   };

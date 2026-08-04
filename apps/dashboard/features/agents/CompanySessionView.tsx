@@ -137,10 +137,6 @@ export function CompanySessionView({
         ...baseTarget,
         route: buildAgentsUrl(sessionId, activeFrontId, 'work', 'board'),
       },
-      pipelineTarget: {
-        ...baseTarget,
-        route: buildAgentsUrl(sessionId, activeFrontId, 'work', 'pipelines'),
-      },
     };
   }, [activeFrontId, activeSessionId, sessionId, sessionName]);
   const stream = useCompanyStream(activeSessionId, notificationContext);

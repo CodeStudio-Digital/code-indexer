@@ -19,9 +19,10 @@ const handlers: PromptHandlers = {
 function expectFailedUpdate(html: string): void {
   expect(html).toContain('Falha ao atualizar meta');
   expect(html).not.toContain('Meta atualizada');
-  expect(html).toContain('border-destructive/40');
+  expect(html).toContain('border-destructive/50');
   expect(html).toContain('text-destructive');
-  expect(html).not.toContain('border-success/40');
+  expect(html).not.toContain('rounded-lg');
+  expect(html).not.toContain('bg-destructive/5');
   expect(html.match(new RegExp(ERROR_TEXT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1);
 }
 
@@ -80,6 +81,33 @@ describe('GoalCallBlock error presentation', () => {
     expect(html).toContain('Meta consultada');
     expect(html).toContain('Status: in_progress');
     expect(html).toContain('Goal: Fix the renderer');
+  });
+
+  it('renders a created goal as a compact timeline event instead of a card', () => {
+    const block: StreamBlock = {
+      type: 'tool',
+      call: {
+        id: 'goal-created-1',
+        name: 'create_goal',
+        input: {
+          goal: 'Refatorar o renderer sem perder o histórico.',
+          budget_tokens: 60_000,
+        },
+        status: 'done',
+        durationMs: 19,
+      },
+    };
+
+    const html = renderToStaticMarkup(renderStreamBlock(block, 0, handlers));
+    expect(html).toContain('Meta definida');
+    expect(html).toContain('Refatorar o renderer sem perder o histórico.');
+    expect(html).toContain('Orçamento: 60k tokens');
+    expect(html).toContain('19ms');
+    expect(html).toContain('border-l');
+    expect(html).toContain('pl-3');
+    expect(html).not.toContain('rounded-lg');
+    expect(html).not.toContain('uppercase');
+    expect(html).not.toContain('bg-warning/5');
   });
 
   it('uses an in-progress heading while update_goal is still running', () => {

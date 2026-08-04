@@ -3,7 +3,7 @@
 O **Modo Empresa de Agentes** ("company mode") transforma uma sessão única em um **time
 de agentes IA com papéis distintos**: um **Master** orquestra e **subordinados** executam,
 trabalhando sobre um ou mais projetos. Cada papel pode rodar em um provider/modelo diferente,
-seguir regras operacionais compartilhadas e colaborar por um quadro, Kanban, inbox e pipelines.
+seguir regras operacionais compartilhadas e colaborar por um quadro, Kanban e inbox.
 
 > **Documento bilíngue.** A Parte 1 está em **Português**; a Parte 2 (idêntica) em **English**.
 > A interface respeita o idioma do app (locale `pt-BR` ou `en`) — os rótulos abaixo aparecem
@@ -59,7 +59,7 @@ arquivo, o chat único continua mais simples.
 | **Projetos** | As codebases sobre as quais o time trabalha. Uma sessão liga 1+ projetos. | Seção **Projetos** · tabela `company_session_projects` |
 | **Papéis (Roles)** | "Cargos" do time. Exatamente **um** papel `master` é obrigatório; os demais são subordinados. | `roles_json` do template / `config_json` da sessão |
 | **Regras operacionais** | Política em texto livre (markdown) injetada **verbatim** no prompt do Master e de **todo** subordinado. | Campo **Regras operacionais** |
-| **Runtime / capability** | Define qual produto hospeda o lifecycle Company. `company` usa quadro/Kanban/pipelines; `app_studio` usa o workflow e as ferramentas do App. | `company_sessions.runtime_kind` |
+| **Runtime / capability** | Define qual produto hospeda o lifecycle Company. `company` usa quadro/Kanban; `app_studio` usa o workflow e as ferramentas do App. | `company_sessions.runtime_kind` |
 
 ### Papéis: Master × Subordinado
 
@@ -93,10 +93,10 @@ pause/resume/abort, reconexão e supervisão. A equipe também aparece em **Agen
 
 O servidor resolve a capability a partir de `runtime_kind`:
 
-- `company`: mantém o scheduler, o Kanban e as pipelines genéricas e **não** registra ferramentas
+- `company`: mantém o scheduler e o Kanban genérico e **não** registra ferramentas
   `app_*`;
 - `app_studio`: usa prompt, allowlists, política de autonomia e fonte de trabalho do App; não
-  inicializa o scheduler Company nem usa Kanban/pipelines como uma segunda fila;
+  inicializa o scheduler Company nem usa Kanban como uma segunda fila;
 - o **workflow do App é a única fonte de cards**. A API `/api/app-studio` permanece como fachada e
   delega o lifecycle de agentes ao Company.
 
@@ -270,24 +270,15 @@ de "espiada" (painéis que você quer **junto** do conteúdo central).
 
 ### Zona **Work** (trabalho do time)
 
-As abas abaixo descrevem sessões `runtime_kind = 'company'`. Em equipes `app_studio`, **Kanban** e
-**Pipelines** ficam ocultos: o painel oferece acesso ao workflow autoritativo do App, sem duplicar
+As abas abaixo descrevem sessões `runtime_kind = 'company'`. Em equipes `app_studio`, **Kanban**
+fica oculto: o painel oferece acesso ao workflow autoritativo do App, sem duplicar
 cards entre produtos. Board, transcript e controles reais dos agentes continuam disponíveis.
 
 | Aba | O que faz |
 |---|---|
 | **Quadro** (Board) | Feed compartilhado onde os agentes postam. Tipos de mensagem: *message, decision, question, deliverable, handoff, blocker*. Dá para copiar o quadro/mensagem em Markdown. |
 | **Kanban** | Colunas **Pendências · A Fazer · Em Progresso · Revisão · Concluído**. Cards com objetivos, dependências, comentários e histórico de agente. |
-| **Pipelines** | Workflows multi-estágio (ver abaixo). |
 | **Transcrição** | Log histórico das mensagens entre agentes. |
-
-**Pipelines** em detalhe: builder visual com **templates** de estágio (Investigar, Coletar
-contexto, Implementar, Refatorar, Validar output, QA gate, Revisão humana, Resumir, Changelog,
-Checkpoint, Classificar). Cada nó é um **Agente** ou um **Validador** (só decisão:
-`submit_verdict({pass|fail|review})`). Arestas com modos **linear / pass-fail / by-tag /
-by-text-match**. Opções por nó: **Máx. tentativas**, **override de modelo** (rode validadores num
-modelo mais barato), e **Aprovação manual** (`requires_confirmation` — pausa para você aprovar
-antes de avançar). Escopo: **sessão** (multi-projeto) ou **global**.
 
 ### Zona **Build** (artefatos que o time produz)
 
@@ -409,7 +400,7 @@ sobrevivem a reativações e compactações.
   (`read/write/append/delete/list_shared_file`), comunicação (`send_message`, `list_agents`,
   `wait_agents`, inbox), e env (`env_list/read/set/delete/validate` — Master só lê).
 - **`BUILDER_TOOLS`** — só quando há binding de sandbox (subordinado ligado a serviço em
-  container): `db_*`, `docs_*`, controle de sandbox/pipeline/serviços.
+  container): `db_*`, `docs_*`, controle de sandbox/design-system/serviços.
 - **`APP_TOOLS`** — registradas somente quando `runtime_kind = 'app_studio'` e filtradas por
   audiência (Master ou papel especialista). Sessões Company comuns nunca recebem `app_*`, e uma
   tool externa não pode se apresentar como capability nativa do App.
@@ -418,7 +409,7 @@ sobrevivem a reativações e compactações.
 
 - O **pool de modelos permitidos** é validado no spawn — `(provider, modelo)` fora do pool é rejeitado.
 - Um único resolver de runtime atende os despachos de especialistas por Master, caminho manual,
-  scheduler, pipeline, fan-out, retry e App. Para papel configurado, o pool só valida a escolha
+  scheduler, fan-out, retry e App. Para papel configurado, o pool só valida a escolha
   persistida; não substitui essa escolha. Em App, fallback vem exclusivamente da lista explícita
   do papel. O Master usa o runtime persistido próprio da sessão.
 - **Concorrência**: no máximo **10** subordinados simultâneos (`CODER_COMPANY_MAX_SUBORDINATES`);
@@ -445,7 +436,7 @@ carregar uma chave `builder` do modo aposentado — ignorada pelo runtime atual.
 
 Tabelas adicionais por migrations posteriores: `034` sandbox, `035` serviços, `036` env vars
 (`company_session_envs`), `038` arquivos (`company_archives`), `065` frentes, `067` sub-sessões,
-`085` fundação de pipelines. (A tabela `company_session_databases` da migration `040` foi
+`085` fundação de bindings de modelos. (A tabela `company_session_databases` da migration `040` foi
 aposentada na `191` — conexões agora são por projeto, migration `174`.)
 
 A migration `235_app_studio_company_runtime.ts` adiciona a integração App:
@@ -462,7 +453,7 @@ que a equipe seja removida por fora enquanto ainda pertence ao App.
 
 **Rotas HTTP** (sob `apps/http-api/server/routes/company/`): `GET/POST /api/company/templates`,
 `PATCH/DELETE /api/company/templates/:id`, `GET/POST /api/company/sessions`,
-`.../sessions/:id/projects`, além de `board`, `kanban`, `pipelines`, `envs`, `databases`, `drive`, `sandbox`.
+`.../sessions/:id/projects`, além de `board`, `kanban`, `envs`, `databases`, `drive`, `sandbox`.
 As rotas sob `/api/app-studio/sessions/:id/agents` e `/workflow` são a fachada do App para
 configuração de papéis, sessões/transcripts, dispatch e lifecycle. Respostas expõem
 `company_session_id`, Master/equipe, provider/modelo configurado e efetivo e runs legados separados.
@@ -555,8 +546,8 @@ time. *Pool de modelos* = lista permitida de provider/modelo.
 | Criar template (UI) | `apps/dashboard/features/agents/{TemplateBuilderModal,RoleEditModal,TemplateListPanel}.tsx` |
 | Sidebar / papéis / regras | `apps/dashboard/features/agents/session-view/`, `OperationalRulesEditor.tsx` |
 | Zonas e abas | `apps/dashboard/features/agents/zones/` · `preview-sidebar/` |
-| Contratos | `packages/company-contracts/src/models/{template,pipeline}.ts` |
-| Orquestração / tools | `packages/company/src/tools/{master-tools,master-filter,pipeline-tools,review-subordinate,board-tools}.ts` |
+| Contratos | `packages/company-contracts/src/models/template.ts` |
+| Orquestração / tools | `packages/company/src/tools/{master-tools,master-filter,review-subordinate,board-tools}.ts` |
 | Tiers de company | `packages/code-agent/src/tools/tiers-company.ts` |
 | Supervisor / reconciler | `packages/company/src/services/supervisor/` · `RuntimeReconciler.ts` |
 | Capability / scheduler do App | `packages/company/src/tools/app-studio/` · `packages/company/src/services/scheduler/AppStudioScheduler.ts` |
@@ -614,7 +605,7 @@ chat is still simpler.
 | **Projects** | The codebases the team works on. A session links 1+ projects. | **Projects** section · `company_session_projects` table |
 | **Roles** | The team's "positions". Exactly **one** `master` role is required; the rest are subordinates. | template `roles_json` / session `config_json` |
 | **Operational rules** | Free-text (markdown) policy injected **verbatim** into the Master's and **every** subordinate's prompt. | **Operational rules** field |
-| **Runtime / capability** | Selects which product hosts the Company lifecycle. `company` uses board/Kanban/pipelines; `app_studio` uses the App workflow and tools. | `company_sessions.runtime_kind` |
+| **Runtime / capability** | Selects which product hosts the Company lifecycle. `company` uses board/Kanban; `app_studio` uses the App workflow and tools. | `company_sessions.runtime_kind` |
 
 ### Roles: Master vs Subordinate
 
@@ -649,10 +640,10 @@ pause/resume/abort, reconnection, and supervision. The team also appears in **Ag
 
 The server resolves the capability from `runtime_kind`:
 
-- `company` keeps the generic scheduler, Kanban, and pipelines, and **does not** register `app_*`
+- `company` keeps the generic scheduler and Kanban, and **does not** register `app_*`
   tools;
 - `app_studio` uses the App prompt, allowlists, autonomy policy, and work source; it does not start
-  the Company scheduler or use Kanban/pipelines as a second queue;
+  the Company scheduler or use Kanban as a second queue;
 - the **App workflow is the only card source**. `/api/app-studio` remains the facade and delegates
   agent lifecycle operations to Company.
 
@@ -823,24 +814,15 @@ The session uses a **3-zone layout** (which **replace** the central area) + a si
 
 ### **Work** zone (the team's day-to-day)
 
-The tabs below describe `runtime_kind = 'company'` sessions. In `app_studio` teams, **Kanban** and
-**Pipelines** are hidden: the panel links to the authoritative App workflow instead of duplicating
+The tabs below describe `runtime_kind = 'company'` sessions. In `app_studio` teams, **Kanban** is
+hidden: the panel links to the authoritative App workflow instead of duplicating
 cards between products. Board, transcript, and real-agent controls remain available.
 
 | Tab | What it does |
 |---|---|
 | **Board** | Shared feed where agents post. Message kinds: *message, decision, question, deliverable, handoff, blocker*. You can copy the board/message as Markdown. |
 | **Kanban** | Columns **Backlog · To-Do · In Progress · Review · Done**. Cards with objectives, dependencies, comments and agent history. |
-| **Pipelines** | Multi-stage workflows (see below). |
 | **Transcript** | Historical log of inter-agent messages. |
-
-**Pipelines** in detail: a visual builder with stage **templates** (Investigate, Gather context,
-Implement, Refactor, Validate output, QA gate, Human review, Summarize, Changelog, Checkpoint,
-Classify). Each node is an **Agent** or a **Validator** (decision-only:
-`submit_verdict({pass|fail|review})`). Edges with **linear / pass-fail / by-tag / by-text-match**
-modes. Per-node options: **Max attempts**, **model override** (run validators on a cheaper model),
-and **Manual approval** (`requires_confirmation` — pauses for you to approve before advancing).
-Scope: **session** (multi-project) or **global**.
 
 ### **Build** zone (artifacts the team produces)
 
@@ -960,7 +942,7 @@ survive reactivations and compactions.
   (`read/write/append/delete/list_shared_file`), comms (`send_message`, `list_agents`,
   `wait_agents`, inbox), and env (`env_list/read/set/delete/validate` — Master read-only).
 - **`BUILDER_TOOLS`** — only when a sandbox binding is present (service-bound subordinate): `db_*`, `docs_*`,
-  sandbox/pipeline/service control.
+  sandbox/design-system/service control.
 - **`APP_TOOLS`** — registered only when `runtime_kind = 'app_studio'` and filtered by audience
   (Master or specialist role). Generic Company sessions never receive `app_*`, and an external tool
   cannot impersonate a native App capability.
@@ -969,7 +951,7 @@ survive reactivations and compactions.
 
 - The **allowed models pool** is validated at spawn — a `(provider, model)` outside it is rejected.
 - One runtime resolver serves specialist dispatches from the Master, manual path, scheduler,
-  pipeline, fan-out, retry, and App. For a configured role, the pool only validates the persisted
+  fan-out, retry, and App. For a configured role, the pool only validates the persisted
   choice; it never replaces it. In App teams, fallback comes exclusively from the role's explicit
   list. The Master uses the session's own persisted runtime.
 - **Concurrency**: at most **10** concurrent subordinates (`CODER_COMPANY_MAX_SUBORDINATES`); when
@@ -996,7 +978,7 @@ a `builder` key from the retired mode — ignored by the current runtime.)
 
 Additional tables in later migrations: `034` sandbox, `035` services, `036` env vars
 (`company_session_envs`), `038` archives (`company_archives`), `065` fronts, `067` sub-sessions,
-`085` pipeline foundation. (Migration `040`'s `company_session_databases` table was retired in
+`085` model-binding foundation. (Migration `040`'s `company_session_databases` table was retired in
 `191` — connections are per-project now, migration `174`.)
 
 Migration `235_app_studio_company_runtime.ts` adds the App integration:
@@ -1013,7 +995,7 @@ deletion while the App still owns it.
 
 **HTTP routes** (under `apps/http-api/server/routes/company/`): `GET/POST /api/company/templates`,
 `PATCH/DELETE /api/company/templates/:id`, `GET/POST /api/company/sessions`,
-`.../sessions/:id/projects`, plus `board`, `kanban`, `pipelines`, `envs`, `databases`, `drive`, `sandbox`.
+`.../sessions/:id/projects`, plus `board`, `kanban`, `envs`, `databases`, `drive`, `sandbox`.
 Routes under `/api/app-studio/sessions/:id/agents` and `/workflow` are the App facade for role
 configuration, sessions/transcripts, dispatch, and lifecycle. Responses expose
 `company_session_id`, Master/team state, configured and effective provider/model, and separate
@@ -1107,8 +1089,8 @@ feed. *Model pool* = the allowed list of provider/model.
 | Create template (UI) | `apps/dashboard/features/agents/{TemplateBuilderModal,RoleEditModal,TemplateListPanel}.tsx` |
 | Sidebar / roles / rules | `apps/dashboard/features/agents/session-view/`, `OperationalRulesEditor.tsx` |
 | Zones and tabs | `apps/dashboard/features/agents/zones/` · `preview-sidebar/` |
-| Contracts | `packages/company-contracts/src/models/{template,pipeline}.ts` |
-| Orchestration / tools | `packages/company/src/tools/{master-tools,master-filter,pipeline-tools,review-subordinate,board-tools}.ts` |
+| Contracts | `packages/company-contracts/src/models/template.ts` |
+| Orchestration / tools | `packages/company/src/tools/{master-tools,master-filter,review-subordinate,board-tools}.ts` |
 | Company tiers | `packages/code-agent/src/tools/tiers-company.ts` |
 | Supervisor / reconciler | `packages/company/src/services/supervisor/` · `RuntimeReconciler.ts` |
 | App capability / scheduler | `packages/company/src/tools/app-studio/` · `packages/company/src/services/scheduler/AppStudioScheduler.ts` |

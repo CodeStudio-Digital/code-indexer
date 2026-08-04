@@ -157,10 +157,36 @@ describe('attempt correlation authority', () => {
     )).toThrow(expect.objectContaining({ code: 'correlation_mismatch' }));
   });
 
+  it('accepts only bounded local peer clock skew for AttemptPrepared', () => {
+    const value = new AttemptCorrelationAuthority(4);
+    value.registerNew(
+      'prepare-request',
+      value.captureNew(prepareRequest()),
+      DIGEST,
+      100n,
+    );
+
+    expect(() => value.validateInbound(
+      prepared(DIGEST, 99n),
+      'prepare-request',
+      100n,
+    )).not.toThrow();
+    expect(() => value.validateInbound(
+      prepared(DIGEST, 49n),
+      'prepare-request',
+      100n,
+    )).toThrow(expect.objectContaining({ code: 'correlation_mismatch' }));
+    expect(() => value.validateInbound(
+      prepared(DIGEST, 151n),
+      'prepare-request',
+      100n,
+    )).toThrow(expect.objectContaining({ code: 'correlation_mismatch' }));
+  });
+
   it.each([
     [prepared(new Uint8Array(32), 15n), 20n],
-    [prepared(DIGEST, 9n), 20n],
-    [prepared(DIGEST, 21n), 20n],
+    [prepared(DIGEST, 0n), 20n],
+    [prepared(DIGEST, 71n), 20n],
   ])('rejects forged AttemptPrepared facts %#', (payload, observedAtUnixMs) => {
     const value = new AttemptCorrelationAuthority(4);
     value.registerNew(

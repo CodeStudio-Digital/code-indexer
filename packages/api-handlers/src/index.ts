@@ -110,7 +110,6 @@ export { disposeProjectGitProcesses } from './projectGit/index.js';
 export { PROJECT_GIT_RPC_METHODS, type ProjectGitRpcMethod } from './projectGit/guard.js';
 export { createPluginsHandlers } from './plugins/index.js';
 export { createSystemHandlers } from './system/index.js';
-export { generateAiPipeline, type GeneratePipelineResult } from './projectPipeline/generate.js';
 
 /**
  * Aggregate factory. As more namespaces are extracted, add them here so

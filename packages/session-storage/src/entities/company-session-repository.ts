@@ -95,20 +95,6 @@ export interface CompanyAppStudioRunData extends CompanyJsonEntity {
   status: string;
 }
 
-export interface CompanyPipelineRunData extends CompanyJsonEntity {
-  status: string;
-}
-
-export interface CompanyPipelineDefinitionData extends CompanyJsonEntity {
-  name: string;
-  version: number;
-}
-
-export interface CompanyPipelineNodeExecutionData extends CompanyJsonEntity {
-  execution_id: string;
-  status: string;
-}
-
 export interface CompanyWorkflowStepData extends CompanyJsonEntity {
   name: string;
   status: string;
@@ -182,9 +168,6 @@ export interface CompanyEntityDataMap {
   log: CompanyLogData;
   appStudioWorkflow: CompanyAppStudioWorkflowData;
   appStudioRun: CompanyAppStudioRunData;
-  pipelineDefinition: CompanyPipelineDefinitionData;
-  pipelineRun: CompanyPipelineRunData;
-  pipelineNodeExecution: CompanyPipelineNodeExecutionData;
   workflowStep: CompanyWorkflowStepData;
   deployment: CompanyDeploymentData;
   archive: CompanyArchiveData;
@@ -230,9 +213,6 @@ const COMPANY_ENTITY_DIRECTORIES: Record<CompanyEntityKind, string> = {
   log: 'logs',
   appStudioWorkflow: 'app-studio-workflows',
   appStudioRun: 'app-studio-runs',
-  pipelineDefinition: 'pipeline-definitions',
-  pipelineRun: 'pipeline-runs',
-  pipelineNodeExecution: 'pipeline-node-executions',
   workflowStep: 'workflow-steps',
   deployment: 'deployments',
   archive: 'archives',
@@ -594,24 +574,6 @@ export class CompanySessionRepository {
     input: EntityCreateInput<CompanyAppStudioWorkflowData>,
   ): Promise<EntityRecord<CompanyAppStudioWorkflowData>> {
     return this.create('appStudioWorkflow', input);
-  }
-
-  createPipelineRun(
-    input: EntityCreateInput<CompanyPipelineRunData>,
-  ): Promise<EntityRecord<CompanyPipelineRunData>> {
-    return this.create('pipelineRun', input);
-  }
-
-  createPipelineDefinition(
-    input: EntityCreateInput<CompanyPipelineDefinitionData>,
-  ): Promise<EntityRecord<CompanyPipelineDefinitionData>> {
-    return this.create('pipelineDefinition', input);
-  }
-
-  createPipelineNodeExecution(
-    input: EntityCreateInput<CompanyPipelineNodeExecutionData>,
-  ): Promise<EntityRecord<CompanyPipelineNodeExecutionData>> {
-    return this.create('pipelineNodeExecution', input);
   }
 
   listByRelation<K extends CompanyEntityKind>(

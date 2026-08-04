@@ -12,7 +12,6 @@ import { mountCompanyKanbanDispatchRoutes } from './kanban-dispatch.js';
 import { mountCompanyArchiveRoutes } from './archives.js';
 import { mountCompanyDbConnectionsRoutes } from './db-connections.js';
 import { mountCompanyLocalProjectRoutes } from './local-project.js';
-import { mountCompanyPipelineRoutes } from './pipelines.js';
 import { mountCompanyInboxRoutes } from './inbox.js';
 import { mountCompanyDriveRoutes } from './drive.js';
 import { mountCompanySnapshotRoutes } from './snapshot.js';
@@ -45,7 +44,6 @@ export function mountCompanyRoutes(app: Hono, deps: ServerDeps): void {
   // (the session-scoped database CRUD was retired — migration 191).
   mountCompanyDbConnectionsRoutes(app, deps);
   mountCompanyLocalProjectRoutes(app, deps);
-  mountCompanyPipelineRoutes(app, deps);
   mountCompanyInboxRoutes(app, deps);
   mountCompanyDriveRoutes(app, deps);
   mountCompanySnapshotRoutes(app, deps);

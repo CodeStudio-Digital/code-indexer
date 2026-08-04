@@ -79,6 +79,22 @@ export interface SkillListFilter {
   tag?: string;
 }
 
+export interface SkillSummaryDefinition {
+  id: string;
+  name: string;
+  scope: string;
+  enabled: boolean;
+  source: SkillSource;
+  updated_at: string;
+}
+
+export interface SkillSummaryPage {
+  items: SkillSummaryDefinition[];
+  totalCount: number;
+  nextOffset: number | null;
+  revision: number;
+}
+
 // ─── Internal raw row type ───────────────────────────────────────
 
 interface SkillRaw {
@@ -215,6 +231,72 @@ export class SkillStore {
       .prepare(`SELECT * FROM skill_definitions ${where} ORDER BY sort_order, name`)
       .all() as SkillRaw[];
     return rows.map(hydrate);
+  }
+
+  /**
+   * Metadata-only page for UI catalogs. Unlike listSkills(), this never reads
+   * prompt bodies or the other large definition columns into the host process.
+   */
+  listSkillSummaries(input: {
+    scopes: readonly string[];
+    offset: number;
+    limit: number;
+    enabled?: boolean;
+    ids?: readonly string[];
+  }): SkillSummaryPage {
+    const scopes = [...new Set(input.scopes)];
+    if (scopes.length === 0) return { items: [], totalCount: 0, nextOffset: null, revision: 1 };
+    const ids = input.ids == null ? null : [...new Set(input.ids)];
+    if (ids?.length === 0) return { items: [], totalCount: 0, nextOffset: null, revision: 1 };
+    const offset = Math.max(0, Math.trunc(input.offset));
+    const limit = Math.max(0, Math.trunc(input.limit));
+    const scopePlaceholders = scopes.map(() => '?').join(', ');
+    const clauses = [`scope IN (${scopePlaceholders})`];
+    const params: Array<string | number> = [...scopes];
+    if (input.enabled !== undefined) {
+      clauses.push('enabled = ?');
+      params.push(input.enabled ? 1 : 0);
+    }
+    if (ids) {
+      clauses.push(`id IN (${ids.map(() => '?').join(', ')})`);
+      params.push(...ids);
+    }
+    const where = clauses.join(' AND ');
+    const aggregate = this.db.prepare(
+      `SELECT COUNT(*) AS count, MAX(updated_at) AS updated_at
+       FROM skill_definitions WHERE ${where}`,
+    ).get(...params) as { count: number; updated_at: string | null };
+    const totalCount = Number(aggregate.count);
+    const rows = this.db.prepare(
+      `SELECT id, name, scope, enabled, source, updated_at
+       FROM skill_definitions
+       WHERE ${where}
+       ORDER BY sort_order, name, id
+       LIMIT ? OFFSET ?`,
+    ).all(...params, limit, offset) as Array<{
+      id: string;
+      name: string;
+      scope: string;
+      enabled: number;
+      source: string;
+      updated_at: string;
+    }>;
+    const items = rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      scope: row.scope,
+      enabled: row.enabled !== 0,
+      source: row.source as SkillSource,
+      updated_at: row.updated_at,
+    }));
+    const nextOffset = offset + items.length;
+    const parsedRevision = Date.parse(aggregate.updated_at ?? '');
+    return {
+      items,
+      totalCount,
+      nextOffset: nextOffset < totalCount ? nextOffset : null,
+      revision: Number.isFinite(parsedRevision) ? Math.max(1, parsedRevision) : 1,
+    };
   }
 
   getSkill(id: string): SkillDefinition | null {

@@ -133,7 +133,7 @@ You're the active master from here on. Kanban is clean. Behave like a master: co
 
 4.3. If recovery showed ALL work is genuinely complete and only paperwork was missing: post a completion summary and call `ask_user` with 2-3 options for what to do next.
 
-4.4. From here you are a normal master. Standard rules (SDD pipeline if active, planning gates, subordinate coordination, board hygiene) all apply. Recovery briefing ends — do NOT keep referring to phases.
+4.4. From here you are a normal master. Standard rules (planning gates, subordinate coordination, board hygiene) all apply. Recovery briefing ends — do NOT keep referring to phases.
 
 ═══════════════════════════════════════════════════════════════════════
 WHAT TO AVOID

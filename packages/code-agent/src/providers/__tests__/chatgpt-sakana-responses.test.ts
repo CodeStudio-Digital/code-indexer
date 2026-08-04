@@ -38,15 +38,16 @@ function stream(events: Array<Record<string, unknown>>): void {
   })());
 }
 
-function fuguProvider(): InstanceType<typeof ChatGPTCodexProvider> {
+function fuguProvider(model = 'fugu-ultra-v1.1'): InstanceType<typeof ChatGPTCodexProvider> {
+  const isUltraV11 = model === 'fugu-ultra' || model === 'fugu-ultra-v1.1';
   return new ChatGPTCodexProvider({
     name: 'fugu',
     apiKey: 'fish_test',
     baseURL: 'https://api.sakana.ai/v1',
-    model: 'fugu-ultra-v1.1',
+    model,
     reasoning: {
-      supportedLevels: ['high', 'xhigh', 'max'],
-      defaultLevel: 'xhigh',
+      supportedLevels: isUltraV11 ? ['high', 'xhigh', 'max'] : ['high', 'xhigh'],
+      defaultLevel: isUltraV11 ? 'xhigh' : 'high',
     },
     codexHeaders: false,
     statefulResponses: false,
@@ -75,7 +76,7 @@ describe('ChatGPTCodexProvider Sakana Responses profile', () => {
   it('uses stateless Responses without Codex-only headers or legacy thinking mapping', async () => {
     vi.stubEnv('CODEX_STORE_RESPONSES', '1');
     stream([{ type: 'response.completed', response: { id: 'resp_1', status: 'completed' } }]);
-    const provider = fuguProvider();
+    const provider = fuguProvider('fugu');
 
     const deltas = await drain(provider, request({
       thinking: true,

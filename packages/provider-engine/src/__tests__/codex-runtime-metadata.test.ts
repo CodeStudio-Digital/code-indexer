@@ -54,6 +54,9 @@ describe('codex runtime model metadata', () => {
         supportedLevels: ['low', 'xhigh'],
         defaultLevel: 'xhigh',
       },
+      reasoningSummary: 'auto',
+      reasoningSummaryFromThinking: true,
+      parallelToolCalls: false,
       applyPatchToolType: 'freeform',
     }));
   });

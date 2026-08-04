@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { ConversationChapter, PersistedMessage, VisualGroup } from '../../types.js';
-import { loadedChapterMarkers } from '../chapter-markers.js';
+import {
+  activeChapterIdAtScrollOffset,
+  loadedChapterMarkers,
+} from '../chapter-markers.js';
 
 const message: PersistedMessage = { role: 'user', content: [{ type: 'text', text: 'x' }] };
 
@@ -45,5 +48,39 @@ describe('loadedChapterMarkers', () => {
     expect(loadedChapterMarkers([
       chapter('018f0f5e-7b2d-7a45-8c11-0123456789ad', 1, 1, 20),
     ], groups).size).toBe(0);
+  });
+});
+
+describe('chapter quick navigation', () => {
+  it('ignores overscanned rows above the viewport when selecting the active chapter', () => {
+    const rows = [
+      { kind: 'chapter', chapter: { id: 'early' } },
+      { kind: 'message' },
+      { kind: 'chapter', chapter: { id: 'latest' } },
+      { kind: 'message' },
+      { kind: 'tail' },
+    ];
+    const mountedRows = [
+      { index: 0, end: 68 },
+      { index: 1, end: 480 },
+      { index: 2, end: 548 },
+      { index: 3, end: 920 },
+      { index: 4, end: 1080 },
+    ];
+
+    expect(activeChapterIdAtScrollOffset(rows, mountedRows, 930)).toBe('latest');
+  });
+
+  it('clears the active chapter before the first chapter marker', () => {
+    const rows = [
+      { kind: 'history-control' },
+      { kind: 'chapter', chapter: { id: 'first' } },
+    ];
+    const mountedRows = [
+      { index: 0, end: 48 },
+      { index: 1, end: 116 },
+    ];
+
+    expect(activeChapterIdAtScrollOffset(rows, mountedRows, 0)).toBeNull();
   });
 });

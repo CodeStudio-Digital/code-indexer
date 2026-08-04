@@ -13,8 +13,6 @@ export type {
   DecisionQuestion,
   IndexStatus,
   ParallelAgent,
-  PipelineNodeRuntimeStatus,
-  PipelineRuntimeState,
   PlanResolution,
   PlanPrompt,
   QuestionPrompt,

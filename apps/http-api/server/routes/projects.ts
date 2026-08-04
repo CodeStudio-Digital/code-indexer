@@ -14,6 +14,11 @@ import {
 } from '@mcp/shared/vector-namespace.js';
 import type { ServerDeps } from '../deps.js';
 import { parseIdParam, parseJsonBody, notFound } from './_helpers.js';
+import {
+  BulkProjectDeleteError,
+  executeBulkProjectDelete,
+  type BulkProjectDeleteInput,
+} from './project-bulk-delete.js';
 
 /**
  * Hono routes for /api/projects/* — thin adapters that parse the request,
@@ -85,6 +90,25 @@ export function mountProjectsRoutes(app: Hono, deps: ServerDeps): void {
     try {
       return c.json(await h.clearAllData(undefined, createContext()));
     } catch (err) {
+      return mapApiError(c, err);
+    }
+  });
+
+  app.post('/api/projects/bulk-delete', async (c) => {
+    try {
+      const body = await parseJsonBody<BulkProjectDeleteInput>(c);
+      const result = await executeBulkProjectDelete(body as BulkProjectDeleteInput, {
+        getProject: (id) => deps.db.getProject(id),
+        listProjects: () => deps.db.listProjectsForGlobalPicker(),
+        deleteCatalogProject: async (id) => {
+          await h.delete({ id }, createContext());
+        },
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof BulkProjectDeleteError) {
+        return c.json({ error: err.message, code: 'unsafe_bulk_delete' }, err.status);
+      }
       return mapApiError(c, err);
     }
   });

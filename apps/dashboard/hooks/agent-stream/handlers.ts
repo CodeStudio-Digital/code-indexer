@@ -2,8 +2,6 @@ import type {
   AgentStatus,
   AgentsGroup,
   PendingToolApproval,
-  PipelineNodeRuntimeStatus,
-  PipelineRuntimeState,
   ResearchDepth,
   SessionId,
   StreamBlock,
@@ -81,6 +79,10 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
   // one-turn-behind snapshot while the live transcript is advancing.
   let messageCompleteNotified = false;
   let contentBlockSequence = 0;
+  // SnapshotRecorder emits once per successful filesystem mutation. Hold that
+  // dirty signal until the enclosing tool completes so multi-file edits cause
+  // one inventory refresh instead of one full-list request per file.
+  let snapshotInventoryDirty = false;
   const nextContentBlockId = (kind: 'text' | 'thinking') =>
     `${kind}:${sid}:${Date.now().toString(36)}:${++contentBlockSequence}`;
   const upsertProcess = (patch: ActiveProcessPatch) => {
@@ -276,6 +278,12 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       if (!awaitingPersistence) {
         if (removeActivity(blocks, `tool:${d.id}`)) rebuildToolIndex(blocks, toolIndex);
         removeProcess(`tool:${d.id}`);
+        if (snapshotInventoryDirty) {
+          snapshotInventoryDirty = false;
+          updateSession(sid, (cur) => ({
+            snapshotInventoryTick: (cur.snapshotInventoryTick ?? 0) + 1,
+          }));
+        }
       }
       flush();
     },
@@ -1001,6 +1009,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
      * this counter so the diff list updates as the agent writes files.
      */
     session_snapshot_changed: () => {
+      snapshotInventoryDirty = true;
       updateSession(sid, (cur) => ({ snapshotTick: cur.snapshotTick + 1 }));
     },
 
@@ -1235,193 +1244,6 @@ function rebuildToolIndex(blocks: StreamBlock[], toolIndex: Map<string, number>)
     if (block.type === 'tool') toolIndex.set(block.call.id, i);
   }
 }
-
-// ─── Chat pipeline events (PR-3) ─────────────────────────────────
-// Kept separately exported so the dedicated `usePipelineStream` hook
-// can wire them into a long-lived SSE connection without entangling
-// chat-turn state.
-
-interface PipelineHandlerContext {
-  sid: SessionId;
-  updateSession: UpdateSession;
-}
-
-export function createPipelineEventHandlers(
-  ctx: PipelineHandlerContext,
-): Record<string, EventHandler> {
-  const { sid, updateSession } = ctx;
-  return {
-    pipeline_started: (data) => {
-      const d = data as { executionId: string; pipelineId: number | string; startNodeId?: string };
-      updateSession(sid, {
-        pipelineRuntime: {
-          executionId: d.executionId,
-          pipelineId: d.pipelineId,
-          status: 'running',
-          currentNodeId: d.startNodeId ?? null,
-          nodes: d.startNodeId ? { [d.startNodeId]: { status: 'pending' } } : {},
-          error: null,
-        },
-      });
-    },
-
-    pipeline_node_started: (data) => {
-      const d = data as {
-        executionId: string;
-        nodeId: string;
-        nodeLabel?: string;
-        kind?: 'agent' | 'validate';
-      };
-      updateSession(sid, (cur) => {
-        const cur_runtime = cur.pipelineRuntime;
-        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
-        return {
-          pipelineRuntime: {
-            ...cur_runtime,
-            currentNodeId: d.nodeId,
-            nodes: {
-              ...cur_runtime.nodes,
-              [d.nodeId]: {
-                ...(cur_runtime.nodes[d.nodeId] ?? {}),
-                status: 'running' as PipelineNodeRuntimeStatus,
-                label: d.nodeLabel ?? cur_runtime.nodes[d.nodeId]?.label,
-                kind: d.kind ?? cur_runtime.nodes[d.nodeId]?.kind,
-              },
-            },
-          } satisfies PipelineRuntimeState,
-        };
-      });
-    },
-
-    pipeline_node_completed: (data) => {
-      const d = data as {
-        executionId: string;
-        nodeId: string;
-        outcome?: string | null;
-        verdict?: 'pass' | 'fail' | 'review' | null;
-        outputPreview?: string;
-      };
-      updateSession(sid, (cur) => {
-        const cur_runtime = cur.pipelineRuntime;
-        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
-        return {
-          pipelineRuntime: {
-            ...cur_runtime,
-            nodes: {
-              ...cur_runtime.nodes,
-              [d.nodeId]: {
-                ...(cur_runtime.nodes[d.nodeId] ?? {}),
-                status: 'completed',
-                verdict: d.verdict ?? null,
-                outcome: d.outcome ?? null,
-                outputPreview: d.outputPreview,
-              },
-            },
-          } satisfies PipelineRuntimeState,
-        };
-      });
-    },
-
-    pipeline_node_failed: (data) => {
-      const d = data as { executionId: string; nodeId: string; error?: string };
-      updateSession(sid, (cur) => {
-        const cur_runtime = cur.pipelineRuntime;
-        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
-        return {
-          pipelineRuntime: {
-            ...cur_runtime,
-            nodes: {
-              ...cur_runtime.nodes,
-              [d.nodeId]: {
-                ...(cur_runtime.nodes[d.nodeId] ?? {}),
-                status: 'failed',
-                error: d.error,
-              },
-            },
-          } satisfies PipelineRuntimeState,
-        };
-      });
-    },
-
-    pipeline_paused: (data) => {
-      const d = data as { executionId: string; nodeId?: string | null };
-      updateSession(sid, (cur) => {
-        const cur_runtime = cur.pipelineRuntime;
-        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
-        return {
-          pipelineRuntime: {
-            ...cur_runtime,
-            status: 'paused',
-            currentNodeId: d.nodeId ?? cur_runtime.currentNodeId,
-          },
-        };
-      });
-    },
-
-    pipeline_resumed: (data) => {
-      const d = data as { executionId: string; nodeId?: string };
-      updateSession(sid, (cur) => {
-        const cur_runtime = cur.pipelineRuntime;
-        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
-        return {
-          pipelineRuntime: {
-            ...cur_runtime,
-            status: 'running',
-            currentNodeId: d.nodeId ?? cur_runtime.currentNodeId,
-          },
-        };
-      });
-    },
-
-    pipeline_completed: (data) => {
-      const d = data as { executionId: string };
-      updateSession(sid, (cur) => {
-        const cur_runtime = cur.pipelineRuntime;
-        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
-        return {
-          pipelineRuntime: {
-            ...cur_runtime,
-            status: 'completed',
-            currentNodeId: null,
-          },
-        };
-      });
-    },
-
-    pipeline_aborted: (data) => {
-      const d = data as { executionId: string; reason?: string | null };
-      updateSession(sid, (cur) => {
-        const cur_runtime = cur.pipelineRuntime;
-        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
-        return {
-          pipelineRuntime: {
-            ...cur_runtime,
-            status: 'aborted',
-            currentNodeId: null,
-            error: d.reason ?? null,
-          },
-        };
-      });
-    },
-
-    pipeline_failed: (data) => {
-      const d = data as { executionId: string; error?: string };
-      updateSession(sid, (cur) => {
-        const cur_runtime = cur.pipelineRuntime;
-        if (!cur_runtime || cur_runtime.executionId !== d.executionId) return {};
-        return {
-          pipelineRuntime: {
-            ...cur_runtime,
-            status: 'failed',
-            currentNodeId: null,
-            error: d.error ?? null,
-          },
-        };
-      });
-    },
-  };
-}
-
 
 function removeLiveExecuteTasksToolBlock(
   blocks: StreamBlock[],

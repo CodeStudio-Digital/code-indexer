@@ -967,51 +967,84 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // of the admin's `default_tier` deciding visibility per-server.
   let subordinateTierSummary: Map<string, { displayName: string; toolCount: number }> | undefined;
   const isSubordinate = !!opts.companyContext && !opts.companyContext.isMaster;
-  try {
-    const mcpServerStore = new McpServerStore(config.dbPath);
-    const enabledServers = mcpServerStore.listServers({ enabled: true });
-    if (enabledServers.length > 0) {
-      await mcpServerManager.connectAll(enabledServers);
-      const { tools: extTools, tierMap } = await mcpServerManager.listAllTools();
-      if (extTools.length > 0) {
-        registry.registerAll(extTools);
-        for (const [name, tier] of tierMap) runtimeToolTiers.set(name, tier);
-        // Cache discovered tools in DB so admin/session panels see them instantly
-        for (const srv of enabledServers) {
-          const prefix = `ext_${srv.id}__`;
-          const srvTools = extTools
-            .filter((t) => t.name.startsWith(prefix))
-            .map((t) => ({ name: t.name.slice(prefix.length), description: t.description }));
-          if (srvTools.length > 0) mcpServerStore.replaceServerTools(srv.id, srvTools);
-        }
-        console.log(
-          `[coder] ${extTools.length} external tool(s) from ${mcpServerManager.connectedCount} MCP server(s)`,
-        );
+  const exactAllowedToolNames = opts.allowedToolNames === undefined
+    ? null
+    : new Set(opts.allowedToolNames);
+  const allowsLateExternalTool = (tool: CoderTool): boolean =>
+    (exactAllowedToolNames === null || exactAllowedToolNames.has(tool.name))
+    && (effectiveAgentId !== 'research' || isResearchToolAllowed(tool));
 
-        if (isSubordinate) {
-          const subTierMap = new Map<string, import('@mcp/code-agent/tools/tiers.js').ToolTier>();
-          subordinateTierSummary = new Map();
-          for (const srv of enabledServers) {
-            const prefix = `ext_${srv.id}__`;
-            const srvToolNames = extTools.filter((t) => t.name.startsWith(prefix)).map((t) => t.name);
-            if (srvToolNames.length === 0) continue;
-            for (const n of srvToolNames) subTierMap.set(n, srv.id);
-            subordinateTierSummary.set(srv.id, { displayName: srv.name, toolCount: srvToolNames.length });
-          }
-          for (const [name, tier] of subTierMap) runtimeToolTiers.set(name, tier);
-          if (subordinateTierSummary.size > 0) {
-            console.log(
-              `[coder] subordinate ${opts.companyContext!.agentRole}: external MCPs as opt-in tiers ` +
-                `[${[...subordinateTierSummary.keys()].join(', ')}] — call expand_toolset to unlock`,
-            );
-          }
+  const syncExternalToolCatalog = async (refresh: boolean, lateRegistration: boolean): Promise<number> => {
+    const mcpServerStore = new McpServerStore(config.dbPath);
+    try {
+      const enabledServers = mcpServerStore.listServers({ enabled: true });
+      if (refresh) await mcpServerManager.refreshAll(enabledServers);
+      else await mcpServerManager.connectAll(enabledServers);
+
+      const { tools: extTools, tierMap } = await mcpServerManager.listAllTools();
+      const newTools = extTools.filter((tool) =>
+        !registry.has(tool.name) && (!lateRegistration || allowsLateExternalTool(tool)));
+      if (newTools.length > 0) registry.registerAll(newTools);
+
+      if (isSubordinate) {
+        const summary = new Map<string, { displayName: string; toolCount: number }>();
+        for (const server of enabledServers) {
+          const prefix = `ext_${server.id}__`;
+          const serverToolNames = extTools
+            .filter((tool) => tool.name.startsWith(prefix) && registry.has(tool.name))
+            .map((tool) => tool.name);
+          if (serverToolNames.length === 0) continue;
+          for (const name of serverToolNames) runtimeToolTiers.set(name, server.id);
+          summary.set(server.id, { displayName: server.name, toolCount: serverToolNames.length });
+        }
+        if (!lateRegistration) subordinateTierSummary = summary;
+      } else {
+        for (const [name, tier] of tierMap) {
+          if (registry.has(name)) runtimeToolTiers.set(name, tier);
         }
       }
+
+      // Cache discovered tools in DB so admin/session panels see them instantly.
+      for (const server of enabledServers) {
+        const prefix = `ext_${server.id}__`;
+        const serverTools = extTools
+          .filter((tool) => tool.name.startsWith(prefix))
+          .map((tool) => ({ name: tool.name.slice(prefix.length), description: tool.description }));
+        if (serverTools.length > 0) mcpServerStore.replaceServerTools(server.id, serverTools);
+      }
+
+      if (extTools.length > 0) {
+        console.log(
+          `[coder] ${extTools.length} external tool(s) from ${mcpServerManager.connectedCount} MCP server(s)` +
+            (lateRegistration && newTools.length > 0 ? `; ${newTools.length} added to live session` : ''),
+        );
+      }
+      return newTools.length;
+    } finally {
+      mcpServerStore.close();
     }
-    mcpServerStore.close();
+  };
+
+  try {
+    await syncExternalToolCatalog(false, false);
+    if (isSubordinate && subordinateTierSummary && subordinateTierSummary.size > 0) {
+      console.log(
+        `[coder] subordinate ${opts.companyContext!.agentRole}: external MCPs as opt-in tiers ` +
+          `[${[...subordinateTierSummary.keys()].join(', ')}] — call expand_toolset to unlock`,
+      );
+    }
   } catch (e) {
     console.warn(`[coder] External MCP servers failed: ${e instanceof Error ? e.message : String(e)}`);
   }
+
+  let externalCatalogRefresh: Promise<void> | null = null;
+  const refreshExternalToolCatalog = (): Promise<void> => {
+    if (externalCatalogRefresh) return externalCatalogRefresh;
+    externalCatalogRefresh = syncExternalToolCatalog(true, true)
+      .then(() => undefined)
+      .finally(() => { externalCatalogRefresh = null; });
+    return externalCatalogRefresh;
+  };
 
   // Plugin tools — contributed by installed plugins, with worker-backed
   // handlers synthesized by the http-api layer (@mcp/plugin-host
@@ -1034,12 +1067,24 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     subordinateTierSummary ?? mcpServerManager.getCustomTierSummary(),
     pluginTierSummary,
   );
-  registry.registerAll(buildExpandTools(customTierSummary.size > 0 ? customTierSummary : undefined));
+  registry.registerAll(buildExpandTools(
+    customTierSummary.size > 0 ? customTierSummary : undefined,
+    {
+      beforeExpand: async () => refreshExternalToolCatalog(),
+      isTierAvailable: (tier) => registry.list().some(
+        (tool) => runtimeToolTiers.get(tool.name) === tier,
+      ),
+    },
+  ));
 
   // find_tools — Camada 3 lazy discovery. Always registered (cheap, read-only,
   // no tier promotion). Belongs in bootstrap so it's visible before the agent
   // has unlocked anything else. Implementation lives in find-tools.ts.
-  registry.registerAll([buildFindToolsTool(registry, runtimeToolTiers)]);
+  registry.registerAll([buildFindToolsTool(
+    registry,
+    runtimeToolTiers,
+    { beforeSearch: refreshExternalToolCatalog },
+  )]);
 
   // request_review — Camada 4 reviewer subagent. Registered with a placeholder
   // tool snapshot; the runner snapshots the registry AFTER all tools are
@@ -1064,9 +1109,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // native/MCP/plugin tool has registered and before subagent snapshots are
   // captured, so the allowlist is an execution boundary rather than a UI-only
   // hint. `undefined` means inherit; `[]` intentionally removes every tool.
-  if (opts.allowedToolNames !== undefined) {
-    const allowed = new Set(opts.allowedToolNames);
-    registry.filterInPlace((tool) => allowed.has(tool.name));
+  if (exactAllowedToolNames !== null) {
+    registry.filterInPlace((tool) => exactAllowedToolNames.has(tool.name));
   }
   if (effectiveAgentId === 'research') {
     registry.filterInPlace(isResearchToolAllowed);

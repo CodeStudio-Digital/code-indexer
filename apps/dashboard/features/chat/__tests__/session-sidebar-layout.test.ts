@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { sessionSidebarClassName } from '../SessionSidebar.js';
+import { isExecutingSessionStatus, sessionSidebarClassName } from '../SessionSidebar.js';
 
 describe('session sidebar layout', () => {
   it('keeps a workbench-docked sidebar visible below the lg breakpoint', () => {
@@ -15,5 +15,13 @@ describe('session sidebar layout', () => {
   it('retains the off-canvas behavior for the standalone mobile drawer', () => {
     expect(sessionSidebarClassName(false, false)).toContain('-translate-x-full');
     expect(sessionSidebarClassName(false, true)).toContain('translate-x-0');
+  });
+
+  it('recognizes persisted live-run statuses without treating terminal sessions as active', () => {
+    expect(isExecutingSessionStatus('running')).toBe(true);
+    expect(isExecutingSessionStatus('in_progress')).toBe(true);
+    expect(isExecutingSessionStatus('working')).toBe(true);
+    expect(isExecutingSessionStatus('idle')).toBe(false);
+    expect(isExecutingSessionStatus('error')).toBe(false);
   });
 });

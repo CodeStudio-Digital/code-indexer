@@ -51,8 +51,8 @@ export class KanbanService implements IKanbanNotifier {
    * means "open blockers".
    *
    * This lives at the service layer — the single chokepoint every move
-   * flows through — so automation (spawn auto-move, pipeline fan-out, the
-   * autonomous scheduler, HTTP routes) honors dependencies too. Previously
+   * flows through — so automation (spawn auto-move, the autonomous scheduler,
+   * HTTP routes) honors dependencies too. Previously
    * only the agent-facing `kanban_move_card` batch tool checked, leaving
    * `kanban_add_dependency` a phantom contract for every programmatic path.
    *

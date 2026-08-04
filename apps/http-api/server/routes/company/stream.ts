@@ -657,8 +657,8 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       const spawned = await getOrSpawnCompanyOrchestrator(id);
       const orchestrator = spawned.orchestrator;
       const busForPump = spawned.bus;
-      // Bind the immutable command↔bus correlation before pipeline recovery
-      // or master startup can produce any external effect.
+      // Bind the immutable command↔bus correlation before master startup can
+      // produce any external effect.
       if (!(await bindCompanyCommandCompletion(
         id,
         dedupeKey,
@@ -675,15 +675,6 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
       }
       if (dedupeKey) {
         recentMessageKeys.record(id, dedupeKey, busForPump, -1, claimGuard);
-      }
-
-      // Pause any pipeline executions that were 'running' before the
-      // server restart. The dashboard will surface a Resume button.
-      // Fire-and-forget: never block startMaster on this.
-      if (cur.runtime_kind !== 'app_studio') {
-        void orchestrator.pipelineRecoverRunning().catch((err) => {
-          console.warn(`[company s=${id}] pipeline recovery failed:`, err);
-        });
       }
 
       // Await master spin-up — if it fails, return JSON error (not a broken SSE
@@ -1004,8 +995,7 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
 
       // Spawn-or-attach helper. Wraps the single allowed attempt at:
       //   1. getOrSpawn the orchestrator (creates worker if needed)
-      //   2. fire pipeline recovery
-      //   3. resume OR cold-start the master
+      //   2. resume OR cold-start the master
       // Returns the spawn handle on success, throws on any failure. A lost
       // acknowledgement is never replayed onto a replacement worker.
       const attemptSpawnAndResume = async (): Promise<{
@@ -1026,11 +1016,6 @@ export function mountCompanyStreamRoutes(app: Hono, deps: ServerDeps): void {
         }
         if (dedupeKey) {
           recentMessageKeys.record(id, dedupeKey, spawned.bus, -1, claimGuard);
-        }
-        if (session.runtime_kind !== 'app_studio') {
-          void orchestrator.pipelineRecoverRunning().catch((err) => {
-            console.warn(`[company s=${id}] pipeline recovery failed:`, err);
-          });
         }
         // Resume-or-start (shared with /start). `masterRun` present → resume
         // and reuse its coder-session; absent (brand-new sub-session) → cold

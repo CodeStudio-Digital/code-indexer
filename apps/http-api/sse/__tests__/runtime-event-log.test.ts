@@ -61,10 +61,9 @@ describe.sequential('runtime event log', () => {
     await runtime.__flushRuntimeEventLogsForTests();
     detach();
 
-    expect(
-      (await runtime.getRuntimeEventLog('coder', id, bundle))
-        .map((event) => event.event),
-    ).toEqual(['worker_log']);
+    const events = await runtime.getRuntimeEventLog('coder', id, bundle);
+    expect(events.map((event) => event.event)).toEqual(['worker_log']);
+    expect(events[0]).toMatchObject({ busId: bus.busId, seq: 4 });
   });
 
   it('samples duplicate progress and keeps changed phases', async () => {

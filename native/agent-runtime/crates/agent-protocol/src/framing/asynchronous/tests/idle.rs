@@ -2,7 +2,39 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, duplex};
 use tokio::time::{Duration, Instant};
 
 use super::support::{TEST_TIMEOUT, management_channel};
-use crate::framing::asynchronous::AsyncFramingError;
+use crate::framing::asynchronous::{AsyncFramingError, IdleReceiveOutcome};
+
+#[tokio::test(start_paused = true)]
+async fn idle_wake_restores_stream_for_the_next_frame() {
+    let (local, mut peer) = duplex(64);
+    let mut channel = management_channel(local);
+
+    let outcome = channel
+        .receive_until_idle_wake(
+            Instant::now() + TEST_TIMEOUT,
+            Instant::now() + Duration::from_secs(30),
+            TEST_TIMEOUT,
+        )
+        .await
+        .expect("idle wake");
+    assert!(matches!(outcome, IdleReceiveOutcome::Idle));
+    assert!(!channel.is_poisoned());
+
+    peer.write_all(&[1, 0x7f]).await.expect("complete frame");
+    let outcome = channel
+        .receive_until_idle_wake(
+            Instant::now() + TEST_TIMEOUT,
+            Instant::now() + Duration::from_secs(30),
+            TEST_TIMEOUT,
+        )
+        .await
+        .expect("frame after idle wake");
+    let IdleReceiveOutcome::Frame(frame) = outcome else {
+        panic!("frame expected after idle wake");
+    };
+    assert_eq!(frame, vec![0x7f]);
+    assert!(!channel.is_poisoned());
+}
 
 #[tokio::test(start_paused = true)]
 async fn idle_wait_outlives_progress_timeout_until_cancelled() {

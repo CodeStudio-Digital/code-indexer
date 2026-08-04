@@ -62,12 +62,6 @@ export interface MasterStartOpts {
   /** Role preset tools pinned into the Master's first visible catalog. */
   initialTools?: string[];
   systemPromptOverride?: string;
-  /**
-   * Route work through the built-in SDD pipeline by default. Threaded into
-   * `MasterPromptContext.sddMode` via `buildMasterPromptInputs` so the master
-   * prompt picks up the SDD MODE block.
-   */
-  sddMode?: boolean;
 }
 
 /** Immutable runtime snapshot reused by fallback/resurrection cycles. */
@@ -208,10 +202,7 @@ export async function startMaster(
       deps.state.allowedModels,
       deps.orchestratorRef,
       opts.signal,
-      {
-        sddMode: !!opts.sddMode,
-        masterSystemPromptOverride: opts.systemPromptOverride,
-      },
+      { masterSystemPromptOverride: opts.systemPromptOverride },
     );
 
     // Configure skill enablement on the master's coder session — must

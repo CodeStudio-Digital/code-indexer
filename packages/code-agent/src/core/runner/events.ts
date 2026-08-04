@@ -1,5 +1,6 @@
 import type {
   AgentMessage,
+  AssistantMessagePhase,
   ChatUsage,
   PlanBlock,
   SpecBlock,
@@ -13,7 +14,10 @@ import type { AsyncOperationSnapshot } from './operations.js';
  * Events emitted by the runner. CLI and SSE handler both consume these.
  */
 export interface RunnerEvents {
-  text_delta: (text: string) => void;
+  text_delta: (
+    text: string,
+    meta?: { itemId?: string; phase?: AssistantMessagePhase },
+  ) => void;
   thinking_delta: (text: string) => void;
   /**
    * A provider call died mid-stream after already emitting deltas. Those

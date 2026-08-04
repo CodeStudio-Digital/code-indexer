@@ -9,8 +9,10 @@ import { cn } from '../../../lib/utils.js';
  * which is easy to miss; a goal change is a session-wide event the user
  * wants to actually SEE landing in the conversation.
  *
- * Matches the visual language of SessionStateBanner so eye-tracking is
- * consistent between the pinned header and the inline event.
+ * Goal mutations remain visible in the transcript, but follow the compact
+ * activity/timeline language used by the surrounding tool rows. The pinned
+ * SessionStateBanner owns the persistent card treatment; repeating that
+ * treatment inline made goals look like a second, competing surface.
  */
 interface GoalCallBlockProps {
   call: ToolCallEvent;
@@ -52,17 +54,17 @@ export function GoalCallBlock({ call }: GoalCallBlockProps) {
       ? runningHeading
       : completedHeading;
 
-  const accent = call.status === 'error'
-    ? 'border-destructive/40 bg-destructive/5'
+  const railColor = call.status === 'error'
+    ? 'border-destructive/50'
     : call.status === 'running'
-      ? 'border-warning/40 bg-warning/5'
+      ? 'border-warning/50'
       : isCreate
-        ? 'border-warning/40 bg-warning/5'
+        ? 'border-warning/50'
         : isSupersede
-          ? 'border-muted-foreground/30 bg-muted/30'
+          ? 'border-muted-foreground/30'
           : isUpdate
-          ? 'border-success/40 bg-success/5'
-          : 'border-info/30 bg-info/5';
+          ? 'border-success/40'
+          : 'border-info/30';
   const iconColor = call.status === 'error'
     ? 'text-destructive'
     : call.status === 'running'
@@ -84,32 +86,45 @@ export function GoalCallBlock({ call }: GoalCallBlockProps) {
         : 'text-success';
 
   return (
-    <div className={cn('my-2 rounded-lg border p-3', accent)}>
-      <div className="flex items-center gap-2 mb-1">
-        <Target className={cn('h-4 w-4', iconColor)} />
-        <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex-1">
+    <div className={cn('group/goal my-1.5 border-l pl-3 text-xs', railColor)}>
+      <div className="flex min-h-6 items-center gap-1.5 text-muted-foreground">
+        <Target className={cn('h-3.5 w-3.5 shrink-0', iconColor)} />
+        <span className="truncate font-medium">
           {heading}
         </span>
         <StatusIcon className={cn('h-3.5 w-3.5', statusColor, call.status === 'running' && 'animate-spin')} />
+        {call.durationMs !== undefined && (
+          <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/70">
+            {call.durationMs}ms
+          </span>
+        )}
       </div>
       {goalText && (
-        <div className="text-sm text-foreground" title={goalText}>{goalText}</div>
+        <div className="mt-0.5 text-[13px] font-normal leading-5 text-foreground/90" title={goalText}>
+          {goalText}
+        </div>
       )}
       {note && (
-        <div className="text-xs text-muted-foreground italic mt-1" title={note}>{note}</div>
+        <div className="mt-0.5 text-[11px] italic leading-4 text-muted-foreground" title={note}>
+          {note}
+        </div>
       )}
       {budget != null && (
-        <div className="text-[10px] text-muted-foreground mt-1">
+        <div className="mt-0.5 text-[10px] text-muted-foreground/70">
           {t('messages.goalBudget', { tokens: formatK(budget) })}
         </div>
       )}
       {call.result && !goalText && !call.result.isError && (
         // get_goal returns the current state in result.content — show it
         // as plain text so the user can see what the model just read.
-        <pre className="text-[11px] font-mono text-foreground whitespace-pre-wrap mt-1">{call.result.content}</pre>
+        <pre className="mt-0.5 whitespace-pre-wrap font-mono text-[11px] leading-4 text-foreground/80">
+          {call.result.content}
+        </pre>
       )}
       {call.result?.isError && (
-        <div role="alert" className="text-xs text-destructive mt-1">{call.result.content}</div>
+        <div role="alert" className="mt-0.5 text-[11px] leading-4 text-destructive">
+          {call.result.content}
+        </div>
       )}
     </div>
   );

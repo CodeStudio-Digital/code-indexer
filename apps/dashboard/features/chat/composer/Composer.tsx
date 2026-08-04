@@ -159,14 +159,6 @@ interface ComposerProps {
   fallbackModel?: string | null;
   onFallbackChange?: (provider: string | null, model: string | null) => void;
   getModelsForProvider?: (providerId: string) => EnrichedProviderModel[];
-  /**
-   * When set, the send button flips to "Run pipeline" and `onRunPipeline`
-   * receives the input text. Pipeline mode bypasses the chat /messages
-   * endpoint and posts to `/api/coder/sessions/:id/pipelines/:pid/start`.
-   */
-  selectedPipelineId?: number | null;
-  setSelectedPipelineId?: (v: number | null) => void;
-  onRunPipeline?: (pipelineId: number, initialInput: string) => Promise<void> | void;
   /** Hide the agent picker (guided surfaces like App Studio lock the agent). */
   hideAgentPicker?: boolean;
   /**
@@ -330,26 +322,6 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       const picks = props.filePicks ?? [];
       const skillIds = props.skillPicks ?? [];
 
-      // Pipeline mode: route the raw input to the pipeline starter
-      // instead of the chat /messages endpoint. Picks and attachments
-      // aren't forwarded — pipelines are always text-driven for MVP.
-      if (props.selectedPipelineId != null && props.onRunPipeline) {
-        if (attachments.length > 0) {
-          toast.error(t('composer.pipelineAttachmentsUnsupported', {
-            defaultValue: 'This pipeline only accepts text. Remove the attachments before running it.',
-          }));
-          return;
-        }
-        const pid = props.selectedPipelineId;
-        setInput('');
-        setAttachments([]);
-        clearDraft();
-        props.onClearPicks?.();
-        props.onClearSkillPicks?.();
-        void props.onRunPipeline(pid, text);
-        return;
-      }
-
       // Intercept slash commands: /command args → attach the skill instead of
       // inlining its expanded prompt. The typed `/command args` stays visible
       // as the user message; the skill body is injected as <active_skills> by
@@ -380,7 +352,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
       props.onClearPicks?.();
       props.onClearSkillPicks?.();
       props.onSend(finalText, atts, skillIds.length > 0 ? skillIds : undefined);
-    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.selectedPipelineId, props.onRunPipeline, props.sendBlocked, confirm, clearDraft, t]);
+    }, [input, attachments, slashCommands, props.agent, props.onSend, props.sessionId, props.filePicks, props.onClearPicks, props.skillPicks, props.onClearSkillPicks, props.sendBlocked, confirm, clearDraft, t]);
 
     // Enqueue the composed message while the agent is streaming. Same
     // file_refs prefixing + clears as `handleSend`, but the delivery timing
@@ -663,8 +635,6 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               onFallbackChange={props.onFallbackChange ?? (() => {})}
               getModelsForProvider={props.getModelsForProvider ?? (() => [])}
               sessionId={props.sessionId ?? null}
-              selectedPipelineId={props.selectedPipelineId ?? null}
-              setSelectedPipelineId={props.setSelectedPipelineId}
               thinking={props.thinking}
               setThinking={props.setThinking}
               supportsThinking={props.supportsThinking}
@@ -684,7 +654,7 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
           <>
           {/*
             Thin strip for the "session-level" action icons (attachment /
-            pipeline / think / describe / cap / permission shield). The
+            think / describe / cap / permission shield). The
             markdown formatting toolbar that used to host these was removed —
             its markers are useless in an AI-prompt composer. Keeping this row
             above the busier bottom row leaves the pickers (agent / provider /
@@ -709,8 +679,6 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
               toolPermissionMode={props.toolPermissionMode}
               setToolPermissionMode={props.setToolPermissionMode}
               sessionId={props.sessionId}
-              selectedPipelineId={props.selectedPipelineId}
-              setSelectedPipelineId={props.setSelectedPipelineId}
               onTranscript={appendTranscript}
               showMic={false}
             />
@@ -755,7 +723,6 @@ const ComposerImpl = React.forwardRef<ComposerHandle, ComposerProps>(
             sendBlocked={props.sendBlocked}
             planDepth={props.planDepth ?? null}
             setPlanDepth={props.setPlanDepth}
-            selectedPipelineId={props.selectedPipelineId ?? null}
             queueable={!!props.queueable}
             onQueueSend={handleQueue}
           />

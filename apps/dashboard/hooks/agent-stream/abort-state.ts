@@ -13,29 +13,11 @@ export function createAbortedSessionPatch(
   const currentTurn = state.currentTurn
     ? { blocks: state.currentTurn.blocks.map((block) => abortBlock(block, now)) }
     : null;
-  const pipelineRuntime = state.pipelineRuntime && (
-    state.pipelineRuntime.status === 'running' || state.pipelineRuntime.status === 'paused'
-  )
-    ? {
-        ...state.pipelineRuntime,
-        status: 'aborted' as const,
-        currentNodeId: null,
-        awaitingConfirmation: false,
-        nodes: Object.fromEntries(
-          Object.entries(state.pipelineRuntime.nodes).map(([id, node]) => [
-            id,
-            node.status === 'running' ? { ...node, status: 'aborted' as const } : node,
-          ]),
-        ),
-      }
-    : state.pipelineRuntime;
-
   return {
     streaming: false,
     currentTurn,
     doneReason: 'aborted',
     interactionPending: null,
-    pipelineRuntime,
     activeProcesses: [],
     pendingApprovals: [],
     preflight: null,

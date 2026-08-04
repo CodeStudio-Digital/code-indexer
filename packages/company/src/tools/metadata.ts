@@ -84,7 +84,6 @@ const EXECUTE_NAMES = new Set([
   'app_provision_db',
   'app_run_test_cycle',
   'review_subordinate_work',
-  'start_pipeline',
 ]);
 const ADMIN_VERBS = /(?:^|_)(delete|destroy|drop|publish|deploy|remove|stop)(?:_|$)/i;
 

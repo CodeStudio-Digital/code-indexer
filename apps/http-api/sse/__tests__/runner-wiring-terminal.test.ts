@@ -87,11 +87,14 @@ describe('wireRunnerEventsToBus terminal ordering', () => {
     const bus = createBus(new AbortController());
     wireRunnerEventsToBus(runner, bus);
 
-    runner.emit('text_delta', 'hel');
+    runner.emit('text_delta', 'hel', { itemId: 'msg_1', phase: 'commentary' });
     runner.emit('text_delta', 'lo');
 
     expect(bus.buffer).toMatchObject([
-      { event: 'text', data: { text: 'hel' } },
+      {
+        event: 'text',
+        data: { text: 'hel', item_id: 'msg_1', phase: 'commentary' },
+      },
       { event: 'text', data: { text: 'lo' } },
     ]);
     runner.emit('done', 'completed');

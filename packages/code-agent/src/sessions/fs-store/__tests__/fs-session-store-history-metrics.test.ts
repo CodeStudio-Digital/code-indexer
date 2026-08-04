@@ -104,6 +104,10 @@ describe('FsSessionStore chapter and attempt repositories', () => {
     expect(committed.chapter.seq).toBe(1);
     expect(committed.boundary_seq).toBe(2);
     expect(committed.pruned_count).toBe(2);
+    const chapterPage = await store.listConversationChapters(session.id, { limit: 1 });
+    expect(chapterPage.total_count).toBe(1);
+    expect(chapterPage.revision).toBeGreaterThan(0);
+    expect(chapterPage.next_cursor).toBeNull();
 
     const replay = await store.commitConversationChapter(input);
     expect(replay).toMatchObject({

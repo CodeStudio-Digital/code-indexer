@@ -13,7 +13,12 @@
  *
  * Does NOT mutate any caller state.
  */
-import type { ChatDelta, ChatUsage, ChatProviderResponseMeta } from '@mcp/code-agent/core/messages.js';
+import type {
+  AssistantMessagePhase,
+  ChatDelta,
+  ChatUsage,
+  ChatProviderResponseMeta,
+} from '@mcp/code-agent/core/messages.js';
 import { AbortError, TimeoutError } from './executing-abort.js';
 
 export interface ToolUseAccumulated {
@@ -41,12 +46,17 @@ export interface StreamResult {
    * session's immutable turn metric.
    */
   responseMeta: ChatProviderResponseMeta | null;
+  /** Provider-native phase, or a deterministic fallback for legacy wires. */
+  messagePhase: AssistantMessagePhase;
 }
 
 export interface ConsumeStreamArgs {
   stream: AsyncIterable<ChatDelta>;
   signal?: AbortSignal;
-  onTextDelta?: (text: string) => void;
+  onTextDelta?: (
+    text: string,
+    meta?: { itemId?: string; phase?: AssistantMessagePhase },
+  ) => void;
   onThinkingDelta?: (text: string) => void;
   onToolCallStart?: (id: string, name: string) => void;
   /**
@@ -129,6 +139,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   let responseId: string | null = null;
   let responseMessageCount: number | null = null;
   let responseMeta: ChatProviderResponseMeta | null = null;
+  const messagePhases = new Set<AssistantMessagePhase>();
 
   const idleMs = args.idleTimeoutMs ?? resolvePositiveEnvMs('CODER_STREAM_IDLE_TIMEOUT_MS', 90_000);
   const firstByteMs =
@@ -179,7 +190,11 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
       case 'text_delta':
         lastNonThinkingAt = Date.now();
         currentText += delta.text;
-        args.onTextDelta?.(delta.text);
+        if (delta.phase) messagePhases.add(delta.phase);
+        args.onTextDelta?.(delta.text, {
+          ...(delta.itemId ? { itemId: delta.itemId } : {}),
+          ...(delta.phase ? { phase: delta.phase } : {}),
+        });
         break;
 
       case 'thinking_delta':
@@ -318,6 +333,15 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     throw error;
   }
 
+  // Phase-aware providers identify public commentary directly. Legacy wires
+  // get a deterministic equivalent: text alongside a tool request is progress;
+  // text in a tool-free terminal response is the final answer.
+  const messagePhase = messagePhases.size === 1
+    ? [...messagePhases][0]!
+    : toolUses.length > 0
+      ? 'commentary'
+      : 'final_answer';
+
   return {
     textBlocks,
     toolUses,
@@ -327,6 +351,7 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
     responseId,
     responseMessageCount,
     responseMeta,
+    messagePhase,
   };
 }
 

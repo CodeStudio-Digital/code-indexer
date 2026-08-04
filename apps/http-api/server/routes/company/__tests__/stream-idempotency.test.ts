@@ -14,7 +14,6 @@ import { Hono } from 'hono';
 
 type Orch = {
   metaBus: unknown;
-  pipelineRecoverRunning: () => Promise<void>;
   sendMessageToMaster: (...args: unknown[]) => Promise<{
     ok: boolean;
     pending?: 'interactive_wait';
@@ -100,7 +99,6 @@ const PROMPT_83 = '00000000-0000-4000-8000-000000000083';
 function makeOrch(): Orch {
   return {
     metaBus: createBus(new AbortController()),
-    pipelineRecoverRunning: vi.fn(async () => {}),
     sendMessageToMaster: vi.fn(async () => ({ ok: true })),
   };
 }
@@ -1055,7 +1053,7 @@ describe('company POST /start idempotency', () => {
     expect(H.resolveAndRunMaster).not.toHaveBeenCalled();
   });
 
-  it('uses the configured App Master and skips generic pipeline recovery', async () => {
+  it('uses the configured App Master', async () => {
     H.onSpawn = makeOrch;
     const h = setup({
       runtime_kind: 'app_studio',
@@ -1075,7 +1073,6 @@ describe('company POST /start idempotency', () => {
         model: 'gpt-5.6-terra',
       }),
     );
-    expect(H.orch!.pipelineRecoverRunning).not.toHaveBeenCalled();
     markEnded(H.orch!.metaBus as CoderRunBus, 'done', {});
   });
 

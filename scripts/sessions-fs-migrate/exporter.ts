@@ -1031,11 +1031,8 @@ export function categoryForTable(plan: BundlePlan, table: string): string {
   }
   if (plan.identity.kind === 'app_studio') {
     const sharedCompanyDirectories: Record<string, string> = {
-      pipelines: 'pipeline-definitions',
       qa_test_runs: 'qa-runs',
       qa_test_results: 'qa-results',
-      pipeline_executions: 'pipeline-runs',
-      pipeline_node_executions: 'pipeline-node-executions',
     };
     if (sharedCompanyDirectories[table]) {
       return join('company', sharedCompanyDirectories[table]);
@@ -1065,7 +1062,6 @@ export function categoryForTable(plan: BundlePlan, table: string): string {
       kanban_comments: 'kanban-cards',
       company_agent_runs: 'agent-runs',
       company_master_prompts: 'master-prompts',
-      pipelines: 'pipeline-definitions',
       qa_test_runs: 'qa-runs',
       qa_test_results: 'qa-results',
       company_sandbox_services: 'services',
@@ -1073,8 +1069,6 @@ export function categoryForTable(plan: BundlePlan, table: string): string {
       company_session_envs: 'environments',
       company_sandboxes: 'sandboxes',
       company_service_logs: 'logs',
-      pipeline_executions: 'pipeline-runs',
-      pipeline_node_executions: 'pipeline-node-executions',
       company_session_archives: 'archives',
     };
     const directory =
@@ -1114,11 +1108,8 @@ function entityKind(plan: BundlePlan, table: string): string {
   }
   if (plan.identity.kind === 'app_studio') {
     const sharedCompanyKinds: Record<string, string> = {
-      pipelines: 'pipelineDefinition',
       qa_test_runs: 'qaRun',
       qa_test_results: 'qaResult',
-      pipeline_executions: 'pipelineRun',
-      pipeline_node_executions: 'pipelineNodeExecution',
     };
     if (sharedCompanyKinds[table]) return sharedCompanyKinds[table];
     const appStudioKinds: Record<string, string> = {
@@ -1142,7 +1133,6 @@ function entityKind(plan: BundlePlan, table: string): string {
       kanban_comments: 'kanbanCard',
       company_agent_runs: 'agentRun',
       company_master_prompts: 'masterPrompt',
-      pipelines: 'pipelineDefinition',
       qa_test_runs: 'qaRun',
       qa_test_results: 'qaResult',
       company_sandbox_services: 'service',
@@ -1150,8 +1140,6 @@ function entityKind(plan: BundlePlan, table: string): string {
       company_session_envs: 'environment',
       company_sandboxes: 'sandbox',
       company_service_logs: 'log',
-      pipeline_executions: 'pipelineRun',
-      pipeline_node_executions: 'pipelineNodeExecution',
       company_session_archives: 'archive',
     };
     return companyKinds[table] ??
@@ -1855,50 +1843,6 @@ function migratedEntityData(
   }
   if (plan.identity.kind === 'company' || plan.identity.kind === 'app_studio') {
     const kind = entityKind(plan, table);
-    if (kind === 'pipelineDefinition') {
-      const graph = parseJson(source.graph_json);
-      if (
-        graph == null ||
-        typeof graph !== 'object' ||
-        Array.isArray(graph)
-      ) {
-        throw new Error(
-          `Invalid legacy pipeline ${String(source.id)} graph_json`,
-        );
-      }
-      return {
-        ...base,
-        name: text(source.name) ?? 'Legacy pipeline',
-        description: text(source.description) ?? '',
-        graph,
-        version: positiveInteger(
-          source.version ?? 1,
-          `pipeline ${String(source.id)} version`,
-        ),
-        company_session_id: plan.uuid,
-        project_id: null,
-        template_id:
-          source.template_id == null
-            ? null
-            : nonNegativeInteger(source.template_id),
-      };
-    }
-    if (kind === 'pipelineRun') {
-      return {
-        ...base,
-        status: String(normalizeStatus(source.status ?? 'interrupted')),
-        context: (parseJson(source.context_json) ?? {
-          snapshot: { version: 1, nodes: [], edges: [] },
-          vars: {},
-        }) as JsonValue,
-      };
-    }
-    if (kind === 'pipelineNodeExecution') {
-      return {
-        ...base,
-        status: String(normalizeStatus(source.status ?? 'interrupted')),
-      };
-    }
     if (kind === 'qaRun' || kind === 'qaResult') {
       return {
         ...base,

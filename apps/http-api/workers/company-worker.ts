@@ -316,7 +316,7 @@ setSandboxArchiveBundleResolver({
       : null;
   },
 });
-const companyStore = new CompanyStore(db.raw(), sessionStore);
+const companyStore = new CompanyStore(db.raw());
 
 // ─── Company-tool store bindings (DS + QA) ──────────────────────
 // worker_threads don't share module state, so the setDesignSystemStore()

@@ -1212,7 +1212,10 @@ export function mountCoderSessionsRoutes(
     // We need the project workdir to run `git rev-parse HEAD`. If the project
     // isn't a git repo, or the workdir lookup fails, leave it null and the
     // reviewer will fall back to running `git_diff` itself (or report no diff).
-    const responseSession = (await sessionStore.getSession(session.id)) ?? session;
+    // createSession already returns the fully mapped catalog entry. Re-reading
+    // the just-published bundle only repeats session/state/metrics filesystem
+    // work on the latency-sensitive + button path.
+    const responseSession = session;
     rememberSelectedModel(responseSession.provider, responseSession.model);
     setImmediate(() => {
       void (async () => {

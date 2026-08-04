@@ -100,6 +100,25 @@ describe('toKimiMessages — H2 assistant.content with tool_calls', () => {
     const assistant = out[2] as { role: string; content?: unknown };
     expect(assistant.content).toBe('');
   });
+
+  it('preserves an empty reasoning field for assistant tool calls while thinking is kept', () => {
+    const out = toKimiMessages('sys', [userTurn, assistantWith('', true)], true);
+    const assistant = out[2] as { reasoning_content?: unknown };
+    expect(assistant.reasoning_content).toBe('');
+  });
+
+  it('echoes preserved thinking under the reasoning dialect returned by the endpoint', () => {
+    const assistant: AgentMessage = {
+      role: 'assistant',
+      content: [
+        { type: 'thinking', text: 'route thought' },
+        { type: 'tool_use', id: 'c1', name: 'read_file', input: { path: 'x' } },
+      ],
+    };
+    const out = toKimiMessages('sys', [userTurn, assistant], true, 'reasoning');
+    expect(out[2]).toMatchObject({ reasoning: 'route thought' });
+    expect(out[2]).not.toHaveProperty('reasoning_content');
+  });
 });
 
 describe('toKimiToolParam — M6 builtin functions (prefix $)', () => {
@@ -399,19 +418,32 @@ describe('KimiCodeChatProvider.chat() — K3 reasoning effort', () => {
     return calls[calls.length - 1][0] as Record<string, unknown>;
   }
 
-  it('forwards the selected level as reasoning_effort for K3', async () => {
+  it('forwards the selected K3 effort inside preserved thinking', async () => {
     const body = await run('k3', 'max');
-    expect(body.reasoning_effort).toBe('max');
+    expect(body.thinking).toEqual({ type: 'enabled', keep: 'all', effort: 'max' });
+    expect(body).not.toHaveProperty('reasoning_effort');
   });
 
-  it('leaves K3 reasoning_effort unset when the session uses the model default', async () => {
+  it('keeps K3 thinking on when the session uses the model default', async () => {
     const body = await run('k3');
+    expect(body.thinking).toEqual({ type: 'enabled', keep: 'all' });
     expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('does not disable an always-thinking K3 session', async () => {
+    const body = await run('k3', 'none');
+    expect(body.thinking).toEqual({ type: 'enabled', keep: 'all' });
   });
 
   it('does not send reasoning_effort to older Kimi models', async () => {
     const body = await run('kimi-k2.6', 'high');
     expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('uses the reasoning-safe completion budget field', async () => {
+    const body = await run('k3');
+    expect(body.max_completion_tokens).toBe(32_000);
+    expect(body).not.toHaveProperty('max_tokens');
   });
 
   it('forces K3 temperature to 1 despite a user override', async () => {
@@ -424,9 +456,35 @@ describe('KimiCodeChatProvider.chat() — K3 reasoning effort', () => {
     expect(body.temperature).toBe(1);
   });
 
-  it('keeps user temperature behavior for non-K3 models', async () => {
+  it('does not send a sampling override to the always-thinking coding alias', async () => {
     const body = await run('kimi-for-coding', undefined, 0.2);
-    expect(body.temperature).toBe(0.2);
+    expect(body).not.toHaveProperty('temperature');
+    expect(body.thinking).toEqual({ type: 'enabled', keep: 'all' });
+  });
+});
+
+describe('KimiCodeChatProvider.chat() — current reasoning stream dialects', () => {
+  it('surfaces reasoning_content, reasoning_details, and reasoning as thinking deltas', async () => {
+    mockCreate.mockResolvedValueOnce((async function* () {
+      yield { choices: [{ delta: { reasoning_content: 'first ' }, finish_reason: null }] };
+      yield { choices: [{ delta: { reasoning_details: 'second ' }, finish_reason: null }] };
+      yield { choices: [{ delta: { reasoning: 'third' }, finish_reason: null }] };
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    })());
+    const provider = new KimiCodeChatProvider({ apiKey: 'test', model: 'k3' });
+    const deltas: ChatDelta[] = [];
+    for await (const delta of provider.chat({
+      system: 'sys',
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+      tools: [],
+    })) {
+      deltas.push(delta);
+    }
+    expect(deltas.filter((delta) => delta.type === 'thinking_delta')).toEqual([
+      { type: 'thinking_delta', text: 'first ' },
+      { type: 'thinking_delta', text: 'second ' },
+      { type: 'thinking_delta', text: 'third' },
+    ]);
   });
 });
 

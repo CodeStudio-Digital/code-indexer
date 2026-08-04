@@ -4,8 +4,7 @@
  * Replaces the old binary "unrestricted output" toggle: a `Maximize2` trigger
  * (amber when the level is elevated) opens a popover listing the 6 levels
  * (Econômico → Ultra) with their headline cap. Selecting one persists per
- * session via the parent's `onChange` (PATCH `/tool-output-cap-level`). Mirrors
- * the `PipelinePicker` compact pattern so both live in the same icon row.
+ * session via the parent's `onChange` (PATCH `/tool-output-cap-level`).
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';

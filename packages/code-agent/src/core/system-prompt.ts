@@ -55,6 +55,7 @@ Stay inside the delegated scope. An investigation returns evidence and citations
 export type ProviderFamily =
   | 'anthropic'
   | 'claude-code'
+  | 'codex'
   | 'openai'
   | 'openrouter'
   | 'zai'
@@ -66,6 +67,7 @@ export type ProviderFamily =
 const PROVIDER_FAMILIES: ReadonlySet<string> = new Set<ProviderFamily>([
   'anthropic',
   'claude-code',
+  'codex',
   'openai',
   'openrouter',
   'zai',
@@ -83,7 +85,13 @@ const PROVIDER_FAMILIES: ReadonlySet<string> = new Set<ProviderFamily>([
  * string through to the family switch.
  */
 export function normalizeProviderFamily(kind: string | undefined): ProviderFamily {
-  return kind && PROVIDER_FAMILIES.has(kind) ? (kind as ProviderFamily) : 'generic';
+  const normalized = kind?.trim().toLowerCase();
+  if (normalized === 'openai-chatgpt' || normalized === 'chatgpt' || normalized === 'codex') {
+    return 'codex';
+  }
+  return normalized && PROVIDER_FAMILIES.has(normalized)
+    ? (normalized as ProviderFamily)
+    : 'generic';
 }
 
 export interface PromptContext {
@@ -276,6 +284,16 @@ function providerPreamble(family: ProviderFamily): string {
 - When you cite code, use \`file:line\` format.
 </formatting>
 `;
+    case 'codex':
+      return `# Role
+You are a coding agent (OpenAI Codex family).
+
+# Formatting rules
+- Use tools for actions and emit short public commentary around substantial tool work.
+- Independent tool calls SHOULD be emitted in parallel when supported.
+- Keep commentary factual and concise; never expose hidden chain-of-thought.
+- End completed work with a distinct final answer. Cite code as \`file:line\`.
+`;
     case 'openai':
     case 'openrouter':
       // OpenAI-compatible models respond well to explicit checklist-style cues.
@@ -283,7 +301,7 @@ function providerPreamble(family: ProviderFamily): string {
 You are a coding agent (OpenAI GPT family).
 
 # Formatting rules
-- Issue tool calls instead of describing what you would do.
+- Use tools for actions and accompany substantial work with concise progress updates.
 - Independent tool calls MUST be emitted in parallel in the same turn.
 - Terse markdown replies. Cite code as \`file:line\`.
 - Never apologize or restate the user's request.
@@ -295,7 +313,7 @@ You are a coding agent (OpenAI GPT family).
 
 # Hard rules
 - Respond in the user's language. Default English.
-- Always prefer tool calls over narration. Emit independent tool calls in parallel.
+- Use tools for actions and emit concise progress updates around substantial work.
 - No emojis unless the user uses them first.
 - Code citations: \`file:line\`.
 - Keep text replies short; the user reads diffs, not recaps.
@@ -305,7 +323,7 @@ You are a coding agent (OpenAI GPT family).
 Coding agent (Gemini family).
 
 # Formatting
-- Prefer tool calls over explanations.
+- Use tools for actions and emit concise progress updates around substantial work.
 - Emit independent tool calls in parallel in one turn.
 - Markdown, terse. Cite code as \`file:line\`.
 `;
@@ -313,15 +331,15 @@ Coding agent (Gemini family).
       return `# Role: Coding agent (DeepSeek family)
 
 # Rules
-- Tool calls > narration. Parallelize independent calls in one turn.
+- Use tools for actions and concise progress updates. Parallelize independent calls in one turn.
 - Terse markdown. Code citations as \`file:line\`.
-- No preamble, no summary unless asked.
+- No redundant recap unless asked.
 `;
     case 'kimi-code':
       return `# Role: Coding agent (Kimi Code family)
 
 # Rules
-- Prefer tool calls over narration. Emit independent tool calls in parallel.
+- Use tools for actions and emit concise progress updates around substantial work.
 - Preserve useful reasoning internally, but keep user-facing text concise.
 - Markdown, terse. Cite code as \`file:line\`.
 `;
@@ -331,7 +349,7 @@ Coding agent (Gemini family).
 You are a coding agent.
 
 # Formatting
-- Prefer tool calls over narration. Emit independent calls in parallel.
+- Use tools for actions and emit concise progress updates around substantial work.
 - Terse markdown. Cite code as \`file:line\`.
 `;
   }

@@ -344,6 +344,12 @@ export class McpServerManager {
     return { tools: allTools, tierMap };
   }
 
+  /** Rebuild every transport from the latest persisted configuration. */
+  async refreshAll(configs: McpServerConfig[]): Promise<void> {
+    await this.closeAll();
+    await this.connectAll(configs);
+  }
+
   /**
    * Keep the SDK's strict path for conforming servers so its output/task
    * metadata cache remains populated. If that path proves the server has a

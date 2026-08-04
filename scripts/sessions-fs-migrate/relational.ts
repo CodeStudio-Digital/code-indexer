@@ -216,7 +216,6 @@ function identifierAlias(table: string, column: string): string | undefined {
     grant_id: 'policy_grants',
     divergence_id: 'control_plane_divergences',
     message_id: 'coder_messages',
-    execution_id: 'pipeline_executions',
     asset_id: 'sprite_assets',
     animation_id: 'sprite_animations',
     version_id: 'sprite_asset_versions',

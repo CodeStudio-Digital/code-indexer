@@ -2,7 +2,9 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
-use agent_protocol::frame::{AsyncEstablishedAttemptChannel, FrameReceiveOutcome};
+use agent_protocol::frame::{
+    ActiveFrameReceiveOutcome, AsyncEstablishedAttemptChannel, FrameReceiveOutcome,
+};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::Instant;
 
@@ -17,8 +19,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
     /// future before its first poll therefore revokes authority and closes it.
     pub(crate) fn receive_active(
         &mut self,
+        idle_wake_deadline: Instant,
         hard_deadline: Instant,
-    ) -> impl Future<Output = Result<ControlDriverEvent, AsyncControlDriverError>> + '_ {
+    ) -> impl Future<Output = Result<Option<ControlDriverEvent>, AsyncControlDriverError>> + '_ {
         let operation = if self.pending_prepare.is_some() {
             Err(AsyncControlDriverError::PrepareInFlight)
         } else {
@@ -28,7 +31,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
             let mut operation = operation?;
             let result = {
                 let (driver, channel) = operation.parts();
-                driver.receive_active_inner(channel, hard_deadline).await
+                driver
+                    .receive_active_inner(channel, idle_wake_deadline, hard_deadline)
+                    .await
             };
             if result.is_ok() {
                 operation.commit();
@@ -40,8 +45,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
     async fn receive_active_inner(
         &mut self,
         channel: &mut AsyncEstablishedAttemptChannel<S>,
+        idle_wake_deadline: Instant,
         hard_deadline: Instant,
-    ) -> Result<ControlDriverEvent, AsyncControlDriverError> {
+    ) -> Result<Option<ControlDriverEvent>, AsyncControlDriverError> {
         let progress_timeout = match self.session.read_timeout_ms() {
             Ok(value) => Duration::from_millis(value),
             Err(error) => return self.close_with(error.into()),
@@ -54,6 +60,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
         let clock = Arc::clone(&self.clock);
         let received = channel
             .begin_receive_active(
+                idle_wake_deadline,
                 hard_deadline,
                 progress_timeout,
                 replay_write_timeout,
@@ -69,11 +76,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
             Err(error) => return self.close_with(error.into()),
         };
         match received {
-            FrameReceiveOutcome::Replay(replay) => Ok(ControlDriverEvent::Replayed(replay)),
-            FrameReceiveOutcome::Pending(pending) => match observed_at_unix_ms {
-                Some(observed) => self.handle_pending(channel, *pending, observed).await,
+            ActiveFrameReceiveOutcome::Idle => Ok(None),
+            ActiveFrameReceiveOutcome::Frame(FrameReceiveOutcome::Replay(replay)) => {
+                Ok(Some(ControlDriverEvent::Replayed(replay)))
+            }
+            ActiveFrameReceiveOutcome::Frame(FrameReceiveOutcome::Pending(pending)) => {
+                match observed_at_unix_ms {
+                Some(observed) => self
+                    .handle_pending(channel, *pending, observed)
+                    .await
+                    .map(Some),
                 None => self.close_with(AsyncControlDriverError::ReceiveTimestampMissing),
-            },
+                }
+            }
         }
     }
 }

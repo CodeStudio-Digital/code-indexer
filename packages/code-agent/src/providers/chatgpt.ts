@@ -27,7 +27,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { nativeFetch } from '@mcp/shared/utils/native-fetch.js';
 import { nativeReasoningLevel, nativeReasoningLevels, resolveReasoningEffort } from '@mcp/provider-sdk';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
-import type { AgentMessage, ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
+import type {
+  AgentMessage,
+  AssistantMessagePhase,
+  ChatDelta,
+  ContentBlock,
+} from '@mcp/code-agent/core/messages.js';
 import { renderTextDocument, safeDocumentFilename } from './document-utils.js';
 
 const GPT_56_PROMPT_CACHE_MODELS = new Set([
@@ -115,6 +120,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
   private reasoningFromThinking = true;
   /** Readable reasoning summary mode requested from compatible backends. */
   private reasoningSummary: 'auto' | 'concise' | 'detailed' | null = null;
+  /** Gate readable summaries on the session's thinking toggle. */
+  private reasoningSummaryFromThinking = false;
+  /** Whether this model/wire accepts concurrent function-call planning. */
+  private parallelToolCalls = false;
   /** Count Sakana-style orchestration token details in billable usage. */
   private includeOrchestrationUsage = false;
   /**
@@ -151,6 +160,10 @@ export class ChatGPTCodexProvider implements ChatProvider {
     reasoningFromThinking?: boolean;
     /** Request readable reasoning summaries when the model supports them. */
     reasoningSummary?: 'auto' | 'concise' | 'detailed' | null;
+    /** Request summaries only when `req.thinking === true` (default false). */
+    reasoningSummaryFromThinking?: boolean;
+    /** Enable the Responses `parallel_tool_calls` capability (default false). */
+    parallelToolCalls?: boolean;
     /** Add provider-specific orchestration tokens to usage totals. */
     includeOrchestrationUsage?: boolean;
   }) {
@@ -169,6 +182,8 @@ export class ChatGPTCodexProvider implements ChatProvider {
     this.statefulResponses = opts.statefulResponses ?? true;
     this.reasoningFromThinking = opts.reasoningFromThinking ?? true;
     this.reasoningSummary = opts.reasoningSummary ?? null;
+    this.reasoningSummaryFromThinking = opts.reasoningSummaryFromThinking ?? false;
+    this.parallelToolCalls = opts.parallelToolCalls ?? false;
     this.includeOrchestrationUsage = opts.includeOrchestrationUsage ?? false;
 
     const headers: Record<string, string> = {};
@@ -322,10 +337,13 @@ export class ChatGPTCodexProvider implements ChatProvider {
     // when the model supports it (or capability is unknown); otherwise we fall
     // back to the derived behaviour so an invalid override never breaks a turn.
     const reasoningEffort = this.resolveReasoningEffort(req);
-    const reasoning = reasoningEffort || this.reasoningSummary
+    const reasoningSummary = this.reasoningSummaryFromThinking && req.thinking !== true
+      ? null
+      : this.reasoningSummary;
+    const reasoning = reasoningEffort || reasoningSummary
       ? {
           ...(reasoningEffort ? { effort: reasoningEffort } : {}),
-          ...(this.reasoningSummary ? { summary: this.reasoningSummary } : {}),
+          ...(reasoningSummary ? { summary: reasoningSummary } : {}),
         }
       : null;
     const promptCacheKey =
@@ -348,7 +366,9 @@ export class ChatGPTCodexProvider implements ChatProvider {
         instructions: req.system,
         input,
         ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}),
-        ...(tools.length > 0 ? { tools, tool_choice: 'auto', parallel_tool_calls: false } : {}),
+        ...(tools.length > 0
+          ? { tools, tool_choice: 'auto', parallel_tool_calls: this.parallelToolCalls }
+          : {}),
         stream: true,
         // store: opt-in. When CODEX_STORE_RESPONSES=1 we persist server-side
         // and replay `previous_response_id` next turn for ~40-80% better
@@ -382,6 +402,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
       string,
       { call_id: string; name: string; argsAcc: string; emittedStart: boolean }
     >();
+    const messagePhases = new Map<string, AssistantMessagePhase>();
 
     // The Responses API emits each reasoning-summary section as a distinct
     // `...part.added` item, but the text deltas themselves do not necessarily
@@ -399,7 +420,16 @@ export class ChatGPTCodexProvider implements ChatProvider {
       // Incremental text from the assistant message.
       if (type === 'response.output_text.delta') {
         const delta = evt.delta as string | undefined;
-        if (delta) yield { type: 'text_delta', text: delta };
+        const itemId = evt.item_id as string | undefined;
+        const phase = normalizeAssistantPhase(evt.phase) ?? (itemId ? messagePhases.get(itemId) : undefined);
+        if (delta) {
+          yield {
+            type: 'text_delta',
+            text: delta,
+            ...(itemId ? { itemId } : {}),
+            ...(phase ? { phase } : {}),
+          };
+        }
         continue;
       }
 
@@ -444,8 +474,18 @@ export class ChatGPTCodexProvider implements ChatProvider {
       // payload (with final arguments) arrives at `output_item.done`.
       if (type === 'response.output_item.added') {
         const item = evt.item as
-          | { type: string; id?: string; call_id?: string; name?: string }
+          | {
+              type: string;
+              id?: string;
+              call_id?: string;
+              name?: string;
+              phase?: string;
+            }
           | undefined;
+        if (item?.type === 'message' && item.id) {
+          const phase = normalizeAssistantPhase(item.phase);
+          if (phase) messagePhases.set(item.id, phase);
+        }
         if ((item?.type === 'function_call' || item?.type === 'custom_tool_call') && item.id) {
           toolAcc.set(item.id, {
             call_id: item.call_id ?? item.id,
@@ -704,6 +744,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
 type ResponsesInputItem =
   | {
       role: 'user' | 'assistant' | 'system' | 'developer';
+      phase?: AssistantMessagePhase;
       content: Array<
         | { type: 'input_text'; text: string }
         | { type: 'output_text'; text: string }
@@ -784,6 +825,7 @@ export function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[]
         out.push({
           role: 'assistant',
           content: [{ type: 'output_text', text }],
+          ...(m.phase ? { phase: m.phase } : {}),
         });
       }
       const toolUses = m.content.filter(
@@ -802,4 +844,8 @@ export function toResponsesInput(messages: AgentMessage[]): ResponsesInputItem[]
   }
 
   return out;
+}
+
+function normalizeAssistantPhase(value: unknown): AssistantMessagePhase | undefined {
+  return value === 'commentary' || value === 'final_answer' ? value : undefined;
 }

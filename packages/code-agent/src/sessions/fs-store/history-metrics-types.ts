@@ -50,6 +50,10 @@ export interface FsConversationChapterSearchResult
 export interface FsConversationChapterPage<T> {
   items: T[];
   next_cursor: string | null;
+  /** Total matching rows, computed from the same artifact read as this page. */
+  total_count?: number;
+  /** Max persisted row timestamp from the same artifact read. */
+  revision?: number;
   status?: FsConversationChapterStatus;
 }
 

@@ -149,7 +149,7 @@ function uniqueModels(models: readonly AllowedModel[]): AllowedModel[] {
 
 /**
  * Read the spawn policy directly from the persisted session config. This is
- * intentionally done for every fresh spawn: scheduler/pipeline calls must see
+ * intentionally done for every fresh spawn: scheduler and manual calls must see
  * the same role_assignments update as a Master-initiated call, even if an
  * in-memory roster is stale for a beat.
  */

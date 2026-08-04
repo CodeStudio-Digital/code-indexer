@@ -191,23 +191,6 @@ export interface GitStatusChangedPayload {
   changeType: 'commit' | 'stage' | 'reset' | 'discard' | 'init';
 }
 
-// ─── Pipeline executor events ──────────────────────────────────
-
-export interface PipelineExecutionPayload {
-  executionId: string;
-  pipelineId: import('./models/pipeline.js').PipelineId;
-  status: 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
-  currentNodeId?: string | null;
-}
-
-export interface PipelineNodePayload {
-  executionId: string;
-  nodeId: string;
-  nodeStatus: 'pending' | 'running' | 'completed' | 'failed' | 'skipped' | 'aborted';
-  agentRunId?: string | null;
-  outcomeBranch?: string | null;
-}
-
 // ─── Discriminated union ───────────────────────────────────────
 
 export type CompanyEvent =
@@ -246,13 +229,6 @@ export type CompanyEvent =
   | { type: 'agent_inbox.message_answered';  data: InboxEventPayload }
   | { type: 'agent_inbox.message_cancelled'; data: InboxEventPayload }
   | { type: 'git.status_changed'; data: GitStatusChangedPayload }
-  | { type: 'pipeline.execution_started';   data: PipelineExecutionPayload }
-  | { type: 'pipeline.execution_completed'; data: PipelineExecutionPayload }
-  | { type: 'pipeline.execution_failed';    data: PipelineExecutionPayload }
-  | { type: 'pipeline.execution_paused';    data: PipelineExecutionPayload }
-  | { type: 'pipeline.node_started';   data: PipelineNodePayload }
-  | { type: 'pipeline.node_completed'; data: PipelineNodePayload }
-  | { type: 'pipeline.node_failed';    data: PipelineNodePayload }
   | { type: 'done'; data: Record<string, never> };
 
 export type CompanyEventType = CompanyEvent['type'];

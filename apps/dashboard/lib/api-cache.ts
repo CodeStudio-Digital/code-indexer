@@ -26,7 +26,7 @@
  * components (e.g. /projects/:id from App + AppShell + ProjectView) and
  * quick back/forward navigation — NOT to serve stale data over time.
  * Freshness is guaranteed by two stronger mechanisms that bypass it:
- * `refetch()` always revalidates (the 2.5s pipeline poll uses it) and any
+ * `refetch()` always revalidates and any
  * mutation calls `invalidateAll()`. 1500ms comfortably covers a single
  * render pass + a remount within the same interaction without ever
  * letting a value visibly age.

@@ -398,6 +398,10 @@ export class FsOperationalSessionStore {
     (self, id: SessionId | string) => self.drive.getDriveAggregate(id),
     this,
   );
+  getSessionFileMap = thisCall(
+    (self, id: SessionId | string) => self.drive.getFileMap(id),
+    this,
+  );
   getDriveInjectionPayload = thisCall(
     (self, id: SessionId | string) =>
       self.drive.getDriveInjectionPayload(id),

@@ -155,11 +155,6 @@ export async function ensureCompanyMasterLiveLocked(
 
   const attemptSpawnAndResume = async (): Promise<WorkerBackedOrchestrator> => {
     const { orchestrator } = await getOrSpawnCompanyOrchestrator(id);
-    if (session.runtime_kind !== 'app_studio') {
-      void orchestrator.pipelineRecoverRunning().catch((err) => {
-        console.warn(`[company s=${id}] pipeline recovery failed:`, err);
-      });
-    }
     await resolveAndRunMaster(orchestrator, !!masterRun, {
       userMessage: opts.message,
       provider: masterRuntime.provider,

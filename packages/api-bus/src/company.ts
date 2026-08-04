@@ -1,8 +1,8 @@
 import type { ApiContext, AsyncStream } from './common.js';
 
 /**
- * Company = multi-agent orchestration (master + subordinates), pipelines,
- * kanban, sandboxes, services, QA, drive, inbox, etc.
+ * Company = multi-agent orchestration (master + subordinates), kanban,
+ * sandboxes, services, QA, drive, inbox, etc.
  *
  * This is the largest namespace by route count (~30+ files under
  * apps/http-api/server/routes/company/*). The interfaces below cover the
@@ -116,12 +116,6 @@ export interface CompanyApi {
     };
     diagnostics(input: { sessionId: string }, ctx: ApiContext): Promise<unknown>;
     restoreConfig(input: { sessionId: string }, ctx: ApiContext): Promise<void>;
-  };
-
-  pipelines: {
-    list(input: { sessionId: string }, ctx: ApiContext): Promise<unknown[]>;
-    execute(input: { sessionId: string; pipelineId: string; params?: unknown }, ctx: ApiContext): Promise<unknown>;
-    status(input: { sessionId: string; pipelineId: string }, ctx: ApiContext): Promise<unknown>;
   };
 
   templates: {

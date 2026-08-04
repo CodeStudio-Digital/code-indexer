@@ -1,6 +1,7 @@
 use std::fmt::{self, Debug, Formatter};
 
 use agent_platform::ipc::EndpointCancellation;
+use agent_protocol::generated::v1 as wire;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{Instant, sleep_until};
 
@@ -42,6 +43,10 @@ pub struct ActiveRunnerCleanup<R> {
 pub struct ActiveRunnerLifetime<S, R> {
     driver: Box<AsyncRunnerControlDriver<S>>,
     resources: R,
+    heartbeat_interval: std::time::Duration,
+    next_heartbeat_at: Instant,
+    last_progress_at_unix_ms: i64,
+    last_event_seq: u64,
 }
 
 impl<S, R> Debug for ActiveRunnerLifetime<S, R>
@@ -74,11 +79,28 @@ impl<S, R> ActiveRunnerLifetime<S, R>
 where
     S: AsyncRead + AsyncWrite + Unpin + 'static,
 {
-    pub(crate) fn new(driver: AsyncRunnerControlDriver<S>, resources: R) -> Self {
-        Self {
+    pub(crate) fn new(
+        driver: AsyncRunnerControlDriver<S>,
+        resources: R,
+    ) -> Result<Self, AsyncControlDriverError> {
+        let heartbeat_interval = driver.heartbeat_interval()?;
+        let next_heartbeat_at = Instant::now()
+            .checked_add(heartbeat_interval)
+            .ok_or(AsyncControlDriverError::InvalidHeartbeatSchedule)?;
+        let last_progress_at_unix_ms = driver.owner_now_unix_ms();
+        if last_progress_at_unix_ms <= 0 {
+            return Err(AsyncControlDriverError::InvalidClockReading(
+                last_progress_at_unix_ms,
+            ));
+        }
+        Ok(Self {
             driver: Box::new(driver),
             resources,
-        }
+            heartbeat_interval,
+            next_heartbeat_at,
+            last_progress_at_unix_ms,
+            last_event_seq: 0,
+        })
     }
 
     #[must_use]
@@ -101,9 +123,23 @@ where
     /// after its first poll closes control, revokes effects, and drops every
     /// retained resource without spawning detached work.
     pub(crate) async fn advance(
-        mut self,
+        self,
         cancellation: &mut EndpointCancellation,
     ) -> ActiveRunnerLifetimeAdvance<S, R> {
+        self.advance_with_resource_sample(cancellation, || {
+            Ok(wire::ResourceSample::default())
+        })
+        .await
+    }
+
+    pub(crate) async fn advance_with_resource_sample<F>(
+        mut self,
+        cancellation: &mut EndpointCancellation,
+        resource_sample: F,
+    ) -> ActiveRunnerLifetimeAdvance<S, R>
+    where
+        F: FnOnce() -> Result<wire::ResourceSample, AsyncControlDriverError>,
+    {
         let hard_deadline = match self.driver.hard_deadline() {
             Ok(deadline) => deadline,
             Err(error) => {
@@ -112,7 +148,11 @@ where
                 );
             }
         };
-        let control = Box::pin(self.driver.receive_active(hard_deadline));
+        let heartbeat_wake = self.next_heartbeat_at.min(hard_deadline);
+        let control = Box::pin(
+            self.driver
+                .receive_active(heartbeat_wake, hard_deadline),
+        );
         let selected = tokio::select! {
             biased;
             () = cancellation.cancelled() => Selected::LocalCancellation,
@@ -130,7 +170,41 @@ where
                 };
                 cleanup(self, reason)
             }
-            Selected::Control(Ok(event)) => {
+            Selected::Control(Ok(None)) => {
+                if Instant::now() >= hard_deadline {
+                    return cleanup(self, ActiveRunnerExitReason::HardDeadlineElapsed);
+                }
+                let resources = match resource_sample() {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return cleanup(self, ActiveRunnerExitReason::ProtocolFailure(error));
+                    }
+                };
+                if let Err(error) = self
+                    .driver
+                    .send_heartbeat(
+                        self.last_progress_at_unix_ms,
+                        self.last_event_seq,
+                        resources,
+                    )
+                    .await
+                {
+                    return cleanup(self, ActiveRunnerExitReason::ProtocolFailure(error));
+                }
+                self.next_heartbeat_at = match Instant::now().checked_add(self.heartbeat_interval) {
+                    Some(value) => value,
+                    None => {
+                        return cleanup(
+                            self,
+                            ActiveRunnerExitReason::ProtocolFailure(
+                                AsyncControlDriverError::InvalidHeartbeatSchedule,
+                            ),
+                        );
+                    }
+                };
+                ActiveRunnerLifetimeAdvance::Continue(self)
+            }
+            Selected::Control(Ok(Some(event))) => {
                 if Instant::now() >= hard_deadline {
                     return cleanup(self, ActiveRunnerExitReason::HardDeadlineElapsed);
                 }
@@ -151,7 +225,9 @@ where
     fn cleanup(mut self, reason: ActiveRunnerExitReason) -> ActiveRunnerCleanup<R> {
         self.driver.close();
         let final_state = self.driver.state();
-        let Self { driver, resources } = self;
+        let Self {
+            driver, resources, ..
+        } = self;
         drop(driver);
         ActiveRunnerCleanup {
             reason,
@@ -190,7 +266,7 @@ impl<R> ActiveRunnerCleanup<R> {
 enum Selected {
     LocalCancellation,
     HardDeadline,
-    Control(Result<super::ControlDriverEvent, AsyncControlDriverError>),
+    Control(Result<Option<super::ControlDriverEvent>, AsyncControlDriverError>),
 }
 
 fn cleanup<S, R>(

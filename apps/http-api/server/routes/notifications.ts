@@ -27,7 +27,6 @@ export interface NotificationRouteTarget {
 
 export interface NotificationSourceContext {
   target: NotificationRouteTarget;
-  pipelineTarget?: NotificationRouteTarget;
 }
 
 export interface NotificationStreamEnvelope extends NotificationRuntimeEvent {
@@ -147,7 +146,7 @@ export async function resolveNotificationSourceContext(
       sessionId: session.id,
       label: session.title,
     };
-    return { target, pipelineTarget: target };
+    return { target };
   }
 
   const companySessionId = asCompanySessionId(source.sessionId);
@@ -165,10 +164,7 @@ export async function resolveNotificationSourceContext(
     sessionId: session.id,
     label: session.name,
   };
-  return {
-    target,
-    pipelineTarget: { ...target, route: `${base}/pipelines` },
-  };
+  return { target };
 }
 
 async function resolveCompanySessionFromBundle(

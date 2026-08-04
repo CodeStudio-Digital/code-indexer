@@ -131,7 +131,8 @@ where
     let gate = driver.effect_gate_for_test().expect("active effect gate");
     let drops = Arc::new(AtomicUsize::new(0));
     (
-        ActiveRunnerLifetime::new(driver, DropProbe(Arc::clone(&drops))),
+        ActiveRunnerLifetime::new(driver, DropProbe(Arc::clone(&drops)))
+            .expect("active heartbeat schedule"),
         control,
         gate,
         drops,

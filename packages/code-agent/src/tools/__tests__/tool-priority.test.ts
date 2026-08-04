@@ -283,9 +283,6 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     }
     expect(names).toHaveLength(28);
     expect(result.protectedToolNames.has('set_agent_status')).toBe(false);
-    expect(names).not.toContain('list_pipelines');
-    expect(names).not.toContain('start_pipeline');
-    expect(result.protectedToolNames.has('list_pipelines')).toBe(false);
   });
 
   it('keeps the shared Drive available to compact Company subordinates', () => {

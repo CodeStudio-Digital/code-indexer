@@ -53,7 +53,10 @@ const mockWorker = vi.hoisted(() => {
         if (state.releaseWriterImpl) return state.releaseWriterImpl(type, payload, opts);
         return { ok: true };
       }
-      if (type === 'acquireSessionWriter') return { ok: true };
+      if (type === 'acquireSessionWriter') {
+        if (state.acquireWriterImpl) return state.acquireWriterImpl(type, payload, opts);
+        return { ok: true };
+      }
       if (state.requestImpl) return state.requestImpl(type, payload, opts);
       if (type === 'pushUserMessage') return { ok: true, roundMessageId: 42 };
       return { ok: true };
@@ -107,12 +110,14 @@ const mockWorker = vi.hoisted(() => {
   const state: {
     hosts: MockWorkerHost[];
     requestImpl: RequestImpl | null;
+    acquireWriterImpl: RequestImpl | null;
     releaseWriterImpl: RequestImpl | null;
     startImpl: ((host: MockWorkerHost) => Promise<void>) | null;
     evictImpl: ((host: MockWorkerHost) => Promise<void>) | null;
   } = {
     hosts: [],
     requestImpl: null,
+    acquireWriterImpl: null,
     releaseWriterImpl: null,
     startImpl: null,
     evictImpl: null,
@@ -128,6 +133,7 @@ vi.mock('@mcp/orchestrator-host', () => ({
 import {
   CoderWorkerPool,
   CONTROL_PLANE_LEASE_RENEW_INTERVAL_MS,
+  SESSION_WRITER_ACQUIRE_TIMEOUT_MS,
 } from '../CoderWorkerPool.js';
 
 function getRunId(bus: CoderRunBus): number {
@@ -153,6 +159,7 @@ describe('CoderWorkerPool', () => {
   beforeEach(() => {
     mockWorker.state.hosts.length = 0;
     mockWorker.state.requestImpl = null;
+    mockWorker.state.acquireWriterImpl = null;
     mockWorker.state.releaseWriterImpl = null;
     mockWorker.state.startImpl = null;
     mockWorker.state.evictImpl = null;
@@ -231,8 +238,9 @@ describe('CoderWorkerPool', () => {
     expect(mockWorker.state.hosts[0].bridge.requests[0]).toMatchObject({
       type: 'acquireSessionWriter',
       payload: {},
-      opts: { timeoutMs: 15_000 },
+      opts: { timeoutMs: SESSION_WRITER_ACQUIRE_TIMEOUT_MS },
     });
+    expect(SESSION_WRITER_ACQUIRE_TIMEOUT_MS).toBe(120_000);
   });
 
   it('routes provider persistence through the worker that owns the session', async () => {
@@ -522,6 +530,55 @@ describe('CoderWorkerPool', () => {
     expect(host.evictCalls).toBe(1);
     expect(existsSync(leasePath)).toBe(false);
     expect(p.has(sid(92))).toBe(false);
+  });
+
+  it('reclaims the exact owner lease when writer acquisition fails during startup', async () => {
+    const p = createPool();
+    let leasePath = '';
+
+    mockWorker.state.acquireWriterImpl = async () => {
+      const host = mockWorker.state.hosts.at(-1)!;
+      const hostOpts = host.opts as {
+        workerData: {
+          sessionContext: {
+            bundlePath: string;
+            writerOwnerId: string;
+          };
+        };
+      };
+      const { bundlePath, writerOwnerId } = hostOpts.workerData.sessionContext;
+      const eventsPath = join(bundlePath, 'events');
+      leasePath = join(eventsPath, 'writer.lease');
+      mkdirSync(eventsPath, { recursive: true });
+      writeFileSync(
+        leasePath,
+        `${JSON.stringify({
+          schema_version: 1,
+          token: randomUUID(),
+          fence: 1,
+          pid: process.pid,
+          owner_id: writerOwnerId,
+          owner_host: 'test',
+          acquired_at: new Date().toISOString(),
+          expires_at: new Date(Date.now() + 30_000).toISOString(),
+        })}\n`,
+      );
+      throw new Error('writer recovery exceeded its startup budget');
+    };
+
+    await expect(
+      p.runFresh(sid(91), { userMessage: 'first' }),
+    ).rejects.toThrow('writer recovery exceeded its startup budget');
+
+    expect(mockWorker.state.hosts[0].evictCalls).toBe(1);
+    expect(existsSync(leasePath)).toBe(false);
+    expect(p.has(sid(91))).toBe(false);
+
+    mockWorker.state.acquireWriterImpl = null;
+    await expect(
+      p.runFresh(sid(91), { userMessage: 'retry' }),
+    ).resolves.toBeDefined();
+    expect(mockWorker.state.hosts).toHaveLength(2);
   });
 
   function makeRunContext(value: number, tag: string): ControlPlaneRunContext {

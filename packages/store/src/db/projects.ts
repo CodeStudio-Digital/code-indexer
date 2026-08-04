@@ -171,7 +171,7 @@ export function del(db: DB, id: number): void {
  * data because `ON DELETE CASCADE` + the FTS AFTER-DELETE triggers fan out to
  * the children (files → symbols/file_dependencies/
  * symbol_references/symbol_relations/*_fts; runs → costs; snapshots →
- * snapshot_versions/*_fts and reusable project pipeline definitions). Listing
+ * snapshot_versions/*_fts). Listing
  * only the parents keeps this from
  * silently going stale when a new child table is added.
  */
@@ -180,12 +180,11 @@ const PROJECT_SCOPED_TABLES = [
   'runs',
   'snapshots',
   'webhooks',
-  'pipelines',
 ] as const;
 
 /**
- * Wipe a project's indexed data, project snapshots, runs, costs and reusable
- * project pipeline definitions, but KEEP the project row and every filesystem
+ * Wipe a project's indexed data, project snapshots, runs and costs, but KEEP
+ * the project row and every filesystem
  * session bundle. Counters are reset; semantic generations and their local
  * vectors are handled by the caller. Runs in one transaction.
  */

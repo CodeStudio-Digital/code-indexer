@@ -80,66 +80,6 @@ export function notifyCoderStreamEvent(
   }
 }
 
-export function notifyPipelineStreamEvent(
-  sessionId: string,
-  eventName: string,
-  data: Payload,
-  context?: NotificationSourceContext,
-): void {
-  if (!context?.target) return;
-  const target = context.pipelineTarget ?? context.target;
-  const label = target.label ?? context.target.label ?? `Session #${sessionId}`;
-  const executionId = readString(data, 'executionId') ?? 'unknown';
-  const publish = (event: AppNotificationEvent) => emit(event, context.dedupeKey);
-
-  if (eventName === 'pipeline_paused' && readBoolean(data, 'awaitingConfirmation')) {
-    publish({
-      kind: 'human_action_required',
-      target,
-      id: `pipeline_paused:${executionId}`,
-      title: tt('notifications.pipelinePausedTitle'),
-      body: tt('notifications.pipelineConfirmationBody', { label }),
-      severity: 'warning',
-    });
-    return;
-  }
-
-  if (eventName === 'pipeline_completed') {
-    publish({
-      kind: 'session_finished',
-      target,
-      id: `pipeline_completed:${executionId}`,
-      title: tt('notifications.pipelineCompletedTitle'),
-      body: tt('notifications.pipelineCompletedBody', { label }),
-      severity: 'info',
-    });
-    return;
-  }
-
-  if (eventName === 'pipeline_aborted') {
-    publish({
-      kind: 'session_finished',
-      target,
-      id: `pipeline_aborted:${executionId}`,
-      title: tt('notifications.pipelineAbortedTitle'),
-      body: tt('notifications.pipelineAbortedBody', { label }),
-      severity: 'warning',
-    });
-    return;
-  }
-
-  if (eventName === 'pipeline_failed') {
-    publish({
-      kind: 'session_finished',
-      target,
-      id: `pipeline_failed:${executionId}`,
-      title: tt('notifications.pipelineFailedTitle'),
-      body: tt('notifications.pipelineFailedBody', { label }),
-      severity: 'error',
-    });
-  }
-}
-
 export function notifyCompanyStreamEvent(
   companySessionId: string,
   eventName: string,
@@ -147,11 +87,6 @@ export function notifyCompanyStreamEvent(
   context?: NotificationSourceContext,
 ): void {
   if (!context?.target) return;
-  if (eventName.startsWith('pipeline_')) {
-    notifyPipelineStreamEvent(companySessionId, eventName, data, context);
-    return;
-  }
-
   const target = context.target;
   const label = target.label ?? `Company session #${companySessionId}`;
   const publish = (event: AppNotificationEvent) => emit(event, context.dedupeKey);
@@ -243,10 +178,6 @@ function readString(data: Payload, key: string): string | undefined {
 function readNumber(data: Payload, key: string): number | undefined {
   const value = data?.[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-function readBoolean(data: Payload, key: string): boolean {
-  return data?.[key] === true;
 }
 
 function tt(key: string, options?: Record<string, unknown>): string {

@@ -42,8 +42,8 @@ pub use digest::{frame_envelope_sha256, frame_payload_sha256};
 pub use direction::{DirectionError, FrameDirection};
 pub use error::{FrameHeaderError, FrameValidationError, PayloadIdentityError};
 pub use established::{
-    AsyncEstablishedAttemptChannel, AsyncEstablishedChannelError, EstablishedAttemptChannel,
-    EstablishedChannelError,
+    ActiveFrameReceiveOutcome, AsyncEstablishedAttemptChannel, AsyncEstablishedChannelError,
+    EstablishedAttemptChannel, EstablishedChannelError,
 };
 pub use receiver::{
     AttemptFrameReceiver, BoundedReplayOutcome, CommittedInbound, FrameReceiveOutcome,

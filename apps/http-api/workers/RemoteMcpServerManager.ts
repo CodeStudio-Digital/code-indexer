@@ -63,6 +63,19 @@ export class RemoteMcpServerManager implements IMcpServerManager {
    * matches what the in-process manager does.
    */
   async connectAll(_configs: McpServerConfig[]): Promise<void> {
+    await this.fetchSnapshot();
+  }
+
+  /**
+   * A session can outlive the pool snapshot it received at run startup. Ask
+   * the main process for a reconciled snapshot again so a broker that came up
+   * later becomes visible without recreating the session.
+   */
+  async refreshAll(_configs: McpServerConfig[]): Promise<void> {
+    await this.fetchSnapshot();
+  }
+
+  private async fetchSnapshot(): Promise<void> {
     try {
       this.snapshot = await this.bridge.request<McpExternalSnapshot>(
         'mcpExt.snapshot',

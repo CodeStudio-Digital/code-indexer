@@ -30,6 +30,13 @@ export interface IMcpServerManager {
   connectAll(configs: McpServerConfig[]): Promise<void>;
 
   /**
+   * Reconcile the live connections and tool catalogue with the latest server
+   * configs. Unlike `connectAll`, this is safe to call after an earlier
+   * connection attempt failed or after an admin edit changed the server set.
+   */
+  refreshAll(configs: McpServerConfig[]): Promise<void>;
+
+  /**
    * Snapshot of all tools across all currently-connected servers,
    * with a tier map so runCoder can override visibility per-server
    * for subordinate agents.

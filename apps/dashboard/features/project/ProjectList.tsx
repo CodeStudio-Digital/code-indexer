@@ -8,10 +8,12 @@ import {
   FolderGit2,
   LayoutGrid,
   LayoutList,
+  ListChecks,
   Plus,
   Search,
   SlidersHorizontal,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import { Badge } from '../../components/ui/badge.js';
@@ -38,6 +40,10 @@ import { cn } from '../../lib/utils.js';
 import { loadRecentProjects } from '../../state/recent-projects.js';
 import type { Project as SettingsProject } from '@mcp/shared/types.js';
 import { ProjectCard, type ProjectCardData } from './list/ProjectCard.js';
+import {
+  BulkDeleteProjectsDialog,
+  type BulkProjectDeleteResponse,
+} from './list/BulkDeleteProjectsDialog.js';
 import {
   countProjectStatuses,
   filterProjectList,
@@ -91,6 +97,9 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
   const [layout, setLayout] = useState<LayoutMode>(readStoredLayout);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [indexingIds, setIndexingIds] = useState<Set<number>>(new Set());
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [recentIds] = useState(loadRecentProjects);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const indexingIdsRef = useRef<Set<number>>(new Set());
@@ -103,6 +112,13 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     [onSelectProject],
   );
   const handleEditProject = useCallback((p: Project) => setEditing(p), []);
+  const handleToggleSelected = useCallback((p: Project) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      next.has(p.id) ? next.delete(p.id) : next.add(p.id);
+      return next;
+    });
+  }, []);
   const handleIndexProject = useCallback(
     async (p: Project) => {
       if (indexingIdsRef.current.has(p.id)) return;
@@ -210,6 +226,12 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
     () => countProjectStatuses(projects ?? []),
     [projects],
   );
+  const selectedProjects = useMemo(
+    () => (projects ?? []).filter((project) => selectedIds.has(project.id)),
+    [projects, selectedIds],
+  );
+  const allVisibleSelected = visibleProjects.length > 0
+    && visibleProjects.every((project) => selectedIds.has(project.id));
 
   useEffect(() => {
     if (selectedGroup === null || !projects) return;
@@ -219,6 +241,53 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
         : projects.some((project) => project.group_name === selectedGroup);
     if (!selectionStillExists) setSelectedGroup(null);
   }, [projects, selectedGroup]);
+
+  useEffect(() => {
+    if (!projects || selectedIds.size === 0) return;
+    const availableIds = new Set(projects.map((project) => project.id));
+    if ([...selectedIds].every((id) => availableIds.has(id))) return;
+    setSelectedIds((current) => new Set([...current].filter((id) => availableIds.has(id))));
+  }, [projects, selectedIds]);
+
+  function exitSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }
+
+  function toggleVisibleSelection() {
+    setSelectedIds((current) => {
+      if (allVisibleSelected) return new Set();
+      const next = new Set(current);
+      for (const project of visibleProjects) next.add(project.id);
+      return next;
+    });
+  }
+
+  function handleBulkDeleteCompleted(result: BulkProjectDeleteResponse) {
+    const catalogFailures = result.results.filter((item) => !item.catalog_deleted);
+    const errors = result.results.filter((item) => item.error);
+    setSelectedIds(new Set(catalogFailures.map((item) => item.id)));
+    if (catalogFailures.length === 0) setSelectionMode(false);
+    refetch();
+
+    if (errors.length > 0) {
+      const firstError = errors[0];
+      toast.warning(t('projects:bulkDelete.partial'), {
+        description: t('projects:bulkDelete.partialDescription', {
+          projects: result.projects_deleted,
+          errors: errors.length,
+          detail: [firstError.root_path, firstError.error].filter(Boolean).join(': '),
+        }),
+      });
+      return;
+    }
+    toast.success(t('projects:bulkDelete.completed'), {
+      description: t('projects:bulkDelete.completedDescription', {
+        projects: result.projects_deleted,
+        folders: result.folders_deleted,
+      }),
+    });
+  }
 
   function toggleGroup(group: string) {
     setCollapsedGroups((prev) => {
@@ -320,7 +389,10 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
               onSelect={handleSelectProject}
               onEdit={handleEditProject}
               onIndex={handleIndexProject}
+              onToggleSelected={handleToggleSelected}
               indexing={indexingIds.has(p.id)}
+              selecting={selectionMode}
+              selected={selectedIds.has(p.id)}
             />
           ))}
         </div>
@@ -335,7 +407,10 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             onSelect={() => onSelectProject(p.id, p.name)}
             onEdit={() => setEditing(p)}
             onIndex={() => void handleIndexProject(p)}
+            onToggleSelected={() => handleToggleSelected(p)}
             indexing={indexingIds.has(p.id)}
+            selecting={selectionMode}
+            selected={selectedIds.has(p.id)}
           />
         ))}
       </div>
@@ -535,6 +610,7 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
 
       <section className="min-w-0 space-y-5">
         {recentProjects.length > 0 &&
+          !selectionMode &&
           selectedGroup === null &&
           !searchQuery.trim() &&
           filter === 'all' && (
@@ -566,16 +642,57 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
             </section>
           )}
 
-        <div className="flex min-w-0 items-center justify-between gap-3 border-b pb-3">
-          <h3 className="truncate text-base font-semibold">{selectedGroupLabel}</h3>
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {searchQuery.trim() || filter !== 'all' || selectedGroup !== null
-              ? t('projects:searchFiltered', {
-                  filtered: visibleProjects.length,
-                  total: projects.length,
-                })
-              : t('projects:visibleCount', { count: visibleProjects.length })}
-          </span>
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-b pb-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <h3 className="truncate text-base font-semibold">{selectedGroupLabel}</h3>
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+              {searchQuery.trim() || filter !== 'all' || selectedGroup !== null
+                ? t('projects:searchFiltered', {
+                    filtered: visibleProjects.length,
+                    total: projects.length,
+                  })
+                : t('projects:visibleCount', { count: visibleProjects.length })}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-end gap-1.5">
+            {selectionMode ? (
+              <>
+                <Badge variant="muted" className="normal-case tracking-normal">
+                  {t('projects:selection.selected', { count: selectedProjects.length })}
+                </Badge>
+                <Button variant="outline" size="sm" onClick={toggleVisibleSelection}>
+                  <ListChecks className="h-4 w-4" />
+                  {allVisibleSelected
+                    ? t('projects:selection.clear')
+                    : t('projects:selection.selectVisible')}
+                </Button>
+                {selectedProjects.length > 0 && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setBulkDeleteOpen(true)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {t('projects:bulkDelete.confirm', { count: selectedProjects.length })}
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={exitSelectionMode}
+                  aria-label={t('projects:selection.exit')}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </>
+            ) : (
+              <Button variant="outline" size="sm" onClick={() => setSelectionMode(true)}>
+                <ListChecks className="h-4 w-4" />
+                {t('projects:selection.select')}
+              </Button>
+            )}
+          </div>
         </div>
 
         {(!grouped || selectedGroup !== null) && renderProjects(visibleProjects)}
@@ -624,6 +741,13 @@ export default function ProjectList({ onSelectProject }: ProjectListProps) {
           </div>
         )}
       </section>
+
+      <BulkDeleteProjectsDialog
+        open={bulkDeleteOpen}
+        projects={selectedProjects}
+        onOpenChange={setBulkDeleteOpen}
+        onCompleted={handleBulkDeleteCompleted}
+      />
 
       {editing && (
         <Suspense fallback={null}>

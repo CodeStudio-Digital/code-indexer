@@ -8,6 +8,13 @@ use zeroize::Zeroizing;
 use super::operation::AsyncEstablishedOperation;
 use super::{AsyncEstablishedAttemptChannel, AsyncEstablishedChannelError};
 use crate::frame::{FrameReceiveOutcome, InboundFrameError};
+use crate::framing::asynchronous::IdleReceiveOutcome;
+
+#[derive(Debug)]
+pub enum ActiveFrameReceiveOutcome {
+    Idle,
+    Frame(FrameReceiveOutcome),
+}
 
 impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncEstablishedAttemptChannel<S> {
     /// Receives active control traffic without treating idle as failure.
@@ -21,11 +28,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncEstablishedAttemptChannel
     /// malformed frame, EOF, replay write failure, or prior channel poisoning.
     pub fn begin_receive_active<'a, F>(
         &'a mut self,
+        idle_wake_deadline: Instant,
         hard_deadline: Instant,
         progress_timeout: Duration,
         replay_write_timeout: Duration,
         clock: F,
-    ) -> impl Future<Output = Result<FrameReceiveOutcome, AsyncEstablishedChannelError>> + 'a
+    ) -> impl Future<Output = Result<ActiveFrameReceiveOutcome, AsyncEstablishedChannelError>> + 'a
     where
         F: FnOnce() -> i64 + 'a,
     {
@@ -34,6 +42,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncEstablishedAttemptChannel
             let result = operation
                 .channel()
                 .begin_receive_active_inner(
+                    idle_wake_deadline,
                     hard_deadline,
                     progress_timeout,
                     replay_write_timeout,
@@ -49,11 +58,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncEstablishedAttemptChannel
 
     async fn begin_receive_active_inner<F>(
         &mut self,
+        idle_wake_deadline: Instant,
         hard_deadline: Instant,
         progress_timeout: Duration,
         replay_write_timeout: Duration,
         clock: F,
-    ) -> Result<FrameReceiveOutcome, AsyncEstablishedChannelError>
+    ) -> Result<ActiveFrameReceiveOutcome, AsyncEstablishedChannelError>
     where
         F: FnOnce() -> i64,
     {
@@ -64,10 +74,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncEstablishedAttemptChannel
         }
         let encoded = match self
             .transport
-            .receive_idle_progress_bounded(hard_deadline, progress_timeout)
+            .receive_until_idle_wake(idle_wake_deadline, hard_deadline, progress_timeout)
             .await
         {
-            Ok(encoded) => Zeroizing::new(encoded),
+            Ok(IdleReceiveOutcome::Idle) => return Ok(ActiveFrameReceiveOutcome::Idle),
+            Ok(IdleReceiveOutcome::Frame(encoded)) => Zeroizing::new(encoded),
             Err(error) => {
                 self.receiver.poison();
                 self.sender.poison();
@@ -101,6 +112,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncEstablishedAttemptChannel
                 return Err(AsyncEstablishedChannelError::Framing(error));
             }
         }
-        Ok(outcome)
+        Ok(ActiveFrameReceiveOutcome::Frame(outcome))
     }
 }

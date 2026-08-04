@@ -20,11 +20,10 @@ pub(super) async fn read_first_byte<S: AsyncRead + Unpin>(
     stream: &mut S,
 ) -> Result<u8, AsyncFramingError> {
     let mut first = [0_u8; 1];
-    match stream.read_exact(&mut first).await {
-        Ok(_) => Ok(first[0]),
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
-            Err(AsyncFramingError::PeerClosed)
-        }
+    match stream.read(&mut first).await {
+        Ok(1) => Ok(first[0]),
+        Ok(0) => Err(AsyncFramingError::PeerClosed),
+        Ok(_) => unreachable!("one-byte read cannot return more than one byte"),
         Err(error) => Err(FramingError::Io(error).into()),
     }
 }

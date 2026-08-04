@@ -331,7 +331,7 @@ export function subscribe(
  * attach replay only needs (a) the LIVE tail — everything from the last
  * `message_complete` on, which is what reconstructs `currentTurn` — plus
  * (b) the low-volume CROSS-TURN state kinds below (task runs, spawned-agent
- * groups, pipelines, interactive gates) that the dashboard accumulates from
+ * groups and interactive gates) that the dashboard accumulates from
  * events across turns. The replay weight lives in the turn-local kinds
  * (text/thinking deltas, tool_call_*), which are exactly what gets dropped.
  *
@@ -354,10 +354,6 @@ export const REPLAY_STATE_KINDS = new Set<string>([
   'task_run_task_finished', 'task_run_finished',
   // Spawned-agent groups (background jobs) span turns.
   'agents_group_start', 'agent_progress', 'agents_group_end',
-  // Pipeline lifecycle spans turns.
-  'pipeline_started', 'pipeline_node_started', 'pipeline_node_completed',
-  'pipeline_node_failed', 'pipeline_paused', 'pipeline_resumed',
-  'pipeline_completed', 'pipeline_aborted', 'pipeline_failed',
   // Latest-wins session state the client has no other live source for.
   'todos_updated', 'session_agent_changed', 'session_drive_changed',
   'session_snapshot_changed', 'diagram_changed', 'context_status',

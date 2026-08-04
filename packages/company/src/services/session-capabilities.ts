@@ -4,11 +4,10 @@ import type {
 } from '@mcp/company/types.js';
 import type { AutonomyConfig } from '@mcp/company/services/autonomy/autonomy-config.js';
 
-export type CompanyGenericSurface = 'kanban' | 'pipelines' | 'scheduler';
+export type CompanyGenericSurface = 'kanban' | 'scheduler';
 
 export interface CompanyServiceWiringPlan {
   initializeCompanyKanban: boolean;
-  initializeCompanyPipelines: boolean;
   initializeCompanyScheduler: boolean;
   allowIncidentKanbanCards: boolean;
 }
@@ -33,8 +32,6 @@ export function resolveCompanyServiceWiringPlan(
   const initializeCompanyKanban = capabilities.allowCompanyKanban;
   return {
     initializeCompanyKanban,
-    initializeCompanyPipelines:
-      initializeCompanyKanban && capabilities.allowCompanyPipelines,
     initializeCompanyScheduler:
       initializeCompanyKanban && capabilities.allowCompanyScheduler,
     allowIncidentKanbanCards: initializeCompanyKanban,
@@ -59,7 +56,6 @@ export function resolveCompanySessionCapabilities(
       // still expose lifecycle/recovery, but no App mutation surface starts.
       allowAppTools: linked,
       allowCompanyKanban: false,
-      allowCompanyPipelines: false,
       allowCompanyScheduler: false,
       allowAppScheduler: linked,
       allowFreeSubordinateSpawn: false,
@@ -74,7 +70,6 @@ export function resolveCompanySessionCapabilities(
     workSource: 'company_kanban',
     allowAppTools: false,
     allowCompanyKanban: true,
-    allowCompanyPipelines: true,
     allowCompanyScheduler: true,
     allowAppScheduler: false,
     allowFreeSubordinateSpawn: true,

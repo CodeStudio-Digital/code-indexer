@@ -5,7 +5,6 @@ import { recordCoderRuntimeNotification } from '../chat/notifications/runtime-ev
 import {
   notifyCoderStreamEvent,
   notifyCompanyStreamEvent,
-  notifyPipelineStreamEvent,
 } from './stream-events.js';
 import type { NotificationSourceContext } from './types.js';
 
@@ -68,11 +67,7 @@ export function dispatchGlobalNotification(source: GlobalNotificationEnvelope): 
   };
   if (source.kind === 'coder') {
     recordCoderRuntimeNotification(source);
-    if (source.event.startsWith('pipeline_')) {
-      notifyPipelineStreamEvent(source.sessionId, source.event, data, context);
-    } else {
-      notifyCoderStreamEvent(source.sessionId, source.event, data, context);
-    }
+    notifyCoderStreamEvent(source.sessionId, source.event, data, context);
     return;
   }
   notifyCompanyStreamEvent(source.sessionId, source.event, data, context);

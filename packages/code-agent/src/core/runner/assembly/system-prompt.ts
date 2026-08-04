@@ -102,4 +102,6 @@
 // runs cannot retain the previous unbounded-research framing.
 // 2026-07-24.1 bump — goal state is optional telemetry; completion evidence
 // and independent review are advisory instead of execution gates.
-export const SYSTEM_PROMPT_VERSION = '20260731.1';
+// 2026-08-02.1 bump — restore public progress commentary around substantial
+// tool work and distinguish it from reasoning summaries and the final answer.
+export const SYSTEM_PROMPT_VERSION = '20260802.1';

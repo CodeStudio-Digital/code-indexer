@@ -17,6 +17,7 @@ use super::{EffectivePreparedFacts, HydrationToken};
 mod activation;
 mod active;
 mod error;
+mod heartbeat;
 mod inbound;
 mod operation;
 mod termination;

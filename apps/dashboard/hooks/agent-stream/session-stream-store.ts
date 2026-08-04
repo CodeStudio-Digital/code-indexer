@@ -20,6 +20,8 @@ const sessionTouchedAt = new Map<SessionId, number>();
 const sessionListeners = new Map<SessionId, Set<() => void>>();
 const currentTurns = new Map<SessionId, AssistantTurn>();
 const currentTurnListeners = new Map<SessionId, Set<() => void>>();
+const activeSessionListeners = new Set<() => void>();
+let activeSessionIdsSnapshot: readonly SessionId[] = [];
 
 export const agentStreamAbortMap = new Map<SessionId, AbortController>();
 export const agentStreamLastSeenSeqMap = new Map<SessionId, number>();
@@ -47,6 +49,32 @@ export function subscribeAgentSession(
     listeners?.delete(listener);
     if (listeners?.size === 0) sessionListeners.delete(sessionId);
   };
+}
+
+/**
+ * Process-wide live-run snapshot used by navigation surfaces. A session can
+ * keep streaming after the user switches chats, so the sidebar must not infer
+ * activity only from whichever conversation is currently mounted.
+ */
+export function getActiveAgentSessionIdsSnapshot(): readonly SessionId[] {
+  return activeSessionIdsSnapshot;
+}
+
+export function subscribeActiveAgentSessions(listener: () => void): () => void {
+  activeSessionListeners.add(listener);
+  return () => activeSessionListeners.delete(listener);
+}
+
+function publishActiveAgentSessions(): void {
+  const next = Object.entries(sessionStates)
+    .filter(([, state]) => state.streaming)
+    .map(([sessionId]) => sessionId);
+  if (
+    next.length === activeSessionIdsSnapshot.length
+    && next.every((sessionId, index) => sessionId === activeSessionIdsSnapshot[index])
+  ) return;
+  activeSessionIdsSnapshot = next;
+  for (const listener of activeSessionListeners) listener();
 }
 
 export function getAgentCurrentTurnSnapshot(
@@ -111,6 +139,12 @@ export const updateAgentSession: UpdateSession = (sessionId, patch) => {
     }
   }
   sessionStates = merged;
+
+  // Publish only when run membership can have changed. In particular, avoid
+  // scanning/notifying the navigation store for token-only currentTurn churn.
+  if (Object.prototype.hasOwnProperty.call(next, 'streaming') || removed.length > 0) {
+    publishActiveAgentSessions();
+  }
 
   if (Object.prototype.hasOwnProperty.call(next, 'currentTurn')) {
     publishCurrentTurn(sessionId, merged[sessionId]?.currentTurn ?? null);
@@ -241,6 +275,8 @@ export function __resetAgentStreamStoreForTests(): void {
   sessionListeners.clear();
   currentTurns.clear();
   currentTurnListeners.clear();
+  activeSessionIdsSnapshot = [];
+  activeSessionListeners.clear();
   agentStreamAbortMap.clear();
   agentStreamLastSeenSeqMap.clear();
   agentStreamLastSeenBusIdMap.clear();

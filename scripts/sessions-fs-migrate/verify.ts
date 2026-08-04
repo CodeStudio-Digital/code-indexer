@@ -441,7 +441,6 @@ export async function smokeOperationalBundleRepositories(
     'log',
     'appStudioWorkflow',
     'appStudioRun',
-    'pipelineRun',
     'workflowStep',
     'deployment',
     'archive',

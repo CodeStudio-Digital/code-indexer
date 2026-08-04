@@ -1,13 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, lstatSync, readFileSync } from 'node:fs';
-import { mkdir, readdir, unlink } from 'node:fs/promises';
+import { existsSync, lstatSync, readFileSync, statSync } from 'node:fs';
+import { lstat, mkdir, readdir, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import {
   ArtifactStore,
   type ArtifactReader,
 } from './artifact-store.js';
 import { recoverSessionArtifacts } from './artifact-recovery.js';
-import { atomicWriteFile, atomicWriteJson, canonicalJson, durableRename } from './atomic-file.js';
+import {
+  atomicCopyFile,
+  atomicWriteFile,
+  atomicWriteJson,
+  canonicalJson,
+  durableRename,
+} from './atomic-file.js';
 import {
   assertContainedPath,
   assertPathHasNoLinks,
@@ -204,6 +210,15 @@ export class FileSessionRepository {
   readonly #writers = new Map<string, Promise<SessionWriter>>();
   readonly #sessionCache = new Map<string, SessionMetadata>();
   readonly #stateCache = new Map<string, SessionState>();
+  readonly #metricsCache = new Map<
+    string,
+    {
+      readonly mtimeMs: number;
+      readonly ctimeMs: number;
+      readonly size: number;
+      readonly summary: SessionMetricsSummary;
+    }
+  >();
   readonly #listeners = new Set<(event: SessionRepositoryEvent) => void>();
   readonly #moving = new Set<string>();
   readonly #artifactRecoveryRegistry: Set<string>;
@@ -313,6 +328,91 @@ export class FileSessionRepository {
     return { location, session, state };
   }
 
+  /**
+   * Clone the immutable coder transcript projections into a freshly-created
+   * target bundle. Artifact/entity files become durable first and the journal
+   * is published last, so an interrupted copy never exposes commits whose
+   * referenced files are missing. The target must not have opened a writer.
+   */
+  async cloneConversationProjection(
+    source: SessionLocation,
+    target: SessionLocation,
+    commits: readonly ConversationCommit[],
+  ): Promise<void> {
+    this.#assertReadableLocation(source);
+    this.#assertReadableLocation(target);
+    if (cacheKey(source) === cacheKey(target)) {
+      throw new Error('Conversation clone target must differ from its source');
+    }
+    if (this.#writers.has(cacheKey(target))) {
+      throw new Error(
+        `Cannot clone into session ${target.session_id} after its writer has opened`,
+      );
+    }
+
+    const atomicOptions = {
+      faultInjector: this.#faultInjector,
+      context: { session_id: target.session_id },
+    };
+    const copyTree = async (
+      sourceDirectory: string,
+      targetDirectory: string,
+    ): Promise<void> => {
+      await assertPathHasNoLinks(source.bundle_path, sourceDirectory);
+      await ensureDirectoryTreeNoLinks(target.bundle_path, targetDirectory);
+      const entries = await readdir(sourceDirectory, { withFileTypes: true });
+      // Bound fan-out so Windows volumes can overlap independent fsyncs without
+      // exhausting file handles on sessions with thousands of tool artifacts.
+      for (let offset = 0; offset < entries.length; offset += 16) {
+        await Promise.all(entries.slice(offset, offset + 16).map(async (entry) => {
+          assertSafeFileName(entry.name, 'conversation projection path');
+          const sourcePath = join(sourceDirectory, entry.name);
+          const targetPath = join(targetDirectory, entry.name);
+          assertContainedPath(source.bundle_path, sourcePath);
+          assertContainedPath(target.bundle_path, targetPath);
+          const sourceStat = await lstat(sourcePath);
+          if (sourceStat.isSymbolicLink()) {
+            throw new UnsafeSessionPathError(
+              `Refusing to clone symbolic link: ${sourcePath}`,
+            );
+          }
+          if (sourceStat.isDirectory()) {
+            await copyTree(sourcePath, targetPath);
+            return;
+          }
+          if (!sourceStat.isFile()) {
+            throw new UnsafeSessionPathError(
+              `Refusing to clone non-file projection: ${sourcePath}`,
+            );
+          }
+          await atomicCopyFile(sourcePath, targetPath, atomicOptions);
+        }));
+      }
+    };
+
+    // These directories are precisely the projections produced by the old
+    // message-by-message replay path. Plans/tasks/memory/runtime events remain
+    // intentionally session-local.
+    await Promise.all(
+      ['attachments', 'tools_outputs', 'metrics', 'chapters'].map((directory) =>
+        copyTree(
+          join(source.bundle_path, directory),
+          join(target.bundle_path, directory),
+        ),
+      ),
+    );
+    const conversation = commits.length === 0
+      ? ''
+      : `${commits.map((commit) => JSON.stringify(commit)).join('\n')}\n`;
+    await atomicWriteFile(
+      join(target.bundle_path, 'conversation.jsonl'),
+      conversation,
+      atomicOptions,
+    );
+    this.#metricsCache.delete(cacheKey(target));
+    this.#emit({ type: 'updated', location: target });
+  }
+
   #assertReadableLocation(location: SessionLocation): void {
     const expected = this.#locator.locate(location.scope, location.session_id);
     if (
@@ -369,7 +469,27 @@ export class FileSessionRepository {
 
   readMetricsSummarySync(location: SessionLocation): SessionMetricsSummary {
     this.#assertReadableLocation(location);
-    return readSessionMetricsSummarySync(location.bundle_path);
+    const path = join(location.bundle_path, 'metrics', 'summary.json');
+    assertPathHasNoLinksSync(location.bundle_path, path);
+    const stat = statSync(path);
+    const key = cacheKey(location);
+    const cached = this.#metricsCache.get(key);
+    if (
+      cached &&
+      cached.mtimeMs === stat.mtimeMs &&
+      cached.ctimeMs === stat.ctimeMs &&
+      cached.size === stat.size
+    ) {
+      return cached.summary;
+    }
+    const summary = readSessionMetricsSummarySync(location.bundle_path);
+    this.#metricsCache.set(key, {
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      size: stat.size,
+      summary,
+    });
+    return summary;
   }
 
   getCachedSession(location: SessionLocation): SessionMetadata | null {
@@ -633,6 +753,7 @@ export class FileSessionRepository {
       );
       if (session) this.#sessionCache.set(cacheKey(location), session);
       if (state) this.#stateCache.set(cacheKey(location), state);
+      if (input.metrics_summary) this.#metricsCache.delete(cacheKey(location));
       return { session, state };
     });
     this.#emit({ type: 'updated', location });
@@ -719,6 +840,7 @@ export class FileSessionRepository {
           location.session_id,
           this.#faultInjector,
         );
+        this.#metricsCache.delete(cacheKey(location));
       }
       this.#emit({ type: 'updated', location });
       return target;
@@ -729,13 +851,15 @@ export class FileSessionRepository {
     location: SessionLocation,
   ): Promise<SessionMetricsSummary> {
     const writer = await this.#writer(location);
-    return writer.runExclusive(() =>
-      rebuildSessionMetricsSummary(
+    return writer.runExclusive(async () => {
+      const summary = await rebuildSessionMetricsSummary(
         location.bundle_path,
         location.session_id,
         this.#faultInjector,
-      ),
-    );
+      );
+      this.#metricsCache.delete(cacheKey(location));
+      return summary;
+    });
   }
 
   async closeSession(location: SessionLocation): Promise<void> {
@@ -772,6 +896,7 @@ export class FileSessionRepository {
       await writer.closeAfterMove(trashPath);
       this.#sessionCache.delete(key);
       this.#stateCache.delete(key);
+      this.#metricsCache.delete(key);
       this.#artifactRecoveryRegistry.delete(key);
       this.#emit({ type: 'trashed', location, trash_path: trashPath });
       return {
@@ -791,6 +916,7 @@ export class FileSessionRepository {
           await writer.closeAfterMove(trashPath).catch(() => undefined);
           this.#sessionCache.delete(key);
           this.#stateCache.delete(key);
+          this.#metricsCache.delete(key);
           this.#artifactRecoveryRegistry.delete(key);
         } else {
           await writer.close().catch(() => undefined);

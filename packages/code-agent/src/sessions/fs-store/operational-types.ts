@@ -292,6 +292,13 @@ export interface FsTaskRunRow {
   updated_at: string;
 }
 
+export interface FsTaskRunPage {
+  items: FsTaskRunRow[];
+  totalCount: number;
+  nextOffset: number | null;
+  revision: number;
+}
+
 export interface FsCreateTaskRunInput {
   run_id: string;
   session_id: SessionId;
@@ -411,9 +418,17 @@ export interface FsToolCallStats {
   };
 }
 
+export interface FsToolCallSummaryPage {
+  items: FsToolCallStats['byName'];
+  totalCount: number;
+  nextOffset: number | null;
+  revision: number;
+}
+
 export interface FsSessionEvent {
   id: string;
   seq: number;
+  operation_id: string;
   type: string;
   created_at: string;
   payload: JsonValue;

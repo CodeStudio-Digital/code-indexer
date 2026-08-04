@@ -86,7 +86,7 @@ export function ZoneLayout({
       onToggleBottom={onToggleBottom}
       catalog={runtimeKind === 'company' ? workbenchSlots?.catalog : undefined}
       hiddenTabs={runtimeKind === 'app_studio'
-        ? ['kanban', 'memory', 'pipelines', 'files', 'git', 'drive', 'docs', 'tests', 'api', 'snapshots', 'archived']
+        ? ['kanban', 'memory', 'files', 'git', 'drive', 'docs', 'tests', 'api', 'snapshots', 'archived']
         : undefined}
       showTerminal={runtimeKind === 'company'}
     />

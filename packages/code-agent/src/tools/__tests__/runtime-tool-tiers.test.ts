@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import {
   collectRuntimeToolTiers,
@@ -65,5 +65,29 @@ describe('runtime tool tiers', () => {
     expect(result.isError).toBeFalsy();
     expect(activeTiers.has('plugin:cloudflare')).toBe(true);
     expect(result.content).toContain('2 tools from plugin cloudflare');
+  });
+
+  it('reconciles a late Unity tier before rejecting an initially unknown tier', async () => {
+    let unityAvailable = false;
+    const beforeExpand = vi.fn(async () => { unityAvailable = true; });
+    const expand = buildExpandTools(undefined, {
+      beforeExpand,
+      isTierAvailable: (tier) => tier === 'unity' && unityAvailable,
+    })[0];
+    const activeTiers = new Set<string>(['bootstrap']);
+
+    const result = await expand.handler(
+      { tier: 'unity' },
+      {
+        runner: {
+          activeTiers,
+          promoteTier: (tier: string) => activeTiers.add(tier),
+        },
+      } as never,
+    );
+
+    expect(beforeExpand).toHaveBeenCalledWith('unity');
+    expect(result.isError).toBeFalsy();
+    expect(activeTiers.has('unity')).toBe(true);
   });
 });

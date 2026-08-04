@@ -16,6 +16,7 @@ pub enum RunnerControlServiceError {
     PulseAccept(ProtectedEndpointFailure<WindowsEndpointCleanup>),
     Pulse(RunnerPulseError),
     PulseAuthority(RunnerBootstrapError),
+    ResourceSample(std::io::Error),
     PulsePumpStopped,
     Bootstrap(AsyncRunnerBootstrapError),
     Driver(AsyncControlDriverError),
@@ -45,6 +46,9 @@ impl Display for RunnerControlServiceError {
             }
             Self::Pulse(error) => Display::fmt(error, formatter),
             Self::PulseAuthority(error) => Display::fmt(error, formatter),
+            Self::ResourceSample(error) => {
+                write!(formatter, "runner resource sample failed: {error}")
+            }
             Self::PulsePumpStopped => formatter.write_str("runner pulse pump stopped"),
             Self::Bootstrap(error) => Display::fmt(error, formatter),
             Self::Driver(error) => Display::fmt(error, formatter),
@@ -76,6 +80,7 @@ impl Error for RunnerControlServiceError {
             Self::Accept(error) | Self::PulseAccept(error) => Some(error.error()),
             Self::Pulse(error) => Some(error),
             Self::PulseAuthority(error) => Some(error),
+            Self::ResourceSample(error) => Some(error),
             Self::Bootstrap(error) => Some(error),
             Self::Driver(error) => Some(error),
             Self::Hydration(error) => Some(error.as_ref()),

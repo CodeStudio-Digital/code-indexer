@@ -11,6 +11,7 @@ mod idle;
 mod io;
 
 pub use halves::{AsyncFrameReader, AsyncFrameWriter};
+pub(crate) use idle::IdleReceiveOutcome;
 use io::{read_frame, write_frame};
 
 type AsyncFrameHalves<S> = (

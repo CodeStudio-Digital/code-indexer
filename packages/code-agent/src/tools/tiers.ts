@@ -480,12 +480,6 @@ export const MASTER_TOOLS: ReadonlySet<string> = new Set([
   // review_subordinate_work — master runs the review pipeline over a sub's
   // snapshots (buildMasterTools). Was an untiered bootstrap fallback.
   'review_subordinate_work',
-  // Company pipeline orchestration is constructed by buildMasterTools. It is
-  // not a subordinate sandbox capability and belongs to the master identity.
-  'list_pipelines',
-  'start_pipeline',
-  'get_pipeline_status',
-  'stop_pipeline',
   // Master-only kanban management. The unified `kanban_post_comment`
   // and `kanban_update_objectives` live in the shared company tier.
   'kanban_create_card',
@@ -962,10 +956,6 @@ const FUNCTIONAL_DESCRIPTIONS: Record<string, string> = {
   broadcast_to_roles: 'Broadcast one message to multiple Company roles',
   kanban_plan_graph: 'Create a dependency-aware Company Kanban work graph',
   review_subordinate_work: 'Run the master review pipeline over subordinate changes',
-  list_pipelines: 'List Company execution pipelines',
-  start_pipeline: 'Start a Company execution pipeline',
-  get_pipeline_status: 'Read the current Company pipeline status',
-  stop_pipeline: 'Stop a Company execution pipeline',
   kanban_create_card: 'Create one or more Company Kanban cards',
   kanban_move_card: 'Move one or more Company Kanban cards between columns',
   kanban_update_meta: 'Update Company Kanban card metadata',

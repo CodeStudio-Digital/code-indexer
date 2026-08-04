@@ -96,6 +96,7 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
       const initial = resolveClaudeCodeModel(wireModel, accountInfo, {
         includeOAuth: !!creds.authToken,
         thinking: true,
+        thinkingDisplay: 'summarized',
         promptCacheTtl: '1h',
         effort: readClaudeCodeEffortForModel(opts, selectedModel),
       });
@@ -123,6 +124,7 @@ export function buildClaudeCode(_spec: ProviderSpec): WireParts {
           const resolved = resolveClaudeCodeModel(parseRuntimeModelRef(selectedModel).id, accountInfo, {
             includeOAuth: !!creds.authToken,
             thinking: true,
+            thinkingDisplay: 'summarized',
             hasTools: (req.tools?.length ?? 0) > 0,
             promptCacheTtl: '1h',
             effort: nativeEffort ?? readClaudeCodeEffortForModel(opts, selectedModel),

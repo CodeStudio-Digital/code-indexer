@@ -51,6 +51,7 @@ import {
 export function buildFindToolsTool(
   registry: ToolRegistry,
   tierOverrides?: ReadonlyMap<string, ToolTier>,
+  options?: { beforeSearch?: () => Promise<void> },
 ): CoderTool {
   return {
     name: 'find_tools',
@@ -114,6 +115,19 @@ export function buildFindToolsTool(
       const tokens = tokenizeQuery(query);
       if (tokens.length === 0) {
         return err('find_tools: query has no usable tokens.');
+      }
+
+      // External MCP servers can become ready after this runner was built
+      // (notably Unity's editor broker). Reconcile before reading the mutable
+      // registry so the same live session can discover the late catalogue.
+      if (options?.beforeSearch) {
+        try {
+          await options.beforeSearch();
+        } catch (e) {
+          console.warn(
+            `[find_tools] catalogue refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
       }
 
       // Coverage knob: fraction of distinct query tokens that must hit for

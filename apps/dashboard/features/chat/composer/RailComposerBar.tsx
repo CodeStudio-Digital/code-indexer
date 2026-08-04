@@ -16,14 +16,10 @@
  * parent `Composer` — this is layout only, so every function stays in sync
  * with the full chat composer.
  *
- * Pipeline mode is intentionally NOT wired in the rail (the editor host never
- * passes `setSelectedPipelineId`), so the PipelinePicker stays hidden and the
- * "Run pipeline" Send branch below is inert — pipelines live in the full Chat
- * tab, which has the runtime/progress panel.
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, Gauge, Layers, Network, Send, Square } from 'lucide-react';
+import { Brain, Gauge, Layers, Send, Square } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
 import type { EnrichedProviderModel, ExecutionMode, ProviderOption } from '../types.js';
@@ -79,8 +75,6 @@ interface RailComposerBarProps {
   onFallbackChange: (provider: string | null, model: string | null) => void;
   getModelsForProvider: (providerId: string) => EnrichedProviderModel[];
   sessionId: string | null;
-  selectedPipelineId: number | null;
-  setSelectedPipelineId?: (v: number | null) => void;
   thinking?: boolean;
   setThinking?: (v: boolean) => void;
   supportsThinking?: boolean;
@@ -125,8 +119,6 @@ export function RailComposerBar(props: RailComposerBarProps) {
           toolPermissionMode={props.toolPermissionMode}
           setToolPermissionMode={props.setToolPermissionMode}
           sessionId={props.sessionId}
-          selectedPipelineId={props.selectedPipelineId}
-          setSelectedPipelineId={props.setSelectedPipelineId}
           showThink={false}
           onTranscript={props.onTranscript}
         />
@@ -235,10 +227,6 @@ export function RailComposerBar(props: RailComposerBarProps) {
                 <Square className="h-3.5 w-3.5" /> {t('common:actions.stop')}
               </Button>
             </>
-          ) : props.selectedPipelineId != null ? (
-            <Button onClick={props.onSend} disabled={!props.hasInput || props.sendBlocked} size="sm" variant="default" className="h-7">
-              <Network className="h-3.5 w-3.5" /> {t('chat:pipelinePicker.runButton')}
-            </Button>
           ) : (
             <Button onClick={props.onSend} disabled={!props.hasInput || props.sendBlocked} size="sm" className="h-7">
               <Send className="h-3.5 w-3.5" /> {t('common:actions.send')}

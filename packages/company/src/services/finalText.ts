@@ -1,9 +1,8 @@
 /**
  * Helpers for reading the final assistant message of a coder session.
  *
- * Shared between `SubordinateLifecycle` (which renders the master notice
- * after a subordinate completes) and `PipelineExecutor` (which captures
- * each node's final text as the input to the next node).
+ * Shared by `SubordinateLifecycle`, which renders the master notice after a
+ * subordinate completes.
  *
  * Best-effort: callers should treat `null` as "no useful text" and fall
  * back to a generic message rather than failing.

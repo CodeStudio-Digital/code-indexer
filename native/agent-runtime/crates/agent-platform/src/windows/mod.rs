@@ -14,6 +14,7 @@ pub mod ipc;
 mod launch;
 mod lifecycle;
 mod limits;
+mod resource;
 #[allow(unsafe_code)]
 mod sys;
 
@@ -27,6 +28,7 @@ use crate::containment::{
 };
 
 pub use error::WindowsContainmentError;
+pub use resource::{CurrentProcessResourceSample, sample_current_process_resources};
 
 use launch::PreparedLaunch;
 use limits::JobLimits;

@@ -76,7 +76,7 @@ Status: functional pass; orchestration-efficiency fail.
 
 Initial evidence:
 
-- The Master spent three provider turns on goal/board/project/pipeline
+- The Master spent three provider turns on goal/board/project/workflow
   discovery, then delegated three separate read-only investigations before
   implementation. This is correct but unnecessarily expensive for a fixture
   this small.
@@ -149,7 +149,7 @@ explicit-binding preservation.
 
 The S1 master had 42 visible tools even though its nominal compact cap was 28:
 the complete Master tier was protected, so the protected set alone overflowed
-the cap. It spent a turn listing pipelines, later said it would publish
+the cap. It spent a turn inspecting stored workflows, later said it would publish
 `contracts/board-card-contract.md` to the Shared Drive, but
 `write_shared_file` had been trimmed. It posted the entire contract to the
 Board instead and the Drive remained empty.
@@ -157,10 +157,10 @@ Board instead and the Drive remained empty.
 The protected surface is now a closed operational loop rather than the entire
 Master catalog: delegation/wait, Board, three Kanban operations
 (`plan_graph/list/move`), and Drive `write/read/list`, plus the ordinary
-lifecycle floor. Pipeline and detailed mutation tools remain discoverable.
+lifecycle floor. Detailed mutation tools remain discoverable.
 The equivalent weak-model test now trims 63 eligible tools to exactly 28
 instead of overflowing with 42; both Drive publication and the minimal Kanban
-loop survive, while `list_pipelines` and `start_pipeline` do not.
+loop survive, while the former stored-workflow tools did not.
 
 ### Live defect 5 — one answered question caused repeated Master resurrection
 

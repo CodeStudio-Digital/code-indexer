@@ -485,50 +485,6 @@ export interface FailureStreakIntervention {
   reason: string;
 }
 
-/**
- * Per-node runtime status for the chat pipeline runtime overlay.
- * Reduced from the SSE `pipeline_node_*` events. The dashboard mini-graph
- * colors nodes by `status`.
- */
-export type PipelineNodeRuntimeStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'aborted';
-
-export interface PipelineRuntimeState {
-  /** Opaque filesystem-backed pipeline execution UUID. */
-  executionId: string;
-  /** `pipelines.id`. */
-  pipelineId: number | string;
-  /** Aggregate state machine — mirrors the pipeline-run bundle entity status. */
-  status: 'running' | 'paused' | 'completed' | 'failed' | 'aborted';
-  /** Active node id (null when terminal). */
-  currentNodeId: string | null;
-  /** Per-node status keyed by node id. */
-  nodes: Record<
-    string,
-    {
-      status: PipelineNodeRuntimeStatus;
-      label?: string;
-      kind?: 'agent' | 'validate';
-      verdict?: 'pass' | 'fail' | 'review' | null;
-      outcome?: string | null;
-      outputPreview?: string;
-      error?: string;
-    }
-  >;
-  /** Last error message from a failed run (terminal). */
-  error: string | null;
-  /**
-   * Set when `requires_confirmation` paused the run between stages. The
-   * dashboard renders an Approve button (which calls `/confirm`) instead
-   * of the normal Resume button. Cleared on confirm/abort/resume.
-   */
-  awaitingConfirmation?: boolean;
-}
-
 export interface SessionState {
   streaming: boolean;
   currentTurn: AssistantTurn | null;
@@ -552,12 +508,6 @@ export interface SessionState {
    * when the user dismisses.
    */
   interactionPending: InteractionPending | null;
-  /**
-   * Latest snapshot of the in-flight chat pipeline (PR-3). Null when no
-   * pipeline has run in this session yet. Sticks around after terminal
-   * states so the user can read the final outcome until they dismiss.
-   */
-  pipelineRuntime: PipelineRuntimeState | null;
   /** Live-only processes rendered in the right Session state rail. */
   activeProcesses: ActiveProcess[];
   /**
@@ -584,6 +534,12 @@ export interface SessionState {
    * so the user sees new agent edits land in the review UI live.
    */
   snapshotTick: number;
+  /**
+   * Monotonic counter bumped once after one or more snapshot mutations reach
+   * the next terminal tool boundary. Consumers use this lower-frequency signal
+   * to refresh the full inventory without one request per filesystem write.
+   */
+  snapshotInventoryTick: number;
   /**
    * PermissionGate approvals waiting for the user's verdict, oldest first.
    * Mirrors the per-block `ToolCallEvent.approvals` so the banner above the
@@ -656,11 +612,11 @@ export const EMPTY_STATE: SessionState = {
   contextStatus: null,
   indexStatus: null,
   interactionPending: null,
-  pipelineRuntime: null,
   activeProcesses: [],
   sidebarRefreshTick: 0,
   tasksRefreshTick: 0,
   snapshotTick: 0,
+  snapshotInventoryTick: 0,
   pendingApprovals: [],
   lastEventAt: null,
   preflight: null,

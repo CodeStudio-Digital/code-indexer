@@ -12,7 +12,7 @@
  *   coder/sessions.ts, coder/providers.ts, coder/groups.ts,
  *   coder/interaction.ts, coder/stream.ts, coder/skills.ts,
  *   coder/state.ts, coder/snapshot.ts, coder/project-files.ts,
- *   coder/project-tree.routes.ts, coder/pipelines.ts, coder/pipelines-state.ts,
+ *   coder/project-tree.routes.ts,
  *   coder/active-skills.ts, coder/sessionLock.ts
  */
 

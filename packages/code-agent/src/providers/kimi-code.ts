@@ -14,12 +14,19 @@ import {
 
 type KimiMsg = OpenAI.Chat.Completions.ChatCompletionMessageParam;
 export type KimiCodeThinkingMode = 'auto' | 'enabled' | 'disabled';
+type KimiReasoningKey = 'reasoning_content' | 'reasoning_details' | 'reasoning';
+type KimiThinkingConfig = {
+  type: 'enabled' | 'disabled';
+  keep?: 'all';
+  effort?: 'low' | 'high' | 'max';
+};
 
 export class KimiCodeChatProvider implements ChatProvider {
   readonly name = 'kimi-code';
   model: string;
   private client: OpenAI;
   private thinkingMode: KimiCodeThinkingMode;
+  private reasoningKey: KimiReasoningKey = 'reasoning_content';
 
   constructor(opts: {
     apiKey?: string;
@@ -46,7 +53,20 @@ export class KimiCodeChatProvider implements ChatProvider {
   }
 
   async *chat(req: ChatRequest): AsyncIterable<ChatDelta> {
-    const messages = toKimiMessages(req.system, req.messages);
+    const effectiveThinking = resolveEffectiveThinking(
+      this.model,
+      req.reasoningEffort === 'none' ? false : req.thinking,
+      this.thinkingMode,
+    );
+    const k3Effort = normalizeKimiK3ReasoningEffort(req.reasoningEffort);
+    const thinking = kimiThinkingConfig(this.model, effectiveThinking, k3Effort);
+    const preservedThinkingEnabled = thinking?.type === 'enabled' && thinking.keep === 'all';
+    const messages = toKimiMessages(
+      req.system,
+      req.messages,
+      preservedThinkingEnabled,
+      this.reasoningKey,
+    );
     const tools = req.tools.map((tool) => toKimiToolParam(tool));
 
     const params: Record<string, unknown> = {
@@ -54,16 +74,14 @@ export class KimiCodeChatProvider implements ChatProvider {
       messages,
       stream: true,
       stream_options: { include_usage: true },
-      max_tokens: resolveKimiMaxTokens(),
+      // Current Kimi Code reserves one shared completion budget for reasoning
+      // and visible content. Its official client uses max_completion_tokens so
+      // reasoning cannot consume a legacy max_tokens budget before text lands.
+      max_completion_tokens: resolveKimiMaxTokens(),
       ...(tools.length > 0 ? { tools } : {}),
       ...(req.sessionId != null ? { prompt_cache_key: `coder-session-${req.sessionId}` } : {}),
     };
 
-    const effectiveThinking = resolveEffectiveThinking(
-      this.model,
-      req.reasoningEffort === 'none' ? false : req.thinking,
-      this.thinkingMode,
-    );
     // K3 is calibrated for temperature=1 and must not inherit a sticky
     // user/session override. Keep this at the wire boundary so every caller
     // (individual chat, Company roles, subagents, and summaries) agrees.
@@ -74,16 +92,8 @@ export class KimiCodeChatProvider implements ChatProvider {
         : req.inference?.temperature;
     if (typeof temperature === 'number') params.temperature = temperature;
 
-    const thinking = kimiThinkingConfig(this.model, effectiveThinking);
     if (thinking) {
       params.thinking = thinking;
-    }
-
-    // K3 exposes low/high/max. Map the product-wide superset at this boundary;
-    // omission keeps Kimi's documented server-side default (`high`).
-    const k3Effort = normalizeKimiK3ReasoningEffort(req.reasoningEffort);
-    if (isKimiK3Model(this.model) && effectiveThinking !== false && k3Effort) {
-      params.reasoning_effort = k3Effort;
     }
 
     if (kimiDebugEnabled()) {
@@ -140,9 +150,12 @@ export class KimiCodeChatProvider implements ChatProvider {
         yield { type: 'text_delta', text: delta.content };
       }
 
-      const reasoning = (delta as { reasoning_content?: unknown } | undefined)?.reasoning_content;
-      if (typeof reasoning === 'string' && reasoning.length > 0) {
-        yield { type: 'thinking_delta', text: reasoning };
+      const reasoning = readKimiReasoningDelta(delta);
+      if (reasoning) {
+        this.reasoningKey = reasoning.key;
+        if (reasoning.text.length > 0) {
+          yield { type: 'thinking_delta', text: reasoning.text };
+        }
       }
 
       if (delta?.tool_calls) {
@@ -245,7 +258,9 @@ function resolveKimiMaxTokens(): number {
 }
 
 function isAlwaysThinkingModel(model: string): boolean {
-  return /thinking/i.test(model);
+  return /thinking/i.test(model)
+    || isKimiK3Model(model)
+    || /^kimi-for-coding(?:-highspeed)?$/i.test(model);
 }
 
 function isKimiK3Model(model: string): boolean {
@@ -286,10 +301,29 @@ export function normalizeKimiK3ReasoningEffort(
 function kimiThinkingConfig(
   model: string,
   thinking: boolean | undefined,
-): { type: 'enabled' | 'disabled' } | null {
-  if (isAlwaysThinkingModel(model)) return { type: 'enabled' };
+  effort?: 'low' | 'high' | 'max',
+): KimiThinkingConfig | null {
+  if (isAlwaysThinkingModel(model)) {
+    return {
+      type: 'enabled',
+      keep: 'all',
+      ...(isKimiK3Model(model) && effort ? { effort } : {}),
+    };
+  }
   if (thinking === undefined) return null;
-  return { type: thinking ? 'enabled' : 'disabled' };
+  if (!thinking) return { type: 'disabled' };
+  return { type: 'enabled', keep: 'all' };
+}
+
+function readKimiReasoningDelta(
+  delta: OpenAI.Chat.Completions.ChatCompletionChunk.Choice.Delta | undefined,
+): { key: KimiReasoningKey; text: string } | null {
+  if (!delta) return null;
+  const candidate = delta as unknown as Partial<Record<KimiReasoningKey, unknown>>;
+  for (const key of ['reasoning_content', 'reasoning_details', 'reasoning'] as const) {
+    if (typeof candidate[key] === 'string') return { key, text: candidate[key] };
+  }
+  return null;
 }
 
 /**
@@ -522,7 +556,12 @@ function summarizeAssistantContentTypes(messages: KimiMsg[]): string[] {
   return out;
 }
 
-export function toKimiMessages(system: string, messages: AgentMessage[]): KimiMsg[] {
+export function toKimiMessages(
+  system: string,
+  messages: AgentMessage[],
+  preservedThinkingEnabled = false,
+  reasoningKey: KimiReasoningKey = 'reasoning_content',
+): KimiMsg[] {
   const out: KimiMsg[] = [{ role: 'system', content: system }];
 
   for (const m of messages) {
@@ -544,7 +583,7 @@ export function toKimiMessages(system: string, messages: AgentMessage[]): KimiMs
     }
 
     if (m.role === 'assistant') {
-      appendAssistantMessage(out, m.content);
+      appendAssistantMessage(out, m.content, preservedThinkingEnabled, reasoningKey);
     }
   }
 
@@ -599,7 +638,12 @@ function appendUserMessage(out: KimiMsg[], blocks: ContentBlock[]): void {
   }
 }
 
-function appendAssistantMessage(out: KimiMsg[], blocks: ContentBlock[]): void {
+function appendAssistantMessage(
+  out: KimiMsg[],
+  blocks: ContentBlock[],
+  preservedThinkingEnabled: boolean,
+  reasoningKey: KimiReasoningKey,
+): void {
   const reasoning = blocks
     .filter((b): b is Extract<ContentBlock, { type: 'thinking' }> => b.type === 'thinking')
     .map((b) => b.text)
@@ -620,7 +664,9 @@ function appendAssistantMessage(out: KimiMsg[], blocks: ContentBlock[]): void {
   // tool_uses, so non-Kimi-specific code paths see `content: ''` like before.
   const dropContent = toolUses.length > 0 && isEffectivelyEmptyText(text);
   if (!dropContent) msg.content = text;
-  if (reasoning) msg.reasoning_content = reasoning;
+  // In preserved-thinking mode Kimi requires this field even when a tool-call
+  // assistant message happened to contain an empty reasoning fragment.
+  if (reasoning || preservedThinkingEnabled) msg[reasoningKey] = reasoning;
   if (toolUses.length > 0) {
     msg.tool_calls = toolUses.map((tu) => ({
       id: tu.id,

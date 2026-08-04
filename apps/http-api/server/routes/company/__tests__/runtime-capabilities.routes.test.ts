@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { CompanyStore } from '@mcp/store/company-store.js';
 import { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/fs-session-store.js';
 import { OperationalSessionFiles } from '../../../operational-session-files.js';
-import type { PipelineGraph } from '@mcp/company/types.js';
 import type { ServerDeps } from '../../../deps.js';
 
 const H = vi.hoisted(() => ({
@@ -24,12 +23,8 @@ vi.mock('../../../../sse/companyOrchestrator.js', () => ({
     H.deleteActive(id);
   }),
 }));
-vi.mock('@mcp/api-handlers', () => ({
-  generateAiPipeline: vi.fn(),
-}));
 const { mountCompanyKanbanRoutes } = await import('../kanban.js');
 const { mountCompanyKanbanDispatchRoutes } = await import('../kanban-dispatch.js');
-const { mountCompanyPipelineRoutes } = await import('../pipelines.js');
 const { mountCompanyAgentControlRoutes } = await import('../agents.js');
 const { mountCompanyArchiveRoutes } = await import('../archives.js');
 const { mountReestablishMasterRoute } = await import('../reestablish-master.js');
@@ -37,17 +32,6 @@ const { mountCompanySessionRoutes } = await import('../sessions.js');
 const { mountCompanyStreamRoutes } = await import('../stream.js');
 const { mountCompanyInboxRoutes } = await import('../inbox.js');
 const { mountCompanyEnvsRoutes } = await import('../envs.js');
-
-const graph: PipelineGraph = {
-  version: 1,
-  nodes: [{
-    id: 'implement',
-    label: 'Implement',
-    role: 'backend',
-    taskTemplate: '{{initial_input}}',
-  }],
-  edges: [],
-};
 
 interface Handle {
   app: Hono;
@@ -96,7 +80,7 @@ async function setup(): Promise<Handle> {
       all: vi.fn(() => []),
     })),
   };
-  const companyStore = new CompanyStore(emptyCatalogDb as never, sessionStore);
+  const companyStore = new CompanyStore(emptyCatalogDb as never);
   const generic = await operationalSessionFiles.createCompanySession({
     name: 'Company',
     project_ids: [project.id],
@@ -124,7 +108,6 @@ async function setup(): Promise<Handle> {
   } as unknown as ServerDeps;
   mountCompanyKanbanRoutes(app, deps);
   mountCompanyKanbanDispatchRoutes(app, deps);
-  mountCompanyPipelineRoutes(app, deps);
   mountCompanyAgentControlRoutes(app, deps);
   mountCompanyArchiveRoutes(app, deps);
   mountReestablishMasterRoute(app, deps);
@@ -207,27 +190,6 @@ describe('Company route capability boundary for App Studio teams', () => {
     expect(await suggestions.json()).toEqual({ suggestions: [] });
   });
 
-  it('preserves generic pipeline definitions but blocks App-owned definitions', async () => {
-    const generic = await h.app.request('/api/company/pipelines', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'Generic pipeline', graph, company_session_id: h.genericId }),
-    });
-    expect(generic.status).toBe(201);
-
-    const blocked = await h.app.request('/api/company/pipelines', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: 'App pipeline', graph, company_session_id: h.appId }),
-    });
-    expect(blocked.status).toBe(409);
-    expect(await blocked.json()).toMatchObject({
-      code: 'COMPANY_SURFACE_UNAVAILABLE_FOR_APP',
-      surface: 'pipelines',
-    });
-    expect(await h.companyStore.listPipelines()).toEqual([]);
-  });
-
   it('preserves the full generic Company role runtime contract', async () => {
     const response = await h.app.request(`/api/company/sessions/${h.genericId}/config`, {
       method: 'PATCH',
@@ -264,31 +226,6 @@ describe('Company route capability boundary for App Studio teams', () => {
       reasoningEffort: 'high',
       fallbackModels: [{ provider: 'openai-chatgpt', model: 'gpt-5.6-terra' }],
     })]);
-  });
-
-  it('returns empty App pipeline reads and rejects start before the orchestrator', async () => {
-    const pipelineId = '77777777-7777-4777-8777-777777777777';
-
-    const listed = await h.app.request(`/api/company/pipelines?company_session_id=${h.appId}`);
-    expect(listed.status).toBe(200);
-    expect(await listed.json()).toEqual([]);
-
-    const executions = await h.app.request(
-      `/api/company/sessions/${h.appId}/pipelines/executions`,
-    );
-    expect(executions.status).toBe(200);
-    expect(await executions.json()).toEqual([]);
-
-    const started = await h.app.request(
-      `/api/company/sessions/${h.appId}/pipelines/${pipelineId}/start`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ initial_input: 'go' }),
-      },
-    );
-    expect(started.status).toBe(409);
-    expect(H.getActive).not.toHaveBeenCalled();
   });
 
   it('rejects every generic Company control-plane mutation for an App-owned team', async () => {

@@ -17,7 +17,7 @@ test.describe('AI-first project workbench', () => {
         previewVisible: true,
       }));
     });
-    await page.goto(`/projects/${projectId}`);
+    await page.goto(`/#/projects/${projectId}`);
     await expect(page.getByRole('tab', { name: 'Code', exact: true })).toBeVisible();
   });
 
@@ -160,7 +160,7 @@ test.describe('AI-first project workbench', () => {
   });
 
   test('composes Global Sessions with the shared workbench containers', async ({ page }) => {
-    await page.goto('/global');
+    await page.goto('/#/global');
     await expect(page.getByRole('complementary')).toBeVisible();
     await expect(page.locator('.workbench-surface')).toHaveCount(2);
     await expect(page.locator('nav[aria-label="Session tools"]')).toHaveCount(0);

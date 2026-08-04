@@ -352,6 +352,38 @@ describe('FsSessionStore session catalog', () => {
     expect(await store.recoverOrphanedSubagentRuns()).toBe(0);
   });
 
+  it('pages persisted subagent runs with a stable total and revision', async () => {
+    const session = await store.createSession({
+      project_id: 1,
+      title: 'Subagent page',
+      provider: 'test',
+      model: 'test',
+    });
+    await store.startSubagentRun({
+      session_id: session.id,
+      run_id: SUBAGENT_RUN_ID,
+      profile: 'explore',
+      max_turns: 2,
+    });
+    await store.startSubagentRun({
+      session_id: session.id,
+      run_id: OTHER_SUBAGENT_RUN_ID,
+      profile: 'implement',
+      max_turns: 3,
+    });
+
+    const first = await store.listSubagentRuns(session.id, 0, 1);
+    const second = await store.listSubagentRuns(session.id, first.nextOffset!, 1);
+    expect(first.items).toHaveLength(1);
+    expect(first.totalCount).toBe(2);
+    expect(first.nextOffset).toBe(1);
+    expect(first.revision).toBeGreaterThan(0);
+    expect(second.items).toHaveLength(1);
+    expect(second.totalCount).toBe(2);
+    expect(second.nextOffset).toBeNull();
+    expect(second.revision).toBe(first.revision);
+  });
+
   it('links projects inside one global bundle and refuses unsafe detachments', async () => {
     const session = await store.createGlobalSession({
       title: 'Mutable roots',

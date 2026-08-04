@@ -53,6 +53,19 @@ export interface SubagentRunData {
   fence_token: string;
 }
 
+export interface FsSubagentRunRow extends SubagentRunData {
+  id: string;
+  seq: number;
+  revision: number;
+}
+
+export interface FsSubagentRunPage {
+  items: FsSubagentRunRow[];
+  totalCount: number;
+  nextOffset: number | null;
+  revision: number;
+}
+
 export interface SubagentToolCallData {
   session_id: SessionId;
   run_id: string;

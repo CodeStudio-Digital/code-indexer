@@ -32,11 +32,12 @@ async function readError(res: Response, fallback: string): Promise<Error> {
 export async function fetchSnapshotList(
   scope: SessionScope,
   sessionId: string,
-  opts: { includeClosed?: boolean } = {},
+  opts: { includeClosed?: boolean; refreshKey?: string | number } = {},
 ): Promise<{ files: SnapshotFileSummary[] }> {
   const qs = opts.includeClosed ? '?includeClosed=1' : '';
   const url = `/api${base(scope, sessionId)}${qs}`;
-  return dedupeInflight(`snapshot-list:${url}`, async () => {
+  const refreshSuffix = opts.refreshKey == null ? '' : `:refresh:${opts.refreshKey}`;
+  return dedupeInflight(`snapshot-list:${url}${refreshSuffix}`, async () => {
     const r = await fetch(url);
     if (!r.ok) throw await readError(r, 'Could not load snapshots');
     return (await r.json()) as { files: SnapshotFileSummary[] };

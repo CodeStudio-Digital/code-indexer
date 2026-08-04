@@ -38,10 +38,10 @@ export interface SpawnSubordinateSpec {
   roleOverride?: string;
   /**
    * Built-in agent identity for this spawn. When set, the runner loads the
-   * matching `prompts/<agentId>.txt` and applies its policy gates. The SDD
-   * pipeline passes `'spec'` here for the spec-writer node so the subordinate
-   * runs under spec-mode discipline; left undefined the runner falls through
-   * to the default profile-driven behaviour (no agentId-specific prompt).
+   * matching `prompts/<agentId>.txt` and applies its policy gates. Callers can
+   * pass `'spec'` to run the subordinate under spec-mode discipline; left
+   * undefined the runner falls through to the default profile-driven behaviour
+   * (no agentId-specific prompt).
    */
   agent?: AgentId;
   /**

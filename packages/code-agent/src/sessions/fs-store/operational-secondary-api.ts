@@ -12,6 +12,7 @@ import type {
   FsCreateTaskRunInput,
   FsRecordTasksInput,
   FsSessionEvent,
+  FsTaskRunPage,
   FsUpdateTaskRunPatch,
   FsUpsertTaskRunItemInput,
   TaskExecutionMode,
@@ -101,6 +102,15 @@ class FsSecondaryOperationalStore {
       self.services.taskRuns.list(id, limit),
     this,
   );
+  listTaskRunsPage = thisCall(
+    (self, id: SessionId | string, offset: number, limit: number) =>
+      self.services.taskRuns.listPage(id, offset, limit),
+    this,
+  ) as (
+    id: SessionId | string,
+    offset: number,
+    limit: number,
+  ) => Promise<FsTaskRunPage>;
   listTaskRunItems = thisCall(
     (self, id: SessionId | string, runId: string) =>
       self.services.taskRuns.listItems(id, runId),
@@ -162,6 +172,11 @@ class FsSecondaryOperationalStore {
       self.services.tools.stats(id, recentLimit),
     this,
   );
+  listToolCallSummaries = thisCall(
+    (self, id: SessionId | string, offset: number, limit: number) =>
+      self.services.tools.listSummaryPage(id, offset, limit),
+    this,
+  );
   appendSessionEvent = thisCall(
     (
       self,
@@ -180,6 +195,19 @@ class FsSecondaryOperationalStore {
     id: SessionId | string,
     type?: string,
   ) => Promise<FsSessionEvent[]>;
+  getSessionEventByOperationId = thisCall(
+    (
+      self,
+      id: SessionId | string,
+      operationId: string,
+      type?: string,
+    ) => self.services.tools.getEventByOperationId(id, operationId, type),
+    this,
+  ) as (
+    id: SessionId | string,
+    operationId: string,
+    type?: string,
+  ) => Promise<FsSessionEvent | null>;
   listSessionToolCalls = thisCall(
     (self, id: SessionId | string) =>
       self.services.tools.listCalls(id),

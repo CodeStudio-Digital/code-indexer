@@ -8,7 +8,7 @@ import type {
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
 import { resolveCompanySessionContext } from '../_helpers.js';
 
-export type CompanyRouteSurface = 'kanban' | 'pipelines';
+export type CompanyRouteSurface = 'kanban';
 
 export interface CompanyRouteRuntime {
   requestedSessionId: CompanySessionId;
@@ -20,7 +20,7 @@ export interface CompanyRouteRuntime {
 /**
  * Resolve a route's capability from the persisted, server-owned runtime kind.
  * The App link is deliberately not needed for generic Company surfaces:
- * `app_studio` denies Kanban/pipelines whether the link is healthy or broken.
+ * `app_studio` denies Company Kanban whether the link is healthy or broken.
  */
 export async function resolveCompanyRouteRuntime(
   sessionStore: FsSessionStore,
@@ -49,9 +49,7 @@ export async function routeAllowsCompanySurface(
 ): Promise<boolean> {
   const runtime = await resolveCompanyRouteRuntime(sessionStore, sessionId);
   if (!runtime) return false;
-  return surface === 'kanban'
-    ? runtime.capabilities.allowCompanyKanban
-    : runtime.capabilities.allowCompanyPipelines;
+  return surface === 'kanban' && runtime.capabilities.allowCompanyKanban;
 }
 
 /** App-owned teams keep lifecycle reads/streaming in Company, but every

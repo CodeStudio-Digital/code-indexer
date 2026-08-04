@@ -3,8 +3,9 @@
  *
  * Adds three tables to support n8n-style executable pipelines on top of the
  * existing company orchestrator. The graph is stored as JSON; execution
- * state is normalised so the dashboard and `PipelineExecutor` can query
- * progress without parsing JSON.
+ * state is normalised so the original runtime could query progress without
+ * parsing JSON. Migration 265 retires these tables after preserving upgrade
+ * compatibility for databases created before that removal.
  *
  *   - `pipelines`               — definition (graph + metadata). Reusable;
  *                                 `company_session_id` NULL means global.

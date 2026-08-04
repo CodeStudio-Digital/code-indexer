@@ -12,6 +12,7 @@ import { FsSessionDirectory } from './session-directory.js';
 import type {
   FsCreateTaskRunInput,
   FsTaskRunItemRow,
+  FsTaskRunPage,
   FsTaskRunRow,
   FsUpdateTaskRunPatch,
   FsUpsertTaskRunItemInput,
@@ -253,6 +254,27 @@ export class FsTaskRunRepository {
           right.seq - left.seq,
       )
       .slice(0, Math.max(0, limit));
+  }
+
+  async listPage(
+    sessionId: SessionId | string,
+    offset: number,
+    limit: number,
+  ): Promise<FsTaskRunPage> {
+    const boundedOffset = Math.max(0, Math.trunc(offset));
+    const boundedLimit = Math.max(0, Math.trunc(limit));
+    const rows = await this.list(sessionId, Number.MAX_SAFE_INTEGER);
+    const items = rows.slice(boundedOffset, boundedOffset + boundedLimit);
+    const nextOffset = boundedOffset + items.length;
+    const timestamps = rows
+      .map((row) => Date.parse(row.updated_at))
+      .filter(Number.isFinite);
+    return {
+      items,
+      totalCount: rows.length,
+      nextOffset: nextOffset < rows.length ? nextOffset : null,
+      revision: Math.max(1, ...timestamps),
+    };
   }
 
   async listItems(

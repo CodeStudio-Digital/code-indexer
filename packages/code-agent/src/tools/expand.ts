@@ -30,6 +30,10 @@ export interface CustomTierInfo {
  */
 export function buildExpandTools(
   customTiers?: ReadonlyMap<string, CustomTierInfo>,
+  options?: {
+    beforeExpand?: (tier: string) => Promise<void>;
+    isTierAvailable?: (tier: string) => boolean;
+  },
 ): CoderTool[] {
   // Every built-in functional tier is addressable. Contextual tiers are
   // normally auto-active when their runtime capability is present, but
@@ -115,7 +119,16 @@ export function buildExpandTools(
     handler: async (args, ctx): Promise<ToolResult> => {
       const tier = String(args.tier ?? '').trim() as ToolTier;
       const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
-      if (!validTiers.has(tier)) {
+      if (!validTiers.has(tier) && options?.beforeExpand) {
+        try {
+          await options.beforeExpand(tier);
+        } catch (e) {
+          console.warn(
+            `[expand_toolset] catalogue refresh failed: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
+      }
+      if (!validTiers.has(tier) && !options?.isTierAvailable?.(tier)) {
         return err(`Invalid tier '${tier}'. Valid options: ${allTiers.join(', ')}.`);
       }
       if (tier === 'bootstrap') {

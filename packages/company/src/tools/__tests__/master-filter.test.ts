@@ -89,8 +89,6 @@ describe('isMasterAllowed — App Studio capability boundary', () => {
     'spawn_subordinate_agent',
     'kanban_create_card',
     'kanban_list_cards',
-    'list_pipelines',
-    'start_pipeline',
   ])('removes incompatible Company capability %s from the App master', (name) => {
     expect(isMasterAllowed(native(name), { allowAppStudio: true })).toBe(false);
   });

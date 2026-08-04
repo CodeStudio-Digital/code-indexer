@@ -38,7 +38,7 @@ const fuguSpec: ProviderSpec = {
     vendor: 'fugu',
     responsesApi: true,
     responsesStateless: true,
-    responsesReasoningSummaryModels: ['fugu-ultra-v1.1'],
+    responsesReasoningSummaryModels: ['fugu', 'fugu-ultra-v1.1'],
     responsesIncludeOrchestrationUsage: true,
   },
 };
@@ -80,6 +80,33 @@ describe('provider-runtime openai-compat Responses wire', () => {
       reasoningFromThinking: false,
       reasoningSummary: 'auto',
       includeOrchestrationUsage: true,
+    });
+  });
+
+  it('requests readable reasoning summaries for the default fugu model', () => {
+    const wire = buildOpenAICompat(fuguSpec);
+    wire.createCoder!(
+      { apiKey: 'fish_test', baseURL: 'https://api.sakana.ai/v1', extra: {} },
+      'fugu',
+      {
+        providerModels: [
+          {
+            model_id: 'fugu',
+            supported_reasoning_levels: ['high', 'xhigh'],
+            default_reasoning_level: 'high',
+            apply_patch_tool_type: 'freeform',
+          },
+        ],
+      },
+    );
+
+    expect(responsesConstructedWith.at(-1)).toMatchObject({
+      model: 'fugu',
+      reasoningSummary: 'auto',
+      reasoning: {
+        supportedLevels: ['high', 'xhigh'],
+        defaultLevel: 'high',
+      },
     });
   });
 });

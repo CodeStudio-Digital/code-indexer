@@ -6,8 +6,7 @@
  * "AgentChat minus the sessions-sidebar / right-rail / dialog chrome, plus
  * editor-context staging".
  *
- * Fork, pipelines and snapshots intentionally stay in the full Chat tab
- * (pipelines need the runtime/progress panel the rail doesn't host); fallback
+ * Fork and snapshots intentionally stay in the full Chat tab; fallback
  * and tool-permission-mode ARE exposed here (settings dialog / shield). The
  * rail is the lightweight inline assistant; sessions are shared with that tab
  * (same project_id).
@@ -174,6 +173,7 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
   const stream = useAgentStream(selectedId, notificationContext);
   const {
     streaming, doneReason, error, sendMessage, reattach, abort, clearCurrentTurn, tasksRefreshTick,
+    snapshotInventoryTick,
     answerQuestion, respondToPlan, decideGate, respondToTasks, respondToToolApproval, switchProvider, pendingApprovals,
   } = stream;
   const currentTurn = useAgentCurrentTurn(selectedId);
@@ -361,7 +361,10 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
       return;
     }
     let cancelled = false;
-    fetchSnapshotList('coder', selectedId, { includeClosed: true })
+    fetchSnapshotList('coder', selectedId, {
+      includeClosed: true,
+      refreshKey: `${snapshotInventoryTick}:${snapshotRefreshNonce}`,
+    })
       .then((r) => {
         if (!cancelled) setSnapshotFiles(buildSnapshotFileMap(r.files));
       })
@@ -371,9 +374,9 @@ export function useEditorChatSession(projectId: number, options: EditorChatSessi
     return () => {
       cancelled = true;
     };
-  // A live snapshot ping can arrive for every file write. Refresh the complete
-  // map at the run boundary (or after an explicit review action), not per edit.
-  }, [selectedId, snapshotRefreshNonce, doneReason]);
+  // Refresh once per completed edit tool (or explicit review action), not for
+  // every file-write ping emitted by a multi-file edit.
+  }, [selectedId, snapshotRefreshNonce, snapshotInventoryTick]);
 
   const createSession = useCallback(async (
     config: Partial<SessionLaunchConfig> & { useLastModel?: boolean } = {},

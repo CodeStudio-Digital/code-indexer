@@ -232,6 +232,11 @@ progress e resource sample antes de admitir `LaunchAccepted`. Depois do commit,
 o receipt instala o monitor no owner permanente do supervisor e o runner emite
 com intervalo `pulse_timeout / 3`, recebido do handoff. Então o runner envia
 `AgentHello`, aceita somente o PID Host selado e conclui `HostHello`.
+No Windows, cada pulse amostra o processo runner corrente por APIs Win32 e
+carrega RSS atual/pico, CPU acumulada e número real de handles. Nesta etapa o
+runner ainda não abre processos filhos nem spool, portanto `process_count = 1`
+e `spool_bytes = 0` são fatos estruturais; o rollup do Job/spool entra junto da
+composição dessas capacidades.
 
 Nesta fatia, o session store e seu bridge já oferecem leitura path-free dos
 bytes comprometidos, e o runner já verifica/possui os snapshots e artifacts
@@ -274,8 +279,8 @@ falha de autenticação removem apenas o monitor alvo e agendam termination/reap
 imediato; pulse fresco nunca renova o hard deadline. Drop do monitor encerra o
 ator receiver.
 
-Permanecem pendentes heartbeat semântico no control, resource sampling real
-(o sample atual é estrutural, com contadores zerados e `process_count = 1`),
+Permanecem pendentes heartbeat semântico no control, rollup de recursos dos
+descendentes/Job e bytes reais de spool,
 `UpdateAttemptAuthority`, `QuerySupervisorState`, outbox e fatos duráveis
 `AttemptProcessExited`/`AttemptProcessReaped`, Cancel/Fence process-real
 pós-Active, terminal durável, matriz Windows packaged/nested/breakaway, backend

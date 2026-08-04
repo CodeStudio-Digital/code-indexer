@@ -1,5 +1,5 @@
 /**
- * The "session-level" composer action icons: attach files, pipeline picker,
+ * The "session-level" composer action icons: attach files,
  * extended-thinking, describe-images (vision fallback), unrestricted tool
  * output (cap→full) and the tool-permission-mode shield.
  *
@@ -11,7 +11,6 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { Brain, Eye, MessageSquareOff, Paperclip, Shield, ShieldCheck, ShieldOff } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../../components/ui/tooltip.js';
-import { PipelinePicker } from './PipelinePicker.js';
 import { OutputCapPicker } from './OutputCapPicker.js';
 import { MicButton } from './MicButton.js';
 import { MicDevicePicker } from './MicDevicePicker.js';
@@ -36,8 +35,6 @@ interface ComposerActionIconsProps {
   toolPermissionMode?: 'ask' | 'auto' | 'unrestricted';
   setToolPermissionMode?: (v: 'ask' | 'auto' | 'unrestricted') => void;
   sessionId?: string | null;
-  selectedPipelineId?: number | null;
-  setSelectedPipelineId?: (v: number | null) => void;
   /** Hide the thinking icon (the rail renders its own prominent Think pill). */
   showThink?: boolean;
   /** Append voice-transcribed text to the composer input. Hides the mic when unset. */
@@ -63,8 +60,6 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
   toolPermissionMode,
   setToolPermissionMode,
   sessionId,
-  selectedPipelineId,
-  setSelectedPipelineId,
   showThink = true,
   onTranscript,
   showMic = true,
@@ -119,15 +114,6 @@ export const ComposerActionIcons = memo(function ComposerActionIcons({
           <MicButton onTranscript={onTranscript} disabled={streaming} />
           <MicDevicePicker disabled={streaming} />
         </span>
-      )}
-
-      {setSelectedPipelineId && (
-        <PipelinePicker
-          sessionId={sessionId ?? null}
-          selectedPipelineId={selectedPipelineId ?? null}
-          onChange={setSelectedPipelineId}
-          compact
-        />
       )}
 
       {showThink && setThinking && (

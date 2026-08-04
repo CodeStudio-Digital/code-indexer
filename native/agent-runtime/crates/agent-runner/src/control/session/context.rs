@@ -23,6 +23,13 @@ impl RunnerControlSession {
             .ok_or(ControlError::ConnectionNotEstablished)
     }
 
+    pub(in crate::control) fn heartbeat_interval_ms(&self) -> Result<u64, ControlError> {
+        self.connection
+            .as_ref()
+            .map(|connection| connection.heartbeat_interval_ms)
+            .ok_or(ControlError::ConnectionNotEstablished)
+    }
+
     pub(in crate::control) fn take_inbound(
         &self,
         frame: &mut PendingInbound,

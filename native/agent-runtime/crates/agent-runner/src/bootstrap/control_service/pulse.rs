@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use agent_platform::ipc::{EndpointCancellation, ExpectedLocalPeer, ProtectedEndpointError};
 use agent_platform::windows::ipc::WindowsProtectedEndpoint;
+use agent_platform::windows::sample_current_process_resources;
 use agent_protocol::generated::v1 as wire;
 use agent_protocol::pulse_channel::{
     RunnerPulseAuthenticationKey, RunnerPulseIdentity, RunnerPulseSender,
@@ -82,7 +83,7 @@ impl PendingRunnerPulse {
             .send(
                 wire::RunnerPulsePhase::Negotiating,
                 0,
-                initial_resources(),
+                resource_sample().map_err(RunnerControlServiceError::ResourceSample)?,
                 Duration::MAX,
             )
             .await
@@ -91,13 +92,30 @@ impl PendingRunnerPulse {
     }
 }
 
-const fn initial_resources() -> wire::ResourceSample {
-    wire::ResourceSample {
-        resident_memory_bytes: 0,
-        peak_resident_memory_bytes: 0,
-        cpu_time_ms: 0,
-        process_count: 1,
-        open_file_count: 0,
+pub(super) fn resource_sample() -> std::io::Result<wire::ResourceSample> {
+    let sample = sample_current_process_resources()?;
+    Ok(wire::ResourceSample {
+        resident_memory_bytes: sample.resident_memory_bytes,
+        peak_resident_memory_bytes: sample.peak_resident_memory_bytes,
+        cpu_time_ms: sample.cpu_time_ms,
+        process_count: sample.process_count,
+        open_file_count: sample.open_handle_count,
         spool_bytes: 0,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resource_sample;
+
+    #[test]
+    fn pulse_resource_sample_uses_live_process_counters() {
+        let sample = resource_sample().expect("runner process resource sample");
+
+        assert!(sample.resident_memory_bytes > 0);
+        assert!(sample.peak_resident_memory_bytes >= sample.resident_memory_bytes);
+        assert_eq!(sample.process_count, 1);
+        assert!(sample.open_file_count > 0);
+        assert_eq!(sample.spool_bytes, 0);
     }
 }

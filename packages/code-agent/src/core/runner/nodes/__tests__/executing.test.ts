@@ -1520,6 +1520,37 @@ describe('ExecutingNode', () => {
     expect(r.textBlocks.join('')).toBe('hi');
   });
 
+  it('preserves native public phases and infers them for legacy wires', async () => {
+    async function* nativeCommentary(): AsyncIterable<ChatDelta> {
+      yield {
+        type: 'text_delta',
+        text: 'Checking now.',
+        itemId: 'msg_1',
+        phase: 'commentary',
+      };
+      yield { type: 'tool_call_start', id: 'call_1', name: 'read_file' };
+      yield { type: 'tool_call_end', id: 'call_1', name: 'read_file', input: {} };
+      yield { type: 'done', stop_reason: 'tool_use' };
+    }
+    const seen: unknown[] = [];
+    const commentary = await consumeStream({
+      stream: nativeCommentary(),
+      onTextDelta: (text, meta) => seen.push({ text, meta }),
+    });
+    expect(commentary.messagePhase).toBe('commentary');
+    expect(seen).toEqual([{
+      text: 'Checking now.',
+      meta: { itemId: 'msg_1', phase: 'commentary' },
+    }]);
+
+    async function* legacyFinal(): AsyncIterable<ChatDelta> {
+      yield { type: 'text_delta', text: 'Done.' };
+      yield { type: 'done', stop_reason: 'stop' };
+    }
+    await expect(consumeStream({ stream: legacyFinal() }))
+      .resolves.toMatchObject({ messagePhase: 'final_answer' });
+  });
+
   it('rejects a clean iterator EOF that lacks the terminal result event', async () => {
     async function* truncated(): AsyncIterable<ChatDelta> {
       yield { type: 'text_delta', text: 'partial' };

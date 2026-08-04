@@ -945,13 +945,13 @@ export class ExecutingNode implements BehaviorNode {
           ctx.opts.reasoningEffort,
           ctx.recovery.get('provider-thinking-timeout') ?? 0,
         ),
-        onTextDelta: (text) => {
+        onTextDelta: (text, meta) => {
           // Keep operation liveness accurate without mirroring every token as
           // a second `operation_progress` event. The 10s stream heartbeat
           // above remains the sampled progress signal for diagnostics/UI.
           ctx.operations.touch(providerOpId, { phase: 'text_delta' });
           attemptTextChars += text.length;
-          ctx.emit('text_delta', text);
+          ctx.emit('text_delta', text, meta);
         },
         onThinkingDelta: (text) => {
           ctx.operations.touch(providerOpId, { phase: 'thinking_delta' });
@@ -1168,8 +1168,13 @@ export class ExecutingNode implements BehaviorNode {
       assistantContent.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input });
     }
     if (assistantContent.length > 0) {
-      ctx.messages.push({ role: 'assistant', content: assistantContent });
-      ctx.emit('message_complete', { role: 'assistant', content: assistantContent }, result.usage);
+      const assistantMessage = {
+        role: 'assistant' as const,
+        content: assistantContent,
+        phase: result.messagePhase,
+      };
+      ctx.messages.push(assistantMessage);
+      ctx.emit('message_complete', assistantMessage, result.usage);
     }
 
     // ── Honest context accounting (single source of truth) ──────────────

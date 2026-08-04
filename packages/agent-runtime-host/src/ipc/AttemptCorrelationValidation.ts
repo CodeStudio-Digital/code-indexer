@@ -127,7 +127,7 @@ export function assertInboundCorrelation(
         body.value.specSha256,
         request.facts.expectedSpecSha256,
       )
-      || !timestampWithin(
+      || !timestampWithinLocalPeer(
         body.value.readyAtUnixMs,
         request.sentAtUnixMs,
         observedAtUnixMs,

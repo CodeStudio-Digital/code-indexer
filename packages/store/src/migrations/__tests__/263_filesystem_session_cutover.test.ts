@@ -33,7 +33,7 @@ describe('migration 263 filesystem session cutover', () => {
           version: number;
         }
       ).version,
-    ).toBe(263);
+    ).toBe(265);
     expect(
       (
         db.prepare('SELECT value FROM app_settings WHERE key = ?').get(

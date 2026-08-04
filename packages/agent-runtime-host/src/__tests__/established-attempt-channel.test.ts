@@ -340,8 +340,8 @@ describe('established outbound header authority', () => {
 
   it.each([
     ['spec digest', new Uint8Array(32).fill(1), 10n],
-    ['ready timestamp', new Uint8Array(32), 9n],
-    ['observed timestamp', new Uint8Array(32), 11n],
+    ['ready timestamp', new Uint8Array(32), 0n],
+    ['observed timestamp', new Uint8Array(32), 61n],
   ])('rejects forged AttemptPrepared %s', async (
     _name,
     specSha256,

@@ -16,7 +16,7 @@ import {
   CardTitle,
 } from '../../../components/ui/card.js';
 import { useContextMenu } from '../../../components/ui/context-menu.js';
-import { formatRelativeTime } from '../../../lib/utils.js';
+import { cn, formatRelativeTime } from '../../../lib/utils.js';
 import { buildProjectContextMenuItems } from './projectContextMenu.js';
 
 export interface ProjectCardData {
@@ -35,7 +35,10 @@ export interface ProjectCardProps {
   onSelect: () => void;
   onEdit: () => void;
   onIndex: () => void;
+  onToggleSelected?: () => void;
   indexing?: boolean;
+  selecting?: boolean;
+  selected?: boolean;
 }
 
 export function ProjectCard({
@@ -43,7 +46,10 @@ export function ProjectCard({
   onSelect,
   onEdit,
   onIndex,
+  onToggleSelected,
   indexing = false,
+  selecting = false,
+  selected = false,
 }: ProjectCardProps) {
   const { t } = useTranslation(['projects', 'common']);
   const { triggerProps, openAt, Menu } = useContextMenu(
@@ -68,14 +74,32 @@ export function ProjectCard({
   );
   return (
     <Card
-      onClick={onSelect}
-      {...triggerProps}
-      className="cursor-pointer transition-all hover:shadow-md hover:border-primary/40 hover:-translate-y-0.5 group"
+      onClick={selecting ? onToggleSelected : onSelect}
+      {...(selecting ? {} : triggerProps)}
+      className={cn(
+        'cursor-pointer transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md group',
+        selected && 'border-primary/60 bg-primary/10 ring-1 ring-primary/30',
+      )}
     >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
-          <div className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
-            <FolderGit2 className="h-5 w-5" />
+          <div className="flex items-center gap-2">
+            {selecting && (
+              <input
+                type="checkbox"
+                checked={selected}
+                onChange={onToggleSelected}
+                onClick={(event) => event.stopPropagation()}
+                aria-label={t(
+                  selected ? 'projects:selection.deselectProject' : 'projects:selection.selectProject',
+                  { name: p.name },
+                )}
+                className="h-4 w-4 shrink-0 accent-primary"
+              />
+            )}
+            <div className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center group-hover:bg-primary group-hover:text-primary-foreground transition-colors">
+              <FolderGit2 className="h-5 w-5" />
+            </div>
           </div>
           <div className="flex items-center gap-1">
             <Badge
@@ -89,19 +113,21 @@ export function ProjectCard({
                   ? t('projects:indexStatus.indexed')
                   : t('projects:indexStatus.notIndexed')}
             </Badge>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="h-7 w-7"
-              onClick={(event) => {
-                event.stopPropagation();
-                const rect = event.currentTarget.getBoundingClientRect();
-                openAt(Math.max(4, rect.right - 180), rect.bottom + 4);
-              }}
-              aria-label={t('projects:moreActions', { name: p.name })}
-            >
-              <Ellipsis className="h-4 w-4" />
-            </Button>
+            {!selecting && (
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="h-7 w-7"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  openAt(Math.max(4, rect.right - 180), rect.bottom + 4);
+                }}
+                aria-label={t('projects:moreActions', { name: p.name })}
+              >
+                <Ellipsis className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         </div>
         <CardTitle className="text-base mt-3 truncate">{p.name}</CardTitle>
@@ -131,7 +157,7 @@ export function ProjectCard({
                 })
               : t('projects:neverIndexed')}
           </span>
-          {!p.last_indexed && (
+          {!selecting && !p.last_indexed && (
             <Button
               variant="ghost"
               size="sm"
@@ -150,7 +176,7 @@ export function ProjectCard({
           )}
         </div>
       </CardContent>
-      {Menu}
+      {!selecting && Menu}
     </Card>
   );
 }

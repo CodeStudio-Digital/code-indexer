@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { brokerRouteReadiness } from '../mcp-servers.routes.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  brokerRouteReadiness,
+  refreshGlobalMcpExternalPool,
+} from '../mcp-servers.routes.js';
+import { setGlobalMcpExternalPool } from '../../sse/McpExternalPool.js';
+
+afterEach(() => setGlobalMcpExternalPool(null));
 
 describe('Unity broker route readiness', () => {
   it('does not confuse a persisted tool catalogue with a live Unity route', () => {
@@ -19,5 +25,14 @@ describe('Unity broker route readiness', () => {
       bridgeState: 'ready',
       routeReady: true,
     })).toEqual({ ready: true });
+  });
+
+  it('refreshes the shared runtime catalogue after an admin mutation/test', async () => {
+    const refresh = vi.fn(async () => undefined);
+    setGlobalMcpExternalPool({ refresh } as never);
+
+    await refreshGlobalMcpExternalPool();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

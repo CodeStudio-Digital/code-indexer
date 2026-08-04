@@ -10,6 +10,7 @@
 
 export type {
   AgentRole,
+  AssistantMessagePhase,
   TextBlock,
   ToolUseBlock,
   ToolResultBlock,

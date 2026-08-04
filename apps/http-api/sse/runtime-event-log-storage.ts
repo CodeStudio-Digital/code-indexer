@@ -27,6 +27,24 @@ interface RuntimeEventData {
   envelope: JsonValue;
 }
 
+export interface PersistedRuntimeEventRecord {
+  id: string;
+  revision: number;
+  event: RuntimeEventEnvelope;
+}
+
+export interface PersistedRuntimeEventPage {
+  items: PersistedRuntimeEventRecord[];
+  nextCursor: string | null;
+  totalCount: number | null;
+}
+
+export interface PersistedRuntimeEventPageOptions {
+  cursor?: string;
+  limit: number;
+  order?: 'asc' | 'desc';
+}
+
 const repositories = new Map<string, EntityFileRepository<RuntimeEventData>>();
 const pendingWrites = new Set<Promise<void>>();
 const writeFailures = new Map<string, Error>();
@@ -161,6 +179,51 @@ export async function readPersistedRuntimeEvents(
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
   return events;
+}
+
+/**
+ * Bounded page reader for consumers such as the Session Workbench. The entity
+ * cursor remains opaque to callers and is anchored to the last persisted
+ * record returned, so a descending backfill does not drift when new events are
+ * appended concurrently.
+ */
+export async function listPersistedRuntimeEventPage(
+  kind: RuntimeLogKind,
+  sessionId: RuntimeSessionId,
+  location: RuntimeEventLogLocation,
+  options: PersistedRuntimeEventPageOptions,
+): Promise<PersistedRuntimeEventPage> {
+  const bundlePath = resolve(location.bundlePath);
+  const writeFailure = writeFailures.get(bundlePath);
+  if (writeFailure) {
+    throw new Error(
+      `Runtime event persistence failed for session ${sessionId}`,
+      { cause: writeFailure },
+    );
+  }
+
+  const page = await repositoryFor(location).list({
+    limit: options.limit,
+    order: options.order ?? 'desc',
+    ...(options.cursor ? { cursor: options.cursor } : {}),
+  });
+  return {
+    items: page.items.map((record) => {
+      if (
+        record.data.kind !== kind
+        || record.data.session_id !== String(sessionId)
+      ) {
+        throw new Error(`Runtime event identity mismatch in bundle ${bundlePath}`);
+      }
+      const event = asRuntimeEvent(record.data.envelope);
+      if (!event) {
+        throw new Error(`Invalid runtime event record ${record.id} in bundle ${bundlePath}`);
+      }
+      return { id: record.id, revision: record.seq, event };
+    }),
+    nextCursor: page.nextCursor,
+    totalCount: options.cursor ? null : await repositoryFor(location).count(),
+  };
 }
 
 export async function flushRuntimeEventLogWrites(): Promise<void> {

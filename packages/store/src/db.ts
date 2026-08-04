@@ -361,7 +361,7 @@ export class CodeIndexDB {
 
   /**
    * Public routed handle for project-scoped FEATURE stores (API client, builder
-   * checkpoints, file local history, doc suggestions, project pipelines, DS
+   * checkpoints, file local history, doc suggestions, DS
    * studio). Returns the project DB handle when the project is migrated +
    * routing is on, else the central handle. Feature stores are constructed
    * per-project on THIS handle (dual-mode) so their whole project-scoped graph

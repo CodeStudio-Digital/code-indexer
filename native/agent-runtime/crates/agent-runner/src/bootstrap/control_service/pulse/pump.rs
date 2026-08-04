@@ -9,13 +9,12 @@ use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
 
 use super::super::RunnerControlServiceError;
-use super::initial_resources;
+use super::resource_sample;
 
 #[derive(Debug, Clone)]
 struct RunnerPulseState {
     phase: wire::RunnerPulsePhase,
     last_progress_seq: u64,
-    resources: wire::ResourceSample,
 }
 
 /// Control handle for the runner-owned periodic pulse task.
@@ -37,7 +36,6 @@ impl RunnerPulsePump {
         let initial = RunnerPulseState {
             phase: wire::RunnerPulsePhase::Negotiating,
             last_progress_seq: 0,
-            resources: initial_resources(),
         };
         let (state, mut updates) = watch::channel(initial);
         let task = tokio::spawn(async move {
@@ -58,7 +56,10 @@ impl RunnerPulsePump {
                     .send(
                         current.phase,
                         current.last_progress_seq,
-                        current.resources,
+                        match resource_sample() {
+                            Ok(sample) => sample,
+                            Err(_) => return,
+                        },
                         interval,
                     )
                     .await
@@ -83,7 +84,6 @@ impl RunnerPulsePump {
             .send(RunnerPulseState {
                 phase,
                 last_progress_seq,
-                resources: initial_resources(),
             })
             .map_err(|_| RunnerControlServiceError::PulsePumpStopped)
     }

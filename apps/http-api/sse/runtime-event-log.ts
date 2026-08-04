@@ -15,6 +15,8 @@ export type RuntimeLogKind = 'coder' | 'company';
 export type RuntimeSessionId = SessionId | CompanySessionId;
 
 export interface RuntimeEventEnvelope extends BufferedEvent {
+  /** Stable identity of the run bus. Older persisted rows may omit it. */
+  busId?: string;
   ts: number;
   kind: RuntimeLogKind;
   sessionId: RuntimeSessionId;
@@ -68,7 +70,7 @@ export function installRuntimeEventLog(
 
   const detachSink = addBusEventSink(bus, (ev) => {
     if (!shouldCaptureRuntimeEvent(ev, key)) return;
-    const env = enrichEvent(ev, kind, sessionId);
+    const env = enrichEvent(ev, bus.busId, kind, sessionId);
     publishNotificationRuntimeEvent(env);
 
     const prepared = prepareRuntimeEvent(env);
@@ -184,12 +186,14 @@ function sampleProgress(key: string, signature: string, now = Date.now()): boole
 
 function enrichEvent(
   ev: BufferedEvent,
+  busId: string,
   kind: RuntimeLogKind,
   sessionId: RuntimeSessionId,
 ): RuntimeEventEnvelope {
   const view = runtimeEventView(ev);
   return {
     ...ev,
+    busId,
     ts: Date.now(),
     kind,
     sessionId,

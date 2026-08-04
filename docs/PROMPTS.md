@@ -122,9 +122,6 @@ assembled via [`services/master/prompt-builder.ts`](../packages/company/src/serv
   deliverable requirement, tool surface, focus, optional role override.
 - **`buildBuilderInstructions(b)`** — container-environment facts for
   service-bound subordinates (reserved files, dev server, env store, peers).
-- **`buildSddMasterBlock()`** — [`prompts/sdd-master-block.ts`](../packages/company/src/prompts/sdd-master-block.ts);
-  routes work through the SDD pipeline (`list_pipelines` → `start_pipeline`).
-
 **Operational rules** (operator-authored, per session) are read by
 `readOperationalRules(config_json)` in
 [`services/master/config-loader.ts`](../packages/company/src/services/master/config-loader.ts)
@@ -199,7 +196,6 @@ lists or rationale in the prompt.
 | company master block | `company/src/system-prompts.ts` (`buildMasterCompanyBlock`) | Orchestration framing | EN | No |
 | company subordinate block | `company/src/system-prompts.ts` (`buildSubordinateCompanyBlock`) | Worker framing | EN | No |
 | builder instructions | `company/src/system-prompts.ts` (`buildBuilderInstructions`) | Container facts (service-bound subordinates) | EN | No |
-| SDD master block | `company/src/prompts/sdd-master-block.ts` | Spec-driven pipeline | EN | No |
 | **snapshot review** | `services/src/services/snapshot-review-prompt.ts` | Pre-commit diff review | EN | **YES** — `findings[]` (parser: `snapshot-review-pipeline.ts`) |
 | **review subagent** | `code-agent/src/tools/review-subagent.ts` | Fresh-eyes reviewer | EN | **YES** — `<review>{findings[]}` (parser: same file) |
 | **summarize v1 / v2** | `code-agent/src/prompts/summarize{,-v2}.txt` | Compaction summary | EN | **YES** — 6 / 9 keys (parser: `core/summarizer.ts`) |

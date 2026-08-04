@@ -44,13 +44,8 @@ vi.mock('@mcp/company/services/CompanySessionFiles.js', () => ({
   },
 }));
 
-vi.mock('@mcp/api-handlers', () => ({
-  generateAiPipeline: vi.fn(),
-}));
-
 const { mountCompanyChildRoutes } = await import('../children.js');
 const { mountCompanyInboxRoutes } = await import('../inbox.js');
-const { mountCompanyPipelineRoutes } = await import('../pipelines.js');
 const { mountCompanyKanbanDispatchRoutes } = await import('../kanban-dispatch.js');
 const { abortCompanyRuntime } = await import('../runtime-lifecycle.js');
 const { ensureCompanyMasterLive } = await import('../ensure-master-live.js');
@@ -71,7 +66,6 @@ const SESSION_ID = asCompanySessionId(
 const CHILD_ID = '00000000-0000-4000-8000-000000000008';
 const NEW_CHILD_ID = '00000000-0000-4000-8000-000000000009';
 const INBOX_ID = '00000000-0000-4000-8000-000000000011';
-const PIPELINE_EXECUTION_ID = '00000000-0000-4000-8000-000000000031';
 const KANBAN_CARD_ID = '00000000-0000-4000-8000-000000000091';
 
 function genericSession(id: string) {
@@ -131,39 +125,6 @@ describe('worker-backed Company RPC boundaries', () => {
       },
     );
     expect(cancel.status).toBe(404);
-  });
-
-  it('awaits pipeline status and pause results before deciding the HTTP response', async () => {
-    const orchestrator = {
-      pipelineStatus: vi.fn(async () => null),
-      pipelinePause: vi.fn(async () => false),
-    };
-    H.getActive.mockReturnValue(orchestrator);
-    const companyStore = {
-      getPipelineExecution: (id: string) => ({
-        id,
-        company_session_id: SESSION_ID,
-      }),
-      listPipelineNodeExecutions: vi.fn(() => []),
-    };
-    const app = new Hono();
-    mountCompanyPipelineRoutes(app, {
-      companyStore,
-      operationalSessionFiles: {
-        getCompanySession: async (id: string) => genericSession(id),
-      },
-    } as unknown as ServerDeps);
-
-    const status = await app.request(
-      `/api/company/sessions/${SESSION_ID}/pipelines/executions/${PIPELINE_EXECUTION_ID}`,
-    );
-    expect(status.status).toBe(404);
-
-    const pause = await app.request(
-      `/api/company/sessions/${SESSION_ID}/pipelines/executions/${PIPELINE_EXECUTION_ID}/pause`,
-      { method: 'POST' },
-    );
-    expect(pause.status).toBe(409);
   });
 
   it('awaits child creation and rename RPCs before reading or returning durable state', async () => {

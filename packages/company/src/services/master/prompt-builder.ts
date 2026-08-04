@@ -87,7 +87,7 @@ export async function buildMasterPromptInputs(
   orchestratorRef: unknown,
   signal?: AbortSignal,
   /** Extra flags threaded into the prompt without touching the legacy positional signature. */
-  flags: { sddMode?: boolean; masterSystemPromptOverride?: string } = {},
+  flags: { masterSystemPromptOverride?: string } = {},
 ): Promise<MasterPromptInputs> {
   const orchestrator = orchestratorRef as MasterOrchestratorHooks;
   const configuredStack = orchestrator.getSandboxStackForService?.() ?? null;
@@ -131,7 +131,6 @@ export async function buildMasterPromptInputs(
     // Curated pool — when non-empty, the master prompt gains a strict
     // "ALLOWED SUBORDINATE MODELS" section + tool rejection guidance.
     allowedModels: allowedModels.length > 0 ? [...allowedModels] : undefined,
-    sddMode: flags.sddMode,
     // Session-level operational rules — single source of truth, injected
     // verbatim. The same text reaches every subordinate (see spawn/resume),
     // so the master enforces rather than re-pastes them into each task.

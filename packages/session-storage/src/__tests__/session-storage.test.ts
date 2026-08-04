@@ -213,6 +213,37 @@ describe('filesystem session bundle', () => {
     expect(repository.readConversationSync(created.location)).toEqual([]);
   });
 
+  it('reuses metrics projections while detecting external worker updates', async () => {
+    const { repository } = await fixture();
+    const created = await repository.createSession({
+      kind: 'coder',
+      scope: { kind: 'project', project_id: 1 },
+    });
+    expect(repository.readMetricsSummarySync(created.location).tokens.input).toBe(0);
+
+    const summaryPath = join(
+      created.location.bundle_path,
+      'metrics',
+      'summary.json',
+    );
+    const updated = {
+      ...emptySessionMetricsSummary('2026-08-02T12:00:00.000Z'),
+      tokens: {
+        input: 7,
+        output: 3,
+        cache_read: 2,
+        cache_creation: 1,
+      },
+    };
+    await writeFile(summaryPath, `${JSON.stringify(updated)}\n`);
+    const timestamp = new Date(Date.now() + 2_000);
+    await utimes(summaryPath, timestamp, timestamp);
+
+    expect(repository.readMetricsSummarySync(created.location).tokens).toEqual(
+      updated.tokens,
+    );
+  });
+
   it('persists independent initial projections in one concurrent write wave', async () => {
     let arrivals = 0;
     let arrivalsWhenReleased = 0;

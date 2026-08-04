@@ -6,7 +6,6 @@ import { PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { IndexingOverlay } from './IndexingOverlay.js';
 import { useTranslation } from 'react-i18next';
 import { useAgentStream } from '../../hooks/useAgentStream.js';
-import { usePipelineStream } from '../../hooks/usePipelineStream.js';
 import { apiDelete, apiPatch, apiPost, useApi } from '../../hooks/useApi.js';
 import { useElementWidth } from '../../hooks/useElementWidth.js';
 import { useOpenedOnce } from '../../hooks/useOpenedOnce.js';
@@ -307,9 +306,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
    */
   const [describeImages, setDescribeImages] = useState(false);
   const [blockCodeComments, setBlockCodeComments] = useState(true);
-  /** PR-4: when set, the Composer's send button flips to "Run pipeline". */
-  const [selectedPipelineId, setSelectedPipelineId] = useState<number | null>(null);
-
   const sessionUrl = selectedId ? `/coder/sessions/${selectedId}?tail=40&detail=preview` : '';
   const { data: sessionData, refetch: refetchSession, update: updateSessionData } = useApi<SessionData>(sessionUrl);
   const selectedSessionData = useMemo(
@@ -391,7 +387,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
   }, [isGlobal, projectId, projectName, selectedId, selectedSessionData?.session.title, sessions]);
 
   const stream = useAgentStream(selectedId, notificationContext);
-  const { pipelineRuntime, openStream: openPipelineStream } = usePipelineStream(selectedId, notificationContext);
   const {
     streaming,
     doneReason,
@@ -405,6 +400,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     sidebarRefreshTick,
     tasksRefreshTick,
     snapshotTick,
+    snapshotInventoryTick,
     pendingApprovals,
     lastEventAt,
     preflight,
@@ -459,10 +455,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       setModel,
     });
 
-  // Pending-snapshot count — refetched on selection change and whenever the
-  // user performs an explicit snapshot action. Live edit pings only mark the
-  // badge dirty below; the full diff inventory is intentionally loaded by the
-  // snapshot dialog, not recomputed after every agent filesystem write.
+  // Snapshot counts/diffs are refreshed on selection, explicit review actions,
+  // and once per completed edit tool. The lower-frequency tool boundary keeps
+  // live file cards current without recomputing the full inventory for every
+  // individual filesystem write inside a multi-file edit.
   useEffect(() => {
     if (!selectedId) {
       setSnapshotPending(0);
@@ -472,7 +468,10 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     let cancelled = false;
     // includeClosed so historical turns' summaries still resolve counts/diffs
     // after the user keeps/reverts (which closes the baseline).
-    fetchSnapshotList('coder', selectedId, { includeClosed: true })
+    fetchSnapshotList('coder', selectedId, {
+      includeClosed: true,
+      refreshKey: `${snapshotInventoryTick}:${snapshotRefreshNonce}`,
+    })
       .then((r) => {
         if (cancelled) return;
         const pending = r.files
@@ -490,7 +489,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
     return () => {
       cancelled = true;
     };
-  }, [selectedId, snapshotRefreshNonce]);
+  }, [selectedId, snapshotRefreshNonce, snapshotInventoryTick]);
 
   const previousSnapshotTick = useRef(snapshotTick);
   useEffect(() => {
@@ -863,26 +862,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
       refetchSession();
     }, { agent: reviewAgent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments });
   }, [selectedId, awaitPendingExecutionMode, awaitPendingAgentChange, sendMessage, refetchSession, agent, maxTurns, maxAutoContinues, thinking, describeImages, blockCodeComments]);
-
-  /**
-   * Pipeline-mode send: post to `/pipelines/:pid/start` instead of
-   * /messages. Pipeline events arrive over a separate SSE stream — see
-   * `usePipelineStream` consumed by the SessionStateSidebar.
-   */
-  const handleRunPipeline = useCallback(async (pipelineId: number, initialInput: string) => {
-    if (!selectedId) return;
-    try {
-      await apiPost(`/coder/sessions/${selectedId}/pipelines/${pipelineId}/start`, {
-        initial_input: initialInput,
-      });
-      // Now that the executor is registered server-side, open the SSE.
-      // The hook stays closed until this call to avoid the 404-retry loop.
-      openPipelineStream();
-    } catch (err) {
-      console.warn('[pipeline] start failed:', err);
-    }
-  }, [selectedId, openPipelineStream]);
-
 
   const loadEarlierMessages = useCallback(async (
     beforeSeq: number | undefined,
@@ -1878,10 +1857,7 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 toolPermissionMode={toolPermissionMode}
                 setToolPermissionMode={handleToolPermissionModeChange}
                 getModelsForProvider={getModelsForProvider}
-                selectedPipelineId={selectedPipelineId}
-                setSelectedPipelineId={setSelectedPipelineId}
-                onRunPipeline={handleRunPipeline}
-                queueable={!!selectedId && selectedPipelineId == null}
+                queueable={!!selectedId}
                 onQueue={handleQueue}
                 queuedStrip={queuedStrip}
               />
@@ -1925,7 +1901,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
                 onClearPicks={clearPicks}
                 skillPicks={skillPicks}
                 onToggleSkillPick={toggleSkillPick}
-                pipelineRuntime={pipelineRuntime}
                 activeProcesses={activeProcesses}
                 pluginWindows={pluginPanelWindows}
                 preview={preview}
@@ -2003,7 +1978,6 @@ export default function AgentChat({ projectId, projectName, mode = 'project', in
           onClearPicks={clearPicks}
           skillPicks={skillPicks}
           onToggleSkillPick={toggleSkillPick}
-          pipelineRuntime={pipelineRuntime}
           activeProcesses={activeProcesses}
           pluginWindows={pluginPanelWindows}
           preview={preview}

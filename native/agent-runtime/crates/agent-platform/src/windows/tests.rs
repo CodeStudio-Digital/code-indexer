@@ -65,3 +65,4 @@ mod launch;
 mod lifecycle;
 mod local_ipc;
 mod pipe_identity;
+mod resource;

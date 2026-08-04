@@ -13,6 +13,7 @@ import {
   type FsCompleteSubagentRunInput,
   type FsStartSubagentRunInput,
   type FsSubagentRunFence,
+  type FsSubagentRunPage,
   type FsSubagentToolCallInput,
   type FsWorkflowStepRunReconciliation,
 } from './subagent-repository.js';
@@ -134,6 +135,13 @@ class FsOrchestrationSubagentOperations {
 
   recoverOrphanedSubagentRuns = (): Promise<number> =>
     this.#subagents.recoverOrphaned();
+
+  listSubagentRuns = (
+    id: SessionId | string,
+    offset: number,
+    limit: number,
+  ): Promise<FsSubagentRunPage> =>
+    this.#subagents.listPage(id, offset, limit);
 }
 
 export type FsOrchestrationSubagentApi = Pick<

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Archive,
@@ -39,6 +39,10 @@ import { ScrollArea } from '../../components/ui/scroll-area.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../../components/ui/tooltip.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
 import { usePinnedTabs } from '../../state/pinned-tabs.js';
+import {
+  getActiveAgentSessionIdsSnapshot,
+  subscribeActiveAgentSessions,
+} from '../../hooks/agent-stream/session-stream-store.js';
 import { providerAccent, workspaceColor, type AccentColor } from './constants.js';
 import type {
   CoderSession,
@@ -92,6 +96,11 @@ interface SessionSidebarProps {
 }
 
 const UNGROUPED_KEY = '__ungrouped__';
+const EXECUTING_SESSION_STATUSES = new Set(['running', 'in_progress', 'working']);
+
+export function isExecutingSessionStatus(status: string): boolean {
+  return EXECUTING_SESSION_STATUSES.has(status.trim().toLowerCase());
+}
 
 export function sessionSidebarClassName(docked: boolean, mobileOpen: boolean): string {
   return cn(
@@ -147,6 +156,19 @@ export const SessionSidebar = memo(function SessionSidebar({
 }: SessionSidebarProps) {
   const { t } = useTranslation(['chat', 'common']);
   const [selectMode, setSelectMode] = useState(false);
+  const [runningOnly, setRunningOnly] = useState(false);
+  const liveSessionIdList = useSyncExternalStore(
+    subscribeActiveAgentSessions,
+    getActiveAgentSessionIdsSnapshot,
+    getActiveAgentSessionIdsSnapshot,
+  );
+  const executingSessionIds = useMemo(() => {
+    const ids = new Set<string>(liveSessionIdList);
+    for (const session of sessions ?? []) {
+      if (isExecutingSessionStatus(session.status)) ids.add(session.id);
+    }
+    return ids;
+  }, [liveSessionIdList, sessions]);
   // Workspace mode (Sessões Globais) auto-buckets by virtual workspace; the
   // per-project named-folder controls don't apply there.
   const showGroups = groupBy === 'group';
@@ -162,6 +184,10 @@ export const SessionSidebar = memo(function SessionSidebar({
   }, [docked, mobileOpen, onMobileClose]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (view === 'archived') setRunningOnly(false);
+  }, [view]);
 
   // Stable so `memo(SessionRow)` isn't defeated — passed straight to every row.
   const toggleSelected = useCallback((id: string) => {
@@ -198,7 +224,9 @@ export const SessionSidebar = memo(function SessionSidebar({
     accent?: AccentColor;
   };
   const grouped = useMemo<GroupEntry[]>(() => {
-    const list = sessions ?? [];
+    const list = (sessions ?? []).filter(
+      (session) => !runningOnly || executingSessionIds.has(session.id),
+    );
 
     // Sessões Globais: bucket by their primary real project,
     // in first-appearance order (the list is already sorted by favorite+recency).
@@ -241,9 +269,13 @@ export const SessionSidebar = memo(function SessionSidebar({
       ordered.push({ key: UNGROUPED_KEY, group: null, items: ungrouped });
     }
     return ordered;
-  }, [sessions, groups, groupBy]);
+  }, [sessions, groups, groupBy, runningOnly, executingSessionIds]);
 
   const selectedCount = selectedIds.size;
+  const runningCount = useMemo(
+    () => (sessions ?? []).filter((session) => executingSessionIds.has(session.id)).length,
+    [executingSessionIds, sessions],
+  );
   const selectedArray = useMemo(() => Array.from(selectedIds), [selectedIds]);
   const isArchivedView = view === 'archived';
   // Stable array identity for the rows' move-to-group submenu (was `groups ?? []`
@@ -272,6 +304,36 @@ export const SessionSidebar = memo(function SessionSidebar({
           <span className="text-xs font-semibold truncate @max-[180px]:hidden">{t('chat:sidebar.sessions')}</span>
         </div>
         <div className="ml-auto flex items-center gap-0.5 shrink-0">
+          {!isArchivedView && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant={runningOnly ? 'secondary' : 'ghost'}
+                  className={cn(
+                    'h-7 w-auto min-w-7 gap-1 px-1.5 font-mono text-[10px] tabular-nums',
+                    (runningOnly || runningCount > 0) && 'text-emerald-400',
+                  )}
+                  onClick={() => setRunningOnly((current) => !current)}
+                  aria-pressed={runningOnly}
+                  aria-label={runningOnly ? t('chat:sidebar.showAll') : t('chat:sidebar.showRunning')}
+                >
+                  <Loader2
+                    className={cn(
+                      'h-3.5 w-3.5',
+                      runningCount > 0 && 'animate-spin motion-reduce:animate-none',
+                    )}
+                  />
+                  <span>{runningCount}</span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {runningOnly
+                  ? t('chat:sidebar.showAll')
+                  : t('chat:sidebar.runningCount', { count: runningCount })}
+              </TooltipContent>
+            </Tooltip>
+          )}
           {/* View filter — replaces the active/archived segmented control.
               The trigger icon reflects the current view at a glance. */}
           <DropdownMenu>
@@ -488,9 +550,11 @@ export const SessionSidebar = memo(function SessionSidebar({
 
       <ScrollArea className="flex-1 w-full chat-scroll">
         <div className="px-1.5 py-2 space-y-3">
-          {sessions?.length === 0 && (
+          {((sessions?.length === 0) || (runningOnly && runningCount === 0)) && (
             <div className="p-4 text-xs text-muted-foreground text-center">
-              {isArchivedView
+              {runningOnly
+                ? t('chat:sidebar.noRunning')
+                : isArchivedView
                 ? t('chat:sidebar.noArchived', { name: projectName })
                 : t('chat:sidebar.noSessions', { name: projectName })}
             </div>
@@ -572,6 +636,7 @@ export const SessionSidebar = memo(function SessionSidebar({
                       onMoveToGroup={onMoveToGroup}
                       showGroups={showGroups}
                       accent={accent}
+                      running={executingSessionIds.has(s.id)}
                     />
                   ))}
               </div>
@@ -615,6 +680,7 @@ const SessionRow = memo(function SessionRow({
   onMoveToGroup,
   showGroups,
   accent,
+  running,
 }: {
   session: CoderSession;
   selected: boolean;
@@ -639,6 +705,8 @@ const SessionRow = memo(function SessionRow({
   /** Workspace accent — paints a ring on the avatar so a session visually ties
    *  to its group header (and the chat header bar). Undefined = no ring. */
   accent?: AccentColor;
+  /** Authoritative persisted status combined with the renderer's live transport registry. */
+  running: boolean;
 }) {
   const { t } = useTranslation(['chat', 'common']);
   const pinId = sessionPinId?.(s.id);
@@ -656,6 +724,7 @@ const SessionRow = memo(function SessionRow({
   return (
     <div
       data-session-id={s.id}
+      data-session-running={running ? 'true' : 'false'}
       onClick={handleClick}
       className={cn(
         // Two-line row. The 2px left accent rule is a `before:` pseudo-element
@@ -696,6 +765,15 @@ const SessionRow = memo(function SessionRow({
               aria-hidden="true"
             />
           )}
+          {running && (
+            <span
+              className="absolute -top-0.5 -right-0.5 flex h-2 w-2 items-center justify-center"
+              aria-hidden="true"
+            >
+              <span className="absolute h-full w-full rounded-full bg-emerald-400/50 animate-ping motion-reduce:animate-none" />
+              <span className="relative h-1.5 w-1.5 rounded-full bg-emerald-400 ring-2 ring-card" />
+            </span>
+          )}
         </div>
       )}
 
@@ -703,7 +781,7 @@ const SessionRow = memo(function SessionRow({
           barra aperta e a linha 2 / o badge somem (container queries). */}
       <div
         className="flex-1 min-w-0 flex flex-col"
-        title={`${s.model} · ${formatRelativeTime(s.updated_at)} · ${tokens.toLocaleString()} tokens`}
+        title={`${running ? `${t('chat:sidebar.running')} · ` : ''}${s.model} · ${formatRelativeTime(s.updated_at)} · ${tokens.toLocaleString()} tokens`}
       >
         {/* Line 1: title + right-floated token figure (Linear-style numerals).
             Native title carries the exact count; the row shows it compacted. */}
@@ -733,11 +811,18 @@ const SessionRow = memo(function SessionRow({
         {/* Line 2: model · relative time, all mono so it reads as metadata.
             Colapsa a barra para 1 linha (título só) abaixo de ~210px. */}
         <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground tabular-nums min-w-0 @max-[210px]:hidden">
+          {running && (
+            <span className="inline-flex shrink-0 items-center gap-1 font-sans font-medium text-emerald-400">
+              <Loader2 className="h-2.5 w-2.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              {t('chat:sidebar.running')}
+            </span>
+          )}
           {s.import_source && (
             <span className="shrink-0 rounded border px-1 text-[9px] uppercase tracking-wide text-primary/80">
               {s.import_source === 'claude-code' ? 'Claude' : 'Codex'}
             </span>
           )}
+          {running && <span className="text-muted-foreground/40 shrink-0">·</span>}
           <span className="text-muted-foreground/80 truncate min-w-0">{s.model}</span>
           <span className="text-muted-foreground/40 shrink-0">·</span>
           <span className="shrink-0">{formatRelativeTime(s.updated_at)}</span>

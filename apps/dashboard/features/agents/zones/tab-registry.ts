@@ -30,7 +30,6 @@ import {
   GitCompare,
   KanbanSquare,
   MessageSquare,
-  Network,
   type LucideIcon,
 } from 'lucide-react';
 import type { BuildTab, DataTab, WorkTab, Zone } from './types.js';
@@ -60,7 +59,6 @@ export const TAB_REGISTRY: readonly TabDef[] = [
   // toggled from SessionHeader (Ctrl+J), always reachable.
 
   // ── Advanced ("More") — observation/introspection surfaces ──────
-  { zone: 'work', tab: 'pipelines', Icon: Network, labelKey: 'company.pipelines', fallbackLabel: 'Pipelines', advanced: true },
   { zone: 'build', tab: 'docs', Icon: BookText, labelKey: 'company.docs', fallbackLabel: 'Docs', advanced: true },
   { zone: 'build', tab: 'tests', Icon: FlaskConical, labelKey: 'company.tests', fallbackLabel: 'Tests', advanced: true },
   { zone: 'build', tab: 'api', Icon: BookOpen, labelKey: 'company.apiReference', fallbackLabel: 'API', advanced: true },

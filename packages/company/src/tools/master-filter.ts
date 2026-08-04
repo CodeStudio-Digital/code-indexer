@@ -80,10 +80,6 @@ export const MASTER_ALLOWED_NATIVE_TOOLS: ReadonlySet<string> = new Set([
   'respond_to_inbox',
   'review_subordinate_work',
   'kanban_plan_graph',
-  'list_pipelines',
-  'start_pipeline',
-  'get_pipeline_status',
-  'stop_pipeline',
 ]);
 
 export interface MasterToolFilterOptions {
@@ -93,10 +89,6 @@ export interface MasterToolFilterOptions {
 
 const APP_STUDIO_DISABLED_COMPANY_TOOLS: ReadonlySet<string> = new Set([
   'spawn_subordinate_agent',
-  'list_pipelines',
-  'start_pipeline',
-  'get_pipeline_status',
-  'stop_pipeline',
 ]);
 
 /**

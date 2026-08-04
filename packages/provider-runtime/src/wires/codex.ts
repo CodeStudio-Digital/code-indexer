@@ -1,4 +1,11 @@
-import type { ProviderSpec, ResolvedCreds, ProviderDefinition, CreateCoderOpts } from '@mcp/provider-sdk';
+import {
+  parseRuntimeModelRef,
+  selectRuntimeModelMetadata,
+  type ProviderSpec,
+  type ResolvedCreds,
+  type ProviderDefinition,
+  type CreateCoderOpts,
+} from '@mcp/provider-sdk';
 import { ChatGPTCodexProvider } from '@mcp/code-agent/providers/chatgpt.js';
 
 type WireParts = Pick<
@@ -18,12 +25,13 @@ export function buildCodex(spec: ProviderSpec): WireParts {
   return {
     createCoder: (creds: ResolvedCreds, model?: string, opts?: CreateCoderOpts) => {
       const resolvedModel = model ?? spec.defaultModel ?? spec.defaultModels[0];
+      const wireModel = parseRuntimeModelRef(resolvedModel).id;
 
       // Reasoning capability + apply_patch tool type from the persisted
       // provider_models row (migration 052 + live discovery). Best-effort.
       let reasoning: { supportedLevels?: string[] | null; defaultLevel?: string | null } | undefined;
       let applyPatchToolType: string | null = null;
-      const row = opts?.providerModels?.find((m) => m.model_id === resolvedModel);
+      const row = selectRuntimeModelMetadata(opts?.providerModels, resolvedModel);
       if (row) {
         reasoning = {
           supportedLevels: row.supported_reasoning_levels,
@@ -37,17 +45,26 @@ export function buildCodex(spec: ProviderSpec): WireParts {
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
-      const imageGenerationEnabled = imageGenOptIn && imageAllow.includes(resolvedModel);
+      const imageGenerationEnabled = imageGenOptIn && imageAllow.includes(wireModel);
 
       return new ChatGPTCodexProvider({
         apiKey: creds.apiKey ?? '',
         baseURL: creds.baseURL ?? DEFAULT_BASE_URL,
         accountId: (creds.extra?.accountId as string | null | undefined) ?? null,
-        model: resolvedModel,
+        model: wireModel,
         reasoning,
+        reasoningSummary: 'auto',
+        reasoningSummaryFromThinking: true,
+        parallelToolCalls: GPT_56_CODEX_MODELS.has(wireModel.toLowerCase()),
         applyPatchToolType,
         imageGenerationEnabled,
       });
     },
   };
 }
+
+const GPT_56_CODEX_MODELS = new Set([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+]);

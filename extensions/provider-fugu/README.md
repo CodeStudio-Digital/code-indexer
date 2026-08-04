@@ -12,16 +12,19 @@ the canonical `fuguSpec` from `@mcp/provider-engine`.
 | Model | Notes |
 | --- | --- |
 | `fugu` | Balanced everyday model; routes to the best-fit agent. |
-| `fugu-ultra` | Larger expert ensemble for hard problems (higher cost). |
-| `fugu-ultra-20260615` | Pinned alias of a specific `fugu-ultra` version. |
+| `fugu-ultra` / `fugu-ultra-v1.1` | Larger expert ensemble for hard problems; supports distinct `max` effort. |
+| `fugu-ultra-v1.0` / `fugu-ultra-20260615` | Previous pinned Ultra version. |
+| `fugu-cyber` | Access-gated cybersecurity model. |
 
 ## Reasoning effort
 
-Fugu reasons by default. The OpenAI-compatible Chat Completions request accepts a
-**`reasoning_effort`** string with values `high`, `xhigh`, or `max` (`xhigh` and
-`max` are aliases of the same effort; the server default is `xhigh`). The session
-reasoning-effort selector forwards the chosen level; leaving it unset lets Fugu
-apply its `xhigh` default.
+Fugu reasons by default. The plugin uses Sakana's recommended stateless Responses
+API and sends `reasoning: { effort, summary: "auto" }`. The summary request is
+enabled for every current Fugu model so provider-returned reasoning is streamed
+through the product's thinking UI. `fugu-ultra-v1.1` supports distinct `high`,
+`xhigh`, and `max` levels; the other current families expose their documented
+subset. Leaving effort unset keeps the selected model's server default while
+still requesting a readable reasoning summary.
 
 ## Configuration
 

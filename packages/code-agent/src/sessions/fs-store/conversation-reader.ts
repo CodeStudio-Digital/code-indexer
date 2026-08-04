@@ -100,13 +100,17 @@ async function* reverseCommittedConversationLines(
   }
 }
 
-async function highestMessageSeqFromTail(
+/**
+ * Streams committed conversation records newest-first without materializing
+ * the JSONL. Consumers must apply domain projection semantics, including
+ * rollback markers, before exposing records.
+ */
+export async function* reverseCommittedConversationCommits(
   conversationPath: string,
-): Promise<number> {
+): AsyncGenerator<ConversationCommit> {
   for await (const line of reverseCommittedConversationLines(conversationPath)) {
-    let commit: ConversationCommit;
     try {
-      commit = JSON.parse(line) as ConversationCommit;
+      yield JSON.parse(line) as ConversationCommit;
     } catch (error) {
       throw new Error(
         `Invalid committed conversation JSON near tail: ${
@@ -114,6 +118,13 @@ async function highestMessageSeqFromTail(
         }`,
       );
     }
+  }
+}
+
+async function highestMessageSeqFromTail(
+  conversationPath: string,
+): Promise<number> {
+  for await (const commit of reverseCommittedConversationCommits(conversationPath)) {
     const payload = parseCoderTurnPayload(commit);
     if (payload.messages.length === 0) continue;
     let highest = 0;

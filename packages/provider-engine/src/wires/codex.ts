@@ -61,9 +61,18 @@ export function buildCodex(spec: ProviderSpec): WireParts {
         accountId: (creds.extra?.accountId as string | null | undefined) ?? null,
         model: wireModel,
         reasoning,
+        reasoningSummary: 'auto',
+        reasoningSummaryFromThinking: true,
+        parallelToolCalls: GPT_56_CODEX_MODELS.has(wireModel.toLowerCase()),
         applyPatchToolType,
         imageGenerationEnabled,
       });
     },
   };
 }
+
+const GPT_56_CODEX_MODELS = new Set([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+]);

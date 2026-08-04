@@ -73,7 +73,7 @@ Dashboard (React)
 
 ### W2 — Chat route does not send `X-Accel-Buffering: no` ✅ fixed this round
 
-`pumpBusToSSE.ts:46-107` uses `hono/streaming` without anti-buffer headers. Other SSE routes in the same codebase do set it: `apps/http-api/server/routes/docs-agent/index.ts:96`, `apps/http-api/server/routes/docs/index.ts:53`, `apps/http-api/server/routes/coder/pipelines.ts:397`. The chat route — the highest-traffic one — was the only one unprotected.
+`pumpBusToSSE.ts:46-107` uses `hono/streaming` without anti-buffer headers. Other SSE routes in the same codebase do set it: `apps/http-api/server/routes/docs-agent/index.ts:96`, `apps/http-api/server/routes/docs/index.ts:53`. The chat route — the highest-traffic one — was the only one unprotected.
 
 - **Severity:** high behind any buffering proxy (nginx/Cloudflare/dev proxy); invisible locally.
 - **Fix:** B1 below.
@@ -218,7 +218,6 @@ Dashboard (React)
 - codestudio_mcp-codebase/apps/http-api/server/routes/coder/stream.ts:498-771
 - codestudio_mcp-codebase/apps/http-api/server/routes/docs-agent/index.ts:96
 - codestudio_mcp-codebase/apps/http-api/server/routes/docs/index.ts:53
-- codestudio_mcp-codebase/apps/http-api/server/routes/coder/pipelines.ts:397
 - codestudio_mcp-codebase/apps/dashboard/features/chat/AgentChat.tsx:370-399
 - codestudio_mcp-codebase/apps/dashboard/hooks/agent-stream/useAgentStream.ts:62-144
 - codestudio_mcp-codebase/apps/dashboard/hooks/agent-stream/openStream.ts:75-82

@@ -117,9 +117,6 @@ describe('trimProjectSchema (C2)', () => {
       const ftsHits = db.prepare(`SELECT COUNT(*) AS n FROM files_fts`).get() as { n: number };
       expect(ftsHits.n).toBeGreaterThanOrEqual(0); // FTS table queryable post-trim
 
-      // 6) A project table that had a cross-DB FK is now writable with a dangling
-      //    central pointer (FK stripped) — pipeline_executions with a project_id.
-      db.prepare(`INSERT INTO pipelines (name, project_id, graph_json) VALUES ('pl', 1, '{}')`).run();
     } finally {
       db.close();
     }

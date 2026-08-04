@@ -83,6 +83,36 @@ impl OutboundHeaderAuthority {
     where
         F: FnOnce() -> i64,
     {
+        self.prepare_with_reply(
+            payload,
+            Some(reply_to_message_id),
+            deadline_at_unix_ms,
+            clock,
+        )
+    }
+
+    pub(in crate::frame) fn prepare_new<F>(
+        &mut self,
+        payload: &wire::FramePayload,
+        deadline_at_unix_ms: i64,
+        clock: F,
+    ) -> Result<PendingOutbound, OutboundFrameError>
+    where
+        F: FnOnce() -> i64,
+    {
+        self.prepare_with_reply(payload, None, deadline_at_unix_ms, clock)
+    }
+
+    fn prepare_with_reply<F>(
+        &mut self,
+        payload: &wire::FramePayload,
+        reply_to_message_id: Option<String>,
+        deadline_at_unix_ms: i64,
+        clock: F,
+    ) -> Result<PendingOutbound, OutboundFrameError>
+    where
+        F: FnOnce() -> i64,
+    {
         if self.poisoned {
             return Err(OutboundFrameError::SenderPoisoned);
         }
@@ -110,7 +140,7 @@ impl OutboundHeaderAuthority {
             HeaderCoordinates {
                 stream_seq,
                 message_id: format!("outbound:{}:{stream_seq}", self.sender_id),
-                reply_to_message_id: Some(reply_to_message_id),
+                reply_to_message_id,
                 sent_at_unix_ms,
                 deadline_at_unix_ms: Some(deadline_at_unix_ms),
             },

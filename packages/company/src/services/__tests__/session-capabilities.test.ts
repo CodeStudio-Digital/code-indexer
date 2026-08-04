@@ -12,20 +12,18 @@ import {
 const APP_STUDIO_SESSION_ID = '00000000-0000-4000-8000-000000000042';
 
 describe('CompanySessionCapabilities', () => {
-  it('keeps generic Company on Kanban/pipelines without App tools', () => {
+  it('keeps generic Company on Kanban without App tools', () => {
     const capabilities = resolveCompanySessionCapabilities('company');
     expect(capabilities).toMatchObject({
       workSource: 'company_kanban',
       allowAppTools: false,
       allowCompanyKanban: true,
-      allowCompanyPipelines: true,
       allowCompanyScheduler: true,
       allowAppScheduler: false,
       allowFreeSubordinateSpawn: true,
     });
     expect(resolveCompanyServiceWiringPlan(capabilities)).toEqual({
       initializeCompanyKanban: true,
-      initializeCompanyPipelines: true,
       initializeCompanyScheduler: true,
       allowIncidentKanbanCards: true,
     });
@@ -44,14 +42,12 @@ describe('CompanySessionCapabilities', () => {
       workSource: 'app_workflow',
       allowAppTools: true,
       allowCompanyKanban: false,
-      allowCompanyPipelines: false,
       allowCompanyScheduler: false,
       allowAppScheduler: true,
       allowFreeSubordinateSpawn: false,
     });
     expect(resolveCompanyServiceWiringPlan(capabilities)).toEqual({
       initializeCompanyKanban: false,
-      initializeCompanyPipelines: false,
       initializeCompanyScheduler: false,
       allowIncidentKanbanCards: false,
     });
@@ -63,7 +59,6 @@ describe('CompanySessionCapabilities', () => {
       allowAppScheduler: false,
       allowCompanyScheduler: false,
       allowCompanyKanban: false,
-      allowCompanyPipelines: false,
     });
   });
 
@@ -95,7 +90,7 @@ describe('CompanySessionCapabilities', () => {
 describe('App Studio prompt capability', () => {
   const projects = [{ id: 7, name: 'My App', rootPath: 'D:/app' }];
 
-  it('does not inject generic Kanban/pipeline delegation into the App Master', () => {
+  it('does not inject generic Kanban delegation into the App Master', () => {
     const prompt = buildMasterCompanyBlock({
       runtimeKind: 'app_studio',
       projects,
@@ -107,7 +102,6 @@ describe('App Studio prompt capability', () => {
     expect(prompt).toContain('app_dispatch_ready_work');
     expect(prompt).toContain('gpt-5.6-sol');
     expect(prompt).not.toContain('kanban_card_id');
-    expect(prompt).not.toContain('start_pipeline');
     expect(prompt).not.toContain('create a card BEFORE');
   });
 

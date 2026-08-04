@@ -3,10 +3,11 @@
 > **Status inicial:** nenhum gate aprovado  
 > **Atualização:** este é o único arquivo do corpus em que checkboxes de avanço
 > são alterados.
-> **Snapshot operacional:** 2026-08-01. O pacote Windows candidato e o E2E
+> **Snapshot operacional:** 2026-08-04. O pacote Windows candidato e o E2E
 > process-real até `Active`, incluindo pulse físico inicial, emissão periódica,
-> liveness/expiry no owner permanente e reap, foram reexecutados nesta data; os
-> gates globais de CI, soak e matriz multiplataforma continuam abertos.
+> métricas reais do processo runner, liveness/expiry no owner permanente e reap,
+> foram reexecutados nesta data; os gates globais de CI, soak e matriz
+> multiplataforma continuam abertos.
 
 “Spec final” significa texto normativo congelado; não significa implementação
 concluída. Por isso todos os checks começam vazios até owner e evidência serem
@@ -37,7 +38,7 @@ corrente.
 |---|---|---:|---|
 | G0 — spec e baseline | corpus `00..09`, ADRs e gates definidos | 0/13 | baseline reproduzível e aprovação explícita de G0 |
 | G1 — workspace, IDL, Host e packaging | 11 crates; Protobuf TS/Rust; session store; package; bridges Host/Node-API; E2E process-real Windows até `Active` | 6/23 | CI candidato, smoke instalado multiplataforma e classificação dos exports legados |
-| G2 — supervisor, lifecycle e isolamento | lifecycle/management, Windows Job, runner single-tenant, composição Host→supervisor→runner até `Active` com reap e pulse físico contínuo autenticado/expiry target-specific | 0/16 | heartbeat semântico, resource sampling real, outbox/recovery, Cancel/Fence físico pós-Active, backend Unix e gates de soak/isolamento |
+| G2 — supervisor, lifecycle e isolamento | lifecycle/management, Windows Job, runner single-tenant, composição Host→supervisor→runner até `Active` com reap e pulse físico contínuo autenticado/expiry target-specific; RSS/pico/CPU/handles reais do runner | 0/16 | heartbeat semântico, métricas agregadas de descendentes/spool, outbox/recovery, Cancel/Fence físico pós-Active, backend Unix e gates de soak/isolamento |
 | G3 — engine e Provider Gateway | apenas máquina de lifecycle mínima em `agent-engine` e contratos Host de routing/provider | 0/18 | loop do agente e Provider Gateway ainda não implementados |
 | G4 — capabilities e tools | somente crate/contratos mínimos de capability; sem tools nativas de produção | 0/19 | aguarda o loop mínimo do engine e Provider Gateway em G3 |
 | G5 — durability, waiting e run-tree | filesystem session writer, journal/recovery, transferência autenticada e spool quota foundation | 0/17 | checkpoints completos, waiting/resume, child runs e subagentes process-real |
@@ -51,7 +52,8 @@ corrente.
    hidratação → Prepared → Activate/ACK → Active → expiry ou close/reap`,
    inclusive falha fechada de hidratação e liveness target-specific sem renovar
    o hard deadline.
-2. **Próximo:** heartbeat semântico e resource sampling real; depois
+2. **Próximo:** heartbeat semântico e métricas agregadas de descendentes/spool;
+   depois
    Cancel/Fence process-real pós-`Active` e fatos duráveis
    `AttemptProcessExited/AttemptProcessReaped`.
 3. **Depois:** loop mínimo `agent-engine` e Provider Gateway TypeScript.
@@ -432,7 +434,28 @@ corrente.
     `runtime-v1-77948e909b807e069afef9622271b402fc3b5c489249c59bd391a245bd31acac`
     (manifest
     `5c326cc77337a76d77adeb7c2896c3ae5feea8d5a5caea2cf1f32493cdc9e85a`).
-    Heartbeat semântico e resource sampling real permanecem abertos.
+    Heartbeat semântico e resource sampling real ainda permaneciam abertos
+    neste snapshot histórico.
+    Atualização 2026-08-04 (spec 1.11.0): cada emissão inicial, de transição ou
+    periódica de `RunnerPulse` amostra o processo Windows corrente via
+    `K32GetProcessMemoryInfo`, `GetProcessTimes` e `GetProcessHandleCount`.
+    `rss_bytes`, `peak_rss_bytes`, `cpu_time_ms` e `open_handle_count` agora são
+    observações reais; `process_count = 1` e `spool_bytes = 0` continuam fatos
+    estruturais corretos desta etapa, pois o runner ainda não abre filhos nem
+    spool. A API segura vive em `agent-platform`, o FFI cru fica isolado em
+    `windows/sys` e os testes provam RSS/pico, CPU monotônica e handles físicos.
+    A autoridade Host de `AttemptPrepared` também passou a aplicar a mesma
+    tolerância bounded de 50 ms já normativa para peers locais, removendo a
+    flutuação interprocesso sem afrouxar identity/digest/correlação. Evidência:
+    workspace Rust `--all-targets`, rustfmt e Clippy `-D warnings` verdes;
+    40 testes `agent-platform` com 6 físicos ignorados; suíte Host/contratos
+    366 testes com 3 skips; typecheck; package verify/smoke; addon Electron;
+    cinco execuções E2E process-real consecutivas, todas 3/3; 645 módulos de
+    produção sob cap de 250 LOC; grafo de 11 crates/12 arestas. Pacote:
+    `runtime-v1-ebba683a13f7ec595bd91d1195ca9211066e353276bfacf07070b5baf3e01ce6`
+    (manifest
+    `2c91bb5934ac60071060ab0e586462c50bd6bc9cc191653a571c6c6bbf084bc6`).
+    Permanecem abertos heartbeat semântico e rollup de descendentes/spool.
 - [ ] `G1-HS-02` — Management é bounded e runner conecta control/data
   diretamente ao host; supervisor não recebe payload de provider/tool.
   - Spec: `IPC-036..040`, `D-RUST-003`
@@ -448,9 +471,10 @@ corrente.
     de hidratação runner-side agora são concretos, autenticados e bounded; o
     pulse físico também é concreto, autenticado, obrigatório antes de
     `LaunchAccepted` e mantido por owner permanente bounded com emissão
-    periódica e expiry target-specific. Composição multi-launch process-real,
-    heartbeat semântico, resource sampling real, recovery e rehydration ainda
-    são pendentes; item aberto. O `main` Windows
+    periódica e expiry target-specific. Os pulses já incluem RSS/pico/CPU e
+    handles reais do runner. Composição multi-launch process-real, heartbeat
+    semântico, rollup de descendentes/spool, recovery e rehydration ainda são
+    pendentes; item aberto. O `main` Windows
     já possui composition root permanente e smoke real de Hello/Shutdown. O
     owner N-API de attempts já chega ao
     framing/driver Control/Data sem reopen e o sender Data/adapter
@@ -667,7 +691,8 @@ corrente.
     fechada e Reap. O receiver de pulse já pertence ao owner permanente bounded
     do supervisor; silêncio expira a attempt alvo sem renovar hard deadline.
     Pendente: integrar o owner pós-Active com effects e implementar heartbeat
-    semântico, resource sampling real, drain cooperativo, cancelamento host-owned,
+    semântico, rollup de descendentes/spool, drain cooperativo e cancelamento
+    host-owned,
     `UpdateAttemptAuthority`,
     `QuerySupervisorState` e outbox/fatos duráveis
     `AttemptProcessExited`/`AttemptProcessReaped`; estender o E2E para
@@ -860,10 +885,11 @@ corrente.
 
 ## 5. G2 — supervisor, lifecycle e isolamento
 
-Estado corrente (2026-08-01): a composição process-real Windows completa até
+Estado corrente (2026-08-04): a composição process-real Windows completa até
 `Active`, pulse físico inicial/periódico, owner permanente, expiry target-specific
-e reap estão comprovados, mas os checks permanecem abertos porque heartbeat
-semântico, resource sampling real, backend Unix, outbox/recovery, terminal
+e reap estão comprovados. O pulse carrega RSS/pico/CPU/handles reais do runner,
+mas os checks permanecem abertos porque heartbeat semântico, métricas agregadas
+de descendentes/spool, backend Unix, outbox/recovery, terminal
 durável, Cancel/Fence process-real e gates quantitativos de isolamento/soak
 ainda não foram provados.
 `0/16` significa “nenhum requisito formal encerrado”, não “supervisor
@@ -925,7 +951,7 @@ inexistente”.
     correlacionados, replay e cleanup fail-closed. Continuam pendentes Run,
     checkpoint, terminal durável, Cancel/Fence process-real, outbox de
     Exited/Reaped, estado `Reaped` durável end-to-end, recovery, heartbeat
-    semântico, resource sampling real e drain cooperativo; item aberto.
+    semântico, rollup de descendentes/spool e drain cooperativo; item aberto.
 - [ ] `G2-LIFE-02` — Liveness e progress são distintos; hard deadline não pode
   ser renovado por heartbeat.
   - Spec: `RUN-005..008`, `IPC-047..048`
@@ -969,7 +995,10 @@ inexistente”.
     supervisor e o runner passou a emitir pulses periódicos e por transição de
     fase. O lifecycle acorda pelo mínimo entre deadline de cleanup, liveness e
     hard deadline; silêncio/falha agenda cleanup imediato somente da attempt
-    correspondente. Ainda faltam integrar `Heartbeat`, resource samples reais,
+    correspondente. Atualização 2026-08-04 (spec 1.11.0): todos os pulses
+    amostram RSS atual/pico, CPU acumulada e handles reais do runner no Windows;
+    a falha da amostra encerra o pump e cai no mesmo expiry fail-closed. Ainda
+    faltam integrar `Heartbeat`, rollup do Job/spool,
     `UpdateAttemptAuthority`, `QuerySupervisorState` e progress deadlines de
     operações; item aberto.
 - [ ] `G2-LIFE-03` — Fence perdido fecha admissão, cancela operações host-owned

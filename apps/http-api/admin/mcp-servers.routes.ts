@@ -11,6 +11,7 @@ import { McpServerManager } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { maskKey } from './shared/mask.js';
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import type { ToolMeta } from '@mcp/code-agent/tools/tiers.js';
+import { getGlobalMcpExternalPool } from '../sse/McpExternalPool.js';
 
 export interface ExternalToolInfo {
   name: string;
@@ -18,6 +19,12 @@ export interface ExternalToolInfo {
   serverId: string;
   serverName: string;
   tier: string;
+}
+
+/** Keep the process-wide catalogue in lockstep with persisted admin changes. */
+export async function refreshGlobalMcpExternalPool(): Promise<void> {
+  const pool = getGlobalMcpExternalPool();
+  if (pool) await pool.refresh();
 }
 
 export function brokerRouteReadiness(status: unknown): {
@@ -165,19 +172,22 @@ export function mcpServersRouter(): Hono {
       return c.json({ error: `reserved header "${reserved}" cannot be set` }, 400);
     }
     const store = getStore();
+    let server: McpServerConfig;
     try {
-      const server = store.upsertServer(body);
-      return c.json(publicServer(server), 201);
+      server = store.upsertServer(body);
     } catch (e) {
       return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
     } finally {
       store.close();
     }
+    await refreshGlobalMcpExternalPool();
+    return c.json(publicServer(server), 201);
   });
 
   app.patch('/mcp-servers/:id', async (c) => {
     const id = c.req.param('id');
     const store = getStore();
+    let server: McpServerConfig;
     try {
       const existing = store.getServer(id);
       if (!existing) return c.json({ error: 'not found' }, 404);
@@ -200,7 +210,7 @@ export function mcpServersRouter(): Hono {
       if (reserved) {
         return c.json({ error: `reserved header "${reserved}" cannot be set` }, 400);
       }
-      const server = store.upsertServer({
+      server = store.upsertServer({
         id,
         name: body.name ?? existing.name,
         transport: body.transport ?? existing.transport,
@@ -214,20 +224,22 @@ export function mcpServersRouter(): Hono {
         default_tier: body.default_tier ?? existing.default_tier,
         config: body.config ?? existing.config,
       });
-      return c.json(publicServer(server));
     } finally {
       store.close();
     }
+    await refreshGlobalMcpExternalPool();
+    return c.json(publicServer(server));
   });
 
-  app.delete('/mcp-servers/:id', (c) => {
+  app.delete('/mcp-servers/:id', async (c) => {
     const store = getStore();
     try {
       store.deleteServer(c.req.param('id'));
-      return c.json({ ok: true });
     } finally {
       store.close();
     }
+    await refreshGlobalMcpExternalPool();
+    return c.json({ ok: true });
   });
 
   /**
@@ -270,6 +282,7 @@ export function mcpServersRouter(): Hono {
           }
         }
         await manager.closeAll();
+        await refreshGlobalMcpExternalPool();
         return c.json({
           ok: true,
           transportReady: true,

@@ -73,7 +73,7 @@ describe('createAbortedSessionPatch', () => {
     expect(state.currentTurn?.blocks[0]).toMatchObject({ status: 'running' });
   });
 
-  it('terminates nested task, agent, and pipeline runtime state', () => {
+  it('terminates nested task and agent runtime state', () => {
     const state: SessionState = {
       ...EMPTY_STATE,
       streaming: true,
@@ -105,18 +105,6 @@ describe('createAbortedSessionPatch', () => {
           },
         ],
       },
-      pipelineRuntime: {
-        executionId: 7,
-        pipelineId: 3,
-        status: 'paused',
-        currentNodeId: 'build',
-        awaitingConfirmation: true,
-        error: null,
-        nodes: {
-          build: { status: 'running' },
-          verify: { status: 'pending' },
-        },
-      },
     };
 
     const patch = createAbortedSessionPatch(state, Date.parse('2026-07-19T12:00:00.000Z'));
@@ -132,12 +120,6 @@ describe('createAbortedSessionPatch', () => {
     expect(blocks[1]).toMatchObject({
       type: 'agents',
       group: { status: 'completed', agents: [{ status: 'aborted' }] },
-    });
-    expect(patch.pipelineRuntime).toMatchObject({
-      status: 'aborted',
-      currentNodeId: null,
-      awaitingConfirmation: false,
-      nodes: { build: { status: 'aborted' }, verify: { status: 'pending' } },
     });
   });
 });

@@ -98,7 +98,6 @@ import type {
 } from '../types.js';
 import type {
   ActiveProcess,
-  PipelineRuntimeState,
   TodoItem,
 } from '../../../hooks/agent-stream/types.js';
 import { useAgentCurrentTurn } from '../../../hooks/useAgentStream.js';
@@ -120,7 +119,6 @@ export interface RightPanelHostProps {
   onClearPicks: () => void;
   skillPicks: string[];
   onToggleSkillPick: (id: string) => void;
-  pipelineRuntime: PipelineRuntimeState | null;
   activeProcesses: ActiveProcess[];
   /** Plugin tool windows (side: 'right') the rail can activate. */
   pluginWindows?: ContribToolWindow[];
@@ -170,7 +168,6 @@ export const RightPanelHost = memo(function RightPanelHost(props: RightPanelHost
               onClearPicks={props.onClearPicks}
               skillPicks={props.skillPicks}
               onToggleSkillPick={props.onToggleSkillPick}
-              pipelineRuntime={props.pipelineRuntime}
               activeProcesses={props.activeProcesses}
               embedded
             />

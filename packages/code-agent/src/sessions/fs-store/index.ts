@@ -1,5 +1,4 @@
 export * from './bundle-tool-output-store.js';
-export * from './chat-pipeline-repository.js';
 export * from './fs-session-store.js';
 export * from './history-metrics-api.js';
 export * from './history-metrics-types.js';
@@ -9,6 +8,8 @@ export * from './operational-types.js';
 export * from './policy-shadow-repository.js';
 export * from './pipeline-telemetry.js';
 export * from './session-project-authority.js';
+export * from './session-workbench-projection.js';
+export * from './session-workbench-bootstrap-projection.js';
 export * from './snapshot-review-api.js';
 export * from './subagent-repository.js';
 export * from './telemetry-dashboard.js';

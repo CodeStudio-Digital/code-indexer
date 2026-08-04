@@ -17,6 +17,7 @@ import { AGENTS, type AgentId } from '@mcp/code-agent/agents/index.js';
 import {
   appendStaticPromptSection,
   buildSystemPrompt,
+  normalizeProviderFamily,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
   type PromptContext,
 } from '@mcp/code-agent/core/system-prompt.js';
@@ -212,4 +213,29 @@ describe('lean execution contracts', () => {
     expect(prompt).toContain('Use `mcp__prepare_edit` when callers/tests or a shared contract matter');
     expect(prompt).not.toContain('Before editing an existing symbol: call `mcp__prepare_edit` first');
   });
+});
+
+describe('public progress contract', () => {
+  const BASE_CTX: PromptContext = {
+    projectName: 'PromptTestProj',
+    projectRoot: 'D:/nonexistent-prompt-test',
+    os: 'win32',
+    profile: 'navigate',
+  };
+
+  it('routes the persisted ChatGPT provider id to the Codex prompt family', () => {
+    expect(normalizeProviderFamily('openai-chatgpt')).toBe('codex');
+    expect(normalizeProviderFamily('CHATGPT')).toBe('codex');
+  });
+
+  it.each(['codex', 'openai', 'kimi-code', 'generic'] as const)(
+    'requires concise progress updates for the %s family',
+    (providerFamily) => {
+      const prompt = buildSystemPrompt({ ...BASE_CTX, providerFamily });
+      expect(prompt).toContain('Before substantial tool work, send a brief user-facing update');
+      expect(prompt).toContain('do not leave the user without an update for more than 60 seconds');
+      expect(prompt).toContain('Public progress, provider reasoning summaries, and the final answer are distinct channels');
+      expect(prompt).not.toMatch(/prefer tool calls over narration/i);
+    },
+  );
 });

@@ -26,6 +26,14 @@ export interface JsonSchema {
 // ─── Normalized message blocks (was core/messages.ts) ────────────
 export type AgentRole = 'system' | 'user' | 'assistant' | 'tool';
 
+/**
+ * Public assistant-message phase used by phase-aware APIs such as Codex.
+ * `commentary` is user-visible progress emitted around tool work;
+ * `final_answer` is the terminal user-facing response. This is deliberately
+ * separate from `ThinkingBlock`, which carries provider reasoning summaries.
+ */
+export type AssistantMessagePhase = 'commentary' | 'final_answer';
+
 export interface TextBlock {
   type: 'text';
   text: string;
@@ -147,6 +155,8 @@ export type ContentBlock =
 export interface AgentMessage {
   role: AgentRole;
   content: ContentBlock[];
+  /** Provider-native public phase when available, otherwise runner-inferred. */
+  phase?: AssistantMessagePhase;
   /**
    * When true, the dashboard hides the message from the user-visible
    * transcript while the model still sees it in context. Used for
@@ -215,7 +225,14 @@ export interface ChatProviderResponseMeta {
  * new delta variants are additive within a major SDK version.
  */
 export type ChatDelta =
-  | { type: 'text_delta'; text: string }
+  | {
+      type: 'text_delta';
+      text: string;
+      /** Provider output-item identity, when the wire exposes one. */
+      itemId?: string;
+      /** Public message phase; never hidden chain-of-thought. */
+      phase?: AssistantMessagePhase;
+    }
   | { type: 'thinking_delta'; text: string }
   | { type: 'tool_call_start'; id: string; name: string }
   | { type: 'tool_call_args'; id: string; partial_json: string }
