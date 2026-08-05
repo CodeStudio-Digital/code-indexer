@@ -82,7 +82,9 @@ impl NativeDuplex {
                 }
                 read = reader.read(&mut bytes) => Some(read),
             };
-            if matches!(outcome, Some(Ok(0))) {
+            if matches!(outcome, Some(Ok(0)))
+                || matches!(&outcome, Some(Err(source)) if clean_pipe_eof(source))
+            {
                 owner.take();
             }
             outcome
@@ -91,6 +93,10 @@ impl NativeDuplex {
             None => {
                 bytes.zeroize();
                 return Err(error::closed());
+            }
+            Some(Err(source)) if clean_pipe_eof(&source) => {
+                bytes.zeroize();
+                return Ok(None);
             }
             Some(Err(source)) => {
                 bytes.zeroize();
@@ -119,7 +125,10 @@ impl NativeDuplex {
                     let _ = changed;
                     Err(error::closed())
                 }
-                result = writer.write_all(bytes) => {
+                result = async {
+                    writer.write_all(bytes).await?;
+                    writer.flush().await
+                } => {
                     result.map_err(|source| {
                         self.close.begin();
                         error::io("write", &source)
@@ -137,6 +146,11 @@ impl NativeDuplex {
     }
 }
 
+fn clean_pipe_eof(source: &std::io::Error) -> bool {
+    source.kind() == std::io::ErrorKind::BrokenPipe
+        || matches!(source.raw_os_error(), Some(109 | 232 | 233))
+}
+
 impl From<&HostEndpointBinding> for NativeBinding {
     fn from(value: &HostEndpointBinding) -> Self {
         Self {
@@ -145,5 +159,18 @@ impl From<&HostEndpointBinding> for NativeBinding {
             maximum_frame_bytes: value.maximum_frame_bytes(),
             peer_pid: value.peer_pid(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clean_pipe_eof;
+
+    #[test]
+    fn only_named_pipe_disconnect_codes_are_clean_eof() {
+        for code in [109, 232, 233] {
+            assert!(clean_pipe_eof(&std::io::Error::from_raw_os_error(code)));
+        }
+        assert!(!clean_pipe_eof(&std::io::Error::from_raw_os_error(5)));
     }
 }

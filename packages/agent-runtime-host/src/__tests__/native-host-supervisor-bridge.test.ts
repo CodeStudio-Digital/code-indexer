@@ -109,6 +109,7 @@ describe('native Host supervisor bridge', () => {
       nativeHostBridgeAbi: vi.fn(),
       openHostAttemptBridge: vi.fn(),
       openHostSupervisorBridge: vi.fn(async () => channel),
+      openNativeSessionStoreBridge: vi.fn(),
     };
 
     const bootstrap = await createNativeHostSupervisorManagementBootstrap({

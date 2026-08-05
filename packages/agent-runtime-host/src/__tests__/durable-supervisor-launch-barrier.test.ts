@@ -7,7 +7,9 @@ import type {
   SupervisorFactBinding,
 } from '../driver/HostSupervisorFactTypes.js';
 import { activationAuthoritySeal } from './activation-authority-support.js';
-import { acceptedFact } from './host-supervisor-fact-support.js';
+import {
+  acceptedFact, containmentFact, exitedFact, spawnedFact,
+} from './host-supervisor-fact-support.js';
 
 describe('DurableSupervisorLaunchBarrier', () => {
   it('cannot repopulate retained facts after a late durable settlement', async () => {
@@ -31,6 +33,23 @@ describe('DurableSupervisorLaunchBarrier', () => {
     expect(() => barrier.releaseAccepted()).toThrow(expect.objectContaining({
       code: 'management_barrier',
     }));
+  });
+
+  it('becomes a transparent durable writer after releasing containment', async () => {
+    const durable = { commit: vi.fn(async () => undefined) };
+    const barrier = new DurableSupervisorLaunchBarrier(durable);
+    barrier.bindActivationAuthoritySeal(activationAuthoritySeal());
+    for (const fact of [acceptedFact(), spawnedFact(), containmentFact()]) {
+      await barrier.commit(fact, binding(), commitControl());
+    }
+    barrier.releaseAccepted();
+
+    await expect(barrier.commit(
+      exitedFact(),
+      binding(),
+      commitControl(),
+    )).resolves.toBeUndefined();
+    expect(durable.commit).toHaveBeenCalledTimes(4);
   });
 });
 

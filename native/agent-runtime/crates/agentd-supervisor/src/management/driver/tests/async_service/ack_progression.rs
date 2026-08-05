@@ -3,12 +3,59 @@ use std::time::Duration;
 
 use agent_protocol::generated::v1 as wire;
 
+use super::super::super::plan::LaunchPlan;
 use super::super::fakes::ManualLifecycleClock;
-use super::raw_peer::{fact_bound_parts, fact_bound_service, fact_bound_service_with_capacity};
+use super::super::support::launch_attempt;
+use super::fixtures::{empty_core, service};
+use super::raw_peer::{
+    fact_bound_parts, fact_bound_service, fact_bound_service_with_capacity, raw_pair,
+};
 use crate::management::{
     SupervisorAsyncService, SupervisorAsyncServiceAdvance, SupervisorAsyncServiceStatus,
     TokioSupervisorLifecycleTimer,
 };
+use crate::process_table::{OwnershipKey, reaped_attempt_for_test};
+
+#[tokio::test]
+async fn staged_physical_exit_is_sent_before_reaped_and_each_waits_for_host_ack() {
+    let mut core = empty_core();
+    let plan = LaunchPlan::from_validated(&launch_attempt(), [8; 32]).expect("plan");
+    let reaped = reaped_attempt_for_test(plan.metadata(), 32 * 1024 * 1024);
+    let key = OwnershipKey::from_metadata(reaped.metadata());
+    assert!(core.stage_reaped_lifecycle(&key, &reaped, wire::PhysicalExitCause::Fenced, 2_100,));
+    let (mut host, actor) = raw_pair(256 * 1024).await;
+    let (_shutdown, mut service) = service(actor, core);
+
+    assert!(matches!(
+        service.advance().await,
+        SupervisorAsyncServiceAdvance::ManagementAcknowledged
+    ));
+    let exited = host.receive().await;
+    assert!(matches!(
+        exited.body,
+        wire::management_payload::Body::AttemptProcessExited(_)
+    ));
+    assert_eq!(service.owner().pending_management_facts(), 1);
+
+    host.acknowledge(&exited).await;
+    assert!(matches!(
+        service.advance().await,
+        SupervisorAsyncServiceAdvance::ManagementAcknowledged
+    ));
+    let reaped = host.receive().await;
+    assert!(matches!(
+        reaped.body,
+        wire::management_payload::Body::AttemptProcessReaped(_)
+    ));
+    assert_eq!(service.owner().pending_management_facts(), 1);
+
+    host.acknowledge(&reaped).await;
+    assert!(matches!(
+        service.advance().await,
+        SupervisorAsyncServiceAdvance::ManagementAcknowledged
+    ));
+    assert_eq!(service.owner().pending_management_facts(), 0);
+}
 
 #[tokio::test]
 async fn async_ack_advances_each_fact_and_tracks_its_physical_receipt() {

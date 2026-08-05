@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use prost::Message;
+
 use crate::generated::v1 as wire;
 use crate::identity::{AttemptIdentity, ConnectionId};
 use crate::version::ProtocolVersion;
@@ -15,7 +17,7 @@ mod model;
 
 pub(in crate::frame) use bootstrap::encode_bootstrap_hello;
 pub use error::OutboundFrameError;
-pub use model::CommittedResponse;
+pub use model::{CommittedOutbound, CommittedResponse};
 use model::{OutboundReservation, PendingOutbound};
 
 static NEXT_SENDER_ID: AtomicU64 = AtomicU64::new(1);
@@ -133,13 +135,15 @@ impl OutboundHeaderAuthority {
             .checked_add(1)
             .ok_or(OutboundFrameError::PendingTokenExhausted)?;
         let sent_at_unix_ms = clock();
+        let message_id = format!("outbound:{}:{stream_seq}", self.sender_id);
+        let payload_digest = super::frame_payload_sha256(&payload.encode_to_vec());
         let header = frame_header(
             self.protocol,
             &self.connection,
             &self.identity,
             HeaderCoordinates {
                 stream_seq,
-                message_id: format!("outbound:{}:{stream_seq}", self.sender_id),
+                message_id: message_id.clone(),
                 reply_to_message_id,
                 sent_at_unix_ms,
                 deadline_at_unix_ms: Some(deadline_at_unix_ms),
@@ -159,6 +163,9 @@ impl OutboundHeaderAuthority {
             token,
             stream_seq,
             encoded,
+            message_id,
+            payload_digest,
+            sent_at_unix_ms,
         })
     }
 
@@ -180,9 +187,11 @@ impl OutboundHeaderAuthority {
         Ok(())
     }
 
-    pub(in crate::frame) fn commit(&mut self, pending: PendingOutbound) {
+    pub(in crate::frame) fn commit(&mut self, pending: PendingOutbound) -> CommittedOutbound {
+        let committed = CommittedOutbound::from_pending(&pending);
         self.committed_stream_seq = pending.into_stream_seq();
         self.pending = None;
+        committed
     }
 
     pub(in crate::frame) const fn poison(&mut self) {

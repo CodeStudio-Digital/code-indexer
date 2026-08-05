@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import type { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import type { PendingSnapshot } from './AttemptFrameTransaction.js';
 import {
@@ -7,12 +6,15 @@ import {
   captureDataOutboundRequestFacts,
   isDataRunnerResponse,
 } from './AttemptDataCorrelationValidation.js';
-import { AttemptFrameReceiverError } from './AttemptFrameReceiverError.js';
-import { OutboundFrameError } from './OutboundFrameError.js';
 import {
-  earliestLocalPeerTimestamp,
-  latestLocalPeerTimestamp,
-} from './LocalPeerClock.js';
+  assertAckFacts,
+  inboundError,
+  outboundError,
+  sameDigest,
+  timestampAfterLocalPeerStart,
+  timestampWithin,
+  timestampWithinLocalPeer,
+} from './AttemptCorrelationPrimitives.js';
 
 type PayloadCase = agentV1Runtime.FramePayload['body']['case'];
 type ControlOutboundRequestFacts =
@@ -62,6 +64,21 @@ export function captureOutboundRequestFacts(
   }
 }
 
+export function assertOutboundEvent(
+  payload: agentV1Runtime.FramePayload,
+): void {
+  switch (payload.body.case) {
+    case 'providerTextDelta':
+    case 'providerThinkingDelta':
+    case 'providerToolCall':
+    case 'providerUsage':
+    case 'providerTerminal':
+      return;
+    default:
+      throw outboundError('only Host provider stream events may use event disposition');
+  }
+}
+
 export function assertOutboundResponse(
   payload: agentV1Runtime.FramePayload,
   inbound: PendingSnapshot,
@@ -100,6 +117,55 @@ export function assertOutboundResponse(
         'TerminalCommitted contradicts its pending TerminalProposal',
       );
     }
+    return;
+  }
+  if (
+    inbound.payloadCase === 'providerStart'
+    && payload.body.case === 'providerAccepted'
+  ) {
+    if (payload.body.value.operationId !== inbound.providerOperationId) {
+      throw outboundError('ProviderAccepted operation contradicts its ProviderStart');
+    }
+    if (!sameDigest(
+      payload.body.value.requestPayloadSha256,
+      inbound.payloadDigest,
+    )) throw outboundError('ProviderAccepted digest contradicts its ProviderStart');
+    if (!timestampAfterLocalPeerStart(
+      payload.body.value.acceptedAtUnixMs,
+      inbound.sentAtUnixMs,
+      responseSentAtUnixMs,
+    )) throw outboundError(
+      `ProviderAccepted timestamp ${payload.body.value.acceptedAtUnixMs}`
+        + ` is outside ${inbound.sentAtUnixMs}..${responseSentAtUnixMs}`,
+    );
+    return;
+  }
+  if (
+    inbound.payloadCase === 'engineEventProposal'
+    && payload.body.case === 'engineEventCommitted'
+  ) {
+    if (
+      payload.body.value.runtimeInstanceId !== inbound.engineEventRuntimeInstanceId
+      || payload.body.value.localSequence !== inbound.engineEventLocalSequence
+      || !sameDigest(
+        payload.body.value.eventPayloadSha256,
+        inbound.engineEventPayloadSha256,
+      )
+      || !sameDigest(
+        payload.body.value.commitReceipt?.payloadSha256 ?? new Uint8Array(),
+        inbound.engineEventPayloadSha256,
+      )
+    ) throw outboundError('EngineEventCommitted contradicts its proposal');
+    return;
+  }
+  if (
+    inbound.payloadCase === 'capabilityPrepare'
+    && payload.body.case === 'capabilityUpdate'
+  ) {
+    if (
+      payload.body.value.operationId !== inbound.capabilityOperationId
+      || payload.body.value.toolUseId !== inbound.capabilityToolUseId
+    ) throw outboundError('CapabilityUpdate contradicts its CapabilityPrepare');
     return;
   }
   throw outboundError(
@@ -164,59 +230,4 @@ export function isRunnerResponse(payloadCase: PayloadCase): boolean {
   return payloadCase === 'attemptPrepared'
     || payloadCase === 'ack'
     || isDataRunnerResponse(payloadCase);
-}
-
-function assertAckFacts<T extends Error>(
-  ack: agentV1Runtime.Ack,
-  expectedMessageId: string,
-  expectedDigest: Uint8Array,
-  earliestAtUnixMs: bigint,
-  latestAtUnixMs: bigint,
-  error: (message: string) => T,
-  timestampValidator: (
-    actual: bigint,
-    earliest: bigint,
-    latest: bigint,
-  ) => boolean,
-): void {
-  if (
-    ack.acknowledgedMessageId !== expectedMessageId
-    || !sameDigest(ack.acknowledgedPayloadSha256, expectedDigest)
-    || !timestampValidator(
-      ack.acknowledgedAtUnixMs,
-      earliestAtUnixMs,
-      latestAtUnixMs,
-    )
-  ) throw error('Ack does not authenticate its correlated message');
-}
-
-function sameDigest(
-  actual: Uint8Array,
-  expected: Uint8Array | undefined,
-): boolean {
-  return expected !== undefined
-    && actual.byteLength === 32
-    && expected.byteLength === 32
-    && timingSafeEqual(actual, expected);
-}
-
-function timestampWithin(actual: bigint, earliest: bigint, latest: bigint): boolean {
-  return actual >= earliest && actual <= latest;
-}
-
-function timestampWithinLocalPeer(
-  actual: bigint,
-  earliest: bigint,
-  latest: bigint,
-): boolean {
-  return actual >= earliestLocalPeerTimestamp(earliest)
-    && actual <= latestLocalPeerTimestamp(latest);
-}
-
-function outboundError(message: string): OutboundFrameError {
-  return new OutboundFrameError('invalid_correlation', message);
-}
-
-function inboundError(message: string): AttemptFrameReceiverError {
-  return new AttemptFrameReceiverError('correlation_mismatch', message);
 }

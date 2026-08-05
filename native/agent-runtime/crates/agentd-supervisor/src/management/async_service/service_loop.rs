@@ -57,6 +57,9 @@ where
         if self.pending_launch.is_some() {
             return Box::pin(self.resume_pending_launch()).await;
         }
+        if let Some(step) = self.queue_next_lifecycle_fact().await {
+            return step;
+        }
         if matches!(
             self.mode,
             ServiceMode::Draining(terminal)

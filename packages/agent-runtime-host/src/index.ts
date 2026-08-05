@@ -8,3 +8,9 @@ export * from './router/ports.js';
 export * from './router/BuildMatrixEligibility.js';
 export * from './router/RuntimeRouter.js';
 export * from './packaging/index.js';
+export * from './provider-gateway/index.js';
+export * from './capability-gateway/index.js';
+export type {
+  DurableEngineEventCommitPort,
+  DurableEngineEventCommitRequest,
+} from './ipc/DurableEngineEventCommitPort.js';

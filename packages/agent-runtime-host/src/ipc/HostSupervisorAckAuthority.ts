@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { create, toBinary } from '@bufbuild/protobuf';
+import { agentV1Supervisor } from '@mcp/agent-runtime-contracts';
 import {
   HostSupervisorFactError,
 } from '../driver/HostSupervisorFactError.js';
@@ -14,6 +16,14 @@ import {
 import {
   encodeSupervisorAcknowledgement,
 } from './HostSupervisorAcknowledgement.js';
+import {
+  encodeManagementFrame,
+  managementPayloadSha256,
+} from './ManagementFrame.js';
+import type {
+  PreparedSupervisorCommand,
+  SupervisorCommandBody,
+} from './HostSupervisorCommandTypes.js';
 import type {
   SupervisorAckReplay,
 } from './HostSupervisorReplayHistory.js';
@@ -79,6 +89,55 @@ export class HostSupervisorAckAuthority {
       );
     }
     this.#lastStreamSeq = prepared.replay.outboundStreamSeq;
+  }
+
+  prepareCommand(
+    body: SupervisorCommandBody,
+    deadlineAtUnixMs: bigint,
+  ): PreparedSupervisorCommand {
+    const sentAtUnixMs = this.nowUnixMs();
+    if (
+      sentAtUnixMs <= 0n
+      || sentAtUnixMs > MAX_INT64
+      || deadlineAtUnixMs <= sentAtUnixMs
+      || deadlineAtUnixMs > MAX_INT64
+      || this.#lastStreamSeq === MAX_UINT64
+    ) throw new HostSupervisorFactError('invalid_header', 'command clock is invalid');
+    const streamSeq = this.#lastStreamSeq + 1n;
+    const messageId = `management-command:${this.#senderNonce}:${streamSeq}`;
+    const payload = create(agentV1Supervisor.ManagementPayloadSchema, { body });
+    const encodedPayload = toBinary(agentV1Supervisor.ManagementPayloadSchema, payload);
+    const payloadSha256 = managementPayloadSha256(encodedPayload);
+    encodedPayload.fill(0);
+    return {
+      case: body.case,
+      messageId,
+      streamSeq,
+      sentAtUnixMs,
+      deadlineAtUnixMs,
+      payloadSha256,
+      encoded: encodeManagementFrame(create(
+        agentV1Supervisor.ManagementFrameHeaderSchema,
+        {
+          protocolVersion: this.handoff.protocolVersion,
+          connectionId: this.handoff.connectionId,
+          messageId,
+          streamSeq,
+          sentAtUnixMs,
+          deadlineAtUnixMs,
+        },
+      ), payload),
+    };
+  }
+
+  commitCommand(prepared: PreparedSupervisorCommand): void {
+    if (prepared.streamSeq !== this.#lastStreamSeq + 1n) {
+      throw new HostSupervisorFactError(
+        'invalid_command',
+        'command no longer owns the next outbound sequence',
+      );
+    }
+    this.#lastStreamSeq = prepared.streamSeq;
   }
 
   #replay(

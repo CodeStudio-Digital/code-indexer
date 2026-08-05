@@ -45,6 +45,12 @@ export function validateSupervisorLifecycleFact(
       case 'attemptContainmentReport':
         validateContainment(fact.value, observedAtUnixMs, handoff);
         break;
+      case 'attemptProcessExited':
+        validateExited(fact.value, observedAtUnixMs, handoff);
+        break;
+      case 'attemptProcessReaped':
+        validateReaped(fact.value, observedAtUnixMs);
+        break;
     }
   } catch (cause) {
     throw new HostSupervisorFactError(
@@ -137,6 +143,57 @@ function validateContainment(
     requiredLevel: handoff.requiredContainmentLevel,
     requiredLimits: handoff.requiredEnforcedLimits,
   });
+}
+
+function validateExited(
+  value: agentV1Supervisor.AttemptProcessExited,
+  observedAt: bigint,
+  handoff: HostSupervisorFactHandoff,
+): void {
+  const actual = value.runnerProvenance;
+  const expected = handoff.expectedRunnerProvenance;
+  if (!actual || !value.finalResources) {
+    throw new RangeError('exit fact lacks provenance or resources');
+  }
+  validText(actual.runtimeInstanceId);
+  if (
+    actual.pid <= 0
+    || actual.buildId !== expected.buildId
+    || actual.sourceCommit !== expected.sourceCommit
+    || actual.operatingSystem !== expected.operatingSystem
+    || actual.architecture !== expected.architecture
+    || !sameDigest(actual.binarySha256, expected.binarySha256)
+    || value.cause < agentV1Supervisor.PhysicalExitCause.COOPERATIVE
+    || value.cause > agentV1Supervisor.PhysicalExitCause.HOST_DISCONNECTED
+    || value.exitedAtUnixMs <= 0n
+    || value.exitedAtUnixMs > observedAt
+    || value.finalResources.peakResidentMemoryBytes
+      < value.finalResources.residentMemoryBytes
+  ) throw new RangeError('exit fact authority mismatch');
+}
+
+function validateReaped(
+  value: agentV1Supervisor.AttemptProcessReaped,
+  observedAt: bigint,
+): void {
+  validText(value.runtimeInstanceId);
+  validText(value.resourceGroupId);
+  const kinds = new Set<agentV1Supervisor.ReleasedResourceKind>();
+  for (const resource of value.releasedResources) {
+    validText(resource.resourceId);
+    if (
+      resource.kind === agentV1Supervisor.ReleasedResourceKind.UNSPECIFIED
+      || resource.releasedCount <= 0n
+      || kinds.has(resource.kind)
+    ) throw new RangeError('invalid released resource');
+    kinds.add(resource.kind);
+  }
+  if (
+    !kinds.has(agentV1Supervisor.ReleasedResourceKind.PROCESS)
+    || !kinds.has(agentV1Supervisor.ReleasedResourceKind.RESOURCE_GROUP)
+    || value.reapedAtUnixMs <= 0n
+    || value.reapedAtUnixMs > observedAt
+  ) throw new RangeError('reap fact authority mismatch');
 }
 
 function exactUniqueSet(

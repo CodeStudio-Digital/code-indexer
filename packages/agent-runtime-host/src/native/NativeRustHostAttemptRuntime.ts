@@ -8,6 +8,8 @@ import {
 } from '../driver/RustHostAttemptCoordinator.js';
 import type {
   ActiveAttemptAuthoritySnapshot,
+  HostCancelAttemptRequest,
+  HostFenceAttemptRequest,
 } from '../driver/HostLifecycleTypes.js';
 import type {
   ActiveAttemptAuthorityHandle,
@@ -35,6 +37,13 @@ import {
   createNativeShadowAttemptAdapters,
   type NativeShadowAttemptAdaptersOptions,
 } from './NativeShadowAttemptAdapters.js';
+import {
+  NativeDurableEngineEventCommitter,
+  type NativeDurableEngineEventCommitterOptions,
+} from './NativeDurableEngineEventCommitter.js';
+import type {
+  UnresolvedCapabilityDispatch,
+} from './NativeEngineEventRecoveryTypes.js';
 
 export interface NativeRustHostAttemptRuntimeOptions {
   readonly binding: NativeHostBridgeBinding;
@@ -46,6 +55,7 @@ export interface NativeRustHostAttemptRuntimeOptions {
   readonly management: RustHostAttemptCoordinatorOptions['management'];
   readonly control: NativeShadowAttemptAdaptersOptions['control'];
   readonly data: NativeShadowAttemptAdaptersOptions['data'];
+  readonly sessionStore?: NativeDurableEngineEventCommitterOptions;
 }
 
 /**
@@ -58,16 +68,19 @@ export class NativeRustHostAttemptRuntime {
   readonly #owner: NativeHostSupervisorManagementOwner;
   readonly #coordinator: RustHostAttemptCoordinator;
   #launch?: agentV1Supervisor.LaunchAttemptProcess;
+  readonly #sessionStore?: NativeDurableEngineEventCommitter;
   #closed = false;
 
   private constructor(
     owner: NativeHostSupervisorManagementOwner,
     coordinator: RustHostAttemptCoordinator,
     launch: agentV1Supervisor.LaunchAttemptProcess,
+    sessionStore?: NativeDurableEngineEventCommitter,
   ) {
     this.#owner = owner;
     this.#coordinator = coordinator;
     this.#launch = launch;
+    this.#sessionStore = sessionStore;
   }
 
   static async create(
@@ -78,18 +91,30 @@ export class NativeRustHostAttemptRuntime {
       options.launch,
     );
     let owner: NativeHostSupervisorManagementOwner | undefined;
+    let sessionStore: NativeDurableEngineEventCommitter | undefined;
     try {
       owner = await createNativeHostSupervisorManagementBootstrap({
         binding: options.binding,
         runtimePackage: options.runtimePackage,
         provision: options.supervisor,
       });
+      if (options.sessionStore && options.data.engineEventCommitter) {
+        throw new Error('native session store authority is ambiguous');
+      }
+      sessionStore = options.sessionStore
+        ? await NativeDurableEngineEventCommitter.open(
+          options.binding,
+          options.sessionStore,
+        )
+        : undefined;
       const adapters = createNativeShadowAttemptAdapters({
         binding: options.binding,
         launch,
         openDeadlineAtUnixMs: options.openDeadlineAtUnixMs,
         control: options.control,
-        data: options.data,
+        data: sessionStore
+          ? { ...options.data, engineEventCommitter: sessionStore }
+          : options.data,
       });
       const coordinator = new RustHostAttemptCoordinator({
         bootstrap: owner,
@@ -98,9 +123,15 @@ export class NativeRustHostAttemptRuntime {
         control: adapters.control,
         data: adapters.data,
       });
-      return new NativeRustHostAttemptRuntime(owner, coordinator, launch);
+      return new NativeRustHostAttemptRuntime(
+        owner,
+        coordinator,
+        launch,
+        sessionStore,
+      );
     } catch (cause) {
       scrubLaunch(launch);
+      await sessionStore?.close().catch(() => undefined);
       await owner?.close().catch(() => undefined);
       throw cause;
     }
@@ -127,6 +158,34 @@ export class NativeRustHostAttemptRuntime {
     return this.#coordinator.inspectActive(handle);
   }
 
+  cancelActive(
+    handle: ActiveAttemptAuthorityHandle,
+    request: HostCancelAttemptRequest,
+  ): Promise<void> {
+    return this.#coordinator.cancelActive(handle, request);
+  }
+
+  fenceActive(
+    handle: ActiveAttemptAuthorityHandle,
+    request: HostFenceAttemptRequest,
+  ): Promise<void> {
+    return this.#coordinator.fenceActive(handle, request);
+  }
+
+  waitForPhysicalReap(): Promise<void> {
+    return this.#coordinator.waitForPhysicalReap();
+  }
+
+  inspectUnresolvedCapabilityDispatches(
+    maximumRecords: number,
+  ): Promise<readonly UnresolvedCapabilityDispatch[]> {
+    if (!this.#sessionStore) {
+      return Promise.reject(new Error('native session store is not configured'));
+    }
+    return this.#sessionStore.inspectUnresolvedCapabilityDispatches(maximumRecords);
+  }
+
+
   tick(): void {
     this.#coordinator.tick();
   }
@@ -138,6 +197,7 @@ export class NativeRustHostAttemptRuntime {
       this.#launch = undefined;
       this.#coordinator.abort(cause);
     }
+    await this.#sessionStore?.close().catch(() => undefined);
     return this.#owner.close();
   }
 
@@ -147,5 +207,9 @@ export class NativeRustHostAttemptRuntime {
 
   get isFailed(): boolean {
     return this.#coordinator.isFailed;
+  }
+
+  get failureCause(): unknown {
+    return this.#coordinator.failureCause;
   }
 }

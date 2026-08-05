@@ -4,27 +4,23 @@ import {
   agentV1Runtime,
 } from '@mcp/agent-runtime-contracts';
 import type { AuthorityClock } from './AttemptClock.js';
-import { AttemptCorrelationAuthority } from './AttemptCorrelationAuthority.js';
-import { AttemptFrameReceiver } from './AttemptFrameReceiver.js';
-import { mintNegotiatedSeed } from './AttemptFrameSeed.js';
-import { DelimitedByteChannel } from './DelimitedByteChannel.js';
+import type { DelimitedByteChannel } from './DelimitedByteChannel.js';
 import type { EstablishedAttemptChannel } from './EstablishedAttemptChannel.js';
-import { handoffEstablishedAttemptChannel } from './EstablishedAttemptChannelHandoff.js';
 import {
   type HostDataBoundContext,
   assertExactDataBinding,
-  validateHostDataProvision,
 } from './HostDataAttemptChannelValidation.js';
 import { HostDataChannelError } from './HostDataChannelError.js';
-import { OutboundHeaderAuthority } from './OutboundHeaderAuthority.js';
 import type {
   HostDataHydrationRequest,
   HostDataHydrationReceipt,
 } from './HostDataHydration.js';
 import { sendHostDataHydration } from './HostDataHydration.js';
-
-const DATA_TOMBSTONE_ID = '00000000-0000-4000-8000-000000000000';
-const DATA_REPLAY_ENTRIES = 8;
+import { HostProviderDataSession } from './HostProviderDataSession.js';
+import type { ProviderGateway } from '../provider-gateway/ProviderGateway.js';
+import { constructHostDataAttemptChannel } from './HostDataAttemptChannelConstruction.js';
+import type { DurableEngineEventCommitPort } from './DurableEngineEventCommitPort.js';
+import type { CapabilityGateway } from '../capability-gateway/CapabilityGateway.js';
 export interface HostDataAttemptChannelProvision {
   readonly transport: DelimitedByteChannel;
   readonly identity: agentV1Common.AttemptIdentity;
@@ -116,13 +112,45 @@ export class HostPendingDataAttemptChannel {
 
 export class HostBoundDataAttemptChannel {
   #exchangeActive = false;
+  #phase: 'bound' | 'hydrating' | 'hydrated' | 'handed_off' | 'failed' = 'bound';
   constructor(
-    private readonly channel: EstablishedAttemptChannel,
+    private channel: EstablishedAttemptChannel | undefined,
     readonly context: HostDataBoundContext,
   ) {}
 
-  hydrate(request: HostDataHydrationRequest): Promise<HostDataHydrationReceipt> {
-    return sendHostDataHydration(this, request);
+  async hydrate(request: HostDataHydrationRequest): Promise<HostDataHydrationReceipt> {
+    if (this.#phase !== 'bound') {
+      throw failure('invalid_hydration', 'data hydration is single-use');
+    }
+    this.#phase = 'hydrating';
+    try {
+      const receipt = await sendHostDataHydration(this, request);
+      this.#phase = 'hydrated';
+      return receipt;
+    } catch (cause) {
+      this.#phase = 'failed';
+      throw cause;
+    }
+  }
+
+  intoProviderSession(
+    gateway: ProviderGateway,
+    eventCommitter?: DurableEngineEventCommitPort,
+    capabilityGateway?: CapabilityGateway,
+  ): HostProviderDataSession {
+    if (this.#phase !== 'hydrated' || !this.channel) {
+      throw failure('provider_failure', 'provider session requires committed hydration');
+    }
+    const channel = this.channel;
+    this.channel = undefined;
+    this.#phase = 'handed_off';
+    return new HostProviderDataSession(
+      channel,
+      this.context,
+      gateway,
+      eventCommitter,
+      capabilityGateway,
+    );
   }
 
   async exchange(
@@ -133,16 +161,18 @@ export class HostBoundDataAttemptChannel {
     }
     this.#exchangeActive = true;
     try {
-      const outbound = await this.channel.sendNew(
+      const channel = this.#requireChannel();
+      const outbound = await channel.sendNew(
         payload,
         { timeoutMs: this.context.timeoutMs },
       );
-      if (!this.channel.outboundReceiptMatches(outbound)) {
+      if (!channel.outboundReceiptMatches(outbound)) {
         throw failure('invalid_hydration', 'data outbound receipt is foreign');
       }
-      return await receiveFreshBody(this.channel);
+      return await receiveFreshBody(channel);
     } catch (cause) {
-      this.channel.abort(cause);
+      this.#phase = 'failed';
+      this.channel?.abort(cause);
       throw cause;
     } finally {
       this.#exchangeActive = false;
@@ -150,67 +180,31 @@ export class HostBoundDataAttemptChannel {
   }
 
   abort(cause?: unknown): void {
-    this.channel.abort(cause);
+    this.#phase = 'failed';
+    this.channel?.abort(cause);
+    this.channel = undefined;
   }
 
   get isFailed(): boolean {
-    return this.channel.isPoisoned;
+    return this.#phase === 'failed' || this.channel?.isPoisoned === true;
+  }
+
+  #requireChannel(): EstablishedAttemptChannel {
+    if (!this.channel || this.#phase === 'handed_off' || this.#phase === 'failed') {
+      throw failure('provider_failure', 'data channel ownership is unavailable');
+    }
+    return this.channel;
   }
 }
 
 export function createHostPendingDataAttemptChannel(
   provision: HostDataAttemptChannelProvision,
 ): HostPendingDataAttemptChannel {
-  const context = validateHostDataProvision(provision);
-  const binding = {};
-  const correlations = new AttemptCorrelationAuthority(
-    provision.maxIpcFrames,
-  );
-  const receiver = new AttemptFrameReceiver(mintNegotiatedSeed({
-    protocolVersion: provision.protocolVersion,
-    connectionId: provision.connectionId,
-    runtimeInstanceId: provision.runtimeInstanceId,
-    identity: provision.identity,
-    channel: agentV1Runtime.TransportChannel.DATA,
-    direction: 'runner_to_host',
-    maximumFrameBytes: Number(context.limits.maxFrameBytes),
-    streamWatermark: 0n,
-    bootstrapMessageId: DATA_TOMBSTONE_ID,
-    bootstrapBinding: binding,
-  }), {
-    replayCapacity: Math.min(DATA_REPLAY_ENTRIES, provision.maxIpcFrames),
-    totalIdentityCapacity: provision.maxIpcFrames,
-    maxReplayBytes: Number(context.limits.maxFrameBytes)
-      * Math.min(DATA_REPLAY_ENTRIES, provision.maxIpcFrames),
-  }, correlations);
-  const sender = new OutboundHeaderAuthority({
-    protocolVersion: provision.protocolVersion,
-    connectionId: provision.connectionId,
-    identity: provision.identity,
-    channel: agentV1Runtime.TransportChannel.DATA,
-    direction: 'host_to_runner',
-    maximumFrameBytes: Number(context.limits.maxFrameBytes),
-    committedStreamSeq: 0n,
-    maximumResponseTimeoutMs: context.timeoutMs,
-    hardDeadlineAtUnixMs: provision.hardDeadlineAtUnixMs,
-    clock: provision.clock,
-    correlations,
-  });
-  const owner = {};
-  const established = handoffEstablishedAttemptChannel(
-    provision.transport,
-    receiver,
-    sender,
-    owner,
-    provision.clock,
-    provision.hardDeadlineAtUnixMs,
-    context.timeoutMs,
-    provision.failureObserver,
-  );
+  const constructed = constructHostDataAttemptChannel(provision);
   return new HostPendingDataAttemptChannel(
-    established,
+    constructed.channel,
     provision.connectionSessionToken.slice(),
-    context,
+    constructed.context,
   );
 }
 

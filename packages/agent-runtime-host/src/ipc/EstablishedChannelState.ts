@@ -19,7 +19,10 @@ export class EstablishedChannelState {
   #clock?: AuthorityClock;
   #outbound?: EstablishedAttemptChannelOutbound;
   #deadlines?: AttemptDeadlineGuard;
-  #activeOperation?: object;
+  #activeInbound?: object;
+  #activeOutbound?: object;
+  #outboundIdle: Promise<void> = Promise.resolve();
+  #releaseOutbound?: () => void;
   #failureObserver?: (cause: unknown) => void;
   #poisoned = false;
 
@@ -55,28 +58,60 @@ export class EstablishedChannelState {
     this.#deadlines.start();
   }
 
-  async run<T>(operation: () => Promise<T>): Promise<T> {
-    const token = this.#startOperation();
+  async runInbound<T>(operation: () => Promise<T>): Promise<T> {
+    const token = this.#startInbound();
     try {
       return await operation();
     } catch (cause) {
       this.poison(cause);
       throw cause;
     } finally {
-      this.#finishOperation(token);
+      this.#finishInbound(token);
     }
   }
 
-  runSync<T>(operation: () => T): T {
-    const token = this.#startOperation();
+  runInboundSync<T>(operation: () => T): T {
+    const token = this.#startInbound();
     try {
       return operation();
     } catch (cause) {
       this.poison(cause);
       throw cause;
     } finally {
-      this.#finishOperation(token);
+      this.#finishInbound(token);
     }
+  }
+
+  async runOutbound<T>(operation: () => Promise<T>): Promise<T> {
+    const token = this.#startOutbound();
+    try {
+      return await operation();
+    } catch (cause) {
+      this.poison(cause);
+      throw cause;
+    } finally {
+      this.#finishOutbound(token);
+    }
+  }
+
+  async runExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    const inbound = this.#startInbound();
+    let outbound: object | undefined;
+    try {
+      outbound = this.#startOutbound();
+      return await operation();
+    } catch (cause) {
+      this.poison(cause);
+      throw cause;
+    } finally {
+      if (outbound) this.#finishOutbound(outbound);
+      this.#finishInbound(inbound);
+    }
+  }
+
+  async waitForOutboundIdle(): Promise<void> {
+    await this.#outboundIdle;
+    if (this.#poisoned) throw poisoned();
   }
 
   poison(cause: unknown): void {
@@ -144,24 +179,51 @@ export class EstablishedChannelState {
     return this.#require(this.#clock);
   }
 
-  #startOperation(): object {
+  #startInbound(): object {
     if (this.#poisoned) throw poisoned();
     this.#deadlines?.tick();
-    if (this.#activeOperation) {
+    if (this.#activeInbound) {
       const error = new AttemptFrameReceiverError(
         'pending_inbound_active',
-        'another channel operation is still active',
+        'another inbound channel operation is still active',
       );
       this.poison(error);
       throw error;
     }
     const token = {};
-    this.#activeOperation = token;
+    this.#activeInbound = token;
     return token;
   }
 
-  #finishOperation(token: object): void {
-    if (this.#activeOperation === token) this.#activeOperation = undefined;
+  #finishInbound(token: object): void {
+    if (this.#activeInbound === token) this.#activeInbound = undefined;
+  }
+
+  #startOutbound(): object {
+    if (this.#poisoned) throw poisoned();
+    this.#deadlines?.tick();
+    if (this.#activeOutbound) {
+      const error = new AttemptFrameReceiverError(
+        'pending_inbound_active',
+        'another outbound channel operation is still active',
+      );
+      this.poison(error);
+      throw error;
+    }
+    const token = {};
+    this.#activeOutbound = token;
+    this.#outboundIdle = new Promise((resolve) => {
+      this.#releaseOutbound = resolve;
+    });
+    return token;
+  }
+
+  #finishOutbound(token: object): void {
+    if (this.#activeOutbound !== token) return;
+    this.#activeOutbound = undefined;
+    const release = this.#releaseOutbound;
+    this.#releaseOutbound = undefined;
+    release?.();
   }
 
   #require<T>(value: T | undefined): T {

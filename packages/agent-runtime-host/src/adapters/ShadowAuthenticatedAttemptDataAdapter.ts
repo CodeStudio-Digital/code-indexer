@@ -5,10 +5,6 @@ import type {
 } from '../driver/RustHostAttemptCoordinatorTypes.js';
 import type { AuthorityClock } from '../ipc/AttemptClock.js';
 import type { DelimitedByteChannel } from '../ipc/DelimitedByteChannel.js';
-import type {
-  HostBoundDataAttemptChannel,
-  HostPendingDataAttemptChannel,
-} from '../ipc/HostDataAttemptChannel.js';
 import { AttemptControlAdapterError } from './AttemptControlAdapterError.js';
 import {
   awaitAuthenticatedAttemptConnection,
@@ -20,7 +16,6 @@ import {
   type AuthenticatedAttemptDataConnection,
   type AuthenticatedAttemptDataConnectionOwner,
   type ProtectedAttemptDataEndpoint,
-  type ProtectedAttemptDataEndpointOwner,
   assertDataCleanupDisposition,
   consumeAuthenticatedAttemptDataConnection,
   consumeProtectedAttemptDataEndpoint,
@@ -28,6 +23,7 @@ import {
 } from './ProtectedAttemptDataEndpoint.js';
 import {
   assertPhysicalAttemptDataConnection,
+  bestEffort,
   createPendingHostDataChannel,
   handoffPhysicalAttemptDataTransport,
   revokePhysicalAttemptDataConnection,
@@ -37,22 +33,23 @@ import {
 } from './ShadowAttemptDataFailure.js';
 import {
   type ShadowAttemptDataPlan,
-  type ShadowAttemptDataPlanInput,
   scrubShadowAttemptDataPlan,
   snapshotShadowAttemptDataPlan,
 } from './ShadowAttemptDataPlan.js';
 import {
   assertShadowAttemptIntegrationMode,
 } from './ShadowAttemptIntegrationGate.js';
+import { ShadowAttemptAbortLink } from './ShadowAttemptAbortLink.js';
+import {
+  type AdapterPhase,
+  assertDataAdapterPhase,
+} from './ShadowAttemptDataPhase.js';
+import type { ShadowAuthenticatedAttemptDataAdapterOptions } from './ShadowAuthenticatedAttemptDataAdapterTypes.js';
+import { ShadowAttemptProviderComposition } from './ShadowAttemptProviderComposition.js';
 
-type AdapterPhase =
-  'ready' | 'opening' | 'binding' | 'hydrating' | 'hydrated' | 'failed';
-
-export interface ShadowAuthenticatedAttemptDataAdapterOptions
-extends ShadowAttemptDataPlanInput {
-  readonly endpoint: ProtectedAttemptDataEndpointOwner;
-  readonly clock: AuthorityClock;
-}
+export type {
+  ShadowAuthenticatedAttemptDataAdapterOptions,
+} from './ShadowAuthenticatedAttemptDataAdapterTypes.js';
 
 /**
  * Test/shadow Data composition. It binds the physical peer to durable launch
@@ -65,11 +62,13 @@ implements AuthenticatedAttemptDataPort {
   #plan?: ShadowAttemptDataPlan;
   #clock?: AuthorityClock;
   #phase: AdapterPhase = 'ready';
-  #operationAbort?: AbortController;
-  #unlinkExternalAbort?: () => void;
+  readonly #cancellation = new ShadowAttemptAbortLink();
   #channelAbort?: (cause?: unknown) => void;
+  #channelTerminating?: () => void;
   #sourceTransferred = false;
   #failureCause?: unknown;
+  #provider?: ShadowAttemptProviderComposition;
+  readonly #failureObservers = new Set<(cause: unknown) => void>();
 
   constructor(options: ShadowAuthenticatedAttemptDataAdapterOptions) {
     const endpoint = consumeProtectedAttemptDataEndpoint(options.endpoint);
@@ -82,6 +81,7 @@ implements AuthenticatedAttemptDataPort {
       this.#plan = plan;
       this.#clock = options.clock;
       this.#endpoint = endpoint;
+      this.#provider = new ShadowAttemptProviderComposition(options);
     } catch (cause) {
       scrubShadowAttemptDataPlan(plan, cause);
       bestEffort(() => assertDataCleanupDisposition(endpoint.abort(cause)));
@@ -93,7 +93,7 @@ implements AuthenticatedAttemptDataPort {
     launch: DurableSupervisorLaunchSnapshot,
     context: AuthenticatedAttemptControlContext,
   ): Promise<void> {
-    this.#assertReady();
+    assertDataAdapterPhase(this.#phase, 'ready');
     this.#phase = 'opening';
     const plan = this.#plan!;
     let owner: AuthenticatedAttemptDataConnectionOwner | undefined;
@@ -102,8 +102,11 @@ implements AuthenticatedAttemptDataPort {
     try {
       assertShadowAttemptIntegrationMode(context.integrationMode);
       const bound = bindDurableAttemptDataLaunch(launch, plan);
-      const signal = this.#startCancellation(context.signal);
-      this.#assertPhase('opening');
+      const signal = this.#cancellation.start(
+        context.signal,
+        (cause) => this.abort(cause),
+      );
+      assertDataAdapterPhase(this.#phase, 'opening');
       const operation = this.#endpoint!.open({
         endpointId: plan.endpointId,
         connectionId: plan.connectionId,
@@ -119,7 +122,7 @@ implements AuthenticatedAttemptDataPort {
         signal,
         revokeAuthenticatedAttemptDataConnection,
       );
-      this.#assertPhase('opening');
+      assertDataAdapterPhase(this.#phase, 'opening');
       connection = consumeAuthenticatedAttemptDataConnection(owner);
       owner = undefined;
       assertPhysicalAttemptDataConnection(connection, plan, bound);
@@ -135,14 +138,23 @@ implements AuthenticatedAttemptDataPort {
       transport = undefined;
       plan.connectionToken.fill(0);
       this.#endpoint = undefined;
-      this.#ownPending(pending);
+      this.#ownChannel(pending);
       const channel = await pending.bind();
-      this.#assertPhase('binding');
+      assertDataAdapterPhase(this.#phase, 'binding');
       this.#phase = 'hydrating';
-      this.#ownBound(channel);
+      this.#ownChannel(channel);
       this.#sourceTransferred = true;
       await channel.hydrate({ ...plan.hydration, signal });
-      this.#assertPhase('hydrating');
+      assertDataAdapterPhase(this.#phase, 'hydrating');
+      const providerSession = this.#provider!.start(
+        channel,
+        this.#clock!,
+        (cause) => this.#fail(cause),
+      );
+      if (providerSession) {
+        this.#channelAbort = (cause) => providerSession.abort(cause);
+        this.#channelTerminating = () => providerSession.beginTermination();
+      }
       this.#completeHydration();
     } catch (cause) {
       if (owner) {
@@ -163,34 +175,26 @@ implements AuthenticatedAttemptDataPort {
     ));
   }
 
-  #startCancellation(external: AbortSignal): AbortSignal {
-    const controller = new AbortController();
-    this.#operationAbort = controller;
-    const abort = () => this.abort(external.reason);
-    if (external.aborted) {
-      abort();
-      return controller.signal;
+  beginTermination(): void {
+    this.#channelTerminating?.();
+  }
+
+  observeFailure(observer: (cause: unknown) => void): () => void {
+    if (this.#phase === 'failed') {
+      observer(this.#failureCause);
+      return () => undefined;
     }
-    external.addEventListener('abort', abort, { once: true });
-    this.#unlinkExternalAbort = () => {
-      external.removeEventListener('abort', abort);
-    };
-    return controller.signal;
+    this.#failureObservers.add(observer);
+    return () => { this.#failureObservers.delete(observer); };
   }
 
-  #ownPending(channel: HostPendingDataAttemptChannel): void {
-    this.#channelAbort = (cause) => channel.abort(cause);
-  }
-
-  #ownBound(channel: HostBoundDataAttemptChannel): void {
+  #ownChannel(channel: { abort(cause?: unknown): void }): void {
     this.#channelAbort = (cause) => channel.abort(cause);
   }
 
   #completeHydration(): void {
     this.#phase = 'hydrated';
-    this.#operationAbort = undefined;
-    this.#unlinkExternalAbort?.();
-    this.#unlinkExternalAbort = undefined;
+    this.#cancellation.complete();
     scrubShadowAttemptDataPlan(this.#plan, undefined, false);
     this.#plan = undefined;
     this.#clock = undefined;
@@ -200,14 +204,14 @@ implements AuthenticatedAttemptDataPort {
     if (this.#phase === 'failed') return;
     this.#phase = 'failed';
     this.#failureCause = cause;
+    this.#provider?.clear();
+    this.#provider = undefined;
     const endpoint = this.#endpoint;
     this.#endpoint = undefined;
-    this.#operationAbort?.abort(cause);
-    this.#operationAbort = undefined;
-    this.#unlinkExternalAbort?.();
-    this.#unlinkExternalAbort = undefined;
+    this.#cancellation.abort(cause);
     bestEffort(() => this.#channelAbort?.(cause));
     this.#channelAbort = undefined;
+    this.#channelTerminating = undefined;
     scrubShadowAttemptDataPlan(
       this.#plan,
       cause,
@@ -218,31 +222,8 @@ implements AuthenticatedAttemptDataPort {
     bestEffort(() => {
       if (endpoint) assertDataCleanupDisposition(endpoint.abort(cause));
     });
+    for (const observer of this.#failureObservers) bestEffort(() => observer(cause));
+    this.#failureObservers.clear();
   }
 
-  #assertReady(): void {
-    if (this.#phase !== 'ready') {
-      throw new AttemptControlAdapterError(
-        'already_opened',
-        'shadow attempt data adapter is single-use',
-      );
-    }
-  }
-
-  #assertPhase(expected: AdapterPhase): void {
-    if (this.#phase !== expected) {
-      throw new AttemptControlAdapterError(
-        'aborted',
-        'shadow attempt data adapter lost channel ownership',
-      );
-    }
-  }
-}
-
-function bestEffort(operation: () => void): void {
-  try {
-    operation();
-  } catch {
-    // The first protocol failure remains authoritative.
-  }
 }

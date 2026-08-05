@@ -4,13 +4,397 @@
 
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { AttemptIdentity } from "./common_pb.js";
+import { file_codestudio_agent_v1_common } from "./common_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file codestudio/agent/v1/session_store.proto.
  */
 export const file_codestudio_agent_v1_session_store: GenFile = /*@__PURE__*/
-  fileDesc("Cidjb2Rlc3R1ZGlvL2FnZW50L3YxL3Nlc3Npb25fc3RvcmUucHJvdG8SE2NvZGVzdHVkaW8uYWdlbnQudjEigwEKFVNlc3Npb25TdG9yZUF1dGhvcml0eRJCChJzdG9yYWdlX2dlbmVyYXRpb24YASABKA4yJi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlN0b3JhZ2VHZW5lcmF0aW9uEhMKC2xlYXNlX2Vwb2NoGAIgASgEEhEKCXdyaXRlcl9pZBgDIAEoCSJnChJTZXNzaW9uU3RvcmVMaW1pdHMSEwoLbWF4X3JlY29yZHMYASABKAQSGQoRbWF4X3BheWxvYWRfYnl0ZXMYAiABKAQSIQoZbWF4X2F1dGhvcml0eV90cmFuc2l0aW9ucxgDIAEoBCLPAQoZU2Vzc2lvblN0b3JlUmVxdWVzdEhlYWRlchIYChBwcm90b2NvbF92ZXJzaW9uGAEgASgNEhoKEmJyaWRnZV9pbnN0YW5jZV9pZBgCIAEoCRISCgpyZXF1ZXN0X2lkGAMgASgJEhIKCnN0cmVhbV9zZXEYBCABKAQSFwoPc2VudF9hdF91bml4X21zGAUgASgDEhsKE2RlYWRsaW5lX2F0X3VuaXhfbXMYBiABKAMSHgoWcmVxdWVzdF9wYXlsb2FkX3NoYTI1NhgHIAEoDCJzChhTZXNzaW9uU3RvcmVSZXF1ZXN0RnJhbWUSPgoGaGVhZGVyGAEgASgLMi4uY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVSZXF1ZXN0SGVhZGVyEhcKD2VuY29kZWRfcmVxdWVzdBgCIAEoDCKWBQoTU2Vzc2lvblN0b3JlUmVxdWVzdBJFChNvcGVuX3Nlc3Npb25fd3JpdGVyGAogASgLMiYuY29kZXN0dWRpby5hZ2VudC52MS5PcGVuU2Vzc2lvbldyaXRlckgAEkkKFWNvbW1pdF9zZXNzaW9uX3JlY29yZBgLIAEoCzIoLmNvZGVzdHVkaW8uYWdlbnQudjEuQ29tbWl0U2Vzc2lvblJlY29yZEgAElMKGnB1Ymxpc2hfc2Vzc2lvbl9wcm9qZWN0aW9uGAwgASgLMi0uY29kZXN0dWRpby5hZ2VudC52MS5QdWJsaXNoU2Vzc2lvblByb2plY3Rpb25IABJFChNxdWVyeV9zZXNzaW9uX3N0YXRlGA0gASgLMiYuY29kZXN0dWRpby5hZ2VudC52MS5RdWVyeVNlc3Npb25TdGF0ZUgAEmQKI3RyYW5zZmVyX3Nlc3Npb25fc3RvcmFnZV9nZW5lcmF0aW9uGA4gASgLMjUuY29kZXN0dWRpby5hZ2VudC52MS5UcmFuc2ZlclNlc3Npb25TdG9yYWdlR2VuZXJhdGlvbkgAEj4KD2FyY2hpdmVfc2Vzc2lvbhgPIAEoCzIjLmNvZGVzdHVkaW8uYWdlbnQudjEuQXJjaGl2ZVNlc3Npb25IABJHChRjbG9zZV9zZXNzaW9uX3dyaXRlchgQIAEoCzInLmNvZGVzdHVkaW8uYWdlbnQudjEuQ2xvc2VTZXNzaW9uV3JpdGVySAASWgoecmVhZF9jb21taXR0ZWRfc2Vzc2lvbl9wYXlsb2FkGBEgASgLMjAuY29kZXN0dWRpby5hZ2VudC52MS5SZWFkQ29tbWl0dGVkU2Vzc2lvblBheWxvYWRIAEIGCgRib2R5IskBChFPcGVuU2Vzc2lvbldyaXRlchIPCgdyb290X2lkGAEgASgJEhIKCnNlc3Npb25faWQYAiABKAkSPQoJYXV0aG9yaXR5GAMgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkSNwoGbGltaXRzGAQgASgLMicuY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVMaW1pdHMSFwoPaWRlbXBvdGVuY3lfa2V5GAUgASgJIrICChNDb21taXRTZXNzaW9uUmVjb3JkEhUKDXdyaXRlcl9oYW5kbGUYASABKAkSPQoJYXV0aG9yaXR5GAIgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkSFAoMb3BlcmF0aW9uX2lkGAMgASgJEjQKBGtpbmQYBCABKA4yJi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25SZWNvcmRLaW5kEj8KCmR1cmFiaWxpdHkYBSABKA4yKy5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25EdXJhYmlsaXR5Q2xhc3MSFwoPZW5jb2RlZF9wYXlsb2FkGAYgASgMEh8KF2V4cGVjdGVkX3BheWxvYWRfc2hhMjU2GAcgASgMIvcBChhQdWJsaXNoU2Vzc2lvblByb2plY3Rpb24SFQoNd3JpdGVyX2hhbmRsZRgBIAEoCRI9CglhdXRob3JpdHkYAiABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRIUCgxvcGVyYXRpb25faWQYAyABKAkSFwoPcHJvamVjdGlvbl9raW5kGAQgASgJEhoKEnByb2plY3Rpb25fdmVyc2lvbhgFIAEoBBIeChZleHBlY3RlZF9jb21taXRfc2hhMjU2GAYgASgMEhoKEmVuY29kZWRfcHJvamVjdGlvbhgHIAEoDCJpChFRdWVyeVNlc3Npb25TdGF0ZRIVCg13cml0ZXJfaGFuZGxlGAEgASgJEj0KCWF1dGhvcml0eRgCIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5IoACChtSZWFkQ29tbWl0dGVkU2Vzc2lvblBheWxvYWQSFQoNd3JpdGVyX2hhbmRsZRgBIAEoCRI9CglhdXRob3JpdHkYAiABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRIUCgxvcGVyYXRpb25faWQYAyABKAkSNAoEa2luZBgEIAEoDjImLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblJlY29yZEtpbmQSHwoXZXhwZWN0ZWRfcGF5bG9hZF9zaGEyNTYYBSABKAwSHgoWZXhwZWN0ZWRfcGF5bG9hZF9ieXRlcxgGIAEoBCLxAgogVHJhbnNmZXJTZXNzaW9uU3RvcmFnZUdlbmVyYXRpb24SDwoHcm9vdF9pZBgBIAEoCRISCgpzZXNzaW9uX2lkGAIgASgJEkEKEXNvdXJjZV9nZW5lcmF0aW9uGAMgASgOMiYuY29kZXN0dWRpby5hZ2VudC52MS5TdG9yYWdlR2VuZXJhdGlvbhJBChF0YXJnZXRfZ2VuZXJhdGlvbhgEIAEoDjImLmNvZGVzdHVkaW8uYWdlbnQudjEuU3RvcmFnZUdlbmVyYXRpb24SIwobZXhwZWN0ZWRfc291cmNlX2xlYXNlX2Vwb2NoGAUgASgEEkIKDm5leHRfYXV0aG9yaXR5GAYgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkSIAoYdmVyaWZpZWRfbWFuaWZlc3Rfc2hhMjU2GAcgASgMEhcKD2lkZW1wb3RlbmN5X2tleRgIIAEoCSKlAQoOQXJjaGl2ZVNlc3Npb24SFQoNd3JpdGVyX2hhbmRsZRgBIAEoCRI9CglhdXRob3JpdHkYAiABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRIUCgxvcGVyYXRpb25faWQYAyABKAkSJwofZXhwZWN0ZWRfcHJldmlvdXNfY29tbWl0X3NoYTI1NhgEIAEoDCJqChJDbG9zZVNlc3Npb25Xcml0ZXISFQoNd3JpdGVyX2hhbmRsZRgBIAEoCRI9CglhdXRob3JpdHkYAiABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eSK5AQoaU2Vzc2lvblN0b3JlUmVzcG9uc2VIZWFkZXISGAoQcHJvdG9jb2xfdmVyc2lvbhgBIAEoDRIaChJicmlkZ2VfaW5zdGFuY2VfaWQYAiABKAkSEgoKcmVxdWVzdF9pZBgDIAEoCRISCgpzdHJlYW1fc2VxGAQgASgEEhwKFGNvbXBsZXRlZF9hdF91bml4X21zGAUgASgDEh8KF3Jlc3BvbnNlX3BheWxvYWRfc2hhMjU2GAYgASgMInYKGVNlc3Npb25TdG9yZVJlc3BvbnNlRnJhbWUSPwoGaGVhZGVyGAEgASgLMi8uY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVSZXNwb25zZUhlYWRlchIYChBlbmNvZGVkX3Jlc3BvbnNlGAIgASgMIswFChRTZXNzaW9uU3RvcmVSZXNwb25zZRJJChVzZXNzaW9uX3dyaXRlcl9vcGVuZWQYCiABKAsyKC5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25Xcml0ZXJPcGVuZWRIABJYCh1jb21taXRfc2Vzc2lvbl9yZWNvcmRfcmVjZWlwdBgLIAEoCzIvLmNvZGVzdHVkaW8uYWdlbnQudjEuQ29tbWl0U2Vzc2lvblJlY29yZFJlY2VpcHRIABJXChxzZXNzaW9uX3Byb2plY3Rpb25fcHVibGlzaGVkGAwgASgLMi8uY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uUHJvamVjdGlvblB1Ymxpc2hlZEgAEjoKDXNlc3Npb25fc3RhdGUYDSABKAsyIS5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdGF0ZUgAElUKG3Nlc3Npb25fc3RvcmFnZV90cmFuc2ZlcnJlZBgOIAEoCzIuLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JhZ2VUcmFuc2ZlcnJlZEgAEkAKEHNlc3Npb25fYXJjaGl2ZWQYDyABKAsyJC5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25BcmNoaXZlZEgAEkkKFXNlc3Npb25fd3JpdGVyX2Nsb3NlZBgQIAEoCzIoLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvbldyaXRlckNsb3NlZEgAEjsKB2ZhaWx1cmUYESABKAsyKC5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUZhaWx1cmVIABJRChljb21taXR0ZWRfc2Vzc2lvbl9wYXlsb2FkGBIgASgLMiwuY29kZXN0dWRpby5hZ2VudC52MS5Db21taXR0ZWRTZXNzaW9uUGF5bG9hZEgAQgYKBGJvZHki2AEKE1Nlc3Npb25Xcml0ZXJPcGVuZWQSFQoNd3JpdGVyX2hhbmRsZRgBIAEoCRISCgpzZXNzaW9uX2lkGAIgASgJEj0KCWF1dGhvcml0eRgDIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5EhkKEWNvbW1pdHRlZF9yZWNvcmRzGAQgASgEEhoKEmxhc3RfY29tbWl0X3NoYTI1NhgFIAEoDBIQCghhcmNoaXZlZBgGIAEoCBIOCgZyZXBsYXkYByABKAgiiwMKGkNvbW1pdFNlc3Npb25SZWNvcmRSZWNlaXB0EhIKCnNlc3Npb25faWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEj0KCWF1dGhvcml0eRgDIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5EhcKD2dsb2JhbF9zZXF1ZW5jZRgEIAEoBBI0CgRraW5kGAUgASgOMiYuY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uUmVjb3JkS2luZBI/CgpkdXJhYmlsaXR5GAYgASgOMisuY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uRHVyYWJpbGl0eUNsYXNzEh4KFnByZXZpb3VzX2NvbW1pdF9zaGEyNTYYByABKAwSFgoOcGF5bG9hZF9zaGEyNTYYCCABKAwSFQoNY29tbWl0X3NoYTI1NhgJIAEoDBIVCg1wYXlsb2FkX2J5dGVzGAogASgEEg4KBnJlcGxheRgLIAEoCCL8AQoaU2Vzc2lvblByb2plY3Rpb25QdWJsaXNoZWQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIUCgxvcGVyYXRpb25faWQYAiABKAkSPQoJYXV0aG9yaXR5GAMgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkSFwoPcHJvamVjdGlvbl9raW5kGAQgASgJEhoKEnByb2plY3Rpb25fdmVyc2lvbhgFIAEoBBIVCg1jb21taXRfc2hhMjU2GAYgASgMEhkKEXByb2plY3Rpb25fc2hhMjU2GAcgASgMEg4KBnJlcGxheRgIIAEoCCKqAQoMU2Vzc2lvblN0YXRlEhIKCnNlc3Npb25faWQYASABKAkSPQoJYXV0aG9yaXR5GAIgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkSGQoRY29tbWl0dGVkX3JlY29yZHMYAyABKAQSGgoSbGFzdF9jb21taXRfc2hhMjU2GAQgASgMEhAKCGFyY2hpdmVkGAUgASgIInsKF0NvbW1pdHRlZFNlc3Npb25QYXlsb2FkEkcKDmNvbW1pdF9yZWNlaXB0GAEgASgLMi8uY29kZXN0dWRpby5hZ2VudC52MS5Db21taXRTZXNzaW9uUmVjb3JkUmVjZWlwdBIXCg9lbmNvZGVkX3BheWxvYWQYAiABKAwikAIKGVNlc3Npb25TdG9yYWdlVHJhbnNmZXJyZWQSEgoKc2Vzc2lvbl9pZBgBIAEoCRJBChFzb3VyY2VfZ2VuZXJhdGlvbhgCIAEoDjImLmNvZGVzdHVkaW8uYWdlbnQudjEuU3RvcmFnZUdlbmVyYXRpb24SRwoTYWN0aXZhdGVkX2F1dGhvcml0eRgDIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5EiAKGHZlcmlmaWVkX21hbmlmZXN0X3NoYTI1NhgEIAEoDBIhChlhY3RpdmF0aW9uX3JlY2VpcHRfc2hhMjU2GAUgASgMEg4KBnJlcGxheRgGIAEoCCJbCg9TZXNzaW9uQXJjaGl2ZWQSSAoPYXJjaGl2ZV9yZWNlaXB0GAEgASgLMi8uY29kZXN0dWRpby5hZ2VudC52MS5Db21taXRTZXNzaW9uUmVjb3JkUmVjZWlwdCJoChNTZXNzaW9uV3JpdGVyQ2xvc2VkEhIKCnNlc3Npb25faWQYASABKAkSPQoJYXV0aG9yaXR5GAIgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkiqwEKE1Nlc3Npb25TdG9yZUZhaWx1cmUSOgoEY29kZRgBIAEoDjIsLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlRmFpbHVyZUNvZGUSEwoLcmVhc29uX2NvZGUYAiABKAkSHAoPcmVkYWN0ZWRfZGV0YWlsGAMgASgJSACIAQESEQoJcmV0cnlhYmxlGAQgASgIQhIKEF9yZWRhY3RlZF9kZXRhaWwqgwEKEVN0b3JhZ2VHZW5lcmF0aW9uEiIKHlNUT1JBR0VfR0VORVJBVElPTl9VTlNQRUNJRklFRBAAEicKI1NUT1JBR0VfR0VORVJBVElPTl9UWVBFU0NSSVBUX0ZTX1YxEAESIQodU1RPUkFHRV9HRU5FUkFUSU9OX1JVU1RfRlNfVjEQAiq1AwoRU2Vzc2lvblJlY29yZEtpbmQSIwofU0VTU0lPTl9SRUNPUkRfS0lORF9VTlNQRUNJRklFRBAAEiQKIFNFU1NJT05fUkVDT1JEX0tJTkRfQ09OVkVSU0FUSU9OEAESJwojU0VTU0lPTl9SRUNPUkRfS0lORF9MSUZFQ1lDTEVfRVZFTlQQAhIlCiFTRVNTSU9OX1JFQ09SRF9LSU5EX01FVFJJQ19ST0xMVVAQAxIjCh9TRVNTSU9OX1JFQ09SRF9LSU5EX1RPT0xfT1VUUFVUEAQSIgoeU0VTU0lPTl9SRUNPUkRfS0lORF9DSEVDS1BPSU5UEAUSHAoYU0VTU0lPTl9SRUNPUkRfS0lORF9QTEFOEAYSHAoYU0VTU0lPTl9SRUNPUkRfS0lORF9UQVNLEAcSHQoZU0VTU0lPTl9SRUNPUkRfS0lORF9JTlBVVBAIEh4KGlNFU1NJT05fUkVDT1JEX0tJTkRfTUVNT1JZEAkSIAocU0VTU0lPTl9SRUNPUkRfS0lORF9TVUJBR0VOVBAKEh8KG1NFU1NJT05fUkVDT1JEX0tJTkRfQVJDSElWRRALKrwBChZTZXNzaW9uRHVyYWJpbGl0eUNsYXNzEigKJFNFU1NJT05fRFVSQUJJTElUWV9DTEFTU19VTlNQRUNJRklFRBAAEioKJlNFU1NJT05fRFVSQUJJTElUWV9DTEFTU19BVVRIT1JJVEFUSVZFEAESJAogU0VTU0lPTl9EVVJBQklMSVRZX0NMQVNTX0RVUkFCTEUQAhImCiJTRVNTSU9OX0RVUkFCSUxJVFlfQ0xBU1NfQ09BTEVTQ0VEEAMqhQUKF1Nlc3Npb25TdG9yZUZhaWx1cmVDb2RlEioKJlNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX1VOU1BFQ0lGSUVEEAASLgoqU0VTU0lPTl9TVE9SRV9GQUlMVVJFX0NPREVfSU5WQUxJRF9SRVFVRVNUEAESLgoqU0VTU0lPTl9TVE9SRV9GQUlMVVJFX0NPREVfVU5BVVRIRU5USUNBVEVEEAISLgoqU0VTU0lPTl9TVE9SRV9GQUlMVVJFX0NPREVfU1RBTEVfQVVUSE9SSVRZEAMSLAooU0VTU0lPTl9TVE9SRV9GQUlMVVJFX0NPREVfV1JJVEVSX0FDVElWRRAEEi8KK1NFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX1dSSVRFUl9OT1RfRk9VTkQQBRIvCitTRVNTSU9OX1NUT1JFX0ZBSUxVUkVfQ09ERV9ESVZFUkdFTlRfUkVQTEFZEAYSLQopU0VTU0lPTl9TVE9SRV9GQUlMVVJFX0NPREVfTElNSVRfRVhDRUVERUQQBxItCilTRVNTSU9OX1NUT1JFX0ZBSUxVUkVfQ09ERV9DT1JSVVBUX0JVTkRMRRAIEi0KKVNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX1VOU0FGRV9TVE9SQUdFEAkSMgouU0VTU0lPTl9TVE9SRV9GQUlMVVJFX0NPREVfQ09OQ1VSUkVOVF9NVVRBVElPThAKEjQKMFNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX1VOU1VQUE9SVEVEX09QRVJBVElPThALEicKI1NFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX0lOVEVSTkFMEAxiBnByb3RvMw");
+  fileDesc("Cidjb2Rlc3R1ZGlvL2FnZW50L3YxL3Nlc3Npb25fc3RvcmUucHJvdG8SE2NvZGVzdHVkaW8uYWdlbnQudjEiNQodRW5naW5lUHJvdmlkZXJTdGFydGVkUmVjb3JkVjESFAoMb3BlcmF0aW9uX2lkGAEgASgJInEKG0VuZ2luZVByb3ZpZGVyRGVsdGFSZWNvcmRWMRIUCgxvcGVyYXRpb25faWQYASABKAkSEgoKdXRmOF9ieXRlcxgCIAEoBBIWCg5jb250ZW50X3NoYTI1NhgDIAEoDBIQCgh0aGlua2luZxgEIAEoCCJ2ChVFbmdpbmVVc2FnZVNuYXBzaG90VjESFAoMaW5wdXRfdG9rZW5zGAEgASgEEhUKDW91dHB1dF90b2tlbnMYAiABKAQSGwoTY2FjaGVkX2lucHV0X3Rva2VucxgDIAEoBBITCgtjb3N0X21pY3JvcxgEIAEoBCJuChtFbmdpbmVQcm92aWRlclVzYWdlUmVjb3JkVjESFAoMb3BlcmF0aW9uX2lkGAEgASgJEjkKBXVzYWdlGAIgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5FbmdpbmVVc2FnZVNuYXBzaG90VjEiTAofRW5naW5lUHJvdmlkZXJDb21wbGV0ZWRSZWNvcmRWMRIUCgxvcGVyYXRpb25faWQYASABKAkSEwoLcmVzcG9uc2VfaWQYAiABKAkiTQogRW5naW5lQ2FwYWJpbGl0eUJvdW5kYXJ5UmVjb3JkVjESFAoMb3BlcmF0aW9uX2lkGAEgASgJEhMKC3Rvb2xfdXNlX2lkGAIgASgJIqIBCidFbmdpbmVDYXBhYmlsaXR5RGlzcGF0Y2hTdGFydGVkUmVjb3JkVjESFAoMb3BlcmF0aW9uX2lkGAEgASgJEhMKC3Rvb2xfdXNlX2lkGAIgASgJEhAKCGdyYW50X2lkGAMgASgJEh4KFmVmZmVjdGl2ZV9pbnB1dF9zaGEyNTYYBCABKAwSGgoSc3RhcnRlZF9hdF91bml4X21zGAUgASgDIqIDCiBFbmdpbmVDYXBhYmlsaXR5VGVybWluYWxSZWNvcmRWMRIUCgxvcGVyYXRpb25faWQYASABKAkSEwoLdG9vbF91c2VfaWQYAiABKAkSEAoIZ3JhbnRfaWQYAyABKAkSVQoOY2xhc3NpZmljYXRpb24YBCABKA4yPS5jb2Rlc3R1ZGlvLmFnZW50LnYxLkVuZ2luZUNhcGFiaWxpdHlUZXJtaW5hbENsYXNzaWZpY2F0aW9uVjESEwoLcmVhc29uX2NvZGUYBSABKAkSGAoQcmVzdWx0X3NjaGVtYV9pZBgGIAEoCRIdChVyZXN1bHRfc2NoZW1hX3ZlcnNpb24YByABKA0SFQoNcmVzdWx0X3NoYTI1NhgIIAEoDBIUCgxyZXN1bHRfYnl0ZXMYCSABKAQSEgoKYnl0ZXNfcmVhZBgKIAEoBBIVCg1ieXRlc19lbWl0dGVkGAsgASgEEhEKCXRydW5jYXRlZBgMIAEoCBITCgtkdXJhdGlvbl9tcxgNIAEoBBIcChRjb21wbGV0ZWRfYXRfdW5peF9tcxgOIAEoAyK1AQoWRW5naW5lVGVybWluYWxSZWNvcmRWMRJLCg5jbGFzc2lmaWNhdGlvbhgBIAEoDjIzLmNvZGVzdHVkaW8uYWdlbnQudjEuRW5naW5lVGVybWluYWxDbGFzc2lmaWNhdGlvblYxEhMKC3JlYXNvbl9jb2RlGAIgASgJEjkKBXVzYWdlGAMgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5FbmdpbmVVc2FnZVNuYXBzaG90VjEisAYKE0VuZ2luZUV2ZW50UmVjb3JkVjESFgoOc2NoZW1hX3ZlcnNpb24YASABKA0SNgoIaWRlbnRpdHkYAiABKAsyJC5jb2Rlc3R1ZGlvLmFnZW50LnYxLkF0dGVtcHRJZGVudGl0eRIbChNydW50aW1lX2luc3RhbmNlX2lkGAMgASgJEhYKDmxvY2FsX3NlcXVlbmNlGAQgASgEEk4KEHByb3ZpZGVyX3N0YXJ0ZWQYCiABKAsyMi5jb2Rlc3R1ZGlvLmFnZW50LnYxLkVuZ2luZVByb3ZpZGVyU3RhcnRlZFJlY29yZFYxSAASSgoOcHJvdmlkZXJfZGVsdGEYCyABKAsyMC5jb2Rlc3R1ZGlvLmFnZW50LnYxLkVuZ2luZVByb3ZpZGVyRGVsdGFSZWNvcmRWMUgAEkoKDnByb3ZpZGVyX3VzYWdlGAwgASgLMjAuY29kZXN0dWRpby5hZ2VudC52MS5FbmdpbmVQcm92aWRlclVzYWdlUmVjb3JkVjFIABJSChJwcm92aWRlcl9jb21wbGV0ZWQYDSABKAsyNC5jb2Rlc3R1ZGlvLmFnZW50LnYxLkVuZ2luZVByb3ZpZGVyQ29tcGxldGVkUmVjb3JkVjFIABJUChNjYXBhYmlsaXR5X2JvdW5kYXJ5GA4gASgLMjUuY29kZXN0dWRpby5hZ2VudC52MS5FbmdpbmVDYXBhYmlsaXR5Qm91bmRhcnlSZWNvcmRWMUgAEj8KCHRlcm1pbmFsGA8gASgLMisuY29kZXN0dWRpby5hZ2VudC52MS5FbmdpbmVUZXJtaW5hbFJlY29yZFYxSAASYwobY2FwYWJpbGl0eV9kaXNwYXRjaF9zdGFydGVkGBAgASgLMjwuY29kZXN0dWRpby5hZ2VudC52MS5FbmdpbmVDYXBhYmlsaXR5RGlzcGF0Y2hTdGFydGVkUmVjb3JkVjFIABJUChNjYXBhYmlsaXR5X3Rlcm1pbmFsGBEgASgLMjUuY29kZXN0dWRpby5hZ2VudC52MS5FbmdpbmVDYXBhYmlsaXR5VGVybWluYWxSZWNvcmRWMUgAQgYKBGJvZHkigwEKFVNlc3Npb25TdG9yZUF1dGhvcml0eRJCChJzdG9yYWdlX2dlbmVyYXRpb24YASABKA4yJi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlN0b3JhZ2VHZW5lcmF0aW9uEhMKC2xlYXNlX2Vwb2NoGAIgASgEEhEKCXdyaXRlcl9pZBgDIAEoCSJnChJTZXNzaW9uU3RvcmVMaW1pdHMSEwoLbWF4X3JlY29yZHMYASABKAQSGQoRbWF4X3BheWxvYWRfYnl0ZXMYAiABKAQSIQoZbWF4X2F1dGhvcml0eV90cmFuc2l0aW9ucxgDIAEoBCLPAQoZU2Vzc2lvblN0b3JlUmVxdWVzdEhlYWRlchIYChBwcm90b2NvbF92ZXJzaW9uGAEgASgNEhoKEmJyaWRnZV9pbnN0YW5jZV9pZBgCIAEoCRISCgpyZXF1ZXN0X2lkGAMgASgJEhIKCnN0cmVhbV9zZXEYBCABKAQSFwoPc2VudF9hdF91bml4X21zGAUgASgDEhsKE2RlYWRsaW5lX2F0X3VuaXhfbXMYBiABKAMSHgoWcmVxdWVzdF9wYXlsb2FkX3NoYTI1NhgHIAEoDCJzChhTZXNzaW9uU3RvcmVSZXF1ZXN0RnJhbWUSPgoGaGVhZGVyGAEgASgLMi4uY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVSZXF1ZXN0SGVhZGVyEhcKD2VuY29kZWRfcmVxdWVzdBgCIAEoDCLyBQoTU2Vzc2lvblN0b3JlUmVxdWVzdBJFChNvcGVuX3Nlc3Npb25fd3JpdGVyGAogASgLMiYuY29kZXN0dWRpby5hZ2VudC52MS5PcGVuU2Vzc2lvbldyaXRlckgAEkkKFWNvbW1pdF9zZXNzaW9uX3JlY29yZBgLIAEoCzIoLmNvZGVzdHVkaW8uYWdlbnQudjEuQ29tbWl0U2Vzc2lvblJlY29yZEgAElMKGnB1Ymxpc2hfc2Vzc2lvbl9wcm9qZWN0aW9uGAwgASgLMi0uY29kZXN0dWRpby5hZ2VudC52MS5QdWJsaXNoU2Vzc2lvblByb2plY3Rpb25IABJFChNxdWVyeV9zZXNzaW9uX3N0YXRlGA0gASgLMiYuY29kZXN0dWRpby5hZ2VudC52MS5RdWVyeVNlc3Npb25TdGF0ZUgAEmQKI3RyYW5zZmVyX3Nlc3Npb25fc3RvcmFnZV9nZW5lcmF0aW9uGA4gASgLMjUuY29kZXN0dWRpby5hZ2VudC52MS5UcmFuc2ZlclNlc3Npb25TdG9yYWdlR2VuZXJhdGlvbkgAEj4KD2FyY2hpdmVfc2Vzc2lvbhgPIAEoCzIjLmNvZGVzdHVkaW8uYWdlbnQudjEuQXJjaGl2ZVNlc3Npb25IABJHChRjbG9zZV9zZXNzaW9uX3dyaXRlchgQIAEoCzInLmNvZGVzdHVkaW8uYWdlbnQudjEuQ2xvc2VTZXNzaW9uV3JpdGVySAASWgoecmVhZF9jb21taXR0ZWRfc2Vzc2lvbl9wYXlsb2FkGBEgASgLMjAuY29kZXN0dWRpby5hZ2VudC52MS5SZWFkQ29tbWl0dGVkU2Vzc2lvblBheWxvYWRIABJaCh5saXN0X2NvbW1pdHRlZF9zZXNzaW9uX3JlY29yZHMYEiABKAsyMC5jb2Rlc3R1ZGlvLmFnZW50LnYxLkxpc3RDb21taXR0ZWRTZXNzaW9uUmVjb3Jkc0gAQgYKBGJvZHkiyQEKEU9wZW5TZXNzaW9uV3JpdGVyEg8KB3Jvb3RfaWQYASABKAkSEgoKc2Vzc2lvbl9pZBgCIAEoCRI9CglhdXRob3JpdHkYAyABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRI3CgZsaW1pdHMYBCABKAsyJy5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUxpbWl0cxIXCg9pZGVtcG90ZW5jeV9rZXkYBSABKAkisgIKE0NvbW1pdFNlc3Npb25SZWNvcmQSFQoNd3JpdGVyX2hhbmRsZRgBIAEoCRI9CglhdXRob3JpdHkYAiABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRIUCgxvcGVyYXRpb25faWQYAyABKAkSNAoEa2luZBgEIAEoDjImLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblJlY29yZEtpbmQSPwoKZHVyYWJpbGl0eRgFIAEoDjIrLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvbkR1cmFiaWxpdHlDbGFzcxIXCg9lbmNvZGVkX3BheWxvYWQYBiABKAwSHwoXZXhwZWN0ZWRfcGF5bG9hZF9zaGEyNTYYByABKAwi9wEKGFB1Ymxpc2hTZXNzaW9uUHJvamVjdGlvbhIVCg13cml0ZXJfaGFuZGxlGAEgASgJEj0KCWF1dGhvcml0eRgCIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5EhQKDG9wZXJhdGlvbl9pZBgDIAEoCRIXCg9wcm9qZWN0aW9uX2tpbmQYBCABKAkSGgoScHJvamVjdGlvbl92ZXJzaW9uGAUgASgEEh4KFmV4cGVjdGVkX2NvbW1pdF9zaGEyNTYYBiABKAwSGgoSZW5jb2RlZF9wcm9qZWN0aW9uGAcgASgMImkKEVF1ZXJ5U2Vzc2lvblN0YXRlEhUKDXdyaXRlcl9oYW5kbGUYASABKAkSPQoJYXV0aG9yaXR5GAIgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkigAIKG1JlYWRDb21taXR0ZWRTZXNzaW9uUGF5bG9hZBIVCg13cml0ZXJfaGFuZGxlGAEgASgJEj0KCWF1dGhvcml0eRgCIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5EhQKDG9wZXJhdGlvbl9pZBgDIAEoCRI0CgRraW5kGAQgASgOMiYuY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uUmVjb3JkS2luZBIfChdleHBlY3RlZF9wYXlsb2FkX3NoYTI1NhgFIAEoDBIeChZleHBlY3RlZF9wYXlsb2FkX2J5dGVzGAYgASgEIqcBChtMaXN0Q29tbWl0dGVkU2Vzc2lvblJlY29yZHMSFQoNd3JpdGVyX2hhbmRsZRgBIAEoCRI9CglhdXRob3JpdHkYAiABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRIdChVhZnRlcl9nbG9iYWxfc2VxdWVuY2UYAyABKAQSEwoLbWF4X3JlY29yZHMYBCABKA0i8QIKIFRyYW5zZmVyU2Vzc2lvblN0b3JhZ2VHZW5lcmF0aW9uEg8KB3Jvb3RfaWQYASABKAkSEgoKc2Vzc2lvbl9pZBgCIAEoCRJBChFzb3VyY2VfZ2VuZXJhdGlvbhgDIAEoDjImLmNvZGVzdHVkaW8uYWdlbnQudjEuU3RvcmFnZUdlbmVyYXRpb24SQQoRdGFyZ2V0X2dlbmVyYXRpb24YBCABKA4yJi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlN0b3JhZ2VHZW5lcmF0aW9uEiMKG2V4cGVjdGVkX3NvdXJjZV9sZWFzZV9lcG9jaBgFIAEoBBJCCg5uZXh0X2F1dGhvcml0eRgGIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5EiAKGHZlcmlmaWVkX21hbmlmZXN0X3NoYTI1NhgHIAEoDBIXCg9pZGVtcG90ZW5jeV9rZXkYCCABKAkipQEKDkFyY2hpdmVTZXNzaW9uEhUKDXdyaXRlcl9oYW5kbGUYASABKAkSPQoJYXV0aG9yaXR5GAIgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkSFAoMb3BlcmF0aW9uX2lkGAMgASgJEicKH2V4cGVjdGVkX3ByZXZpb3VzX2NvbW1pdF9zaGEyNTYYBCABKAwiagoSQ2xvc2VTZXNzaW9uV3JpdGVyEhUKDXdyaXRlcl9oYW5kbGUYASABKAkSPQoJYXV0aG9yaXR5GAIgASgLMiouY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVBdXRob3JpdHkiuQEKGlNlc3Npb25TdG9yZVJlc3BvbnNlSGVhZGVyEhgKEHByb3RvY29sX3ZlcnNpb24YASABKA0SGgoSYnJpZGdlX2luc3RhbmNlX2lkGAIgASgJEhIKCnJlcXVlc3RfaWQYAyABKAkSEgoKc3RyZWFtX3NlcRgEIAEoBBIcChRjb21wbGV0ZWRfYXRfdW5peF9tcxgFIAEoAxIfChdyZXNwb25zZV9wYXlsb2FkX3NoYTI1NhgGIAEoDCJ2ChlTZXNzaW9uU3RvcmVSZXNwb25zZUZyYW1lEj8KBmhlYWRlchgBIAEoCzIvLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlUmVzcG9uc2VIZWFkZXISGAoQZW5jb2RlZF9yZXNwb25zZRgCIAEoDCKmBgoUU2Vzc2lvblN0b3JlUmVzcG9uc2USSQoVc2Vzc2lvbl93cml0ZXJfb3BlbmVkGAogASgLMiguY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uV3JpdGVyT3BlbmVkSAASWAodY29tbWl0X3Nlc3Npb25fcmVjb3JkX3JlY2VpcHQYCyABKAsyLy5jb2Rlc3R1ZGlvLmFnZW50LnYxLkNvbW1pdFNlc3Npb25SZWNvcmRSZWNlaXB0SAASVwocc2Vzc2lvbl9wcm9qZWN0aW9uX3B1Ymxpc2hlZBgMIAEoCzIvLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblByb2plY3Rpb25QdWJsaXNoZWRIABI6Cg1zZXNzaW9uX3N0YXRlGA0gASgLMiEuY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RhdGVIABJVChtzZXNzaW9uX3N0b3JhZ2VfdHJhbnNmZXJyZWQYDiABKAsyLi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yYWdlVHJhbnNmZXJyZWRIABJAChBzZXNzaW9uX2FyY2hpdmVkGA8gASgLMiQuY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uQXJjaGl2ZWRIABJJChVzZXNzaW9uX3dyaXRlcl9jbG9zZWQYECABKAsyKC5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25Xcml0ZXJDbG9zZWRIABI7CgdmYWlsdXJlGBEgASgLMiguY29kZXN0dWRpby5hZ2VudC52MS5TZXNzaW9uU3RvcmVGYWlsdXJlSAASUQoZY29tbWl0dGVkX3Nlc3Npb25fcGF5bG9hZBgSIAEoCzIsLmNvZGVzdHVkaW8uYWdlbnQudjEuQ29tbWl0dGVkU2Vzc2lvblBheWxvYWRIABJYCh1jb21taXR0ZWRfc2Vzc2lvbl9yZWNvcmRfcGFnZRgTIAEoCzIvLmNvZGVzdHVkaW8uYWdlbnQudjEuQ29tbWl0dGVkU2Vzc2lvblJlY29yZFBhZ2VIAEIGCgRib2R5ItgBChNTZXNzaW9uV3JpdGVyT3BlbmVkEhUKDXdyaXRlcl9oYW5kbGUYASABKAkSEgoKc2Vzc2lvbl9pZBgCIAEoCRI9CglhdXRob3JpdHkYAyABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRIZChFjb21taXR0ZWRfcmVjb3JkcxgEIAEoBBIaChJsYXN0X2NvbW1pdF9zaGEyNTYYBSABKAwSEAoIYXJjaGl2ZWQYBiABKAgSDgoGcmVwbGF5GAcgASgIIosDChpDb21taXRTZXNzaW9uUmVjb3JkUmVjZWlwdBISCgpzZXNzaW9uX2lkGAEgASgJEhQKDG9wZXJhdGlvbl9pZBgCIAEoCRI9CglhdXRob3JpdHkYAyABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRIXCg9nbG9iYWxfc2VxdWVuY2UYBCABKAQSNAoEa2luZBgFIAEoDjImLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblJlY29yZEtpbmQSPwoKZHVyYWJpbGl0eRgGIAEoDjIrLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvbkR1cmFiaWxpdHlDbGFzcxIeChZwcmV2aW91c19jb21taXRfc2hhMjU2GAcgASgMEhYKDnBheWxvYWRfc2hhMjU2GAggASgMEhUKDWNvbW1pdF9zaGEyNTYYCSABKAwSFQoNcGF5bG9hZF9ieXRlcxgKIAEoBBIOCgZyZXBsYXkYCyABKAgi/AEKGlNlc3Npb25Qcm9qZWN0aW9uUHVibGlzaGVkEhIKCnNlc3Npb25faWQYASABKAkSFAoMb3BlcmF0aW9uX2lkGAIgASgJEj0KCWF1dGhvcml0eRgDIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5EhcKD3Byb2plY3Rpb25fa2luZBgEIAEoCRIaChJwcm9qZWN0aW9uX3ZlcnNpb24YBSABKAQSFQoNY29tbWl0X3NoYTI1NhgGIAEoDBIZChFwcm9qZWN0aW9uX3NoYTI1NhgHIAEoDBIOCgZyZXBsYXkYCCABKAgiqgEKDFNlc3Npb25TdGF0ZRISCgpzZXNzaW9uX2lkGAEgASgJEj0KCWF1dGhvcml0eRgCIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5EhkKEWNvbW1pdHRlZF9yZWNvcmRzGAMgASgEEhoKEmxhc3RfY29tbWl0X3NoYTI1NhgEIAEoDBIQCghhcmNoaXZlZBgFIAEoCCJ7ChdDb21taXR0ZWRTZXNzaW9uUGF5bG9hZBJHCg5jb21taXRfcmVjZWlwdBgBIAEoCzIvLmNvZGVzdHVkaW8uYWdlbnQudjEuQ29tbWl0U2Vzc2lvblJlY29yZFJlY2VpcHQSFwoPZW5jb2RlZF9wYXlsb2FkGAIgASgMIqIBChpDb21taXR0ZWRTZXNzaW9uUmVjb3JkUGFnZRISCgpzZXNzaW9uX2lkGAEgASgJEkAKB3JlY29yZHMYAiADKAsyLy5jb2Rlc3R1ZGlvLmFnZW50LnYxLkNvbW1pdFNlc3Npb25SZWNvcmRSZWNlaXB0EhwKFG5leHRfZ2xvYmFsX3NlcXVlbmNlGAMgASgEEhAKCGNvbXBsZXRlGAQgASgIIpACChlTZXNzaW9uU3RvcmFnZVRyYW5zZmVycmVkEhIKCnNlc3Npb25faWQYASABKAkSQQoRc291cmNlX2dlbmVyYXRpb24YAiABKA4yJi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlN0b3JhZ2VHZW5lcmF0aW9uEkcKE2FjdGl2YXRlZF9hdXRob3JpdHkYAyABKAsyKi5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUF1dGhvcml0eRIgChh2ZXJpZmllZF9tYW5pZmVzdF9zaGEyNTYYBCABKAwSIQoZYWN0aXZhdGlvbl9yZWNlaXB0X3NoYTI1NhgFIAEoDBIOCgZyZXBsYXkYBiABKAgiWwoPU2Vzc2lvbkFyY2hpdmVkEkgKD2FyY2hpdmVfcmVjZWlwdBgBIAEoCzIvLmNvZGVzdHVkaW8uYWdlbnQudjEuQ29tbWl0U2Vzc2lvblJlY29yZFJlY2VpcHQiaAoTU2Vzc2lvbldyaXRlckNsb3NlZBISCgpzZXNzaW9uX2lkGAEgASgJEj0KCWF1dGhvcml0eRgCIAEoCzIqLmNvZGVzdHVkaW8uYWdlbnQudjEuU2Vzc2lvblN0b3JlQXV0aG9yaXR5IqsBChNTZXNzaW9uU3RvcmVGYWlsdXJlEjoKBGNvZGUYASABKA4yLC5jb2Rlc3R1ZGlvLmFnZW50LnYxLlNlc3Npb25TdG9yZUZhaWx1cmVDb2RlEhMKC3JlYXNvbl9jb2RlGAIgASgJEhwKD3JlZGFjdGVkX2RldGFpbBgDIAEoCUgAiAEBEhEKCXJldHJ5YWJsZRgEIAEoCEISChBfcmVkYWN0ZWRfZGV0YWlsKoMBChFTdG9yYWdlR2VuZXJhdGlvbhIiCh5TVE9SQUdFX0dFTkVSQVRJT05fVU5TUEVDSUZJRUQQABInCiNTVE9SQUdFX0dFTkVSQVRJT05fVFlQRVNDUklQVF9GU19WMRABEiEKHVNUT1JBR0VfR0VORVJBVElPTl9SVVNUX0ZTX1YxEAIqtQMKEVNlc3Npb25SZWNvcmRLaW5kEiMKH1NFU1NJT05fUkVDT1JEX0tJTkRfVU5TUEVDSUZJRUQQABIkCiBTRVNTSU9OX1JFQ09SRF9LSU5EX0NPTlZFUlNBVElPThABEicKI1NFU1NJT05fUkVDT1JEX0tJTkRfTElGRUNZQ0xFX0VWRU5UEAISJQohU0VTU0lPTl9SRUNPUkRfS0lORF9NRVRSSUNfUk9MTFVQEAMSIwofU0VTU0lPTl9SRUNPUkRfS0lORF9UT09MX09VVFBVVBAEEiIKHlNFU1NJT05fUkVDT1JEX0tJTkRfQ0hFQ0tQT0lOVBAFEhwKGFNFU1NJT05fUkVDT1JEX0tJTkRfUExBThAGEhwKGFNFU1NJT05fUkVDT1JEX0tJTkRfVEFTSxAHEh0KGVNFU1NJT05fUkVDT1JEX0tJTkRfSU5QVVQQCBIeChpTRVNTSU9OX1JFQ09SRF9LSU5EX01FTU9SWRAJEiAKHFNFU1NJT05fUkVDT1JEX0tJTkRfU1VCQUdFTlQQChIfChtTRVNTSU9OX1JFQ09SRF9LSU5EX0FSQ0hJVkUQCyq8AQoWU2Vzc2lvbkR1cmFiaWxpdHlDbGFzcxIoCiRTRVNTSU9OX0RVUkFCSUxJVFlfQ0xBU1NfVU5TUEVDSUZJRUQQABIqCiZTRVNTSU9OX0RVUkFCSUxJVFlfQ0xBU1NfQVVUSE9SSVRBVElWRRABEiQKIFNFU1NJT05fRFVSQUJJTElUWV9DTEFTU19EVVJBQkxFEAISJgoiU0VTU0lPTl9EVVJBQklMSVRZX0NMQVNTX0NPQUxFU0NFRBADKtsCCihFbmdpbmVDYXBhYmlsaXR5VGVybWluYWxDbGFzc2lmaWNhdGlvblYxEjwKOEVOR0lORV9DQVBBQklMSVRZX1RFUk1JTkFMX0NMQVNTSUZJQ0FUSU9OX1YxX1VOU1BFQ0lGSUVEEAASOgo2RU5HSU5FX0NBUEFCSUxJVFlfVEVSTUlOQUxfQ0xBU1NJRklDQVRJT05fVjFfU1VDQ0VFREVEEAESNwozRU5HSU5FX0NBUEFCSUxJVFlfVEVSTUlOQUxfQ0xBU1NJRklDQVRJT05fVjFfRkFJTEVEEAISOgo2RU5HSU5FX0NBUEFCSUxJVFlfVEVSTUlOQUxfQ0xBU1NJRklDQVRJT05fVjFfQ0FOQ0VMTEVEEAMSQAo8RU5HSU5FX0NBUEFCSUxJVFlfVEVSTUlOQUxfQ0xBU1NJRklDQVRJT05fVjFfT1VUQ09NRV9VTktOT1dOEAQq5QEKHkVuZ2luZVRlcm1pbmFsQ2xhc3NpZmljYXRpb25WMRIxCi1FTkdJTkVfVEVSTUlOQUxfQ0xBU1NJRklDQVRJT05fVjFfVU5TUEVDSUZJRUQQABIvCitFTkdJTkVfVEVSTUlOQUxfQ0xBU1NJRklDQVRJT05fVjFfQ09NUExFVEVEEAESLAooRU5HSU5FX1RFUk1JTkFMX0NMQVNTSUZJQ0FUSU9OX1YxX0ZBSUxFRBACEjEKLUVOR0lORV9URVJNSU5BTF9DTEFTU0lGSUNBVElPTl9WMV9JTlRFUlJVUFRFRBADKoUFChdTZXNzaW9uU3RvcmVGYWlsdXJlQ29kZRIqCiZTRVNTSU9OX1NUT1JFX0ZBSUxVUkVfQ09ERV9VTlNQRUNJRklFRBAAEi4KKlNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX0lOVkFMSURfUkVRVUVTVBABEi4KKlNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX1VOQVVUSEVOVElDQVRFRBACEi4KKlNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX1NUQUxFX0FVVEhPUklUWRADEiwKKFNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX1dSSVRFUl9BQ1RJVkUQBBIvCitTRVNTSU9OX1NUT1JFX0ZBSUxVUkVfQ09ERV9XUklURVJfTk9UX0ZPVU5EEAUSLworU0VTU0lPTl9TVE9SRV9GQUlMVVJFX0NPREVfRElWRVJHRU5UX1JFUExBWRAGEi0KKVNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX0xJTUlUX0VYQ0VFREVEEAcSLQopU0VTU0lPTl9TVE9SRV9GQUlMVVJFX0NPREVfQ09SUlVQVF9CVU5ETEUQCBItCilTRVNTSU9OX1NUT1JFX0ZBSUxVUkVfQ09ERV9VTlNBRkVfU1RPUkFHRRAJEjIKLlNFU1NJT05fU1RPUkVfRkFJTFVSRV9DT0RFX0NPTkNVUlJFTlRfTVVUQVRJT04QChI0CjBTRVNTSU9OX1NUT1JFX0ZBSUxVUkVfQ09ERV9VTlNVUFBPUlRFRF9PUEVSQVRJT04QCxInCiNTRVNTSU9OX1NUT1JFX0ZBSUxVUkVfQ09ERV9JTlRFUk5BTBAMYgZwcm90bzM", [file_codestudio_agent_v1_common]);
+
+/**
+ * Canonical, bounded payload written by the Host-side Rust event sink. Raw
+ * transcript text is deliberately represented only by byte length and digest;
+ * transcript/artifact publication remains a separate durable protocol.
+ *
+ * @generated from message codestudio.agent.v1.EngineProviderStartedRecordV1
+ */
+export type EngineProviderStartedRecordV1 = Message<"codestudio.agent.v1.EngineProviderStartedRecordV1"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineProviderStartedRecordV1.
+ * Use `create(EngineProviderStartedRecordV1Schema)` to create a new message.
+ */
+export const EngineProviderStartedRecordV1Schema: GenMessage<EngineProviderStartedRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 0);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineProviderDeltaRecordV1
+ */
+export type EngineProviderDeltaRecordV1 = Message<"codestudio.agent.v1.EngineProviderDeltaRecordV1"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: uint64 utf8_bytes = 2;
+   */
+  utf8Bytes: bigint;
+
+  /**
+   * @generated from field: bytes content_sha256 = 3;
+   */
+  contentSha256: Uint8Array;
+
+  /**
+   * @generated from field: bool thinking = 4;
+   */
+  thinking: boolean;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineProviderDeltaRecordV1.
+ * Use `create(EngineProviderDeltaRecordV1Schema)` to create a new message.
+ */
+export const EngineProviderDeltaRecordV1Schema: GenMessage<EngineProviderDeltaRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 1);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineUsageSnapshotV1
+ */
+export type EngineUsageSnapshotV1 = Message<"codestudio.agent.v1.EngineUsageSnapshotV1"> & {
+  /**
+   * @generated from field: uint64 input_tokens = 1;
+   */
+  inputTokens: bigint;
+
+  /**
+   * @generated from field: uint64 output_tokens = 2;
+   */
+  outputTokens: bigint;
+
+  /**
+   * @generated from field: uint64 cached_input_tokens = 3;
+   */
+  cachedInputTokens: bigint;
+
+  /**
+   * @generated from field: uint64 cost_micros = 4;
+   */
+  costMicros: bigint;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineUsageSnapshotV1.
+ * Use `create(EngineUsageSnapshotV1Schema)` to create a new message.
+ */
+export const EngineUsageSnapshotV1Schema: GenMessage<EngineUsageSnapshotV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 2);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineProviderUsageRecordV1
+ */
+export type EngineProviderUsageRecordV1 = Message<"codestudio.agent.v1.EngineProviderUsageRecordV1"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: codestudio.agent.v1.EngineUsageSnapshotV1 usage = 2;
+   */
+  usage?: EngineUsageSnapshotV1 | undefined;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineProviderUsageRecordV1.
+ * Use `create(EngineProviderUsageRecordV1Schema)` to create a new message.
+ */
+export const EngineProviderUsageRecordV1Schema: GenMessage<EngineProviderUsageRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 3);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineProviderCompletedRecordV1
+ */
+export type EngineProviderCompletedRecordV1 = Message<"codestudio.agent.v1.EngineProviderCompletedRecordV1"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string response_id = 2;
+   */
+  responseId: string;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineProviderCompletedRecordV1.
+ * Use `create(EngineProviderCompletedRecordV1Schema)` to create a new message.
+ */
+export const EngineProviderCompletedRecordV1Schema: GenMessage<EngineProviderCompletedRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 4);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineCapabilityBoundaryRecordV1
+ */
+export type EngineCapabilityBoundaryRecordV1 = Message<"codestudio.agent.v1.EngineCapabilityBoundaryRecordV1"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string tool_use_id = 2;
+   */
+  toolUseId: string;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineCapabilityBoundaryRecordV1.
+ * Use `create(EngineCapabilityBoundaryRecordV1Schema)` to create a new message.
+ */
+export const EngineCapabilityBoundaryRecordV1Schema: GenMessage<EngineCapabilityBoundaryRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 5);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineCapabilityDispatchStartedRecordV1
+ */
+export type EngineCapabilityDispatchStartedRecordV1 = Message<"codestudio.agent.v1.EngineCapabilityDispatchStartedRecordV1"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string tool_use_id = 2;
+   */
+  toolUseId: string;
+
+  /**
+   * @generated from field: string grant_id = 3;
+   */
+  grantId: string;
+
+  /**
+   * @generated from field: bytes effective_input_sha256 = 4;
+   */
+  effectiveInputSha256: Uint8Array;
+
+  /**
+   * @generated from field: int64 started_at_unix_ms = 5;
+   */
+  startedAtUnixMs: bigint;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineCapabilityDispatchStartedRecordV1.
+ * Use `create(EngineCapabilityDispatchStartedRecordV1Schema)` to create a new message.
+ */
+export const EngineCapabilityDispatchStartedRecordV1Schema: GenMessage<EngineCapabilityDispatchStartedRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 6);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineCapabilityTerminalRecordV1
+ */
+export type EngineCapabilityTerminalRecordV1 = Message<"codestudio.agent.v1.EngineCapabilityTerminalRecordV1"> & {
+  /**
+   * @generated from field: string operation_id = 1;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string tool_use_id = 2;
+   */
+  toolUseId: string;
+
+  /**
+   * @generated from field: string grant_id = 3;
+   */
+  grantId: string;
+
+  /**
+   * @generated from field: codestudio.agent.v1.EngineCapabilityTerminalClassificationV1 classification = 4;
+   */
+  classification: EngineCapabilityTerminalClassificationV1;
+
+  /**
+   * @generated from field: string reason_code = 5;
+   */
+  reasonCode: string;
+
+  /**
+   * @generated from field: string result_schema_id = 6;
+   */
+  resultSchemaId: string;
+
+  /**
+   * @generated from field: uint32 result_schema_version = 7;
+   */
+  resultSchemaVersion: number;
+
+  /**
+   * @generated from field: bytes result_sha256 = 8;
+   */
+  resultSha256: Uint8Array;
+
+  /**
+   * @generated from field: uint64 result_bytes = 9;
+   */
+  resultBytes: bigint;
+
+  /**
+   * @generated from field: uint64 bytes_read = 10;
+   */
+  bytesRead: bigint;
+
+  /**
+   * @generated from field: uint64 bytes_emitted = 11;
+   */
+  bytesEmitted: bigint;
+
+  /**
+   * @generated from field: bool truncated = 12;
+   */
+  truncated: boolean;
+
+  /**
+   * @generated from field: uint64 duration_ms = 13;
+   */
+  durationMs: bigint;
+
+  /**
+   * @generated from field: int64 completed_at_unix_ms = 14;
+   */
+  completedAtUnixMs: bigint;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineCapabilityTerminalRecordV1.
+ * Use `create(EngineCapabilityTerminalRecordV1Schema)` to create a new message.
+ */
+export const EngineCapabilityTerminalRecordV1Schema: GenMessage<EngineCapabilityTerminalRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 7);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineTerminalRecordV1
+ */
+export type EngineTerminalRecordV1 = Message<"codestudio.agent.v1.EngineTerminalRecordV1"> & {
+  /**
+   * @generated from field: codestudio.agent.v1.EngineTerminalClassificationV1 classification = 1;
+   */
+  classification: EngineTerminalClassificationV1;
+
+  /**
+   * @generated from field: string reason_code = 2;
+   */
+  reasonCode: string;
+
+  /**
+   * @generated from field: codestudio.agent.v1.EngineUsageSnapshotV1 usage = 3;
+   */
+  usage?: EngineUsageSnapshotV1 | undefined;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineTerminalRecordV1.
+ * Use `create(EngineTerminalRecordV1Schema)` to create a new message.
+ */
+export const EngineTerminalRecordV1Schema: GenMessage<EngineTerminalRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 8);
+
+/**
+ * @generated from message codestudio.agent.v1.EngineEventRecordV1
+ */
+export type EngineEventRecordV1 = Message<"codestudio.agent.v1.EngineEventRecordV1"> & {
+  /**
+   * @generated from field: uint32 schema_version = 1;
+   */
+  schemaVersion: number;
+
+  /**
+   * @generated from field: codestudio.agent.v1.AttemptIdentity identity = 2;
+   */
+  identity?: AttemptIdentity | undefined;
+
+  /**
+   * @generated from field: string runtime_instance_id = 3;
+   */
+  runtimeInstanceId: string;
+
+  /**
+   * @generated from field: uint64 local_sequence = 4;
+   */
+  localSequence: bigint;
+
+  /**
+   * @generated from oneof codestudio.agent.v1.EngineEventRecordV1.body
+   */
+  body: {
+    /**
+     * @generated from field: codestudio.agent.v1.EngineProviderStartedRecordV1 provider_started = 10;
+     */
+    value: EngineProviderStartedRecordV1;
+    case: "providerStarted";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.EngineProviderDeltaRecordV1 provider_delta = 11;
+     */
+    value: EngineProviderDeltaRecordV1;
+    case: "providerDelta";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.EngineProviderUsageRecordV1 provider_usage = 12;
+     */
+    value: EngineProviderUsageRecordV1;
+    case: "providerUsage";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.EngineProviderCompletedRecordV1 provider_completed = 13;
+     */
+    value: EngineProviderCompletedRecordV1;
+    case: "providerCompleted";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.EngineCapabilityBoundaryRecordV1 capability_boundary = 14;
+     */
+    value: EngineCapabilityBoundaryRecordV1;
+    case: "capabilityBoundary";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.EngineTerminalRecordV1 terminal = 15;
+     */
+    value: EngineTerminalRecordV1;
+    case: "terminal";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.EngineCapabilityDispatchStartedRecordV1 capability_dispatch_started = 16;
+     */
+    value: EngineCapabilityDispatchStartedRecordV1;
+    case: "capabilityDispatchStarted";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.EngineCapabilityTerminalRecordV1 capability_terminal = 17;
+     */
+    value: EngineCapabilityTerminalRecordV1;
+    case: "capabilityTerminal";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message codestudio.agent.v1.EngineEventRecordV1.
+ * Use `create(EngineEventRecordV1Schema)` to create a new message.
+ */
+export const EngineEventRecordV1Schema: GenMessage<EngineEventRecordV1> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 9);
 
 /**
  * @generated from message codestudio.agent.v1.SessionStoreAuthority
@@ -37,7 +421,7 @@ export type SessionStoreAuthority = Message<"codestudio.agent.v1.SessionStoreAut
  * Use `create(SessionStoreAuthoritySchema)` to create a new message.
  */
 export const SessionStoreAuthoritySchema: GenMessage<SessionStoreAuthority> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 0);
+  messageDesc(file_codestudio_agent_v1_session_store, 10);
 
 /**
  * @generated from message codestudio.agent.v1.SessionStoreLimits
@@ -64,7 +448,7 @@ export type SessionStoreLimits = Message<"codestudio.agent.v1.SessionStoreLimits
  * Use `create(SessionStoreLimitsSchema)` to create a new message.
  */
 export const SessionStoreLimitsSchema: GenMessage<SessionStoreLimits> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 1);
+  messageDesc(file_codestudio_agent_v1_session_store, 11);
 
 /**
  * request_payload_sha256 is
@@ -115,7 +499,7 @@ export type SessionStoreRequestHeader = Message<"codestudio.agent.v1.SessionStor
  * Use `create(SessionStoreRequestHeaderSchema)` to create a new message.
  */
 export const SessionStoreRequestHeaderSchema: GenMessage<SessionStoreRequestHeader> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 2);
+  messageDesc(file_codestudio_agent_v1_session_store, 12);
 
 /**
  * @generated from message codestudio.agent.v1.SessionStoreRequestFrame
@@ -137,7 +521,7 @@ export type SessionStoreRequestFrame = Message<"codestudio.agent.v1.SessionStore
  * Use `create(SessionStoreRequestFrameSchema)` to create a new message.
  */
 export const SessionStoreRequestFrameSchema: GenMessage<SessionStoreRequestFrame> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 3);
+  messageDesc(file_codestudio_agent_v1_session_store, 13);
 
 /**
  * @generated from message codestudio.agent.v1.SessionStoreRequest
@@ -194,6 +578,12 @@ export type SessionStoreRequest = Message<"codestudio.agent.v1.SessionStoreReque
      */
     value: ReadCommittedSessionPayload;
     case: "readCommittedSessionPayload";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.ListCommittedSessionRecords list_committed_session_records = 18;
+     */
+    value: ListCommittedSessionRecords;
+    case: "listCommittedSessionRecords";
   } | { case: undefined; value?: undefined };
 };
 
@@ -202,7 +592,7 @@ export type SessionStoreRequest = Message<"codestudio.agent.v1.SessionStoreReque
  * Use `create(SessionStoreRequestSchema)` to create a new message.
  */
 export const SessionStoreRequestSchema: GenMessage<SessionStoreRequest> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 4);
+  messageDesc(file_codestudio_agent_v1_session_store, 14);
 
 /**
  * @generated from message codestudio.agent.v1.OpenSessionWriter
@@ -239,7 +629,7 @@ export type OpenSessionWriter = Message<"codestudio.agent.v1.OpenSessionWriter">
  * Use `create(OpenSessionWriterSchema)` to create a new message.
  */
 export const OpenSessionWriterSchema: GenMessage<OpenSessionWriter> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 5);
+  messageDesc(file_codestudio_agent_v1_session_store, 15);
 
 /**
  * @generated from message codestudio.agent.v1.CommitSessionRecord
@@ -286,7 +676,7 @@ export type CommitSessionRecord = Message<"codestudio.agent.v1.CommitSessionReco
  * Use `create(CommitSessionRecordSchema)` to create a new message.
  */
 export const CommitSessionRecordSchema: GenMessage<CommitSessionRecord> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 6);
+  messageDesc(file_codestudio_agent_v1_session_store, 16);
 
 /**
  * @generated from message codestudio.agent.v1.PublishSessionProjection
@@ -333,7 +723,7 @@ export type PublishSessionProjection = Message<"codestudio.agent.v1.PublishSessi
  * Use `create(PublishSessionProjectionSchema)` to create a new message.
  */
 export const PublishSessionProjectionSchema: GenMessage<PublishSessionProjection> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 7);
+  messageDesc(file_codestudio_agent_v1_session_store, 17);
 
 /**
  * @generated from message codestudio.agent.v1.QuerySessionState
@@ -355,7 +745,7 @@ export type QuerySessionState = Message<"codestudio.agent.v1.QuerySessionState">
  * Use `create(QuerySessionStateSchema)` to create a new message.
  */
 export const QuerySessionStateSchema: GenMessage<QuerySessionState> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 8);
+  messageDesc(file_codestudio_agent_v1_session_store, 18);
 
 /**
  * Reads bytes only when the exact operation, kind, hash and length were
@@ -401,7 +791,43 @@ export type ReadCommittedSessionPayload = Message<"codestudio.agent.v1.ReadCommi
  * Use `create(ReadCommittedSessionPayloadSchema)` to create a new message.
  */
 export const ReadCommittedSessionPayloadSchema: GenMessage<ReadCommittedSessionPayload> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 9);
+  messageDesc(file_codestudio_agent_v1_session_store, 19);
+
+/**
+ * Bounded, metadata-only cursor over the already-validated journal. Payloads
+ * remain path-free and require ReadCommittedSessionPayload with the exact
+ * receipt fields returned here.
+ *
+ * @generated from message codestudio.agent.v1.ListCommittedSessionRecords
+ */
+export type ListCommittedSessionRecords = Message<"codestudio.agent.v1.ListCommittedSessionRecords"> & {
+  /**
+   * @generated from field: string writer_handle = 1;
+   */
+  writerHandle: string;
+
+  /**
+   * @generated from field: codestudio.agent.v1.SessionStoreAuthority authority = 2;
+   */
+  authority?: SessionStoreAuthority | undefined;
+
+  /**
+   * @generated from field: uint64 after_global_sequence = 3;
+   */
+  afterGlobalSequence: bigint;
+
+  /**
+   * @generated from field: uint32 max_records = 4;
+   */
+  maxRecords: number;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.ListCommittedSessionRecords.
+ * Use `create(ListCommittedSessionRecordsSchema)` to create a new message.
+ */
+export const ListCommittedSessionRecordsSchema: GenMessage<ListCommittedSessionRecords> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 20);
 
 /**
  * @generated from message codestudio.agent.v1.TransferSessionStorageGeneration
@@ -453,7 +879,7 @@ export type TransferSessionStorageGeneration = Message<"codestudio.agent.v1.Tran
  * Use `create(TransferSessionStorageGenerationSchema)` to create a new message.
  */
 export const TransferSessionStorageGenerationSchema: GenMessage<TransferSessionStorageGeneration> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 10);
+  messageDesc(file_codestudio_agent_v1_session_store, 21);
 
 /**
  * @generated from message codestudio.agent.v1.ArchiveSession
@@ -485,7 +911,7 @@ export type ArchiveSession = Message<"codestudio.agent.v1.ArchiveSession"> & {
  * Use `create(ArchiveSessionSchema)` to create a new message.
  */
 export const ArchiveSessionSchema: GenMessage<ArchiveSession> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 11);
+  messageDesc(file_codestudio_agent_v1_session_store, 22);
 
 /**
  * @generated from message codestudio.agent.v1.CloseSessionWriter
@@ -507,7 +933,7 @@ export type CloseSessionWriter = Message<"codestudio.agent.v1.CloseSessionWriter
  * Use `create(CloseSessionWriterSchema)` to create a new message.
  */
 export const CloseSessionWriterSchema: GenMessage<CloseSessionWriter> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 12);
+  messageDesc(file_codestudio_agent_v1_session_store, 23);
 
 /**
  * response_payload_sha256 is
@@ -552,7 +978,7 @@ export type SessionStoreResponseHeader = Message<"codestudio.agent.v1.SessionSto
  * Use `create(SessionStoreResponseHeaderSchema)` to create a new message.
  */
 export const SessionStoreResponseHeaderSchema: GenMessage<SessionStoreResponseHeader> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 13);
+  messageDesc(file_codestudio_agent_v1_session_store, 24);
 
 /**
  * @generated from message codestudio.agent.v1.SessionStoreResponseFrame
@@ -574,7 +1000,7 @@ export type SessionStoreResponseFrame = Message<"codestudio.agent.v1.SessionStor
  * Use `create(SessionStoreResponseFrameSchema)` to create a new message.
  */
 export const SessionStoreResponseFrameSchema: GenMessage<SessionStoreResponseFrame> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 14);
+  messageDesc(file_codestudio_agent_v1_session_store, 25);
 
 /**
  * @generated from message codestudio.agent.v1.SessionStoreResponse
@@ -637,6 +1063,12 @@ export type SessionStoreResponse = Message<"codestudio.agent.v1.SessionStoreResp
      */
     value: CommittedSessionPayload;
     case: "committedSessionPayload";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.CommittedSessionRecordPage committed_session_record_page = 19;
+     */
+    value: CommittedSessionRecordPage;
+    case: "committedSessionRecordPage";
   } | { case: undefined; value?: undefined };
 };
 
@@ -645,7 +1077,7 @@ export type SessionStoreResponse = Message<"codestudio.agent.v1.SessionStoreResp
  * Use `create(SessionStoreResponseSchema)` to create a new message.
  */
 export const SessionStoreResponseSchema: GenMessage<SessionStoreResponse> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 15);
+  messageDesc(file_codestudio_agent_v1_session_store, 26);
 
 /**
  * @generated from message codestudio.agent.v1.SessionWriterOpened
@@ -692,7 +1124,7 @@ export type SessionWriterOpened = Message<"codestudio.agent.v1.SessionWriterOpen
  * Use `create(SessionWriterOpenedSchema)` to create a new message.
  */
 export const SessionWriterOpenedSchema: GenMessage<SessionWriterOpened> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 16);
+  messageDesc(file_codestudio_agent_v1_session_store, 27);
 
 /**
  * @generated from message codestudio.agent.v1.CommitSessionRecordReceipt
@@ -759,7 +1191,7 @@ export type CommitSessionRecordReceipt = Message<"codestudio.agent.v1.CommitSess
  * Use `create(CommitSessionRecordReceiptSchema)` to create a new message.
  */
 export const CommitSessionRecordReceiptSchema: GenMessage<CommitSessionRecordReceipt> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 17);
+  messageDesc(file_codestudio_agent_v1_session_store, 28);
 
 /**
  * @generated from message codestudio.agent.v1.SessionProjectionPublished
@@ -811,7 +1243,7 @@ export type SessionProjectionPublished = Message<"codestudio.agent.v1.SessionPro
  * Use `create(SessionProjectionPublishedSchema)` to create a new message.
  */
 export const SessionProjectionPublishedSchema: GenMessage<SessionProjectionPublished> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 18);
+  messageDesc(file_codestudio_agent_v1_session_store, 29);
 
 /**
  * @generated from message codestudio.agent.v1.SessionState
@@ -848,7 +1280,7 @@ export type SessionState = Message<"codestudio.agent.v1.SessionState"> & {
  * Use `create(SessionStateSchema)` to create a new message.
  */
 export const SessionStateSchema: GenMessage<SessionState> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 19);
+  messageDesc(file_codestudio_agent_v1_session_store, 30);
 
 /**
  * @generated from message codestudio.agent.v1.CommittedSessionPayload
@@ -870,7 +1302,39 @@ export type CommittedSessionPayload = Message<"codestudio.agent.v1.CommittedSess
  * Use `create(CommittedSessionPayloadSchema)` to create a new message.
  */
 export const CommittedSessionPayloadSchema: GenMessage<CommittedSessionPayload> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 20);
+  messageDesc(file_codestudio_agent_v1_session_store, 31);
+
+/**
+ * @generated from message codestudio.agent.v1.CommittedSessionRecordPage
+ */
+export type CommittedSessionRecordPage = Message<"codestudio.agent.v1.CommittedSessionRecordPage"> & {
+  /**
+   * @generated from field: string session_id = 1;
+   */
+  sessionId: string;
+
+  /**
+   * @generated from field: repeated codestudio.agent.v1.CommitSessionRecordReceipt records = 2;
+   */
+  records: CommitSessionRecordReceipt[];
+
+  /**
+   * @generated from field: uint64 next_global_sequence = 3;
+   */
+  nextGlobalSequence: bigint;
+
+  /**
+   * @generated from field: bool complete = 4;
+   */
+  complete: boolean;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.CommittedSessionRecordPage.
+ * Use `create(CommittedSessionRecordPageSchema)` to create a new message.
+ */
+export const CommittedSessionRecordPageSchema: GenMessage<CommittedSessionRecordPage> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_session_store, 32);
 
 /**
  * @generated from message codestudio.agent.v1.SessionStorageTransferred
@@ -912,7 +1376,7 @@ export type SessionStorageTransferred = Message<"codestudio.agent.v1.SessionStor
  * Use `create(SessionStorageTransferredSchema)` to create a new message.
  */
 export const SessionStorageTransferredSchema: GenMessage<SessionStorageTransferred> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 21);
+  messageDesc(file_codestudio_agent_v1_session_store, 33);
 
 /**
  * @generated from message codestudio.agent.v1.SessionArchived
@@ -929,7 +1393,7 @@ export type SessionArchived = Message<"codestudio.agent.v1.SessionArchived"> & {
  * Use `create(SessionArchivedSchema)` to create a new message.
  */
 export const SessionArchivedSchema: GenMessage<SessionArchived> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 22);
+  messageDesc(file_codestudio_agent_v1_session_store, 34);
 
 /**
  * @generated from message codestudio.agent.v1.SessionWriterClosed
@@ -951,7 +1415,7 @@ export type SessionWriterClosed = Message<"codestudio.agent.v1.SessionWriterClos
  * Use `create(SessionWriterClosedSchema)` to create a new message.
  */
 export const SessionWriterClosedSchema: GenMessage<SessionWriterClosed> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 23);
+  messageDesc(file_codestudio_agent_v1_session_store, 35);
 
 /**
  * @generated from message codestudio.agent.v1.SessionStoreFailure
@@ -983,7 +1447,7 @@ export type SessionStoreFailure = Message<"codestudio.agent.v1.SessionStoreFailu
  * Use `create(SessionStoreFailureSchema)` to create a new message.
  */
 export const SessionStoreFailureSchema: GenMessage<SessionStoreFailure> = /*@__PURE__*/
-  messageDesc(file_codestudio_agent_v1_session_store, 24);
+  messageDesc(file_codestudio_agent_v1_session_store, 36);
 
 /**
  * @generated from enum codestudio.agent.v1.StorageGeneration
@@ -1114,6 +1578,73 @@ export const SessionDurabilityClassSchema: GenEnum<SessionDurabilityClass> = /*@
   enumDesc(file_codestudio_agent_v1_session_store, 2);
 
 /**
+ * @generated from enum codestudio.agent.v1.EngineCapabilityTerminalClassificationV1
+ */
+export enum EngineCapabilityTerminalClassificationV1 {
+  /**
+   * @generated from enum value: ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_SUCCEEDED = 1;
+   */
+  SUCCEEDED = 1,
+
+  /**
+   * @generated from enum value: ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_FAILED = 2;
+   */
+  FAILED = 2,
+
+  /**
+   * @generated from enum value: ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_CANCELLED = 3;
+   */
+  CANCELLED = 3,
+
+  /**
+   * @generated from enum value: ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_OUTCOME_UNKNOWN = 4;
+   */
+  OUTCOME_UNKNOWN = 4,
+}
+
+/**
+ * Describes the enum codestudio.agent.v1.EngineCapabilityTerminalClassificationV1.
+ */
+export const EngineCapabilityTerminalClassificationV1Schema: GenEnum<EngineCapabilityTerminalClassificationV1> = /*@__PURE__*/
+  enumDesc(file_codestudio_agent_v1_session_store, 3);
+
+/**
+ * @generated from enum codestudio.agent.v1.EngineTerminalClassificationV1
+ */
+export enum EngineTerminalClassificationV1 {
+  /**
+   * @generated from enum value: ENGINE_TERMINAL_CLASSIFICATION_V1_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: ENGINE_TERMINAL_CLASSIFICATION_V1_COMPLETED = 1;
+   */
+  COMPLETED = 1,
+
+  /**
+   * @generated from enum value: ENGINE_TERMINAL_CLASSIFICATION_V1_FAILED = 2;
+   */
+  FAILED = 2,
+
+  /**
+   * @generated from enum value: ENGINE_TERMINAL_CLASSIFICATION_V1_INTERRUPTED = 3;
+   */
+  INTERRUPTED = 3,
+}
+
+/**
+ * Describes the enum codestudio.agent.v1.EngineTerminalClassificationV1.
+ */
+export const EngineTerminalClassificationV1Schema: GenEnum<EngineTerminalClassificationV1> = /*@__PURE__*/
+  enumDesc(file_codestudio_agent_v1_session_store, 4);
+
+/**
  * @generated from enum codestudio.agent.v1.SessionStoreFailureCode
  */
 export enum SessionStoreFailureCode {
@@ -1187,5 +1718,5 @@ export enum SessionStoreFailureCode {
  * Describes the enum codestudio.agent.v1.SessionStoreFailureCode.
  */
 export const SessionStoreFailureCodeSchema: GenEnum<SessionStoreFailureCode> = /*@__PURE__*/
-  enumDesc(file_codestudio_agent_v1_session_store, 3);
+  enumDesc(file_codestudio_agent_v1_session_store, 5);
 

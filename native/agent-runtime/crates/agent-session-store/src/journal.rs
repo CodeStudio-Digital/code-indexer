@@ -16,7 +16,9 @@ use crate::{
 };
 
 mod committed_payload;
+mod page;
 mod receipt;
+pub use page::{CommittedRecordPage, ListCommittedRecordsRequest, MAX_COMMITTED_RECORD_PAGE};
 use receipt::replay;
 pub use receipt::{AppendRequest, CommitOutcome, CommitReceipt};
 

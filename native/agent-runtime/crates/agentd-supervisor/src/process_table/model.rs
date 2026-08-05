@@ -182,8 +182,7 @@ pub struct ReapedAttempt {
 
 impl ReapedAttempt {
     #[must_use]
-    #[cfg(test)]
-    pub const fn metadata(&self) -> &AttemptRuntimeMetadata {
+    pub(crate) const fn metadata(&self) -> &AttemptRuntimeMetadata {
         &self.metadata
     }
 
@@ -203,8 +202,7 @@ impl ReapedAttempt {
     }
 
     #[must_use]
-    #[cfg(test)]
-    pub const fn containment_report(&self) -> &ContainmentReport {
+    pub(crate) const fn containment_report(&self) -> &ContainmentReport {
         &self.containment_report
     }
 

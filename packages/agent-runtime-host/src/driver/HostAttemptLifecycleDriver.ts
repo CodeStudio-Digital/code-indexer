@@ -4,37 +4,24 @@ import { type AuthorityClock } from '../ipc/AttemptClock.js';
 import type { AcceptedAgentHello } from '../ipc/AgentHelloSummary.js';
 import { type EstablishedAttemptChannel } from '../ipc/EstablishedAttemptChannel.js';
 import { scrubActivationAuthoritySeal } from '../ipc/ActivationAuthoritySealValidation.js';
-import {
-  HostBootstrapAttemptChannel,
-  createHostBootstrapAttemptChannelWithClock,
-} from '../ipc/HostBootstrapAttemptChannel.js';
+import { HostBootstrapAttemptChannel, createHostBootstrapAttemptChannelWithClock } from '../ipc/HostBootstrapAttemptChannel.js';
 import { HostAuthorityLifetime } from './HostAuthorityLifetime.js';
+import { HostHeartbeatMonitor } from './HostHeartbeatMonitor.js';
 import { HostLifecycleDriverError } from './HostLifecycleDriverError.js';
 import { takeLifecycleDriverClock } from './HostLifecycleDriverConstruction.js';
 import { canonicalLifecycleFailure } from './HostLifecycleFailure.js';
 import { HostLifecycleDriverPhase } from './HostLifecycleDriverState.js';
-import {
-  type ActiveAttemptAuthorityHandle,
-  type ActiveAttemptReceipt,
-  type PreparedAttemptReceipt,
-} from './HostLifecycleReceipts.js';
+import type { ActiveAttemptAuthorityHandle, ActiveAttemptReceipt, PreparedAttemptReceipt } from './HostLifecycleReceipts.js';
+import { executeHostLifecycleActivation } from './HostLifecycleActivate.js';
 import { HostLifecycleReceiptOwner } from './HostLifecycleReceiptOwner.js';
-import { receiveCommittedActivationAck } from './HostLifecycleReceive.js';
-import { sendActivateAttempt } from './HostLifecycleSend.js';
 import type {
-  HostAttemptLifecycleDriverOptions,
-  ActiveAttemptAuthoritySnapshot,
-  PreparedFactsExpectation,
-  PreparedDurabilityPort,
+  ActiveAttemptAuthoritySnapshot, HostAttemptLifecycleDriverOptions,
+  HostCancelAttemptRequest, HostFenceAttemptRequest,
+  PreparedDurabilityPort, PreparedFactsExpectation,
 } from './HostLifecycleTypes.js';
-import {
-  activeAuthorityFacts,
-  snapshotPreparedActivationAuthority,
-  validateDurableActivationGrant,
-} from './HostLifecycleValidation.js';
 import { consumeHostLifecycleLaunchBinding } from './HostLifecycleLaunchAuthority.js';
-import { scrubPreparedDurabilityFacts } from './PreparedFactsScrub.js';
 import { executeHostLifecyclePrepare } from './HostLifecyclePrepare.js';
+import { HostLifecycleTerminator } from './HostLifecycleTerminator.js';
 
 export class HostAttemptLifecycleDriver {
   readonly #receipts = new HostLifecycleReceiptOwner();
@@ -44,6 +31,8 @@ export class HostAttemptLifecycleDriver {
   #preparedExpectation?: PreparedFactsExpectation;
   #clock?: AuthorityClock;
   #authorityLifetime?: HostAuthorityLifetime;
+  #heartbeat?: HostHeartbeatMonitor;
+  #terminator?: HostLifecycleTerminator;
   #activationAuthoritySeal?: agentV1Common.ActivationAuthoritySeal;
   #maximumActivationDeadlineAtUnixMs: bigint;
   #bootstrap?: HostBootstrapAttemptChannel;
@@ -52,10 +41,7 @@ export class HostAttemptLifecycleDriver {
 
   constructor(options: HostAttemptLifecycleDriverOptions) {
     const launch = consumeHostLifecycleLaunchBinding(options.launch);
-    this.#hostHello = clone(
-      agentV1Runtime.HostHelloSchema,
-      options.hostHello,
-    );
+    this.#hostHello = clone(agentV1Runtime.HostHelloSchema, options.hostHello);
     this.#durability = options.durability;
     this.#preparedExpectation = launch.preparedExpectation;
     this.#activationAuthoritySeal = launch.activationAuthoritySeal;
@@ -131,45 +117,39 @@ export class HostAttemptLifecycleDriver {
   ): Promise<ActiveAttemptReceipt> {
     try {
       this.#phase.transition('prepared', 'persisting');
-      const facts = this.#receipts.consumePrepared(receipt);
-      const authority = snapshotPreparedActivationAuthority(
-        facts,
-        this.#maximumActivationDeadlineAtUnixMs,
-      );
-      const lifetime = new HostAuthorityLifetime(
-        this.#clock!,
-        this.#maximumActivationDeadlineAtUnixMs,
-        (cause) => this.#fail(cause),
-      );
-      this.#authorityLifetime = lifetime;
       const durability = this.#durability!;
       this.#durability = undefined;
-      const grant = await lifetime.commitPrepared(
+      const result = await executeHostLifecycleActivation({
+        receipt,
+        receipts: this.#receipts,
+        clock: this.#clock!,
+        maximumDeadlineAtUnixMs: this.#maximumActivationDeadlineAtUnixMs,
         durability,
-        facts,
-      ).finally(() => scrubPreparedDurabilityFacts(facts));
-      const activate = validateDurableActivationGrant(
-        grant,
-        authority,
-        this.#activationAuthoritySeal!,
-      );
-      scrubActivationAuthoritySeal(this.#activationAuthoritySeal);
+        activationSeal: this.#activationAuthoritySeal!,
+        channel: this.#channel!,
+        outboundTimeoutMs: this.#outboundTimeoutMs,
+        heartbeatTimeoutMs: this.#hostHello.heartbeatTimeoutMs,
+        failOwner: (cause) => this.#fail(cause),
+        retainLifetime: (value) => { this.#authorityLifetime = value; },
+        setPhase: (value) => this.#phase.set(value),
+      });
       this.#activationAuthoritySeal = undefined;
-      lifetime.narrowDeadline(activate.deadlineAtUnixMs);
-      const activeFacts = activeAuthorityFacts(activate, authority);
-      this.#phase.set('activating');
-      await sendActivateAttempt(
-        this.#channel!,
-        activate,
-        this.#outboundTimeoutMs,
-      );
-      await receiveCommittedActivationAck(this.#channel!);
-      const active = this.#receipts.installActive(
-        activeFacts,
-        lifetime.signal,
-      );
-      this.#phase.set('active');
-      return active;
+      this.#heartbeat = result.heartbeat;
+      this.#terminator = new HostLifecycleTerminator({
+        receipts: this.#receipts,
+        phase: this.#phase,
+        channel: this.#channel!,
+        monitor: result.heartbeat,
+        lifetime: this.#authorityLifetime!,
+        timeoutMs: this.#outboundTimeoutMs,
+        release: () => {
+          this.#heartbeat = undefined;
+          this.#authorityLifetime = undefined;
+          this.#terminator = undefined;
+        },
+        raise: (cause) => this.#raise(cause),
+      });
+      return result.active;
     } catch (cause) {
       this.#raise(cause);
     }
@@ -191,10 +171,23 @@ export class HostAttemptLifecycleDriver {
   ): ActiveAttemptAuthoritySnapshot {
     try {
       this.#phase.require('active');
-      return this.#receipts.inspectActive(handle);
+      return Object.freeze({
+        ...this.#receipts.inspectActive(handle),
+        heartbeat: this.#heartbeat?.inspect(),
+      });
     } catch (cause) {
       this.#raise(cause);
     }
+  }
+
+  async cancel(handle: ActiveAttemptAuthorityHandle, request: HostCancelAttemptRequest): Promise<void> {
+    this.#phase.require('active');
+    return this.#terminator!.cancel(handle, request);
+  }
+
+  async fence(handle: ActiveAttemptAuthorityHandle, request: HostFenceAttemptRequest): Promise<void> {
+    this.#phase.require('active');
+    return this.#terminator!.fence(handle, request);
   }
 
   abort(): void {
@@ -209,6 +202,7 @@ export class HostAttemptLifecycleDriver {
       this.#bootstrap?.tick();
       this.#channel?.tick();
       this.#authorityLifetime?.tick();
+      this.#heartbeat?.tick();
     } catch (cause) {
       this.#raise(cause);
     }
@@ -238,6 +232,9 @@ export class HostAttemptLifecycleDriver {
     this.#activationAuthoritySeal = undefined;
     this.#authorityLifetime?.abort(cause);
     this.#authorityLifetime = undefined;
+    this.#heartbeat?.close(cause);
+    this.#heartbeat = undefined;
+    this.#terminator = undefined;
     this.#bootstrap?.abort(cause);
     this.#channel?.abort(cause);
     this.#bootstrap = undefined;

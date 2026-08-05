@@ -6,10 +6,12 @@ use super::plan::LaunchPlan;
 use crate::process_table::PhysicalSpawnReceipt;
 
 mod containment;
+mod physical_exit;
 
 pub(in crate::management::driver) use containment::containment_to_wire;
 pub(super) use containment::report_satisfies;
 use containment::runtime_provenance;
+pub(in crate::management) use physical_exit::{AttemptExitedFact, AttemptReapedFact};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LaunchRejection {

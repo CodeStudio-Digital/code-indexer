@@ -1,12 +1,19 @@
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 import { create, toBinary } from '@bufbuild/protobuf';
 import {
+  agentV1Capability,
   agentV1Common,
   agentV1Runtime,
+  agentV1SessionStore,
   agentV1Supervisor,
 } from '@mcp/agent-runtime-contracts';
+import type { ChatRequest } from '@mcp/provider-sdk/adapter.js';
+import {
+  createNativeReadCapabilityGatewayFactory,
+} from '../capability-gateway/NativeReadCapabilityPolicy.js';
 import type {
   DurableSupervisorFactPort,
 } from '../driver/HostSupervisorFactTypes.js';
@@ -30,6 +37,7 @@ import type {
   VerifiedRuntimePackage,
 } from '../packaging/RuntimePackageTypes.js';
 import { resourceBudget } from './attempt-channel-support.js';
+import { ProviderGateway } from '../provider-gateway/ProviderGateway.js';
 import {
   ACTIVATION_NONCE,
   activationAuthoritySeal,
@@ -49,19 +57,40 @@ export interface ProcessRealFixture {
   readonly options: NativeRustHostAttemptRuntimeOptions;
   readonly prepare: agentV1Runtime.PrepareAttempt;
   readonly committedFacts: string[];
+  readonly sessionRoot?: string;
+  readonly workspaceRoot?: string;
+  readonly expectedReadContent?: string;
   readonly observed: {
     runnerProcessId?: number;
+    exitCause?: agentV1Supervisor.PhysicalExitCause;
     sourceCloseCause?: unknown;
+    providerGatewayCreated?: boolean;
+    providerRunStarted?: boolean;
+    providerResolved?: boolean;
+    providerRunCount: number;
+    toolResultObserved?: boolean;
     readCount: number;
   };
 }
 
 export async function processRealFixture(
   corruptHydration = false,
+  productiveEngine = true,
 ): Promise<ProcessRealFixture> {
   const runtimePackage = await installedRuntimePackage();
   const nativeBinding = loadNativeHostBridge(runtimePackage);
   const sequence = randomUUID();
+  const sessionRoot = productiveEngine
+    ? await mkdtemp(join(tmpdir(), 'codestudio-rust-session-'))
+    : undefined;
+  const workspaceRoot = sessionRoot && join(sessionRoot, 'workspace');
+  const expectedReadContent = productiveEngine
+    ? `native read payload:${sequence}`
+    : undefined;
+  if (workspaceRoot) {
+    await mkdir(workspaceRoot);
+    await writeFile(join(workspaceRoot, 'sample.txt'), expectedReadContent!, 'utf8');
+  }
   const now = BigInt(Date.now());
   const hardDeadline = now + 120_000n;
   const specDeadline = now + 90_000n;
@@ -138,6 +167,25 @@ export async function processRealFixture(
 
   const committedFacts: string[] = [];
   const observed = hydration.observed;
+  const capabilityGatewayFactory = productiveEngine
+    ? createNativeReadCapabilityGatewayFactory({
+      rootPath: workspaceRoot!,
+      capabilitySetSha256: hydration.snapshots[1]!.contentSha256,
+      environmentId: 'environment/process-real',
+      environmentVersion: 1n,
+      workspaceLease: {
+        id: 'workspace-lease/process-real',
+        version: 1n,
+        fencingEpoch: 7n,
+      },
+      resourceBindingId: 'workspace-root/process-real',
+      policyVersion: 'native-read/process-real/v1',
+      grantTtlMs: 5_000n,
+      maxReadBytes: 64n * 1024n,
+      maxOutputBytes: 72n * 1024n,
+      requireUtf8: true,
+    })
+    : undefined;
   const durableFacts: DurableSupervisorFactPort = {
     async commit(fact, _binding, control) {
       control.signal.throwIfAborted();
@@ -145,11 +193,17 @@ export async function processRealFixture(
       if (fact.case === 'attemptProcessSpawned') {
         observed.runnerProcessId = fact.value.runnerProvenance?.pid;
       }
+      if (fact.case === 'attemptProcessExited') {
+        observed.exitCause = fact.value.cause;
+      }
     },
   };
   return {
     prepare,
     committedFacts,
+    sessionRoot,
+    workspaceRoot,
+    expectedReadContent,
     observed,
     options: {
       binding: nativeBinding,
@@ -203,9 +257,128 @@ export async function processRealFixture(
         transferId: `process-real-hydration:${sequence}`,
         source: hydration.source,
         clock: createAuthorityClock(),
+        ...(productiveEngine ? {
+          providerGatewayFactory: (context, clock) =>
+            (observed.providerGatewayCreated = true, new ProcessRealProviderGateway({
+              runtimeInstanceId: context.runtimeInstanceId,
+              resolver: {
+                resolve: () => {
+                  observed.providerResolved = true;
+                  return processRealProvider(observed, expectedReadContent!);
+                },
+              },
+              now: () => Number(clock.now()),
+            }, observed)),
+          capabilityGatewayFactory: (context, clock) =>
+            capabilityGatewayFactory!(context, clock),
+        } : {}),
       },
+      ...(productiveEngine ? {
+        sessionStore: {
+          instanceId: `session-bridge:${sequence}`,
+          rootId: 'process-real',
+          rootPath: sessionRoot!,
+          maximumFrameBytes: 256 * 1024,
+          sessionId: launch.identity!.sessionId,
+          authority: create(agentV1SessionStore.SessionStoreAuthoritySchema, {
+            storageGeneration: agentV1SessionStore.StorageGeneration.RUST_FS_V1,
+            leaseEpoch: 1n,
+            writerId: randomUUID(),
+          }),
+          limits: create(agentV1SessionStore.SessionStoreLimitsSchema, {
+            maxRecords: 64n,
+            maxPayloadBytes: 1024n * 1024n,
+            maxAuthorityTransitions: 8n,
+          }),
+          openIdempotencyKey: `process-real-open:${sequence}`,
+          nowUnixMs: () => BigInt(Date.now()),
+          timeoutMs: 10_000n,
+        },
+      } : {}),
     },
   };
+}
+
+function processRealProvider(
+  observed: ProcessRealFixture['observed'],
+  expectedReadContent: string,
+) {
+  return {
+    name: 'openai',
+    model: 'gpt-5',
+    setModel(model: string) { this.model = model; },
+    async *chat(request: ChatRequest) {
+      observed.providerRunCount += 1;
+      if (observed.providerRunCount === 1) {
+        if (!request.tools?.some((tool) => tool.name === 'read_file')) {
+          throw new Error('native read descriptor did not reach provider');
+        }
+        yield {
+          type: 'response_id' as const,
+          id: 'response/process-real/tool',
+          messageCount: 1,
+        };
+        yield {
+          type: 'tool_call_start' as const,
+          id: 'tool/process-real/read',
+          name: 'read_file',
+        };
+        yield {
+          type: 'tool_call_args' as const,
+          id: 'tool/process-real/read',
+          partial_json: '{"path":"sample.txt"}',
+        };
+        yield {
+          type: 'tool_call_end' as const,
+          id: 'tool/process-real/read',
+          name: 'read_file',
+          input: { path: 'sample.txt' },
+        };
+        yield { type: 'done' as const };
+        return;
+      }
+      const result = request.messages
+        .flatMap((message) => message.content)
+        .find((block) => block.type === 'tool_result');
+      if (!result || result.type !== 'tool_result') {
+        throw new Error('native read result did not reach provider follow-up');
+      }
+      const payload = JSON.parse(result.content) as { content?: string };
+      observed.toolResultObserved = payload.content === expectedReadContent;
+      if (!observed.toolResultObserved) {
+        throw new Error('native read result content diverged');
+      }
+      yield {
+        type: 'response_id' as const,
+        id: 'response/process-real/final',
+        messageCount: 3,
+      };
+      yield {
+        type: 'text_delta' as const,
+        text: 'native process-real read completed',
+        phase: 'final_answer' as const,
+      };
+      yield {
+        type: 'thinking_delta' as const,
+        text: 'bounded native reasoning',
+      };
+      yield { type: 'done' as const };
+    },
+  };
+}
+
+class ProcessRealProviderGateway extends ProviderGateway {
+  constructor(
+    dependencies: ConstructorParameters<typeof ProviderGateway>[0],
+    private readonly observed: ProcessRealFixture['observed'],
+  ) {
+    super(dependencies);
+  }
+
+  override run(...args: Parameters<ProviderGateway['run']>) {
+    this.observed.providerRunStarted = true;
+    return super.run(...args);
+  }
 }
 
 function resolvedPrepare(
@@ -265,6 +438,42 @@ function hydrationFixture(sequence: string, corrupt: boolean) {
     'policy', 'preset', 'agent-definition',
   ];
   const bodies = labels.map((label) => Buffer.from(`${label}:${sequence}`));
+  const readSchema = Buffer.from(
+    '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}',
+  );
+  bodies[1] = Buffer.from(toBinary(
+    agentV1Runtime.CapabilitySetSnapshotV1Schema,
+    create(agentV1Runtime.CapabilitySetSnapshotV1Schema, {
+      schemaVersion: 1,
+      tools: [create(agentV1Runtime.ProviderToolDescriptorSchema, {
+        capabilityName: 'read_file',
+        description: 'Read one UTF-8 file from the authorized workspace root.',
+        encodedJsonSchema: readSchema,
+        schemaSha256: createHash('sha256').update(readSchema).digest(),
+        capabilityId: 'native.read_file',
+        capabilityVersion: '1',
+        executionClass: agentV1Capability.CapabilityExecutionClass.NATIVE_READ,
+        mutates: false,
+      })],
+    }),
+  ));
+  bodies[5] = Buffer.from(toBinary(
+    agentV1Runtime.ProviderPresetSnapshotV1Schema,
+    create(agentV1Runtime.ProviderPresetSnapshotV1Schema, { schemaVersion: 1 }),
+  ));
+  bodies[6] = Buffer.from(toBinary(
+    agentV1Runtime.AgentDefinitionSnapshotV1Schema,
+    create(agentV1Runtime.AgentDefinitionSnapshotV1Schema, {
+      schemaVersion: 1,
+      agentDefinitionId: 'rust.process-real-e2e',
+      systemPromptUtf8: 'Validate the native Rust runtime.',
+    }),
+  ));
+  const schemaIds: Partial<Record<string, string>> = {
+    capabilities: 'codestudio.agent.v1.CapabilitySetSnapshotV1',
+    preset: 'codestudio.agent.v1.ProviderPresetSnapshotV1',
+    'agent-definition': 'codestudio.agent.v1.AgentDefinitionSnapshotV1',
+  };
   const snapshots = labels.map((label, index) => create(
     agentV1Common.SnapshotRefSchema,
     {
@@ -274,11 +483,12 @@ function hydrationFixture(sequence: string, corrupt: boolean) {
         createHash('sha256').update(bodies[index]!).digest(),
       ),
       origin: 'process-real-e2e',
-      schemaId: `test.${label}`,
+      schemaId: schemaIds[label] ?? `test.${label}`,
       schemaVersion: 1,
     },
   ));
   const observed: ProcessRealFixture['observed'] = {
+    providerRunCount: 0,
     readCount: 0,
   };
   const source: HostHydrationSource = {

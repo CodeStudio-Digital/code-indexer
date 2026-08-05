@@ -1,5 +1,6 @@
 use agent_platform::ipc::EndpointCancellation;
 use agent_platform::windows::ipc::VerifiedWindowsEndpointStream;
+use agent_protocol::frame::AsyncEstablishedAttemptChannel;
 use agent_protocol::generated::v1 as wire;
 use agent_protocol::runner_bootstrap::ShapeValidatedRunnerLaunchHandoff;
 
@@ -7,8 +8,11 @@ use crate::control::{
     ActivationOutcome, ActiveRunnerLifetime, AsyncRunnerControlDriver, ControlDriverEvent,
     PrepareOutcome,
 };
+use crate::engine_authority::EngineAuthority;
 
+use super::active_engine::{ActiveEngineResources, ActiveEngineTask};
 use super::data::PendingRunnerDataHydration;
+use super::hydration::VerifiedRunnerHydration;
 use super::pulse::RunnerPulsePump;
 use super::{ActiveRunnerControlLaunch, ActiveRunnerResources, RunnerControlServiceError};
 
@@ -47,6 +51,7 @@ pub(super) async fn pre_active(
 ) -> Result<ActiveRunnerControlLaunch, RunnerControlServiceError> {
     let mut hydration = None;
     let mut data_channel = None;
+    let mut initial_provider_context = None;
     loop {
         let event = tokio::select! {
             biased;
@@ -90,6 +95,9 @@ pub(super) async fn pre_active(
                 .await?;
                 let verified = completed.hydration;
                 data_channel = Some(completed.channel);
+                let composed = driver
+                    .compose_initial_provider_context(&verified)
+                    .map_err(RunnerControlServiceError::ProviderContext)?;
                 let facts = verified.effective_facts(
                     pending.resource_budget,
                     pending.effective_containment.clone(),
@@ -105,6 +113,7 @@ pub(super) async fn pre_active(
                     }
                 }
                 hydration = Some(verified);
+                initial_provider_context = Some(composed);
                 pending
                     .runner_pulse
                     .transition(wire::RunnerPulsePhase::Prepared, 2)?;
@@ -118,25 +127,50 @@ pub(super) async fn pre_active(
                 let data = data_channel
                     .take()
                     .ok_or(RunnerControlServiceError::MissingHydrationOwnership)?;
-                pending
-                    .runner_pulse
-                    .transition(wire::RunnerPulsePhase::Active, 3)?;
-                return Ok(ActiveRunnerControlLaunch {
-                    lifetime: ActiveRunnerLifetime::new(
-                        driver,
-                        ActiveRunnerResources {
-                            handoff: pending.handoff,
-                            data,
-                            runner_pulse: pending.runner_pulse,
-                            hydration,
-                        },
-                    )
-                    .map_err(RunnerControlServiceError::Driver)?,
-                });
+                let provider_context = initial_provider_context
+                    .take()
+                    .ok_or(RunnerControlServiceError::MissingProviderContext)?;
+                return activate(driver, pending, hydration, data, provider_context);
             }
             ControlDriverEvent::Cancel(_) | ControlDriverEvent::Fence(_) => {
                 return Err(RunnerControlServiceError::UnexpectedPreActiveTermination);
             }
         }
     }
+}
+
+fn activate(
+    mut driver: AsyncRunnerControlDriver<VerifiedWindowsEndpointStream>,
+    pending: PendingRunnerActivation,
+    hydration: VerifiedRunnerHydration,
+    data: AsyncEstablishedAttemptChannel<VerifiedWindowsEndpointStream>,
+    initial_provider_context: Vec<u8>,
+) -> Result<ActiveRunnerControlLaunch, RunnerControlServiceError> {
+    let execution_seed = driver
+        .take_execution_seed()
+        .ok_or(RunnerControlServiceError::MissingExecutionSeed)?;
+    let engine_authority = driver
+        .active_effect_gate()
+        .map(EngineAuthority::new)
+        .ok_or(RunnerControlServiceError::MissingEffectAuthority)?;
+    pending
+        .runner_pulse
+        .transition(wire::RunnerPulsePhase::Active, 3)?;
+    let runtime_instance_id = pending.handoff.metadata().runtime_instance_id.clone();
+    let engine_task = ActiveEngineTask::spawn(ActiveEngineResources {
+        data,
+        execution_seed,
+        authority: engine_authority,
+        initial_provider_context,
+        runtime_instance_id,
+    });
+    let resources = ActiveRunnerResources {
+        handoff: pending.handoff,
+        runner_pulse: pending.runner_pulse,
+        hydration,
+        engine_task,
+    };
+    let lifetime =
+        ActiveRunnerLifetime::new(driver, resources).map_err(RunnerControlServiceError::Driver)?;
+    Ok(ActiveRunnerControlLaunch { lifetime })
 }

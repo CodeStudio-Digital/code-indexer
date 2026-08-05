@@ -70,6 +70,13 @@ export class HostSupervisorReplayHistory {
     return byteLength > 0 && byteLength <= this.byteCapacity;
   }
 
+  retireFresh(messageId: string): void {
+    if (!this.canTrackFresh || this.classify(messageId, '').kind !== 'fresh') {
+      throw new RangeError('management message identity cannot be retired');
+    }
+    this.#retired.add(messageId);
+  }
+
   commit(
     messageId: string,
     envelopeDigest: string,

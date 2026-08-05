@@ -2,6 +2,11 @@ import { clone } from '@bufbuild/protobuf';
 import { agentV1Supervisor } from '@mcp/agent-runtime-contracts';
 import { HostSupervisorFactError } from '../driver/HostSupervisorFactError.js';
 import type {
+  HostCancelAttemptRequest,
+  HostFenceAttemptRequest,
+  HostReapAttemptRequest,
+} from '../driver/HostLifecycleTypes.js';
+import type {
   HostSupervisorFactHandoff,
 } from '../driver/HostSupervisorFactTypes.js';
 import type { DelimitedByteChannel } from './DelimitedByteChannel.js';
@@ -10,9 +15,7 @@ import {
   HostSupervisorReplayHistory,
 } from './HostSupervisorReplayHistory.js';
 import {
-  snapshotFactHandoff,
   validateSupervisorEnvelopeHeader,
-  validateSupervisorFact,
 } from './HostSupervisorFactValidation.js';
 import {
   managementEnvelopeFingerprint,
@@ -22,7 +25,6 @@ import type {
   PendingSupervisorFact,
   SupervisorFactReceiveOutcome,
 } from './HostSupervisorFactChannelTypes.js';
-import { HostSupervisorAckAuthority } from './HostSupervisorAckAuthority.js';
 import {
   assertSupervisorAckCapacity,
 } from './HostSupervisorAckPreflight.js';
@@ -30,12 +32,19 @@ import {
   validateSupervisorSequence,
 } from './HostSupervisorSequenceValidation.js';
 import { scrubManagementPayload } from './ManagementPayloadScrub.js';
+import { HostSupervisorCommandLane } from './HostSupervisorCommandLane.js';
+import {
+  preparePendingSupervisorFact,
+} from './HostSupervisorPendingFact.js';
+import {
+  constructHostSupervisorFactChannel,
+} from './HostSupervisorFactChannelConstruction.js';
 
 export class HostSupervisorFactChannel {
   readonly #history: HostSupervisorReplayHistory;
   readonly #handoff;
   readonly #nowUnixMs;
-  readonly #ackAuthority: HostSupervisorAckAuthority;
+  readonly #commands: HostSupervisorCommandLane;
   #lastInboundStreamSeq: bigint;
   #pending?: PendingSupervisorFact;
   #failure?: HostSupervisorFactError;
@@ -46,32 +55,18 @@ export class HostSupervisorFactChannel {
     handoff: HostSupervisorFactHandoff,
     nowUnixMs: () => bigint,
   ) {
-    try {
-      this.#handoff = snapshotFactHandoff(handoff);
-    } catch (cause) {
-      transport.fail(cause, owner);
-      throw cause;
-    }
-    transport.claim(this.owner);
-    if (transport.maximumFrameBytes !== this.#handoff.maximumFrameBytes) {
-      const failure = new HostSupervisorFactError(
-        'invalid_handoff',
-        'transport frame cap does not match the negotiated handoff',
-      );
-      transport.fail(failure, this.owner);
-      throw failure;
-    }
     this.#nowUnixMs = nowUnixMs;
+    const constructed = constructHostSupervisorFactChannel(
+      transport,
+      owner,
+      handoff,
+      nowUnixMs,
+      (cause) => { this.#poison(cause); },
+    );
+    this.#handoff = constructed.handoff;
     this.#lastInboundStreamSeq = this.#handoff.committedInboundStreamSeq;
-    this.#ackAuthority = new HostSupervisorAckAuthority(
-      this.#handoff,
-      this.#nowUnixMs,
-    );
-    this.#history = new HostSupervisorReplayHistory(
-      this.#handoff.trackedMessageIdCapacity,
-      this.#handoff.maximumReplayBytes,
-      [this.#handoff.bootstrapInboundMessageId],
-    );
+    this.#commands = constructed.commands;
+    this.#history = constructed.history;
   }
 
   async beginReceive(): Promise<SupervisorFactReceiveOutcome> {
@@ -87,7 +82,7 @@ export class HostSupervisorFactChannel {
     let decodedPayload: agentV1Supervisor.ManagementPayload | undefined;
     let retainedPayload: agentV1Supervisor.ManagementPayload | undefined;
     try {
-      encoded = await this.transport.receive(this.owner);
+      encoded = await this.transport.receiveAfterIdle(this.owner);
       if (!encoded) {
         throw new HostSupervisorFactError(
           'unexpected_eof',
@@ -123,32 +118,33 @@ export class HostSupervisorFactChannel {
           messageId: header.messageId,
         };
       }
+      if (decodedPayload.body.case === 'managementAck') {
+        const commandCase = await this.#commands.acceptAcknowledgement(
+          header,
+          decodedPayload.body.value,
+          observedAtUnixMs,
+        );
+        this.#history.retireFresh(header.messageId);
+        this.#lastInboundStreamSeq = header.streamSeq;
+        return {
+          kind: 'command_acknowledged',
+          commandCase,
+          messageId: header.messageId,
+        };
+      }
       retainedPayload = clone(
         agentV1Supervisor.ManagementPayloadSchema,
         validated.payload,
       );
-      const fact = validateSupervisorFact(
+      const pending = preparePendingSupervisorFact(
         header,
         retainedPayload,
         observedAtUnixMs,
         this.#handoff,
-      );
-      const pending: PendingSupervisorFact = {
-        fact,
-        binding: Object.freeze({
-          connectionId: header.connectionId,
-          messageId: header.messageId,
-          replyToMessageId: header.replyToMessageId,
-          streamSeq: header.streamSeq,
-          payloadSha256: header.payloadSha256.slice(),
-          envelopeSha256: envelope.bytes.slice(),
-          observedAtUnixMs,
-        }),
-        headerSentAtUnixMs: header.sentAtUnixMs,
+        envelope.bytes,
         envelopeDigest,
-        token: {},
-      };
-      const maximumAckBytes = this.#ackAuthority.maximumEncodedBytes(pending);
+      );
+      const maximumAckBytes = this.#commands.maximumAcknowledgementBytes(pending);
       assertSupervisorAckCapacity(
         maximumAckBytes,
         this.#handoff,
@@ -174,27 +170,32 @@ export class HostSupervisorFactChannel {
         'pending fact authority is invalid',
       ));
     }
-    let encoded: Uint8Array | undefined;
     try {
-      const acknowledgement = this.#ackAuthority.prepare(pending);
-      encoded = acknowledgement.encoded;
-      const retainedEncoded = encoded;
-      this.#history.commit(
-        pending.binding.messageId,
-        pending.envelopeDigest,
-        acknowledgement.replay,
-        retainedEncoded,
-      );
-      encoded = undefined;
-      this.#lastInboundStreamSeq = pending.binding.streamSeq;
-      this.#pending = undefined;
-      await this.transport.send(retainedEncoded, this.owner);
-      this.#ackAuthority.commit(acknowledgement);
+      await this.#commands.acknowledge(pending, (acknowledgement) => {
+        this.#history.commit(
+          pending.binding.messageId,
+          pending.envelopeDigest,
+          acknowledgement.replay,
+          acknowledgement.encoded,
+        );
+        this.#lastInboundStreamSeq = pending.binding.streamSeq;
+        this.#pending = undefined;
+      });
     } catch (cause) {
       throw this.#poison(normalizeSupervisorFactFailure(cause));
-    } finally {
-      encoded?.fill(0);
     }
+  }
+
+  cancel(request: HostCancelAttemptRequest, timeoutMs: number): Promise<void> {
+    this.#assertHealthy(); return this.#commands.cancel(request, timeoutMs);
+  }
+
+  fence(request: HostFenceAttemptRequest, timeoutMs: number): Promise<void> {
+    this.#assertHealthy(); return this.#commands.fence(request, timeoutMs);
+  }
+
+  reap(request: HostReapAttemptRequest, timeoutMs: number): Promise<void> {
+    this.#assertHealthy(); return this.#commands.reap(request, timeoutMs);
   }
 
   reject(pending: PendingSupervisorFact, cause: unknown): never {
@@ -214,14 +215,10 @@ export class HostSupervisorFactChannel {
     this.#poison(normalizeSupervisorFactFailure(cause, 'aborted'));
   }
 
-  get isPoisoned(): boolean {
-    return this.#failure !== undefined || this.transport.isFailed;
-  }
+  get isPoisoned(): boolean { return !!this.#failure || this.transport.isFailed; }
 
-  async #replayAcknowledgement(
-    encodedAcknowledgement: Uint8Array,
-  ): Promise<void> {
-    await this.transport.send(encodedAcknowledgement, this.owner);
+  #replayAcknowledgement(encoded: Uint8Array): Promise<void> {
+    return this.#commands.replay(encoded);
   }
 
   #assertHealthy(): void {
@@ -238,6 +235,7 @@ export class HostSupervisorFactChannel {
     if (this.#failure) return this.#failure;
     this.#failure = cause;
     this.#pending = undefined;
+    this.#commands.abort(cause);
     this.#history.clear();
     try {
       this.transport.fail(cause, this.owner);

@@ -6,7 +6,7 @@ use agent_protocol::management_channel::{
     ManagementChannelError, PendingManagementInbound, ValidatedManagementPayload,
 };
 
-use super::fact_flow::{PendingFactAction, PendingFactStage};
+use super::fact_flow::{FactIntent, PendingFactAction, PendingFactStage};
 use super::provision::ProtectedLaunchProvisionPort;
 use super::state::AdmissionClosureReason;
 use super::{
@@ -23,7 +23,7 @@ pub(in crate::management) struct PreparedFactEmission {
 }
 
 impl PreparedFactEmission {
-    const fn new(
+    pub(super) const fn new(
         payload: wire::ManagementPayload,
         action: PendingFactAction,
         failure_key: OwnershipKey,
@@ -137,8 +137,14 @@ where
                 )))
             }
             PendingFactStage::Containment
+            | PendingFactStage::Reaped
             | PendingFactStage::AcceptedReplay
             | PendingFactStage::Rejected => Ok(None),
+            PendingFactStage::Exited { key, reaped } => Ok(Some(PreparedFactEmission::new(
+                reaped.to_wire(),
+                PendingFactAction::new(FactIntent::Unregistered, PendingFactStage::Reaped),
+                key,
+            ))),
         }
     }
 

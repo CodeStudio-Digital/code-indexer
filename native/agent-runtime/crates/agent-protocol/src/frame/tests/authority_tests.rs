@@ -41,11 +41,19 @@ pub(super) fn prepared_payload() -> wire::FramePayload {
 }
 
 pub(super) fn seed(direction: FrameDirection, maximum: usize) -> NegotiatedReceiverSeed {
+    seed_for_channel(direction, maximum, wire::TransportChannel::Control)
+}
+
+pub(super) fn seed_for_channel(
+    direction: FrameDirection,
+    maximum: usize,
+    channel: wire::TransportChannel,
+) -> NegotiatedReceiverSeed {
     NegotiatedReceiverSeed {
         protocol: ProtocolVersion::new(1, 1),
         connection: connection(),
         identity: identity_from_wire(&wire_identity()).expect("identity"),
-        channel: wire::TransportChannel::Control,
+        channel,
         direction,
         maximum_frame_bytes: maximum,
         stream_watermark: 1,

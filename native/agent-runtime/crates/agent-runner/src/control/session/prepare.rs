@@ -52,6 +52,7 @@ impl RunnerControlSession {
             spec_sha256: validated.spec_sha256,
             wire_identity: validated.wire_identity,
         })));
+        self.execution_seed = Some(validated.execution_seed);
         self.handshake = handshake;
         self.lifecycle = lifecycle;
         Ok(PrepareOutcome::HydrationRequired(HydrationToken {

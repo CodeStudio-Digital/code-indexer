@@ -198,6 +198,17 @@ impl SupervisorDriverState {
         self.cleanup.remove(index);
         Ok(())
     }
+
+    pub(super) fn cleanup_trigger(
+        &self,
+        key: &OwnershipKey,
+    ) -> Result<CleanupTrigger, CleanupStateError> {
+        self.cleanup
+            .iter()
+            .find(|entry| &entry.key == key)
+            .map(|entry| entry.trigger)
+            .ok_or(CleanupStateError::UnknownOwnership)
+    }
 }
 
 pub(super) const fn validate_now(now_unix_ms: i64) -> Result<(), CleanupStateError> {

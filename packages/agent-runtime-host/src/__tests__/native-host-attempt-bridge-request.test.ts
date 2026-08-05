@@ -97,6 +97,7 @@ describe('NativeHostAttemptBridgeRequest', () => {
         return channels;
       }),
       openHostSupervisorBridge: vi.fn(),
+      openNativeSessionStoreBridge: vi.fn(),
     } as NativeHostBridgeBinding;
 
     const bridgeOwner = await openNativeHostAttemptBridge(binding, owner);

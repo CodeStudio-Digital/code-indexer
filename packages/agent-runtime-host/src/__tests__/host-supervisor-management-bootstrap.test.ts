@@ -326,6 +326,7 @@ describe('HostSupervisorManagementBootstrap', () => {
         handoff: {} as never,
         nowUnixMs: () => 1n,
         durableCommitTimeoutMs: 1_000,
+        commandResponseTimeoutMs: 1_000,
         integrationMode: 'test',
       },
     )).toThrow(expect.objectContaining({ code: 'invalid_handoff' }));

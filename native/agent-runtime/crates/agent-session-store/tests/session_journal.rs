@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_session_store::{
-    AppendRequest, CommitOutcome, DurabilityClass, LeaseEpoch, OperationId,
-    ReadCommittedPayloadRequest, SessionId, SessionJournal, SessionRecordKind, SessionStoreError,
-    SessionStoreLimits, StorageAuthority, StorageGeneration, WriterId,
+    AppendRequest, CommitOutcome, DurabilityClass, LeaseEpoch, ListCommittedRecordsRequest,
+    OperationId, ReadCommittedPayloadRequest, SessionId, SessionJournal, SessionRecordKind,
+    SessionStoreError, SessionStoreLimits, StorageAuthority, StorageGeneration, WriterId,
 };
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
@@ -136,6 +136,59 @@ fn commit_replay_recovery_and_hash_chain_are_stable() {
         })
         .expect("replay after recovery");
     assert_eq!(replay.receipt(), &first_receipt);
+}
+
+#[test]
+fn committed_record_cursor_is_bounded_ordered_and_complete() {
+    let root = TestRoot::new("record-page");
+    let mut journal =
+        SessionJournal::open(root.path(), session_id(), authority(1, 1), limits(8, 1024))
+            .expect("open writer");
+    for value in 1..=3 {
+        journal
+            .append(AppendRequest {
+                operation_id: &operation_id(value),
+                kind: SessionRecordKind::LifecycleEvent,
+                durability: DurabilityClass::Authoritative,
+                payload: &[value],
+            })
+            .expect("commit record");
+    }
+
+    let first = journal
+        .list_committed_records(ListCommittedRecordsRequest {
+            after_sequence: 0,
+            maximum_records: 2,
+        })
+        .expect("first page");
+    assert_eq!(
+        first
+            .records()
+            .iter()
+            .map(agent_session_store::CommitReceipt::sequence)
+            .collect::<Vec<_>>(),
+        [1, 2]
+    );
+    assert_eq!(first.next_sequence(), 2);
+    assert!(!first.complete());
+
+    let second = journal
+        .list_committed_records(ListCommittedRecordsRequest {
+            after_sequence: first.next_sequence(),
+            maximum_records: 2,
+        })
+        .expect("second page");
+    assert_eq!(second.records().len(), 1);
+    assert_eq!(second.records()[0].sequence(), 3);
+    assert_eq!(second.next_sequence(), 3);
+    assert!(second.complete());
+    assert!(matches!(
+        journal.list_committed_records(ListCommittedRecordsRequest {
+            after_sequence: 4,
+            maximum_records: 1,
+        }),
+        Err(SessionStoreError::InvalidLimits)
+    ));
 }
 
 #[test]

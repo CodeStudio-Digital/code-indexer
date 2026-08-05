@@ -60,6 +60,7 @@ fn spawn(group: &str) -> SpawnedGroup<WindowsJobGroup> {
 
 mod bootstrap;
 mod expected_address;
+mod filesystem;
 mod inheritance;
 mod launch;
 mod lifecycle;

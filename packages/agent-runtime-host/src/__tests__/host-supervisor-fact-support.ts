@@ -31,6 +31,7 @@ export const MANAGEMENT_PROTOCOL = 65_537;
 export const LAUNCH_MESSAGE_ID = 'launch:request';
 export const RUNTIME_INSTANCE_ID = 'runner:instance';
 export const RESERVATION_ID = 'reservation:test';
+export const RESOURCE_GROUP_ID = 'job:test';
 
 export function runnerProvenance(
   overrides: Partial<agentV1Common.RuntimeProvenance> = {},
@@ -112,7 +113,7 @@ export function spawnedFact(
   const value = create(agentV1Supervisor.AttemptProcessSpawnedSchema, {
     identity: identity(),
     runnerProvenance: runnerProvenance(),
-    resourceGroupId: 'job:test',
+    resourceGroupId: RESOURCE_GROUP_ID,
     reservationId: RESERVATION_ID,
     endpointIds: ['control', 'data', 'pulse'],
     spawnedAtUnixMs: 20n,
@@ -139,6 +140,50 @@ export function containmentFact(
     case: 'attemptContainmentReport',
     value,
   };
+}
+
+export function exitedFact(
+  overrides: Partial<agentV1Supervisor.AttemptProcessExited> = {},
+): SupervisorLifecycleFact {
+  const value = create(agentV1Supervisor.AttemptProcessExitedSchema, {
+    identity: identity(),
+    runnerProvenance: runnerProvenance(),
+    cause: agentV1Supervisor.PhysicalExitCause.CANCELLED,
+    exitCode: 0,
+    exitedAtUnixMs: 40n,
+    finalResources: {
+      residentMemoryBytes: 10n,
+      peakResidentMemoryBytes: 20n,
+      processCount: 1,
+    },
+  });
+  Object.assign(value, overrides);
+  return { case: 'attemptProcessExited', value };
+}
+
+export function reapedFact(
+  overrides: Partial<agentV1Supervisor.AttemptProcessReaped> = {},
+): SupervisorLifecycleFact {
+  const value = create(agentV1Supervisor.AttemptProcessReapedSchema, {
+    identity: identity(),
+    runtimeInstanceId: RUNTIME_INSTANCE_ID,
+    resourceGroupId: RESOURCE_GROUP_ID,
+    releasedResources: [
+      {
+        kind: agentV1Supervisor.ReleasedResourceKind.PROCESS,
+        resourceId: 'pid:42',
+        releasedCount: 1n,
+      },
+      {
+        kind: agentV1Supervisor.ReleasedResourceKind.RESOURCE_GROUP,
+        resourceId: RESOURCE_GROUP_ID,
+        releasedCount: 1n,
+      },
+    ],
+    reapedAtUnixMs: 50n,
+  });
+  Object.assign(value, overrides);
+  return { case: 'attemptProcessReaped', value };
 }
 
 export function factFrame(
@@ -178,6 +223,7 @@ export function harness(
   frames: readonly Uint8Array[],
   port: DurableSupervisorFactPort,
   options: {
+    readable?: Readable;
     writableFailureAt?: number;
     transportMaximum?: number;
     observeTransport?: (transport: DelimitedByteChannel) => void;
@@ -185,13 +231,15 @@ export function harness(
       handoff?: Partial<HostSupervisorFactHandoff>;
       nowUnixMs?: () => bigint;
       durableCommitTimeoutMs?: number;
+      commandResponseTimeoutMs?: number;
     };
   } = {},
 ) {
   const capture = captureWritable(options.writableFailureAt);
   const maximum = options.transportMaximum ?? MANAGEMENT_MAXIMUM;
   const transport = new DelimitedByteChannel(
-    Readable.from(frames.length === 0 ? [] : [delimit(...frames)]),
+    options.readable
+      ?? Readable.from(frames.length === 0 ? [] : [delimit(...frames)]),
     capture.writable,
     { maximumFrameBytes: maximum },
   );
@@ -205,7 +253,7 @@ export function harness(
       committedOutboundStreamSeq: 1n,
       maximumFrameBytes: MANAGEMENT_MAXIMUM,
       maximumReplayBytes: MANAGEMENT_MAXIMUM,
-      trackedMessageIdCapacity: 8,
+      trackedMessageIdCapacity: 16,
       expectedIdentity: identity(),
       expectedResourceBudget: resourceBudget(),
       launchObservedAtUnixMs: 5n,
@@ -232,6 +280,7 @@ export function harness(
     },
     nowUnixMs: () => 100n,
     durableCommitTimeoutMs: 1_000,
+    commandResponseTimeoutMs: 1_000,
     integrationMode: 'test',
   };
   const supplied = options.driver ?? {};

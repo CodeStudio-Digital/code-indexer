@@ -51,7 +51,7 @@ export class EstablishedAttemptChannel {
   }
 
   async beginReceive(): Promise<EstablishedReceiveOutcome> {
-    return this.state.run(async () => {
+    return this.state.runInbound(async () => {
       if (this.state.receiver.hasPending) {
         throw new AttemptFrameReceiverError(
           'pending_inbound_active',
@@ -65,6 +65,9 @@ export class EstablishedAttemptChannel {
           'established channel reached EOF',
         );
       }
+      // A peer may answer as soon as the bytes reach its pipe. Ensure the
+      // matching outbound request is committed before validating its reply.
+      await this.state.waitForOutboundIdle();
       const outcome = this.state.receiver.beginReceive(
         encoded,
         () => this.state.clock.now(),
@@ -72,7 +75,9 @@ export class EstablishedAttemptChannel {
       if (outcome.kind === 'replay') {
         const response = sharedReplayResponse(outcome.replay.outcome);
         if (response) {
-          await this.state.transport.send(response, this.state.owner);
+          await this.state.runOutbound(
+            () => this.state.transport.send(response, this.state.owner),
+          );
         }
         return {
           kind: 'replayed' as const,
@@ -92,7 +97,7 @@ export class EstablishedAttemptChannel {
     payload: agentV1Runtime.FramePayload,
     deadline: ResponseDeadlinePolicy,
   ): Promise<CommittedResponse> {
-    return this.state.run(async () => {
+    return this.state.runExclusive(async () => {
       const receipt = await this.state.outbound.commitResponse(
         pending,
         payload,
@@ -104,7 +109,7 @@ export class EstablishedAttemptChannel {
   }
 
   commitAccepted(pending: PendingInbound): CommittedInbound {
-    return this.state.runSync(() => {
+    return this.state.runInboundSync(() => {
       const receipt = this.state.outbound.commitAccepted(pending);
       this.state.clearPending();
       return receipt;
@@ -115,13 +120,22 @@ export class EstablishedAttemptChannel {
     payload: agentV1Runtime.FramePayload,
     deadline: ResponseDeadlinePolicy,
   ): Promise<CommittedOutbound> {
-    return this.state.run(
+    return this.state.runOutbound(
       () => this.state.outbound.sendNew(payload, deadline),
     );
   }
 
+  async sendEvent(
+    payload: agentV1Runtime.FramePayload,
+    deadline: ResponseDeadlinePolicy,
+  ): Promise<CommittedOutbound> {
+    return this.state.runOutbound(
+      () => this.state.outbound.sendEvent(payload, deadline),
+    );
+  }
+
   reject(pending: PendingInbound): void {
-    this.state.runSync(() => {
+    this.state.runInboundSync(() => {
       this.state.receiver.reject(pending);
       throw new AttemptFrameReceiverError(
         'receiver_poisoned',

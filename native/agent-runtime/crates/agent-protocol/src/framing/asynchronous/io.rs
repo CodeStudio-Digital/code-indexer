@@ -85,6 +85,7 @@ pub(super) async fn write_frame<S: AsyncWrite + Unpin>(
         .await
         .map_err(FramingError::Io)?;
     stream.write_all(frame).await.map_err(FramingError::Io)?;
+    stream.flush().await.map_err(FramingError::Io)?;
     Ok(())
 }
 

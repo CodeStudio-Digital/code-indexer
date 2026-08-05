@@ -1,13 +1,22 @@
 # Checklist mestre — Rust Agent Runtime
 
 > **Status inicial:** nenhum gate aprovado  
+> **Versão da implementação:** 1.36.0
 > **Atualização:** este é o único arquivo do corpus em que checkboxes de avanço
 > são alterados.
-> **Snapshot operacional:** 2026-08-04. O pacote Windows candidato e o E2E
-> process-real até `Active`, incluindo pulse físico inicial, emissão periódica,
-> métricas reais do processo runner, liveness/expiry no owner permanente e reap,
-> foram reexecutados nesta data; os gates globais de CI, soak e matriz
-> multiplataforma continuam abertos.
+> **Snapshot operacional:** 2026-08-05. O pacote Windows candidato e o E2E
+> process-real atravessam lifecycle, provider TS, policy Host, engine Rust,
+> `native.read_file`, nove commits no session journal filesystem Rust e o
+> segundo provider turn. Uma prova duplex adicional cruza sete receipts.
+> Falha live do executor pós-started agora termina como `outcome_unknown`, sem
+> retry, e volta ao provider como resultado de erro.
+> Store/bridge/Host também paginam receipts, leem payloads por prova exata e
+> detectam started órfão com teto total fail-closed.
+> Pulse/heartbeat, métricas reais, Cancel/Fence, Control/Data/management
+> permanentes, Exited/Reaped duráveis e o Gateway de capability também foram
+> reexecutados. Os gates globais de CI,
+> soak, canário e matriz multiplataforma
+> continuam abertos.
 
 “Spec final” significa texto normativo congelado; não significa implementação
 concluída. Por isso todos os checks começam vazios até owner e evidência serem
@@ -37,11 +46,11 @@ corrente.
 | Fase | Implementação existente | Checks formais | Bloqueador atual |
 |---|---|---:|---|
 | G0 — spec e baseline | corpus `00..09`, ADRs e gates definidos | 0/13 | baseline reproduzível e aprovação explícita de G0 |
-| G1 — workspace, IDL, Host e packaging | 11 crates; Protobuf TS/Rust; session store; package; bridges Host/Node-API; E2E process-real Windows até `Active` | 6/23 | CI candidato, smoke instalado multiplataforma e classificação dos exports legados |
-| G2 — supervisor, lifecycle e isolamento | lifecycle/management, Windows Job, runner single-tenant, composição Host→supervisor→runner até `Active` com reap e pulse físico contínuo autenticado/expiry target-specific; RSS/pico/CPU/handles reais do runner | 0/16 | heartbeat semântico, métricas agregadas de descendentes/spool, outbox/recovery, Cancel/Fence físico pós-Active, backend Unix e gates de soak/isolamento |
-| G3 — engine e Provider Gateway | apenas máquina de lifecycle mínima em `agent-engine` e contratos Host de routing/provider | 0/18 | loop do agente e Provider Gateway ainda não implementados |
-| G4 — capabilities e tools | somente crate/contratos mínimos de capability; sem tools nativas de produção | 0/19 | aguarda o loop mínimo do engine e Provider Gateway em G3 |
-| G5 — durability, waiting e run-tree | filesystem session writer, journal/recovery, transferência autenticada e spool quota foundation | 0/17 | checkpoints completos, waiting/resume, child runs e subagentes process-real |
+| G1 — workspace, IDL, Host e packaging | 11 crates/14 arestas; Protobuf TS/Rust; session store; package; bridges Host/Node-API; E2E process-real Windows produtivo | 6/23 | CI candidato, smoke instalado multiplataforma e classificação dos exports legados |
+| G2 — supervisor, lifecycle e isolamento | lifecycle/management, Windows Job, runner single-tenant; pulse/heartbeat/métricas reais; Cancel/Fence Control + management process-real; primitiva Reap Host; outbox/emissão Rust e receiver Host permanente/durável de Exited/Reaped; timeout/reap target-specific | 0/16 | recovery durável da outbox, terminal esperado para Reap público, métricas agregadas, `UpdateAttemptAuthority`, backend Unix e gates de soak/isolamento |
+| G3 — engine e Provider Gateway | primeiro turno e continuação pós-tool process-real; composer/wire/owners bounded; pairing e cursor stateful preservados | 0/18 | resume por checkpoint, adapters completos, memória/TTFT e paridade de projeção |
+| G4 — capabilities e tools | Gateway `allow|ask|deny`, policy Host fail-closed, grant/binding selado, executor `native.read_file`, lifecycle autoritativo, unknown live, scanner de started órfão e E2E process-real até o segundo provider turn | 0/19 | persistência da decisão recovery/probe, demais tools e gates funcionais/security/perf |
+| G5 — durability, waiting e run-tree | filesystem session writer, journal/recovery, cursor metadata-only autenticado, transferência e spool quota foundation | 0/17 | checkpoints completos, decisão recovery, waiting/resume, child runs e subagentes process-real |
 | G6 — shadow, chaos e canário | adapters internos `test|shadow` e validações de routing existem | 0/21 | ainda não há replay comparativo, soak, chaos nem cohort de produto |
 | G7 — default e limpeza | plano de migração/retirada documentado | 0/29 | depende dos gates G0–G6 e do drain do legado |
 | GI — indexador nativo | somente especificação do trilho paralelo | 0/8 | baseline, workspace e implementação I0–I4 não iniciados |
@@ -49,16 +58,121 @@ corrente.
 ### 2.1 Marco em execução e sequência real
 
 1. **Concluído:** `Host → supervisor → runner → RunnerPulse inicial/periódico →
-   hidratação → Prepared → Activate/ACK → Active → expiry ou close/reap`,
+   hidratação → Prepared → Activate/ACK → Active → Heartbeat semântico →
+   expiry ou close/reap`,
    inclusive falha fechada de hidratação e liveness target-specific sem renovar
    o hard deadline.
-2. **Próximo:** heartbeat semântico e métricas agregadas de descendentes/spool;
-   depois
-   Cancel/Fence process-real pós-`Active` e fatos duráveis
-   `AttemptProcessExited/AttemptProcessReaped`.
-3. **Depois:** loop mínimo `agent-engine` e Provider Gateway TypeScript.
-4. **Na sequência:** primeiro conjunto de tools nativas; shadow/chaos/canário
-   vêm depois dessa fatia funcional.
+2. **Concluído:** Control Host full-duplex e Cancel/Fence process-real pós-`Active`,
+   com ACK correlacionado, revogação após commit e saída comprovada do PID
+   runner sem derrubar o supervisor.
+3. **Concluído:** outbox/emissor Rust e receptor Host permanente de
+   `AttemptProcessExited/AttemptProcessReaped`, com prova física capturada antes
+   de descartar ownership, validação/correlação, commit durável e progressão
+   somente após cada ACK; E2E process-real confirma os cinco fatos.
+4. **Concluído:** após o receipt Control, Cancel/Fence passam também pelo canal
+   management permanente, compartilham a sequência com ACKs de fatos e aguardam
+   ACK exato do schedule físico; E2E confirma `CANCELLED`/`FENCED` e reap durável.
+5. **Concluído:** a mesma command lane Host constrói/valida/serializa Reap com
+   identity, runtime instance, ceiling e ACK exatos; a API permanece interna até
+   o fechamento Control por hard-reap ser classificado como terminal esperado.
+6. **Próximo:** recovery durável da outbox; depois métricas
+   agregadas de descendentes/spool e
+   `UpdateAttemptAuthority`.
+7. **Concluído em paralelo seguro:** primeiro loop `agent-engine` determinístico
+   por ports, bounded por bytes/eventos/usage e com terminal durável, composto
+   no runner por `ProviderDataGateway` sem transportar authority pelo contexto.
+8. **Concluído em paralelo seguro:** wire Provider v1 gerado em TS/Rust para
+   start/accepted/cancel, deltas públicos, tool call completo, usage e terminal;
+   canal, direção e identidade possuem testes fail-closed.
+9. **Concluído em paralelo seguro:** primitiva Provider Gateway TS sem
+   `code-agent`, com resolver injetado, binding exato, adaptação bounded,
+   deadline/cancel/fence, agregação de tool args, usage/terminal e registry
+   evicted. Sete testes focados e 333 testes Host passaram.
+10. **Concluído:** o canal Data pós-hidratação faz handoff single-use ao owner
+    Provider Host; Accepted é resposta autenticada/replayável, eventos dividem
+    lane outbound bounded, Cancel entra durante stream e falha tardia chega ao
+    coordinator. Dois testes Data end-to-end em memória e 336 testes Host
+    passaram.
+11. **Concluído em paralelo seguro:** peer Data Rust e adapter do runner exigem
+    Accepted autenticado, stream monotônico e terminal completo; uma prova
+    duplex cross-crate percorre Start→Accepted→texto→usage→terminal e conclui o
+    turno no engine.
+12. **Concluído em paralelo seguro:** a spec validada vira um execution seed
+    single-owner, redigido e não clonável; ele atravessa hidratação, permanece
+    inacessível antes de `Active`, é retirado uma vez e termina nos recursos do
+    owner ativo sem iniciar efeitos.
+13. **Concluído em paralelo seguro:** `EngineAuthority` implementa o port do
+    engine sobre o mesmo `EffectGate` revogável do Control; authority só existe
+    após `Active` e passa a falhar após close/Cancel/Fence, sem disparar efeito.
+14. **Concluído em paralelo seguro:** agent definition, capability set e preset
+    possuem payloads Protobuf V1 gerados; o composer valida materiais hidratados
+    antes de `Prepared` e produz contexto inicial bounded/canônico.
+15. **Concluído em paralelo seguro:** o sink runner-side implementa o port do
+    engine e a fronteira Host→Rust session store possui payload Protobuf V1
+    bounded, receipt físico, sequência local/global, replay exato e terminal
+    fail-closed.
+16. **Concluído:** `EngineEventProposal/EngineEventCommitted` atravessam o owner
+    Data process-real; o engine Rust inicia o provider TS e só termina depois de
+    cinco receipts físicos no journal filesystem Rust.
+17. **Concluído:** `CapabilityPrepare/CapabilityUpdate` atravessam o mesmo owner
+    Data autenticado; descriptors ligam nome do provider a capability
+    ID/versão/classe/mutação, o engine revalida authority antes do prepare e o
+    Host responde `allow|ask|deny` por `operation_id/tool_use_id`. Aceite produz
+    grant selado, bounded e revalidado no runner. O caminho termina antes de
+    qualquer efeito e possui prova duplex física em memória.
+18. **Concluído em prova duplex:** `native.read_file` executa somente após grant
+    com binding/root/quota selados; o Windows valida o path final pelo handle,
+    `started/terminal` recebem receipts autoritativos distintos, o resultado
+    bounded mantém pairing/cursor e abre o segundo provider turn. O loop aplica
+    `maxTurns/maxToolCalls` antes do efeito e compartilha contexto por
+    `Arc<[u8]>`.
+19. **Concluído:** policy Host fail-closed confere o SHA-256 do catálogo
+    hidratado, canonicaliza a raiz confiável fora do input do modelo e sela
+    environment, lease/fencing, quotas, policy, nonce e expiry. O E2E
+    process-real lê o arquivo pelo executor Rust, persiste nove records e prova
+    o conteúdo exato no segundo provider turn.
+20. **Concluído para falha live:** erro do executor depois do receipt `started`
+    executa uma única vez, vira terminal `outcome_unknown`, cruza o wire
+    autoritativo e chega ao provider como `tool_result` de erro.
+21. **Concluído para inventário:** store pagina até 256 receipts e revalida a
+    cadeia inteira; bridge expõe metadata path-free; Host lê payload por receipt
+    exato, detecta started órfão e falha se o teto total não alcançar o tail.
+22. **Próximo funcional:** persistir a decisão de recovery numa nova
+    attempt/interaction e introduzir probe somente para handlers que o suportam;
+    depois ampliar reads (`glob/grep/Git/HTTP`) e avançar transcript/checkpoint.
+    Shadow/chaos/canário vêm após essas fatias.
+
+### 2.2 Evidência do candidato 1.36.0
+
+- pacote:
+  `runtime-v1-f6496fb120c29da50913e04eba033f98b67f85468e85035e34fe5aba6ba39930`;
+- manifesto:
+  `807b861d2d7093c58af749ef74566fefa5b4389cbc1268acc2f9e336a740fd6e`;
+- package verify e smoke read-only passaram, incluindo load do addon e
+  launch/kill de runner e supervisor;
+- `cargo fmt`, Clippy de todos os targets/features com `-D warnings` e a suíte
+  completa do workspace Rust passaram;
+- contratos gerados: 51 testes; Host: typecheck e 355 testes aprovados, 5
+  ignorados por desenho;
+- suíte process-real Windows completa: 5/5 cenários; o cenário produtivo
+  confirma dois provider turns e nove records físicos;
+- capability/read: testes Host cobrem replay exato, divergência,
+  rejection/grant e correlação; teste duplex Rust cruza provider tool call,
+  prepare/accepted, started, leitura real, terminal, pairing/cursor e segundo
+  provider turn em sete records/receipts. O process-real 5/5 agora confere o
+  catálogo hidratado na policy Host, emite o grant, lê arquivo real e verifica
+  o resultado no segundo turn;
+- ambiguity live: teste do engine prova um único dispatch e terminal
+  `outcome_unknown`; teste do wire prova classification/reason autoritativos e
+  teste do composer prova `tool_result` de erro sem resultado inventado;
+- recovery inventory: paginação store/bridge testa cursor, fencing e cadeia;
+  scanner Host cobre started órfão, terminal exato/divergente e teto truncado;
+  E2E físico confirma inventário vazio depois dos nove records;
+- orçamento: 755 módulos produtivos, todos com no máximo 250 LOC; grafo: 11
+  crates/14 arestas internas;
+- `check:agent-boundary` global permanece vermelho por 126 referências novas e
+  55 remoções no legado presentes no worktree compartilhado. Esta fatia não
+  altera a baseline, não toca esses módulos e não usa o drift para aprovar gate.
 
 ## 3. G0 — spec, ownership e baseline
 
@@ -170,6 +284,11 @@ corrente.
     `SupervisorProcessHandoff/Ready`, sem argv/env para segredos. Bindings
     TS/Prost foram gerados e compilados a partir do IDL; `buf lint` e
     `buf build` passam localmente. Item aberto até o CI candidato.
+  - Evidência adicional (2026-08-04, spec 1.29.0): `runtime.proto` formaliza
+    os payloads executáveis `AgentDefinitionSnapshotV1`,
+    `CapabilitySetSnapshotV1` e `ProviderPresetSnapshotV1`; mapas de tags
+    impedem renumeração silenciosa. `buf lint`, `buf build`, geração e os 50
+    testes de contrato passaram. O item continua aberto até o CI candidato.
 - [ ] `G1-IDL-02` — Bindings TS/Rust são gerados; nenhum tipo de wire é mantido
   manualmente em paralelo.
   - Spec: `IPC-001..002`
@@ -178,6 +297,9 @@ corrente.
     incluindo o bootstrap físico do supervisor. O plugin Prost está fixado em
     `v0.5.0`, `revision: 1`; existem sete módulos TS gerados e um módulo Prost
     agregado. Nenhum binding foi escrito manualmente.
+  - Evidência adicional (2026-08-04, spec 1.29.0): os três snapshots
+    executáveis foram regenerados no mesmo `runtime_pb.ts` e módulo Prost
+    agregado; nenhuma representação wire paralela foi criada.
 - [ ] `G1-IDL-03` — Golden fixtures cobrem IDs opacos, `uint64`, optional/oneof,
   canonical JSON, hash, enum desconhecido e frame máximo.
   - Spec: `IPC-003..005`, `IPC-007`, `IPC-010..012`, `IPC-035`,
@@ -455,7 +577,91 @@ corrente.
     `runtime-v1-ebba683a13f7ec595bd91d1195ca9211066e353276bfacf07070b5baf3e01ce6`
     (manifest
     `2c91bb5934ac60071060ab0e586462c50bd6bc9cc191653a571c6c6bbf084bc6`).
-    Permanecem abertos heartbeat semântico e rollup de descendentes/spool.
+    Atualização 2026-08-04 (spec 1.12.0): o framing async agora acorda uma
+    leitura ociosa no prazo do heartbeat sem consumir bytes nem envenenar o
+    mesmo stream; após o primeiro byte, volta a ser progress-bounded e
+    fail-closed. A authority outbound Rust emite eventos novos sem `reply_to`,
+    com sequência commitada somente após write físico. Pós-`Active`, o runner
+    alterna receive/heartbeat pelo intervalo negociado e envia identity,
+    runtime, `lastAliveAt`, `lastProgressAt`, `lastEventSeq`, fase e resource
+    sample real. O Host mantém pump/timeout permanente, valida relógio local
+    bounded, monotonicidade, IDs e recursos, commita o inbound e retém somente
+    o snapshot mais recente; silêncio revoga Active, enquanto o guard de hard
+    deadline permanece independente e nunca é renovado. O E2E físico verifica
+    o heartbeat e RSS/pico/handles reais após 1.200 ms. Evidência: workspace
+    Rust `--all-targets`; 219 testes `agent-protocol`, 103 `agent-runner`, 171
+    `agentd-supervisor`, 40 `agent-platform` com 6 ignores físicos esperados;
+    rustfmt; Clippy workspace `-D warnings`; 368 testes Host/contratos com 3
+    skips; typecheck; package verify/smoke e addon Electron; cinco E2Es
+    process-real consecutivos, todos 3/3; 653 módulos produtivos sob cap de 250
+    LOC; grafo 11 crates/12 arestas. Pacote:
+    `runtime-v1-fa3682044947bd7163f29fb503a91b16ac1ef57b806a27f35e6fd55c3c19d6f0`
+    (manifest
+    `5ad25e731abe24cfb3483f3f199a33c18befbf3ab5b233f074a5a71d92702003`).
+    Permanecem abertos rollup de descendentes/spool e authority lease
+    management.
+    Atualização 2026-08-04 (spec 1.13.0): o canal Control Host passou de uma
+    exclusão global para lanes inbound/outbound independentes, mantendo no
+    máximo um reader e um writer. Uma resposta que chega antes do retorno do
+    write aguarda o commit da correlação outbound antes de ser validada. O pump
+    pós-Active aceita heartbeat e exatamente um ACK de comando pendente, com
+    timeout próprio, digest/message-id/reply-to autenticados e receipt ligado
+    ao inbound. `CancelAttempt` e `FenceAttempt` são construídos a partir do
+    handle de authority, validados no Host e revogam Active somente após ACK.
+    A suíte Host passou 321 testes com 3 skips; typecheck passou; o E2E Windows
+    3/3 atravessou Cancel no mesmo stream, recebeu ACK real, manteve o
+    supervisor vivo e comprovou a saída do PID runner.
+    Atualização 2026-08-04 (spec 1.14.0): Fence atravessa a mesma composição
+    process-real com epoch substituto maior, ACK autenticado, revogação após
+    commit e saída do runner alvo, mantendo o supervisor vivo. O E2E passou
+    4/4. Os comandos management e a emissão/outbox dos fatos continuam como
+    próximo marco.
+    Atualização 2026-08-04 (spec 1.15.0): o owner Host management aceita agora
+    a cadeia `LaunchAccepted → Spawned → Containment → Exited → Reaped`, valida
+    identity, provenance, runtime, resource group, exit cause, resource sample
+    e released resources, cruza os fatos com o spawn original, chama o writer
+    durável e só então emite o ACK correlacionado. Ordem, transplante e payload
+    inválidos falham antes do commit. Evidência: 43 testes focados; suíte Host
+    322 testes com 4 skips; typecheck; LOC 657 módulos sob cap 250; grafo 11/12.
+    O emissor/outbox Rust e a prova process-real dos fatos permanecem abertos.
+    Atualização 2026-08-04 (spec 1.16.0): o reaper Rust agora reserva capacidade
+    antes da liberação física, captura provenance/PID/exit/resource peak e os
+    recursos PROCESS/RESOURCE_GROUP liberados, preserva a causa terminal sob
+    escalada Reap e coloca a prova em outbox FIFO bounded. O serviço async dá
+    prioridade ao outbox, emite `AttemptProcessExited` e só cria/emite
+    `AttemptProcessReaped` depois do ACK exato do primeiro fato. No Host, um
+    pump owned continua lendo após `Active`; a barreira de launch vira
+    pass-through para o writer durável após liberar Containment. Cancel e Fence
+    process-real agora aguardam reap durável e comprovam a cadeia completa
+    `LaunchAccepted → Spawned → Containment → Exited → Reaped`, mantendo o
+    supervisor vivo. Evidência: 174 testes `agentd-supervisor` aprovados/8
+    ignorados por desenho, Clippy `-D warnings`, dois testes novos de sequência
+    Rust, 11 testes Host focados, typecheck, E2E Windows 4/4, package
+    verify/smoke, 661 módulos sob cap 250 e grafo 11/12. Pacote:
+    `runtime-v1-c8f1a6199b26dc79358876526aecc5beea905f9a57982af51c3a2ea9acb7c334`
+    (manifest
+    `9c56287a5bcc1085625f23d03ef9519bf51ebdde12a33507b0e3b789300745a5`).
+    A outbox ainda é memória bounded: replay após restart do supervisor e os
+    comandos management process-real permanecem abertos.
+    Atualização 2026-08-04 (spec 1.17.0): o Host management possui agora uma
+    command lane bounded, com um único comando pendente e uma sequência outbound
+    compartilhada com ACKs de fatos. Cancel/Fence validam identity, deadline,
+    fencing epoch, idempotência, `reply_to`, message-id, payload digest e relógio;
+    ACK inválido ou vencido envenena o canal. O pump permanente aceita o ACK de
+    comando sem interromper `Exited → Reaped`, e o coordenador só envia o comando
+    físico depois do ACK Control. Evidência: 26 testes focados; suíte Host
+    330/330; typecheck; E2E Windows 4/4 com schedule no supervisor Rust, saída do
+    PID e causas físicas `CANCELLED`/`FENCED`; módulos novos separados e canal
+    principal com 249 LOC. Permanecem abertos Reap no Host e recovery durável da
+    outbox após restart.
+    Atualização 2026-08-04 (spec 1.18.0): `ReapAttemptProcess` entrou na mesma
+    lane bounded e na autoridade de sequência do Host. A primitiva liga identity
+    selada, runtime instance, ceiling futuro, reason/idempotency e valida ACK
+    exato antes de resolver. O teste de canal percorre agora Cancel → Fence →
+    Reap → Exited → Reaped sem segundo reader/writer; suíte Host 326 testes
+    aprovados e 4 E2E físicos opt-in, typecheck aprovado, canal principal em 249
+    LOC. O método ainda não é exposto pela facade do runtime: falta tornar EOF do
+    Control esperado durante hard-reap e provar esse caminho process-real.
 - [ ] `G1-HS-02` — Management é bounded e runner conecta control/data
   diretamente ao host; supervisor não recebe payload de provider/tool.
   - Spec: `IPC-036..040`, `D-RUST-003`
@@ -472,8 +678,10 @@ corrente.
     pulse físico também é concreto, autenticado, obrigatório antes de
     `LaunchAccepted` e mantido por owner permanente bounded com emissão
     periódica e expiry target-specific. Os pulses já incluem RSS/pico/CPU e
-    handles reais do runner. Composição multi-launch process-real, heartbeat
-    semântico, rollup de descendentes/spool, recovery e rehydration ainda são
+    handles reais do runner. O heartbeat semântico agora percorre Control
+    direto runner→Host e não leva payload de domínio ao supervisor. Composição
+    multi-launch process-real, rollup de descendentes/spool, recovery e
+    rehydration ainda são
     pendentes; item aberto. O `main` Windows
     já possui composition root permanente e smoke real de Hello/Shutdown. O
     owner N-API de attempts já chega ao
@@ -687,16 +895,15 @@ corrente.
     management protegido; o smoke multiprocesso comprova Ready, Hello,
     Shutdown/ACK e reap sem usar o CodeStudio.
     O E2E Host TS↔binários já cobre Hello, Prepare, hydration, Activate, owner
-    vivo pós-Active, pulse periódico além de duas janelas de timeout, falha
-    fechada e Reap. O receiver de pulse já pertence ao owner permanente bounded
-    do supervisor; silêncio expira a attempt alvo sem renovar hard deadline.
-    Pendente: integrar o owner pós-Active com effects e implementar heartbeat
-    semântico, rollup de descendentes/spool, drain cooperativo e cancelamento
-    host-owned,
-    `UpdateAttemptAuthority`,
-    `QuerySupervisorState` e outbox/fatos duráveis
-    `AttemptProcessExited`/`AttemptProcessReaped`; estender o E2E para
-    Cancel/Fence pós-Active e seus fatos duráveis, além de testes de expiry nas
+    vivo pós-Active, pulse periódico além de duas janelas de timeout, heartbeat
+    semântico com métricas reais, falha fechada e Reap. Os receivers de pulse e
+    heartbeat pertencem a owners permanentes bounded; silêncio expira somente
+    a attempt alvo sem renovar hard deadline. Pendente: integrar o owner
+    pós-Active com effects, rollup de descendentes/spool, drain cooperativo e
+    cancelamento host-owned de effects produtivos,
+    `UpdateAttemptAuthority`, `QuerySupervisorState`, recovery durável da
+    outbox e comandos management. Cancel/Fence e os fatos Exited/Reaped já
+    passam no E2E pós-Active; ainda faltam testes de expiry nas
     fronteiras do spawn/Ready, matriz Windows packaged/nested/breakaway,
     backend de spawn Unix e unlink Unix descriptor-relative. O item permanece
     aberto.
@@ -752,8 +959,9 @@ corrente.
     explícita passou 7/7. O accept/pump data runner-side já está ligado e retém
     o stream autenticado no owner pós-Active; o sender/pump Host `test|shadow`
     já é bounded e ligado ao gate de `Prepared`. O bridge físico e a correlação
-    até `Active` estão comprovados; ainda faltam fatos duráveis de exit/reap,
-    Cancel/Fence process-real e os gates longos de leak/soak; item aberto.
+    até `Active` e Cancel/Fence Control com saída do runner estão comprovados;
+    ainda faltam fatos duráveis de exit/reap e comandos management process-real e
+    os gates longos de leak/soak; item aberto.
 - [x] `G1-STOR-01` — Workspace contém crate folha `agent-session-store` sem
   dependência de engine/runner/supervisor, com identidade UUID canônica, layout
   explícito e limites simultâneos de records/payload.
@@ -886,12 +1094,13 @@ corrente.
 ## 5. G2 — supervisor, lifecycle e isolamento
 
 Estado corrente (2026-08-04): a composição process-real Windows completa até
-`Active`, pulse físico inicial/periódico, owner permanente, expiry target-specific
-e reap estão comprovados. O pulse carrega RSS/pico/CPU/handles reais do runner,
-mas os checks permanecem abertos porque heartbeat semântico, métricas agregadas
-de descendentes/spool, backend Unix, outbox/recovery, terminal
-durável, Cancel/Fence process-real e gates quantitativos de isolamento/soak
-ainda não foram provados.
+`Active`, pulse físico inicial/periódico, heartbeat semântico, Cancel/Fence nos
+canais Control e management, owners permanentes, expiry target-specific e reap
+estão comprovados. Pulse e heartbeat carregam RSS/pico/CPU/handles reais do
+runner. Os checks permanecem abertos por métricas agregadas de
+descendentes/spool, backend Unix, recovery durável da outbox,
+`UpdateAttemptAuthority`, coordenação pública de hard-reap e gates quantitativos
+de isolamento/soak ainda não provados.
 `0/16` significa “nenhum requisito formal encerrado”, não “supervisor
 inexistente”.
 
@@ -928,10 +1137,11 @@ inexistente”.
 - [ ] `G2-LIFE-01` — State machine cobre spawn, handshake, hydrate, run,
   checkpoint, cancel, terminal, exit e reap.
   - Spec: `RUN-006..023`
-  - Estado corrente (2026-08-01): **parcial**. Spawn, bootstrap, hidratação,
+  - Estado corrente (2026-08-04): **parcial**. Spawn, bootstrap, hidratação,
     Activate e reap estão compostos no E2E process-real único; Cancel/Fence
-    possuem cobertura isolada. Run produtivo, checkpoint/terminal duráveis,
-    outbox Exited/Reaped e Cancel/Fence process-real ainda faltam. O pulse
+    Control pós-Active já possuem prova física completa. Run produtivo,
+    checkpoint/terminal duráveis, recovery da outbox e comandos management
+    process-real ainda faltam. O pulse
     inicial já é exigido antes de `LaunchAccepted`; o pump periódico e o
     expiry target-specific já estão no owner permanente.
   - Evidência parcial (2026-07-26): as máquinas atuais cobrem reservation,
@@ -949,9 +1159,9 @@ inexistente”.
     core de Launch é usado pelos adapters síncrono e assíncrono e cobre
     reservation, provisionamento, spawn contido, handoff, watchdog, fatos
     correlacionados, replay e cleanup fail-closed. Continuam pendentes Run,
-    checkpoint, terminal durável, Cancel/Fence process-real, outbox de
-    Exited/Reaped, estado `Reaped` durável end-to-end, recovery, heartbeat
-    semântico, rollup de descendentes/spool e drain cooperativo; item aberto.
+    checkpoint, terminal durável, comandos management process-real, recovery
+    da outbox sob restart, rollup de
+    descendentes/spool e drain cooperativo; item aberto.
 - [ ] `G2-LIFE-02` — Liveness e progress são distintos; hard deadline não pode
   ser renovado por heartbeat.
   - Spec: `RUN-005..008`, `IPC-047..048`
@@ -997,10 +1207,27 @@ inexistente”.
     hard deadline; silêncio/falha agenda cleanup imediato somente da attempt
     correspondente. Atualização 2026-08-04 (spec 1.11.0): todos os pulses
     amostram RSS atual/pico, CPU acumulada e handles reais do runner no Windows;
-    a falha da amostra encerra o pump e cai no mesmo expiry fail-closed. Ainda
-    faltam integrar `Heartbeat`, rollup do Job/spool,
-    `UpdateAttemptAuthority`, `QuerySupervisorState` e progress deadlines de
-    operações; item aberto.
+    a falha da amostra encerra o pump e cai no mesmo expiry fail-closed.
+    Atualização 2026-08-04 (spec 1.12.0): `Heartbeat` semântico passou a ser
+    emitido pelo runner e recebido/validado/commitado pelo owner Host
+    pós-`Active`. Liveness (`lastAliveAt`) e progress (`lastProgressAt`) são
+    campos e ratchets independentes; o monitor Host renova somente seu timeout
+    de silêncio e nunca altera `deadlineAt/maxWallMs`. O snapshot bounded fica
+    disponível junto da inspeção da authority Active, e timeout revoga a mesma
+    authority. Testes cobrem idle wake cancel-safe, sequência outbound sem
+    `reply_to`, payload/métricas, commit Host e expiry; o E2E process-real prova
+    o frame entre processos. Ainda faltam rollup do Job/spool,
+    `UpdateAttemptAuthority`, `QuerySupervisorState`, provider operation IDs e
+    deadlines próprios de operações (`RUN-007/008`); por isso o item permanece
+    aberto.
+    Atualização 2026-08-04 (spec 1.13.0): a leitura permanente de heartbeat e
+    um outbound Cancel/Fence agora coexistem no mesmo Control sem segunda pipe.
+    A lane inbound espera o commit outbound antes de validar resposta precoce;
+    o ACK tem timeout independente e não renova hard deadline ou heartbeat.
+    O E2E físico comprova Cancel/ACK e saída do runner.
+    Atualização 2026-08-04 (spec 1.14.0): Fence percorre a mesma lane, valida
+    epoch substituto maior e também comprova ACK/revogação/saída no processo
+    real. Operations produtivas e os itens anteriores permanecem abertos.
 - [ ] `G2-LIFE-03` — Fence perdido fecha admissão, cancela operações host-owned
   e mata a árvore após grace.
   - Spec: `RUN-009..012`, `IPC-011..012`
@@ -1014,9 +1241,9 @@ inexistente”.
     Cancel anterior; Reap posterior torna termination imediatamente due.
     O timer já participa do serviço async usado pelo binário process-real sem
     depender de novo frame; ainda faltam o routing de cancelamento pelo launcher
-    Host, cancelamento das operações host-owned, outbox/fatos duráveis e E2E
-    Host TS que prove
-    kill/reap; item aberto.
+    Host, cancelamento das operações host-owned, comando management equivalente
+    e recovery da outbox; o E2E Host TS já prova kill, Exited/Reaped duráveis e
+    reap. Item aberto.
 - [ ] `G2-LIFE-04` — Cancel ACK p95 ≤ 250 ms e árvore não cooperativa some em
   até 2 s depois da grace.
   - Spec: `GATE-LIFE-02/03`
@@ -1027,8 +1254,10 @@ inexistente”.
     o mesmo teto físico antes de ACKar o schedule; seu watchdog inicial e
     deadlines monotônicos impedem Cancel/Fence/disconnect de ampliar a vida da
     attempt. O loop async já mantém o timer ativo enquanto o ACK está em write.
-    Ainda faltam medição p95, drain cooperativo, routing de cancelamento pelo
-    launcher Host e prova E2E de desaparecimento da árvore não cooperativa em até 2 s; item
+    O routing Control pelo launcher Host e a prova E2E de ACK/saída cooperativa
+    do runner já existem. Ainda faltam medição p95, drain cooperativo, comando
+    físico ao supervisor e prova de desaparecimento da árvore não cooperativa
+    em até 2 s; item
     aberto.
 - [ ] `G2-LIFE-05` — 1.000 ciclos/24 h deixam zero PID, Job, pipe, handle e
   scratch dir órfão.
@@ -1059,22 +1288,115 @@ inexistente”.
 
 ## 6. G3 — engine Rust e Provider Gateway TS
 
-Estado corrente (2026-08-01): existe apenas a máquina mínima de lifecycle no
-crate `agent-engine` e contratos de routing/provider no Host. O loop lógico do
-agente, transcript/compactação e Provider Gateway não foram implementados.
+Estado corrente (2026-08-04): além da máquina de lifecycle, `agent-engine`
+possui o primeiro loop provider determinístico e transport-agnostic. O wire
+Provider/event V1 é Protobuf gerado em TS/Rust e valida canal, direção,
+identidade, digest e sequência. O composer produz o `ProviderTurnContext` antes
+de `Prepared`; depois de `Active`, o processo runner usa o Data autenticado para
+iniciar o Provider Gateway TS e consumir Accepted/deltas/usage/terminal. Seu
+`EventSinkPort` propõe records ao Host, que os valida e os entrega ao writer
+filesystem Rust; o E2E confirma cinco receipts até o terminal autoritativo. O
+provider process-real e a barreira journal estão, portanto, implementados.
+A fatia 1.33 acrescenta continuação in-attempt após `native.read_file`, com
+pairing, cursor stateful, context bytes compartilhados e budgets de
+turn/tool-call. A sequência completa possui prova duplex, mas ainda não
+process-real. Transcript/compactação durável, resume por checkpoint, adapters
+completos, projeção, memória e performance continuam abertos.
 
 - [ ] `G3-ENG-01` — Engine depende apenas dos ports tipados de provider,
   capability, artifact, journal, clock e child run.
   - Spec: `ENG-001..009`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.19.0): `agent-engine` não ganhou
+    dependência produtiva; o loop recebe `ProviderGatewayPort`, `AuthorityPort`,
+    `EventSinkPort` e `ClockPort` tipados, todos async e operation-scoped. Os
+    ports de capability/artifact/checkpoint/child ainda serão ligados nas
+    próximas transições, portanto o item permanece aberto.
+  - Evidência adicional (2026-08-04, spec 1.24.0): o Runner implementa
+    `ProviderGatewayPort` sem introduzir transporte no engine. O contrato
+    canônico `ProviderTurnContext` omite deliberadamente identity, binding,
+    deadline e idempotency; o adapter reconstrói `ProviderStart` somente com a
+    authority selada da attempt. Capability/artifact/checkpoint/child continuam
+    abertos.
+  - Evidência adicional (2026-08-04, spec 1.27.0): a spec V1 validada agora é
+    movida para `RunnerExecutionSeed`, owner não clonável com Debug redigido.
+    O seed cruza Prepare/hidratação sem segunda cópia, só pode ser retirado após
+    activation authority instalada, é single-use e passa ao
+    `ActiveRunnerResources`. O teste assíncrono prova indisponibilidade em
+    `Prepared`, conteúdo selado em `Active` e impossibilidade de segunda
+    retirada; os 111 testes do runner passaram. Falta decodificar os snapshots
+    executáveis e ligar authority/event sink ao loop físico.
+  - Evidência adicional (2026-08-04, spec 1.28.0): `EffectGate` passou a reter
+    clock/deadline e validar liveness também na build produtiva. O novo
+    `EngineAuthority` implementa `AuthorityPort`; a ativação move uma instância
+    para `ActiveRunnerResources`, compartilhando a revogação do driver. O teste
+    prova ausência antes de `Active`, sucesso em `ProviderStart` e erro
+    `Revoked` após close. Format, Clippy estrito, os 111 testes do runner e a
+    suíte completa do workspace passaram; o gate de LOC confirmou 704 módulos
+    produtivos sob 250 linhas. O pacote
+    `runtime-v1-251bd0d0197b8beda736e3611e2f8629a20111147cb4792db16e302df00a4da8`
+    (manifest
+    `66ec1a59a6bb214f8df1c30b1908947a661f475053f4af34a8300a127bab773a`)
+    passou verify, smoke CLI, smoke Electron e o E2E físico de lifecycle 4/4.
+    Event sink durável e composer continuam bloqueadores deliberados antes de
+    qualquer provider start físico.
+  - Evidência adicional (2026-08-04, spec 1.30.0):
+    `DurableEngineEventSink` implementa `EventSinkPort` no bridge Rust do Host e
+    persiste no `agent-session-store` sem adicionar storage/transporte ao
+    engine. O teste vertical percorre `TurnEngine → sink → SessionJournal →
+    receipt` e só observa `Completed` depois do quinto commit. O runner→Host
+    proposal/receipt e os ports de capability/artifact/checkpoint/child ainda
+    permanecem abertos.
+  - Evidência adicional (2026-08-04, spec 1.31.0): a composição física substitui
+    o sink direto da fatia 1.30 por uma fronteira mais estreita. O runner agora
+    implementa `EventSinkPort`, envia `EngineEventProposal` no Data e só avança
+    após `EngineEventCommitted`; o Host valida e encaminha ao writer Rust pelo
+    `agent-session-bridge`. Assim, `agent-session-bridge` voltou a depender
+    somente de protocolo/store e `agent-host-bridge` continua storage-free.
+    Capability/artifact/checkpoint/child ainda mantêm o item formal aberto.
+  - Evidência adicional (2026-08-04, spec 1.33.0): capability passou a ter port
+    de executor e checkpoints de authority `prepare/dispatch/effect` no engine;
+    `started/terminal` continuam records do `EventSinkPort`, sem transporte ou
+    storage no domínio. Artifact/checkpoint/child e as demais execution classes
+    mantêm o item formal aberto.
 - [ ] `G3-ENG-02` — Loop lógico completo é determinístico sob fixtures e não
   depende de classes/closures TypeScript.
   - Spec: `ENG-001`, `ENG-004..011`, `ENG-044..045`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.19.0): o primeiro turno textual usa
+    operation ID bounded, revalida authority antes do provider e do terminal,
+    aplica deadline, quantidade/tamanho de eventos, resposta, tokens e custo;
+    usage só avança monotonicamente. EOF vira `Failed`, estouro vira
+    `Interrupted`, tool call vira `CapabilityRequired`, e `Completed` só nasce
+    após `commit_terminal`. Cinco testes determinísticos novos + quatro da state
+    machine passaram; Clippy `-D warnings`; todos os módulos produtivos do crate
+    têm no máximo 206 LOC. Faltam compactação/checkpoint e composição
+    process-real completa, logo o item fica aberto.
+  - Evidência adicional (2026-08-04, spec 1.31.0): o mesmo `TurnEngine` roda no
+    processo `agent-runner`, atravessa o provider Host TS e fecha somente depois
+    do quinto receipt do journal nativo. O turno process-real está concluído;
+    compactação/checkpoint ainda mantém este requisito aberto.
+  - Evidência adicional (2026-08-04, spec 1.33.0): testes determinísticos cobrem
+    `CapabilityDispatch -> started -> effect -> terminal -> Composing`, revogação
+    imediatamente antes do efeito sem dispatch e um segundo provider turn. A
+    prova duplex cruza sete receipts e leitura real. Resume por checkpoint,
+    fallback e todas as outras execution classes mantêm o requisito aberto.
 - [ ] `G3-CTX-01` — Hot transcript tem limite por bytes/tokens; capítulos
   antigos e payloads grandes são refs.
   - Spec: `ENG-012`, `ENG-015..020`, `DUR-007..009`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.29.0): o composer inicial aceita
+    somente trigger `INITIAL`, rejeita checkpoint/transcript e limita o
+    `ProviderTurnContext` serializado ao menor valor entre
+    `max_hot_transcript_bytes` e `max_ipc_bytes`. Task artifact precisa estar
+    hidratada, sem compressão e em UTF-8 text/plain ou text/markdown;
+    attachments permanecem refs. Cinco testes novos cobrem composição,
+    contratos/canonical bytes, tool hashes/duplicidade, inference incoerente,
+    resume rejeitado, artifact task e teto de bytes. Transcript quente
+    multi-turn, tokens e capítulos frios permanecem abertos.
+  - Evidência adicional (2026-08-04, spec 1.33.0): a continuação após tool
+    deriva bytes Protobuf canônicos, anexa pairing assistant/tool e preserva o
+    cursor `response_id/message_count`; o owner mantém `Arc<[u8]>` e clona só o
+    ponteiro entre engine/adapter. O resultado continua inline e bounded;
+    capítulos frios, contagem de tokens e promoção de output grande a artifact
+    mantêm o item aberto.
 - [ ] `G3-CTX-02` — Compactação preserva tool/result pairing, identity,
   interactions, budgets e side-effect ledger.
   - Spec: `ENG-009`, `ENG-020..025`
@@ -1082,15 +1404,101 @@ agente, transcript/compactação e Provider Gateway não foram implementados.
 - [ ] `G3-PROV-01` — OAuth, secrets, adapters e retry físico permanecem no
   Provider Gateway TS.
   - Spec: `IPC-017..019`, `CAP-028..032`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.21.0): a primitiva Host depende apenas
+    do contrato compilável `provider-sdk/adapter|wire`, recebe resolver
+    injetado e nunca representa credential/secret no wire. OAuth, retry físico
+    e os adapters concretos continuam no control plane e ainda serão ligados.
 - [ ] `G3-PROV-02` — `ProviderStart`, stream, cancel, usage, fallback lógico e
   terminal tipado passam na matriz de adapters.
   - Spec: `IPC-017..019`, `CAP-028..032`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.20.0): `runtime.proto` define e gera
+    em TS/Rust `ProviderStart/Accepted/Cancel`, deltas de texto/thinking, tool
+    call completo, usage e terminal classificado. Os validators Host e Rust
+    restringem todos ao canal Data, aplicam direção exata e exigem a mesma
+    `AttemptIdentity`; `agent-protocol` passou 221 testes. Gateway, matriz de
+    adapters e fallback lógico ainda permanecem abertos.
+  - Evidência adicional (2026-08-04, spec 1.21.0): sete testes do Gateway
+    cobrem accepted→texto→usage→terminal, EOF fail-closed, cancel, deadline que
+    interrompe iterator travado, duplicidade, tool aggregation/caps e falha do
+    sink. A suíte Host passou 333 testes; a matriz de adapters reais permanece
+    aberta.
+  - Evidência adicional (2026-08-04, spec 1.22.0): o mesmo canal Data faz
+    handoff single-use após `HydrationCommitted`; dois testes duplex cobrem
+    `ProviderStart → Accepted → texto → terminal` e Cancel inbound enquanto o
+    iterator está pendente. Accepted autentica operation/digest/clock e seu
+    replay físico é preservado; eventos compartilham uma lane outbound. A suíte
+    Host passou 336 testes. Falta o peer Rust e a prova process-real.
+  - Evidência adicional (2026-08-04, spec 1.23.0): o peer Rust single-owner
+    envia Start e Cancel no canal Data, retém um recibo opaco somente depois do
+    write físico e exige `ProviderAccepted` ligado ao message-id, digest SHA-256,
+    operation, runtime instance e janela temporal exatos. Eventos exigem
+    sequência monotônica; tool args têm hash validado; usage e terminal
+    incompletos falham fechados; somente terminal libera a operação. O protocolo
+    passou 222 testes e o runner 107, ambos com Clippy estrito. Ainda faltam a
+    composição com o engine e o E2E process-real.
+  - Evidência adicional (2026-08-04, spec 1.24.0): o adapter Rust converte o
+    stream autenticado para os eventos do engine, preserva thinking separado,
+    recusa tool call de outra operation, classifica Cancelled como Interrupted
+    e entrega final usage antes do terminal. O IDL gerado passou 50 testes;
+    `agent-engine` passou 10 e `agent-runner` 110 com Clippy estrito. Falta o
+    E2E process-real e a matriz de providers reais.
+  - Evidência adicional (2026-08-04, spec 1.25.0): um teste duplex cross-crate
+    usa dois owners `AsyncEstablishedAttemptChannel` opostos e percorre
+    `engine → ProviderDataGateway → ProviderStart → ProviderAccepted → texto →
+    final usage → terminal → commit Completed`. O peer Host do teste comprova o
+    binding/model/deadline selados e Accepted ligado ao digest real. Isso cobre
+    a composição lógica e framing estabelecido, mas não bootstrap, Named Pipe
+    nem isolamento de processo; o check permanece aberto até o E2E físico.
+  - Evidência adicional (2026-08-04, spec 1.26.0): o workspace Rust passou
+    `cargo fmt --all -- --check`, Clippy de todos os targets/features com
+    `-D warnings` e todos os testes locked. Os contratos gerados passaram 50
+    testes; o Host passou typecheck e 336 testes, com 4 ignorados. O gate de LOC
+    confirmou 702 módulos produtivos sob o teto de 250 linhas após separar seis
+    responsabilidades Host. O pacote Windows candidato
+    `runtime-v1-8f1ec5589cc1763b1fdfd2f2b77d9d721b059ac4c7beb1edb7b471eb121f47ad`
+    (manifest
+    `daa589b5e1303c47b1ed7e0ab0edce1eb05086d0796fd2de0bc0ef176b288e31`)
+    passou verify com 3 binários, smoke CLI e smoke Electron/Node-API. O E2E
+    físico de lifecycle registrou uma falha transitória no ACK de Fence e, em
+    seguida, duas execuções consecutivas 4/4; a flutuação continua aberta para
+    estabilização e esta evidência não substitui o provider process-real.
+  - Evidência adicional (2026-08-04, spec 1.29.0): `runtime.proto` agora gera
+    `AgentDefinitionSnapshotV1`, `CapabilitySetSnapshotV1` e
+    `ProviderPresetSnapshotV1` em TS/Rust. O runner exige schema ID/version,
+    encoding Protobuf canônico, definição/preset coerentes e SHA-256 de cada
+    tool schema antes de `AttemptPrepared`; o contexto composto fica retido no
+    owner ativo sem disparar provider. Contratos 50/50, Host 336 com 4 skips,
+    runner 116, Clippy estrito e LOC 709/250 passaram. O pacote
+    `runtime-v1-c2735438d5f8d433f57fcadf5321fcfcb8d17df666b2a52fae191dae5a9ced8d`
+    (manifest
+    `3785aeab9a3b3b58304a2cd75850c42eb57cf82131f6f0d3f3200aed438ac4ff`)
+    passou verify, smoke CLI, smoke Electron e E2E físico de lifecycle 4/4 com
+    os novos snapshots. O check fica aberto: o teste ainda não envia
+    `ProviderStart` pelo Named Pipe.
+  - Evidência adicional (2026-08-04, spec 1.31.0): o teste físico agora envia
+    `ProviderStart` pelo Named Pipe, recebe Accepted/texto/usage/terminal do
+    Gateway TS e confirma a resolução do binding. A publicação do start aguarda
+    o write físico; Accepted tolera somente 50 ms de skew entre peers locais e
+    usa a mesma `AuthorityClock` do Data. Cinco execuções consecutivas da suíte
+    física completa passaram, cada uma com 5/5 cenários. A matriz de adapters,
+    fallback e capability ainda mantém o requisito formal aberto.
 - [ ] `G3-PROV-03` — Perda de fence cancela todas as provider operations do
   attempt; registry do host é bounded e evicted.
   - Spec: `IPC-019`, `CAP-028..031`, `RUST-R009`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.21.0): registry possui teto imutável,
+    rejeita operation ID duplicado, vincula cada entrada à identidade exata,
+    aborta todas as operações da attempt em `fenceAttempt` e libera ownership
+    após terminal ou sink failure. Falta ligar a perda real de fence do owner
+    Control/Data a essa chamada.
+  - Evidência adicional (2026-08-04, spec 1.22.0): o owner Data permanente
+    chama `fenceAttempt` no encerramento e o adapter registra failure observer
+    no coordinator, eliminando o canal órfão pós-hidratação. A ligação com o
+    fence Control real será comprovada no E2E provider.
+  - Evidência adicional (2026-08-04, spec 1.31.0): Control e Data têm lifecycle
+    de stream independente; destruir um wrapper não fecha o irmão, Data é retido
+    até o cleanup coordenado e a perda efetiva chega ao registry Host. O E2E
+    produtivo termina e reapeia sem owner órfão. O check permanece aberto até a
+    matriz de fence durante providers reais e streams travados.
 - [ ] `G3-PROV-04` — Fallback lógico checkpointa, encerra apenas a attempt e
   cria attempt `provider_fallback` com epoch maior; retry físico não faz isso.
   - Spec: `RUN-003`, `ENG-014`, `IPC-042`, `IPC-045`
@@ -1099,7 +1507,11 @@ agente, transcript/compactação e Provider Gateway não foram implementados.
   pricing, reasoning, vision e usage funcionam sem importar provider do
   `code-agent`.
   - Spec: `CUT-023`, `CUT-034`, `RUST-R049`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.21.0): a nova pasta
+    `agent-runtime-host/src/provider-gateway` não importa `code-agent`, exige
+    provider/model efetivos exatos e preserva thinking, reasoning, usage e
+    response ID. OAuth, aliases, pricing comprovado, vision e plugins ainda
+    dependem da composição com os registries atuais, então o check fica aberto.
 - [ ] `G3-ROUTE-01` — Geração `legacy_ts | rust_v1`, razão, cohort, engine e
   catalog hash são persistidos antes do launch; attempt ativa não muda.
   - Spec: `CUT-005..006`, `CUT-012`, `CUT-020`, `CUT-059..060`
@@ -1121,10 +1533,38 @@ agente, transcript/compactação e Provider Gateway não foram implementados.
     Cancel/Fence ou Activate no mesmo stream. Deadline, fechamento de endpoint
     e reap continuam fail-closed, mas cumprir este item requer separar o ACK de
     aceitação da resposta Prepared ou introduzir uma segunda lane bounded.
+  - Evidência adicional (2026-08-04, spec 1.31.0): a operação provider e os
+    commits de engine podem bloquear Data sem transferir ownership ou cleanup ao
+    Control; o runner entra em idle permanente bounded e o Host coordena o drain
+    terminal. Isso elimina o acoplamento de streams observado na fatia física,
+    mas não prova ainda todos os frame/byte credits nem remove o stop-and-wait de
+    Prepare, portanto o item continua aberto.
 - [ ] `G3-EVT-01` — Classes A–C e tipos D declarados duráveis têm paridade
   semântica 100%; terminal nunca ultrapassa delta ou artifact requerido.
   - Spec: `DUR-012..023`, `GATE-EVT-01`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.30.0): `session_store.proto` gera em
+    TS/Rust o payload canônico `EngineEventRecordV1` para started, delta,
+    usage, provider completed, capability boundary e terminal. O sink liga
+    cada record a `AttemptIdentity + runtimeInstanceId + localSequence`, usa
+    durability `coalesced/durable/authoritative`, recebe `globalSequence` e
+    hash-chain somente do writer Rust e deriva operation UUID estável para
+    replay. Delta persiste apenas tamanho e SHA-256, nunca texto cru. Quatro
+    testes novos provam ordenação até terminal, turno real do engine, replay
+    idêntico, replay divergente fail-closed e ausência de terminal após falha de
+    commit; a suíte do bridge passa 10 testes. O check permanece aberto porque
+    transporte process-real, transcript/artifact barrier, todas as classes A–D
+    e paridade com o projector ainda não foram concluídos.
+  - Evidência adicional (2026-08-04, spec 1.31.0):
+    `EngineEventProposal/EngineEventCommitted` entraram no IDL e no Data
+    process-real. O journal físico recebe exatamente cinco records com sequências
+    1..5 e terminal autoritativo; replay/digest/receipt são validados nos dois
+    peers. O transporte do primeiro turno deixou de ser bloqueador. Permanecem
+    abertos transcript/artifact, capability, todas as classes A–D e paridade do
+    projector.
+  - Evidência adicional (2026-08-05, spec 1.34.0): o cenário físico produtivo
+    agora recebe tool call, persiste boundary/started/terminal, retoma o provider
+    e termina com nove records `1..9`; quatro são autoritativos. Paridade ampla
+    do projector e as demais classes A–D continuam abertas.
 - [ ] `G3-MEM-01` — Runner representativo tem incremento privado ≤ 64 MiB.
   - Spec: `GATE-MEM-02`
   - Evidência:
@@ -1141,30 +1581,83 @@ agente, transcript/compactação e Provider Gateway não foram implementados.
 
 ## 7. G4 — capabilities, tools e execução aninhada
 
-Estado corrente (2026-08-01): `agent-tools` contém somente contratos mínimos de
-capability. Filesystem/search/patch/Git/process/HTTP, ToolHost e `code_exec`
-nativos ainda não começaram.
+Estado corrente (2026-08-05): `agent-tools` contém invocation/decision/grant e
+outcome tipados; `capability.proto` gera TS/Rust; runner e Host implementam o
+prepare bounded, correlacionado e fail-closed. Para um grant aceito de
+`native.read_file`, o engine grava `started`, revalida authority imediatamente
+antes do efeito, executa leitura Windows com prova do path pelo handle final e
+grava terminal; ambos são records autoritativos. O resultado bounded mantém
+pairing/cursor e retoma o provider. A policy Host fail-closed confere o digest
+do catálogo hidratado, canonicaliza a raiz de workspace confiável e sela
+environment, lease/fence, quotas, nonce e expiry. O E2E process-real prova a
+leitura e o segundo provider turn. Falha live pós-started do executor vira
+`outcome_unknown` sem retry. O scanner bounded já detecta started órfão por
+receipt/payload/cadeia exatos. Permanecem abertos persistência da decisão de
+recovery/probe, glob/grep/Git/HTTP, mutation/process, ToolHost e `code_exec`.
 
 - [ ] `G4-CAT-01` — Catálogo é serializável, versionado e tem canonical
   bytes/hash idênticos em TS e Rust.
   - Spec: `CAP-001..004`, `CAP-045..047`, `RUST-R016`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.33.0): descriptors Provider carregam
+    ID, versão, execution class e mutation; `capability.proto` gera os mesmos
+    tipos TS/Rust e 51 testes de contrato passaram. O item permanece aberto até
+    canonical bytes/hash cross-language do catálogo completo.
+  - Evidência adicional (2026-08-05, spec 1.34.0): a policy do E2E compara o
+    SHA-256 exato do `CapabilitySetSnapshotV1` hidratado antes de conceder a
+    leitura. O requisito segue aberto para o catálogo completo e suas demais
+    execution classes.
 - [ ] `G4-CAP-01` — Todas as invocations seguem prepare, approval, accepted,
   started e terminal por `operation_id`.
   - Spec: `CAP-005..010`, `IPC-020..021`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.33.0): prepare e decisões
+    `rejected|approval_required|accepted` usam IDs exatos e o mesmo canal Data;
+    `native.read_file` acrescenta `started/terminal` por operation/tool/grant ID
+    e sete receipts na prova duplex. O item permanece aberto até todas as
+    execution classes e recovery/probe seguirem o lifecycle completo.
+  - Evidência adicional (2026-08-05, spec 1.34.0): o mesmo lifecycle atravessa
+    agora Named Pipes/processos reais e nove commits no writer Rust, incluindo
+    segundo provider turn. Persistência recovery/probe e demais classes mantêm
+    o item aberto.
 - [ ] `G4-CAP-02` — Grant vincula input, capability, environment, workspace,
   fence, constraints e expiry; Rust revalida antes do efeito.
   - Spec: `CAP-008..010`, `RUST-R018`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.33.0): grant repete e sela input,
+    capability, execution class, mutation, environment, lease/fence,
+    constraints, policy, nonce e expiry; Host e runner rejeitam contradições e
+    o engine revalida authority/expiry/input imediatamente antes do read. O item
+    permanece aberto até ambiente/lease/fence terem validação live completa em
+    todas as execution classes.
+  - Evidência adicional (2026-08-05, spec 1.34.0): o resolver de produto recebe
+    raiz somente do Host, usa `realpath`/diretório real, confere o catálogo e
+    sela environment, lease/fence, resource binding, constraints, policy,
+    nonce, quotas e TTL. Testes cobrem grant exato, catálogo divergente e raiz
+    indisponível. Validação live em todas as classes continua aberta.
 - [ ] `G4-CAP-03` — Timeout/EOF pós-started produz probe ou
   `outcome_unknown`, nunca retry automático.
   - Spec: `CAP-005..007`, `IPC-021`, `RUST-R017`
-  - Evidência:
+  - Evidência parcial (2026-08-05, spec 1.35.0): depois do receipt `started`,
+    erro do executor vira `OutcomeUnknown(executor_result_ambiguous)`, o engine
+    chama o executor exatamente uma vez, persiste classification/reason no
+    terminal wire e envia `tool_result` de erro ao provider. O item permanece
+    aberto para timeout/EOF que também impeça o commit terminal, recovery de
+    started órfão e probe dos handlers externos capazes de consultar outcome.
+  - Evidência adicional (2026-08-05, spec 1.36.0): store/bridge paginam receipts
+    autenticados, o Host confere payload Protobuf canônico e detecta started sem
+    terminal; terminal com tool/grant divergente e scan truncado falham fechado.
+    O item segue aberto até essa descoberta gerar uma decisão durável numa nova
+    attempt/interaction e probes externos serem comprovados.
 - [ ] `G4-READ-01` — Filesystem read, glob, grep, Git read e HTTP read passam
   functional, traversal, quota e cancellation suites.
   - Spec: `CAP-011..013`, `CAP-024..027`
-  - Evidência:
+  - Evidência parcial (2026-08-04, spec 1.33.0): `native.read_file` valida JSON
+    estrito, path relativo, root final case-insensitive pelo handle Windows,
+    offset, quotas, truncation e UTF-8; testes unitário e duplex leem arquivo
+    real e rejeitam traversal. Glob/grep/Git/HTTP e cancellation durante I/O
+    mantêm o item aberto.
+  - Evidência adicional (2026-08-05, spec 1.34.0): E2E process-real passa o
+    descriptor ao provider, recebe a call, concede apenas a raiz Host, lê o
+    arquivo por handle final e valida o conteúdo no follow-up. O requisito
+    agregado segue aberto para os demais reads e cancellation.
 - [ ] `G4-MUT-01` — Write/edit/patch e Git mutation passam workspace
   binding/fence, idempotência e adversarial suites.
   - Spec: `CAP-014..017`

@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
-import { fromBinary, toBinary } from '@bufbuild/protobuf';
-import { agentV1Supervisor } from '@mcp/agent-runtime-contracts';
+import { PassThrough } from 'node:stream';
+import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
+import {
+  agentV1Runtime,
+  agentV1Supervisor,
+} from '@mcp/agent-runtime-contracts';
 import { describe, expect, it, vi } from 'vitest';
 import {
   HostSupervisorFactError,
@@ -10,11 +14,15 @@ import type {
   DurableSupervisorFactPort,
   SupervisorFactBinding,
 } from '../driver/HostSupervisorFactTypes.js';
-import { validateManagementFrame } from '../ipc/ManagementFrame.js';
+import {
+  encodeManagementFrame,
+  validateManagementFrame,
+} from '../ipc/ManagementFrame.js';
 import {
   acceptedFact,
   containmentFact,
   directionFrame,
+  exitedFact,
   factFrame,
   harness,
   MANAGEMENT_CONNECTION,
@@ -22,10 +30,11 @@ import {
   MANAGEMENT_PROTOCOL,
   mutateWireHeader,
   rejectedFact,
+  reapedFact,
   RESERVATION_ID,
   spawnedFact,
 } from './host-supervisor-fact-support.js';
-import { identity } from './attempt-channel-support.js';
+import { delimit, identity } from './attempt-channel-support.js';
 
 function successfulPort() {
   return { commit: vi.fn(async () => undefined) };
@@ -49,7 +58,226 @@ function expectCode(
   return expect(action).rejects.toMatchObject({ code });
 }
 
+async function capturedFrame(
+  readFrames: () => Uint8Array[],
+  count: number,
+): Promise<Uint8Array> {
+  await vi.waitFor(() => expect(readFrames()).toHaveLength(count));
+  return readFrames()[count - 1]!;
+}
+
+function commandAckFrame(
+  encodedCommand: Uint8Array,
+  messageId: string,
+  streamSeq: bigint,
+): Uint8Array {
+  const command = validateManagementFrame(encodedCommand);
+  const header = command.frame.header!;
+  return encodeManagementFrame(
+    create(agentV1Supervisor.ManagementFrameHeaderSchema, {
+      protocolVersion: MANAGEMENT_PROTOCOL,
+      connectionId: MANAGEMENT_CONNECTION,
+      messageId,
+      replyToMessageId: header.messageId,
+      streamSeq,
+      sentAtUnixMs: 100n,
+    }),
+    create(agentV1Supervisor.ManagementPayloadSchema, {
+      body: {
+        case: 'managementAck',
+        value: {
+          acknowledgedMessageId: header.messageId,
+          acknowledgedPayloadSha256: header.payloadSha256.slice(),
+          acknowledgedAtUnixMs: 100n,
+        },
+      },
+    }),
+  );
+}
+
 describe('HostSupervisorFactDriver', () => {
+  it('durably commits and ACKs Exited then Reaped after the launch chain', async () => {
+    const port = successfulPort();
+    const facts = [
+      acceptedFact(),
+      spawnedFact(),
+      containmentFact(),
+      exitedFact(),
+      reapedFact(),
+    ];
+    const { capture, driver } = harness(
+      facts.map((fact, index) => factFrame(
+        fact,
+        `lifecycle-${index + 2}`,
+        BigInt(index + 2),
+      )),
+      port,
+    );
+
+    const committed = [];
+    for (const _fact of facts) committed.push(await driver.processNext());
+
+    expect(committed.map((step) => (
+      step.kind === 'command_acknowledged' ? step.commandCase : step.factCase
+    ))).toEqual([
+      'launchAccepted',
+      'attemptProcessSpawned',
+      'attemptContainmentReport',
+      'attemptProcessExited',
+      'attemptProcessReaped',
+    ]);
+    expect(port.commit).toHaveBeenCalledTimes(5);
+    expect(capture.frames()).toHaveLength(5);
+    expect(decodedAck(capture.frames()[4]!).ack.acknowledgedMessageId)
+      .toBe('lifecycle-6');
+  });
+
+  it('serializes Cancel, Fence and Reap with fact ACKs on one channel', async () => {
+    const source = new PassThrough();
+    const port = successfulPort();
+    const initial = [acceptedFact(), spawnedFact(), containmentFact()];
+    const { capture, driver } = harness([], port, { readable: source });
+    source.write(delimit(...initial.map((fact, index) => factFrame(
+      fact,
+      `initial-${index + 2}`,
+      BigInt(index + 2),
+    ))));
+    for (const _fact of initial) await driver.processNext();
+
+    const cancelReceive = driver.processNext();
+    const cancel = driver.cancel({
+      reason: agentV1Runtime.CancelReason.USER_REQUEST,
+      reasonCode: 'user_request',
+      graceDeadlineAtUnixMs: 1_000n,
+      idempotencyKey: 'cancel:test',
+    });
+    const cancelCommand = await capturedFrame(capture.frames, 4);
+    const decodedCancel = validateManagementFrame(cancelCommand);
+    expect(decodedCancel.payload.body.case).toBe('cancelAttemptProcess');
+    expect(decodedCancel.frame.header?.streamSeq).toBe(5n);
+    source.write(delimit(commandAckFrame(cancelCommand, 'cancel-ack', 5n)));
+    await expect(cancel).resolves.toBeUndefined();
+    await expect(cancelReceive).resolves.toMatchObject({
+      kind: 'command_acknowledged',
+      commandCase: 'cancelAttemptProcess',
+    });
+
+    const fenceReceive = driver.processNext();
+    const fence = driver.fence({
+      replacementFencingEpoch: 8n,
+      reasonCode: 'replacement_owner',
+      fencedAtUnixMs: 100n,
+      idempotencyKey: 'fence:test',
+    });
+    const fenceCommand = await capturedFrame(capture.frames, 5);
+    const decodedFence = validateManagementFrame(fenceCommand);
+    expect(decodedFence.payload.body.case).toBe('fenceAttemptProcess');
+    expect(decodedFence.frame.header?.streamSeq).toBe(6n);
+    source.write(delimit(commandAckFrame(fenceCommand, 'fence-ack', 6n)));
+    await expect(fence).resolves.toBeUndefined();
+    await expect(fenceReceive).resolves.toMatchObject({
+      kind: 'command_acknowledged',
+      commandCase: 'fenceAttemptProcess',
+    });
+
+    const reapReceive = driver.processNext();
+    const reap = driver.reap({
+      runtimeInstanceId: 'runner:instance',
+      reapDeadlineAtUnixMs: 1_000n,
+      reasonCode: 'hard_cleanup',
+      idempotencyKey: 'reap:test',
+    });
+    const reapCommand = await capturedFrame(capture.frames, 6);
+    const decodedReap = validateManagementFrame(reapCommand);
+    expect(decodedReap.payload.body.case).toBe('reapAttemptProcess');
+    expect(decodedReap.frame.header?.streamSeq).toBe(7n);
+    source.write(delimit(commandAckFrame(reapCommand, 'reap-ack', 7n)));
+    await expect(reap).resolves.toBeUndefined();
+    await expect(reapReceive).resolves.toMatchObject({
+      kind: 'command_acknowledged',
+      commandCase: 'reapAttemptProcess',
+    });
+
+    source.write(delimit(
+      factFrame(exitedFact(), 'exited-after-command', 8n),
+      factFrame(reapedFact(), 'reaped-after-command', 9n),
+    ));
+    await expect(driver.processNext()).resolves.toMatchObject({
+      kind: 'committed',
+      factCase: 'attemptProcessExited',
+    });
+    await expect(driver.processNext()).resolves.toMatchObject({
+      kind: 'committed',
+      factCase: 'attemptProcessReaped',
+    });
+    expect(port.commit).toHaveBeenCalledTimes(5);
+  });
+
+  it('poisons both command and receive on a mismatched command ACK', async () => {
+    const source = new PassThrough();
+    const { capture, driver } = harness([], successfulPort(), {
+      readable: source,
+    });
+    source.write(delimit(
+      factFrame(acceptedFact(), 'accepted', 2n),
+      factFrame(spawnedFact(), 'spawned', 3n),
+      factFrame(containmentFact(), 'containment', 4n),
+    ));
+    await driver.processNext();
+    await driver.processNext();
+    await driver.processNext();
+
+    const receiving = driver.processNext();
+    const command = driver.cancel({
+      reason: agentV1Runtime.CancelReason.USER_REQUEST,
+      reasonCode: 'user_request',
+      graceDeadlineAtUnixMs: 1_000n,
+      idempotencyKey: 'cancel:mismatch',
+    });
+    const outbound = await capturedFrame(capture.frames, 4);
+    const invalidAck = commandAckFrame(outbound, 'cancel-ack', 5n);
+    const mutated = validateManagementFrame(invalidAck);
+    if (mutated.payload.body.case !== 'managementAck') {
+      throw new TypeError('expected ManagementAck');
+    }
+    mutated.payload.body.value.acknowledgedPayloadSha256[0] ^= 0xff;
+    source.write(delimit(encodeManagementFrame(
+      mutated.frame.header!,
+      mutated.payload,
+    )));
+
+    await expect(receiving).rejects.toMatchObject({ code: 'invalid_command' });
+    await expect(command).rejects.toMatchObject({ code: 'invalid_command' });
+    expect(driver.isPoisoned).toBe(true);
+  });
+
+  it('fails closed when a management command ACK times out', async () => {
+    const source = new PassThrough();
+    const { driver } = harness([], successfulPort(), {
+      readable: source,
+      driver: { commandResponseTimeoutMs: 10 },
+    });
+    source.write(delimit(
+      factFrame(acceptedFact(), 'accepted', 2n),
+      factFrame(spawnedFact(), 'spawned', 3n),
+      factFrame(containmentFact(), 'containment', 4n),
+    ));
+    await driver.processNext();
+    await driver.processNext();
+    await driver.processNext();
+
+    const receiving = driver.processNext();
+    const command = driver.cancel({
+      reason: agentV1Runtime.CancelReason.USER_REQUEST,
+      reasonCode: 'user_request',
+      graceDeadlineAtUnixMs: 1_000n,
+      idempotencyKey: 'cancel:timeout',
+    });
+    await expect(command).rejects.toMatchObject({ code: 'command_ack_timeout' });
+    await expect(receiving).rejects.toMatchObject({ code: 'command_ack_timeout' });
+    expect(driver.isPoisoned).toBe(true);
+  });
+
   it('emits the exact correlated ACK only after durable commit resolves', async () => {
     let release!: () => void;
     const commitGate = new Promise<void>((resolve) => {

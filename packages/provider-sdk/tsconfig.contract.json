@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "./src",
+    "outDir": "./dist-contract",
+    "tsBuildInfoFile": "./dist-contract/tsconfig.tsbuildinfo"
+  },
+  "files": [
+    "src/adapter.ts",
+    "src/wire.ts"
+  ]
+}

@@ -25,6 +25,7 @@ mod bootstrap;
 mod driver;
 mod effective;
 mod error;
+mod execution_seed;
 mod hello;
 mod launch;
 mod manifest;
@@ -43,6 +44,7 @@ pub(crate) use authority::AuthorityError;
 pub use bootstrap::{RunnerBootstrapDriver, RunnerBootstrapError};
 pub use driver::{ControlDriverError, ControlDriverEvent, RunnerControlDriver};
 pub use error::{ControlError, TextFieldError};
+pub(crate) use execution_seed::RunnerExecutionSeed;
 pub use launch::{LaunchContextError, RunnerLaunchContext};
 pub use model::{
     ActivationOutcome, CancelOutcome, CancelledAttempt, EffectivePreparedFacts, FenceOutcome,

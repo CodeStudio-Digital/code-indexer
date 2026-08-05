@@ -7,6 +7,7 @@ use agent_protocol::pulse_channel::RunnerPulseError;
 use agent_protocol::runner_bootstrap::RunnerBootstrapError;
 
 use crate::control::{AsyncControlDriverError, AsyncRunnerBootstrapError};
+use crate::provider_context::ProviderContextError;
 
 #[derive(Debug)]
 pub enum RunnerControlServiceError {
@@ -26,6 +27,10 @@ pub enum RunnerControlServiceError {
     HydrationAlreadyConsumed,
     MissingContainmentAuthority,
     MissingHydrationOwnership,
+    MissingExecutionSeed,
+    MissingEffectAuthority,
+    MissingProviderContext,
+    ProviderContext(ProviderContextError),
     UnexpectedPreActiveTermination,
 }
 
@@ -66,6 +71,16 @@ impl Display for RunnerControlServiceError {
             Self::MissingHydrationOwnership => {
                 formatter.write_str("runner activated without verified hydration ownership")
             }
+            Self::MissingExecutionSeed => {
+                formatter.write_str("runner activated without its validated execution seed")
+            }
+            Self::MissingEffectAuthority => {
+                formatter.write_str("runner activated without live effect authority")
+            }
+            Self::MissingProviderContext => {
+                formatter.write_str("runner activated without a composed provider context")
+            }
+            Self::ProviderContext(error) => Display::fmt(error, formatter),
             Self::UnexpectedPreActiveTermination => {
                 formatter.write_str("runner accepted termination before activation")
             }
@@ -84,12 +99,16 @@ impl Error for RunnerControlServiceError {
             Self::Bootstrap(error) => Some(error),
             Self::Driver(error) => Some(error),
             Self::Hydration(error) => Some(error.as_ref()),
+            Self::ProviderContext(error) => Some(error),
             Self::Cancelled
             | Self::PulsePumpStopped
             | Self::DeadlineElapsed
             | Self::HydrationAlreadyConsumed
             | Self::MissingContainmentAuthority
             | Self::MissingHydrationOwnership
+            | Self::MissingExecutionSeed
+            | Self::MissingEffectAuthority
+            | Self::MissingProviderContext
             | Self::UnexpectedPreActiveTermination => None,
         }
     }

@@ -124,9 +124,11 @@ fn open_commit_query_archive_and_replay_stay_fenced() {
     assert!(!state.archived);
     assert_eq!(state.last_commit_sha256, receipt.commit_sha256);
 
+    assert_record_page(&mut bridge, &handle);
+
     let archived = send(
         &mut bridge,
-        6,
+        7,
         wire::session_store_request::Body::ArchiveSession(wire::ArchiveSession {
             writer_handle: handle,
             authority: Some(authority()),
@@ -147,6 +149,34 @@ fn open_commit_query_archive_and_replay_stay_fenced() {
         2
     );
     assert_eq!(bridge.active_writer_count(), 0);
+}
+
+fn assert_record_page(
+    bridge: &mut agent_session_bridge::AuthenticatedSessionStoreBridge,
+    handle: &str,
+) {
+    let listed = send(
+        bridge,
+        6,
+        wire::session_store_request::Body::ListCommittedSessionRecords(
+            wire::ListCommittedSessionRecords {
+                writer_handle: handle.to_owned(),
+                authority: Some(authority()),
+                after_global_sequence: 0,
+                max_records: 8,
+            },
+        ),
+    );
+    let wire::session_store_response::Body::CommittedSessionRecordPage(page) =
+        listed.body.expect("list response")
+    else {
+        panic!("expected committed record page");
+    };
+    assert_eq!(page.session_id, SESSION_ID);
+    assert_eq!(page.records.len(), 1);
+    assert_eq!(page.records[0].operation_id, COMMIT_OPERATION_ID);
+    assert_eq!(page.next_global_sequence, 1);
+    assert!(page.complete);
 }
 
 #[test]

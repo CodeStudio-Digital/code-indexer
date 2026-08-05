@@ -1,11 +1,13 @@
 import type {
   AuthenticatedAttemptLifecyclePort,
+  AuthenticatedAttemptDataPort,
 } from './RustHostAttemptCoordinatorTypes.js';
 
 export class RustHostAttemptSignalLinks {
   #signal?: AbortSignal;
   #listener?: () => void;
-  #unsubscribeFailure?: () => void;
+  #unsubscribeLifecycleFailure?: () => void;
+  #unsubscribeDataFailure?: () => void;
 
   bindAbort(
     signal: AbortSignal | undefined,
@@ -28,7 +30,20 @@ export class RustHostAttemptSignalLinks {
       fail(cause);
     });
     if (failedSynchronously) unsubscribe();
-    else this.#unsubscribeFailure = unsubscribe;
+    else this.#unsubscribeLifecycleFailure = unsubscribe;
+  }
+
+  bindData(
+    data: AuthenticatedAttemptDataPort,
+    fail: (cause: unknown) => void,
+  ): void {
+    let failedSynchronously = false;
+    const unsubscribe = data.observeFailure((cause) => {
+      failedSynchronously = true;
+      fail(cause);
+    });
+    if (failedSynchronously) unsubscribe();
+    else this.#unsubscribeDataFailure = unsubscribe;
   }
 
   clear(): void {
@@ -36,12 +51,14 @@ export class RustHostAttemptSignalLinks {
       this.#signal.removeEventListener('abort', this.#listener);
     }
     try {
-      this.#unsubscribeFailure?.();
+      this.#unsubscribeLifecycleFailure?.();
+      this.#unsubscribeDataFailure?.();
     } catch {
       // Revocation continues even if an adapter cleanup is already broken.
     }
     this.#signal = undefined;
     this.#listener = undefined;
-    this.#unsubscribeFailure = undefined;
+    this.#unsubscribeLifecycleFailure = undefined;
+    this.#unsubscribeDataFailure = undefined;
   }
 }

@@ -27,12 +27,24 @@ const HOST_TO_RUNNER_DATA = new Set([
   'hydrationManifest',
   'hydrationChunk',
   'hydrationComplete',
+  'providerAccepted',
+  'providerTextDelta',
+  'providerThinkingDelta',
+  'providerToolCall',
+  'providerUsage',
+  'providerTerminal',
+  'engineEventCommitted',
+  'capabilityUpdate',
 ]);
 
 const RUNNER_TO_HOST_DATA = new Set([
   'attemptChannelBound',
   'hydrationProgress',
   'hydrationCommitted',
+  'providerStart',
+  'providerCancel',
+  'engineEventProposal',
+  'capabilityPrepare',
 ]);
 
 export function assertPayloadDirection(

@@ -3,7 +3,7 @@ use std::fmt::{self, Debug, Formatter};
 
 use agent_protocol::generated::v1 as wire;
 
-use super::facts::{AttemptContainmentFact, AttemptSpawnedFact};
+use super::facts::{AttemptContainmentFact, AttemptReapedFact, AttemptSpawnedFact};
 use super::launch_registry::LaunchIntentKey;
 use crate::management::ManagementEnvelopeReceipt;
 use crate::process_table::OwnershipKey;
@@ -75,6 +75,11 @@ pub(super) enum PendingFactStage {
         containment: Box<AttemptContainmentFact>,
     },
     Containment,
+    Exited {
+        key: OwnershipKey,
+        reaped: Box<AttemptReapedFact>,
+    },
+    Reaped,
     AcceptedReplay,
     Rejected,
 }
@@ -111,6 +116,8 @@ impl Debug for PendingFactAction {
             PendingFactStage::Accepted { authority, .. } => ("Accepted", Some(authority)),
             PendingFactStage::Spawned { authority, .. } => ("Spawned", Some(authority)),
             PendingFactStage::Containment => ("Containment", None),
+            PendingFactStage::Exited { .. } => ("Exited", None),
+            PendingFactStage::Reaped => ("Reaped", None),
             PendingFactStage::AcceptedReplay => ("AcceptedReplay", None),
             PendingFactStage::Rejected => ("Rejected", None),
         };

@@ -27,7 +27,10 @@ pub use committed_payload::{CommittedPayload, ReadCommittedPayloadRequest};
 pub use durability::DurabilityClass;
 pub use error::SessionStoreError;
 pub use id::{OperationId, SessionId, WriterId};
-pub use journal::{AppendRequest, CommitOutcome, CommitReceipt, SessionJournal};
+pub use journal::{
+    AppendRequest, CommitOutcome, CommitReceipt, CommittedRecordPage, ListCommittedRecordsRequest,
+    MAX_COMMITTED_RECORD_PAGE, SessionJournal,
+};
 pub use kind::SessionRecordKind;
 pub use limits::SessionStoreLimits;
 pub use state::SessionStateSnapshot;

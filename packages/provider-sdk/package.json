@@ -7,6 +7,9 @@
     ".": "./src/index.ts",
     "./*": "./src/*"
   },
+  "scripts": {
+    "typecheck:contract": "tsc -b tsconfig.contract.json --pretty false"
+  },
   "dependencies": {
     "@mcp/shared": "workspace:*",
     "zod": "^3.24.2"

@@ -6,7 +6,7 @@ fn encoded(body: wire::frame_payload::Body) -> Vec<u8> {
     wire::FramePayload { body: Some(body) }.encode_to_vec()
 }
 
-fn wire_identity() -> wire::AttemptIdentity {
+pub(super) fn wire_identity() -> wire::AttemptIdentity {
     wire::AttemptIdentity {
         session_id: "11111111-1111-4111-8111-111111111111".into(),
         command_id: "22222222-2222-4222-8222-222222222222".into(),
@@ -67,6 +67,26 @@ fn bind_payload() -> Vec<u8> {
             ..wire::BindAttemptChannel::default()
         },
     ))
+}
+
+fn provider_start_body() -> wire::frame_payload::Body {
+    wire::frame_payload::Body::ProviderStart(wire::ProviderStart {
+        identity: Some(wire_identity()),
+        operation_id: "provider-operation/1".into(),
+        deadline_at_unix_ms: 1_000,
+        idempotency_key: "provider-start/1".into(),
+        ..wire::ProviderStart::default()
+    })
+}
+
+fn provider_text_delta_body() -> wire::frame_payload::Body {
+    wire::frame_payload::Body::ProviderTextDelta(wire::ProviderTextDelta {
+        identity: Some(wire_identity()),
+        operation_id: "provider-operation/1".into(),
+        event_sequence: 1,
+        text: "delta".into(),
+        ..wire::ProviderTextDelta::default()
+    })
 }
 
 #[test]
@@ -284,6 +304,83 @@ fn enforces_channel_allowlists_and_dedicated_envelopes() {
             Err(FrameValidationError::DedicatedFrameRequired(actual)) if actual == channel
         ));
     }
+}
+
+#[test]
+fn provider_frames_require_the_data_channel_and_exact_direction() {
+    use super::direction::validate_payload_direction;
+
+    let start = provider_start_body();
+    validate_payload_direction(
+        FrameDirection::RunnerToHost,
+        wire::TransportChannel::Data,
+        &start,
+    )
+    .expect("provider start is runner to Host data traffic");
+    assert!(
+        validate_payload_direction(
+            FrameDirection::HostToRunner,
+            wire::TransportChannel::Data,
+            &start,
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        validate(
+            frame(wire::TransportChannel::Control, encoded(start)),
+            wire::TransportChannel::Control,
+        ),
+        Err(FrameValidationError::PayloadNotAllowed {
+            channel: wire::TransportChannel::Control,
+            payload: "ProviderStart",
+        })
+    ));
+
+    let delta = provider_text_delta_body();
+    validate_payload_direction(
+        FrameDirection::HostToRunner,
+        wire::TransportChannel::Data,
+        &delta,
+    )
+    .expect("provider delta is Host to runner data traffic");
+    assert!(
+        validate_payload_direction(
+            FrameDirection::RunnerToHost,
+            wire::TransportChannel::Data,
+            &delta,
+        )
+        .is_err()
+    );
+    assert!(matches!(
+        validate(
+            frame(wire::TransportChannel::Control, encoded(delta)),
+            wire::TransportChannel::Control,
+        ),
+        Err(FrameValidationError::PayloadNotAllowed {
+            channel: wire::TransportChannel::Control,
+            payload: "ProviderTextDelta",
+        })
+    ));
+}
+
+#[test]
+fn provider_frames_require_the_exact_attempt_identity() {
+    let mut start = provider_start_body();
+    let wire::frame_payload::Body::ProviderStart(value) = &mut start else {
+        unreachable!("provider start fixture")
+    };
+    value.identity.as_mut().expect("identity").attempt_id =
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa".into();
+
+    assert!(matches!(
+        validate(
+            frame(wire::TransportChannel::Data, encoded(start)),
+            wire::TransportChannel::Data,
+        ),
+        Err(FrameValidationError::PayloadIdentity(
+            PayloadIdentityError::HeaderMismatch("ProviderStart")
+        ))
+    ));
 }
 
 mod async_established;

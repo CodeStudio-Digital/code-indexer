@@ -38,6 +38,8 @@ import {
 import {
   acceptedFact,
   containmentFact,
+  exitedFact,
+  reapedFact,
   rejectedFact,
   spawnedFact,
 } from './host-supervisor-fact-support.js';
@@ -182,6 +184,9 @@ describe('RustHostAttemptCoordinator', () => {
     const blocked = deferred<HostSupervisorFactStep>();
     const facts: RustHostManagementFactPort = {
       processNext: vi.fn(() => blocked.promise),
+      cancel: vi.fn(async () => undefined),
+      fence: vi.fn(async () => undefined),
+      reap: vi.fn(async () => undefined),
       abort: vi.fn(() => blocked.reject(new Error('facts aborted'))),
     };
     const launch: RustHostManagementLaunchPort = {
@@ -320,6 +325,7 @@ function coordinatorFor(
   bootstrap: RustHostManagementBootstrapPort,
   control: AuthenticatedAttemptControlPort,
   events: string[],
+  data: AuthenticatedAttemptDataPort = dataPort(),
 ): RustHostAttemptCoordinator {
   const durableFacts: DurableSupervisorFactPort = {
     commit: vi.fn(async (fact) => {
@@ -331,9 +337,84 @@ function coordinatorFor(
     durableFacts,
     management: launchOptions(),
     control,
-    data: dataPort(),
+    data,
   });
 }
+
+describe('Rust Host active cleanup', () => {
+  it('keeps receiving terminal facts after Active until physical reap is durable', async () => {
+    const events: string[] = [];
+    const management = managementFixture([
+      acceptedFact(), spawnedFact(), containmentFact(), exitedFact(), reapedFact(),
+    ], events);
+    const coordinator = coordinatorFor(
+      management.bootstrap,
+      controlPort(async () => immediateLifecycle()),
+      events,
+    );
+
+    await expect(coordinator.run(runInput())).resolves.toMatchObject({ kind: 'active' });
+    await expect(coordinator.waitForPhysicalReap()).resolves.toBeUndefined();
+    expect(events.slice(-4)).toEqual([
+      'durable:attemptProcessExited',
+      'ack:attemptProcessExited',
+      'durable:attemptProcessReaped',
+      'ack:attemptProcessReaped',
+    ]);
+    coordinator.abort();
+  });
+
+  it('ACKs Control revocation before scheduling physical management cleanup', async () => {
+    const events: string[] = [];
+    const management = managementFixture([
+      acceptedFact(),
+      spawnedFact(),
+      containmentFact(),
+    ], events);
+    const lifecycle = immediateLifecycle();
+    vi.mocked(lifecycle.cancel).mockImplementation(async () => {
+      events.push('control:cancel');
+    });
+    vi.mocked(lifecycle.fence).mockImplementation(async () => {
+      events.push('control:fence');
+    });
+    const data = dataPort();
+    vi.mocked(data.beginTermination!).mockImplementation(() => {
+      events.push('data:terminating');
+    });
+    const coordinator = coordinatorFor(
+      management.bootstrap,
+      controlPort(async () => lifecycle),
+      events,
+      data,
+    );
+    const result = await coordinator.run(runInput());
+    if (result.kind !== 'active') throw new Error('active result expected');
+
+    await coordinator.cancelActive(result.authority, {
+      reason: agentV1Runtime.CancelReason.USER_REQUEST,
+      reasonCode: 'user_request',
+      graceDeadlineAtUnixMs: 1_000n,
+      idempotencyKey: 'cancel:test',
+    });
+    await coordinator.fenceActive(result.authority, {
+      replacementFencingEpoch: 8n,
+      reasonCode: 'replacement_owner',
+      fencedAtUnixMs: 100n,
+      idempotencyKey: 'fence:test',
+    });
+
+    expect(events.slice(-6)).toEqual([
+      'data:terminating',
+      'control:cancel',
+      'management:cancel',
+      'data:terminating',
+      'control:fence',
+      'management:fence',
+    ]);
+    coordinator.abort();
+  });
+});
 
 function managementFixture(
   sequence: SupervisorLifecycleFact[],
@@ -348,7 +429,8 @@ function managementFixture(
   const facts: RustHostManagementFactPort = {
     processNext: vi.fn(async (signal) => {
       const fact = sequence[index++];
-      if (!fact || !durableFacts) throw new Error('unexpected fact receive');
+      if (!fact) return waitForAbort(signal);
+      if (!durableFacts) throw new Error('durable fact port unavailable');
       await durableFacts.commit(fact, {
         connectionId: 'management:test',
         messageId: `fact:${index}`,
@@ -369,6 +451,9 @@ function managementFixture(
         messageId: `fact:${index}`,
       };
     }),
+    cancel: vi.fn(async () => { events.push('management:cancel'); }),
+    fence: vi.fn(async () => { events.push('management:fence'); }),
+    reap: vi.fn(async () => { events.push('management:reap'); }),
     abort: vi.fn(),
   };
   const launch: RustHostManagementLaunchPort = {
@@ -400,6 +485,13 @@ function managementFixture(
   };
 }
 
+function waitForAbort(signal?: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason);
+    signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+  });
+}
+
 function controlPort(
   open: AuthenticatedAttemptControlPort['open'],
 ): AuthenticatedAttemptControlPort {
@@ -409,6 +501,8 @@ function controlPort(
 function dataPort(): AuthenticatedAttemptDataPort {
   return {
     hydrate: vi.fn(async () => undefined),
+    observeFailure: vi.fn(() => () => undefined),
+    beginTermination: vi.fn(),
     abort: vi.fn(),
   };
 }
@@ -433,6 +527,8 @@ function immediateLifecycle(
     inspectActive: vi.fn(() => ({
       signal: new AbortController().signal,
     }) as never),
+    cancel: vi.fn(async () => undefined),
+    fence: vi.fn(async () => undefined),
     abort: vi.fn(),
     tick: vi.fn(),
     observeFailure: vi.fn(() => () => undefined),

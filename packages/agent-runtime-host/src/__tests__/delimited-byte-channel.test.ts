@@ -116,6 +116,35 @@ describe('DelimitedByteChannel', () => {
     }
   });
 
+  it('permits permanent idle but times out partial frame progress', async () => {
+    vi.useFakeTimers();
+    const idleSource = new PassThrough();
+    const idle = new DelimitedByteChannel(idleSource, new PassThrough(), {
+      maximumFrameBytes: 64,
+      readTimeoutMs: 5,
+    });
+    try {
+      const receive = idle.receiveAfterIdle();
+      await vi.advanceTimersByTimeAsync(50);
+      idleSource.write(Uint8Array.of(1, 7));
+      await expect(receive).resolves.toEqual(Uint8Array.of(7));
+
+      const partialSource = new PassThrough();
+      const partial = new DelimitedByteChannel(partialSource, new PassThrough(), {
+        maximumFrameBytes: 64,
+        readTimeoutMs: 5,
+      });
+      const timed = expect(partial.receiveAfterIdle()).rejects.toMatchObject({
+        code: 'read_timeout',
+      });
+      partialSource.write(Uint8Array.of(2, 9));
+      await vi.advanceTimersByTimeAsync(5);
+      await timed;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('rejects oversized length before waiting for its body', async () => {
     const channel = receiver([Uint8Array.from([0x81, 0x08])], 1_024);
 

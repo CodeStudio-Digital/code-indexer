@@ -29,7 +29,7 @@ interface CrateRule {
 const CRATE_RULES: Readonly<Record<string, CrateRule>> = {
   'crates/agent-engine': {
     name: 'agent-engine',
-    allowedInternalDependencies: [],
+    allowedInternalDependencies: ['agent-tools'],
   },
   'crates/agent-host-bridge': {
     name: 'agent-host-bridge',
@@ -37,7 +37,9 @@ const CRATE_RULES: Readonly<Record<string, CrateRule>> = {
   },
   'crates/agent-host-bridge-napi': {
     name: 'agent-host-bridge-napi',
-    allowedInternalDependencies: ['agent-host-bridge'],
+    // Product ABI facade: transport and filesystem owners remain separate
+    // cores; only their thin N-API exports share the verified addon artifact.
+    allowedInternalDependencies: ['agent-host-bridge', 'agent-session-bridge'],
   },
   'crates/agent-platform': {
     name: 'agent-platform',

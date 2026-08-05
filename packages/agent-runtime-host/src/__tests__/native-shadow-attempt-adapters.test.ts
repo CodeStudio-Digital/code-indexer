@@ -89,6 +89,7 @@ describe('NativeShadowAttemptAdapters', () => {
       nativeHostBridgeAbi: vi.fn(),
       openHostAttemptBridge: vi.fn(async () => peer.channels),
       openHostSupervisorBridge: vi.fn(),
+      openNativeSessionStoreBridge: vi.fn(),
     };
     const durable = durableSnapshot(now, hardDeadline, provenance);
     const adapters = createNativeShadowAttemptAdapters({

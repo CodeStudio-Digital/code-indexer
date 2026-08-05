@@ -1,6 +1,4 @@
-#[cfg(test)]
 use std::error::Error;
-#[cfg(test)]
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
@@ -18,7 +16,6 @@ pub use gate::{EffectClock, EffectGate};
 #[cfg(test)]
 const ACTIVE_AUTHORITY_SCHEMA_ID: &str = "codestudio.agent.v1.ActiveAuthority";
 
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorityError {
     NotActive,
@@ -29,7 +26,6 @@ pub enum AuthorityError {
     GatePoisoned,
 }
 
-#[cfg(test)]
 impl Display for AuthorityError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -51,7 +47,6 @@ impl Display for AuthorityError {
     }
 }
 
-#[cfg(test)]
 impl Error for AuthorityError {}
 
 /// Durable authority retained after a validated Activate.

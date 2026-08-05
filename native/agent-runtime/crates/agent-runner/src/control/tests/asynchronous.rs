@@ -1,4 +1,7 @@
+use agent_engine::ports::{AuthorityCheckpoint, AuthorityPort};
+
 use crate::control::{ActivationOutcome, AuthorityError, ControlDriverEvent, PrepareOutcome};
+use crate::engine_authority::EngineAuthority;
 use crate::lifecycle::RunnerState;
 
 use super::support::{ManualClock, activate_frame_with_deadline, effective_facts, prepare_frame};
@@ -31,12 +34,42 @@ async fn happy_path_is_send_and_reaches_active_only_after_physical_commits() {
     assert_send(&finish);
     finish.await.expect("AttemptPrepared");
     assert_eq!(driver.state(), RunnerState::Prepared);
+    assert!(driver.take_execution_seed().is_none());
+    assert!(driver.active_effect_gate().is_none());
     clock.set(1_200);
     assert!(matches!(
         Box::pin(driver.receive_next()).await.expect("Activate"),
         ControlDriverEvent::Activate(ActivationOutcome::Activated)
     ));
     assert_eq!(driver.state(), RunnerState::Active);
+    let seed = driver
+        .take_execution_seed()
+        .expect("validated execution seed after activation");
+    assert_eq!(
+        seed.as_wire()
+            .provider_binding
+            .as_ref()
+            .expect("provider binding")
+            .effective_model,
+        "gpt-5"
+    );
+    assert!(driver.take_execution_seed().is_none());
+    let mut authority = EngineAuthority::new(
+        driver
+            .active_effect_gate()
+            .expect("active shared effect gate"),
+    );
+    authority
+        .verify(AuthorityCheckpoint::ProviderStart)
+        .await
+        .expect("live engine authority");
+    driver.close();
+    assert!(matches!(
+        authority
+            .verify(AuthorityCheckpoint::TerminalDecision)
+            .await,
+        Err(AuthorityError::Revoked)
+    ));
 }
 
 #[tokio::test]

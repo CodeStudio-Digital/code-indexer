@@ -21,7 +21,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
         &mut self,
         idle_wake_deadline: Instant,
         hard_deadline: Instant,
-    ) -> impl Future<Output = Result<Option<ControlDriverEvent>, AsyncControlDriverError>> + '_ {
+    ) -> impl Future<Output = Result<Option<ControlDriverEvent>, AsyncControlDriverError>> + '_
+    {
         let operation = if self.pending_prepare.is_some() {
             Err(AsyncControlDriverError::PrepareInFlight)
         } else {
@@ -82,11 +83,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
             }
             ActiveFrameReceiveOutcome::Frame(FrameReceiveOutcome::Pending(pending)) => {
                 match observed_at_unix_ms {
-                Some(observed) => self
-                    .handle_pending(channel, *pending, observed)
-                    .await
-                    .map(Some),
-                None => self.close_with(AsyncControlDriverError::ReceiveTimestampMissing),
+                    Some(observed) => self
+                        .handle_pending(channel, *pending, observed)
+                        .await
+                        .map(Some),
+                    None => self.close_with(AsyncControlDriverError::ReceiveTimestampMissing),
                 }
             }
         }

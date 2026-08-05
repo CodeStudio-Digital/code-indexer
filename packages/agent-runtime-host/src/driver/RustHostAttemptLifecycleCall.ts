@@ -23,3 +23,22 @@ export function callOwnedAttemptLifecycle<T>(
     throw cause;
   }
 }
+
+export async function callOwnedAttemptLifecycleAsync<T>(
+  lifecycle: AuthenticatedAttemptLifecyclePort,
+  operation: (value: AuthenticatedAttemptLifecyclePort) => Promise<T>,
+  fail: (cause: unknown) => void,
+): Promise<T> {
+  try {
+    const result = await operation(lifecycle);
+    if (lifecycle.isFailed) {
+      throw rustHostManagementSequenceFailure(
+        'active lifecycle authority failed',
+      );
+    }
+    return result;
+  } catch (cause) {
+    fail(cause);
+    throw cause;
+  }
+}

@@ -4,7 +4,7 @@ import type {
 } from './AttemptCorrelationValidation.js';
 import { OutboundFrameError } from './OutboundFrameError.js';
 
-export type OutboundDisposition = 'bootstrap' | 'new' | 'response';
+export type OutboundDisposition = 'bootstrap' | 'new' | 'event' | 'response';
 
 export interface OutboundSnapshot {
   readonly streamSeq: bigint;

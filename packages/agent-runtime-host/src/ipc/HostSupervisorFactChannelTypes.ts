@@ -3,6 +3,9 @@ import type {
   SupervisorLifecycleFact,
   SupervisorLifecycleFactCase,
 } from '../driver/HostSupervisorFactTypes.js';
+import type {
+  HostSupervisorCommandCase,
+} from './HostSupervisorCommandTypes.js';
 
 export interface PendingSupervisorFact {
   readonly fact: SupervisorLifecycleFact;
@@ -17,5 +20,10 @@ export type SupervisorFactReceiveOutcome =
   | {
     readonly kind: 'replayed';
     readonly factCase: SupervisorLifecycleFactCase;
+    readonly messageId: string;
+  }
+  | {
+    readonly kind: 'command_acknowledged';
+    readonly commandCase: HostSupervisorCommandCase;
     readonly messageId: string;
   };

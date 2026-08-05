@@ -1,5 +1,19 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::future::Future;
+
+mod decision;
+mod execution;
+mod invocation;
+
+pub use decision::{
+    CapabilityApproval, CapabilityDecision, CapabilityRejection, NativeFilesystemReadBinding,
+    SealedExecutionGrant,
+};
+pub use execution::{
+    CapabilityExecutionOutcome, CapabilityExecutorPort, CapabilityFailure, CapabilityOutput,
+};
+pub use invocation::{CapabilityInvocation, ExecutionClass, InvocationValidationError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionBoundary {
@@ -44,4 +58,13 @@ impl CapabilityDescriptor {
         }
         Ok(())
     }
+}
+
+pub trait CapabilityGatewayPort: Send {
+    type Error: Send;
+
+    fn prepare(
+        &mut self,
+        invocation: CapabilityInvocation,
+    ) -> impl Future<Output = Result<CapabilityDecision, Self::Error>> + Send;
 }

@@ -18,6 +18,14 @@ impl ManagementEnvelopeReceipt {
     pub(in crate::management) const fn payload_digest(&self) -> &[u8; 32] {
         &self.payload_digest
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(message_id: &str, payload_digest: [u8; 32]) -> Self {
+        Self {
+            message_id: message_id.into(),
+            payload_digest,
+        }
+    }
 }
 
 impl From<&SentManagementFrame> for ManagementEnvelopeReceipt {

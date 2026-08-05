@@ -65,14 +65,28 @@ pub(super) const fn validate_payload_direction(
         ) | (
             FrameDirection::RunnerToHost,
             wire::TransportChannel::Data,
-            Body::AttemptChannelBound(_) | Body::HydrationProgress(_) | Body::HydrationCommitted(_),
+            Body::AttemptChannelBound(_)
+                | Body::HydrationProgress(_)
+                | Body::HydrationCommitted(_)
+                | Body::ProviderStart(_)
+                | Body::ProviderCancel(_)
+                | Body::EngineEventProposal(_)
+                | Body::CapabilityPrepare(_),
         ) | (
             FrameDirection::HostToRunner,
             wire::TransportChannel::Data,
             Body::BindAttemptChannel(_)
                 | Body::HydrationManifest(_)
                 | Body::HydrationChunk(_)
-                | Body::HydrationComplete(_),
+                | Body::HydrationComplete(_)
+                | Body::ProviderAccepted(_)
+                | Body::ProviderTextDelta(_)
+                | Body::ProviderThinkingDelta(_)
+                | Body::ProviderToolCall(_)
+                | Body::ProviderUsage(_)
+                | Body::ProviderTerminal(_)
+                | Body::EngineEventCommitted(_)
+                | Body::CapabilityUpdate(_),
         )
     );
     if allowed {

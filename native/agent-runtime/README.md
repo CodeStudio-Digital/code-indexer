@@ -16,10 +16,13 @@ agent-runner ───────> agent-engine
         ├───────────> agent-spool
         └───────────> agent-tools
 
+agent-engine ───────> agent-tools
+
 agent-host-bridge ──> agent-platform
         └───────────> agent-protocol
 
 agent-host-bridge-napi ──> agent-host-bridge
+        └───────────────> agent-session-bridge
 
 agent-session-bridge ──> agent-protocol
         └──────────────> agent-session-store
@@ -27,17 +30,38 @@ agent-session-bridge ──> agent-protocol
 agent-session-store  (crate folha; não depende do runner/supervisor)
 ```
 
-- `agent-engine`: estado lógico e algoritmo do agente; sem transporte ou SO.
+- `agent-engine`: estado lógico e primeiro loop provider determinístico; sem
+  transporte, provider concreto, storage ou SO. O runner compõe seus ports após
+  `Active`, inicia o Provider Gateway TS pelo Data process-real e consome
+  Accepted→texto→usage→terminal. Seu `EventSinkPort` envia records V1 como
+  `EngineEventProposal`; o Host só responde `EngineEventCommitted` depois do
+  receipt do writer filesystem Rust. O E2E físico com `native.read_file`
+  confirma nove commits até o terminal autoritativo do segundo provider turn.
+  O capability path revalida authority, atravessa
+  `CapabilityPrepare/CapabilityUpdate` e executa `native.read_file` somente com
+  grant/binding selados. `started/terminal` passam pelo mesmo journal antes e
+  depois do efeito; o resultado bounded mantém pairing e abre outro provider
+  turn. O contexto compartilhado por `Arc<[u8]>` evita um clone persistente.
+  O resolver/policy Host confere o catálogo hidratado e sela raiz canônica,
+  environment, lease/fence, quotas e expiry sem confiar no input do modelo.
+  Erro live do executor depois de `started` produz um terminal
+  `outcome_unknown`, retorna como resultado de erro e nunca é repetido pelo
+  engine. O session store/bridge agora fornece cursor de recovery path-free,
+  autenticado e bounded; o Host detecta `started` órfão somente após conferir
+  receipt, payload canônico e cadeia completa. Persistência da decisão de
+  recovery/probe, outras tools, resume por checkpoint e fallback permanecem
+  fail-closed.
 - `agent-protocol`: contratos de identidade, compatibilidade e handshake.
 - `agent-platform`: budgets e portas de containment; bindings de SO ficam aqui.
 - `agent-tools`: descritores e fronteiras das capabilities.
 - `agent-spool`: referências e accounting de blobs fora do heap.
 - `agent-host-bridge`: owner Host in-process que liga fatos duráveis e abre
   Control/Data somente após peer check no mesmo HANDLE/FD.
-- `agent-host-bridge-napi`: wrapper Node-API 8 fino que mantém Control/Data no
-  Rust, fornece I/O bounded/cancelável e `close()` explícito.
+- `agent-host-bridge-napi`: fachada Node-API 8 fina que mantém Control/Data no
+  Rust e também expõe o core independente do session bridge pelo mesmo addon
+  verificado; fornece I/O bounded/cancelável e `close()` explícito.
 - `agent-session-bridge`: owner in-process opaco, framing e adapter Protobuf
-  path-free para o store.
+  path-free para o store; não depende de engine nem do transporte da attempt.
 - `agent-session-store`: writer filesystem bounded e single-owner por sessão.
 - `agent-runner`: processo single-tenant que compõe engine e adapters.
 - `agentd-supervisor`: admission e ownership físico de processos/resource groups.
@@ -85,8 +109,9 @@ peer PID verificado, responde `SupervisorProcessReady` e compõe o loop
 `SupervisorAsyncService` permanente. Invocação direta, handoff inválido e
 targets ainda sem backend retornam fail-closed com exit code `78`. O launcher
 Node-API do Host já cria e autentica esse processo, retém Job + management
-stream e comprova Hello/Shutdown/reap process-real. Recovery/rehydration e o E2E
-TS↔supervisor↔runner até Active continuam bloqueando produção.
+stream e comprova Hello/Shutdown/reap process-real. O E2E TS↔supervisor↔runner
+já chega a Active e ao reap durável; recovery/rehydration após restart e a
+execução funcional do engine continuam bloqueando produção.
 
 O coordenador atual valida lifecycle, ownership e containment sobre portas
 tipadas/injetadas. Os adapters one-shot de Named Pipe/Unix socket já possuem
@@ -179,6 +204,19 @@ AttemptContainmentReport`, aguardando write/ACK de cada fato. Write já
 enfileirado e sua `PreparedLaunchEmission` permanecem no owner do serviço:
 cancelar `advance()` não perde payload, receipt, tracking, cleanup owner nem
 reservation.
+
+O reap bem-sucedido captura sua prova antes de remover ownership e a move para
+uma outbox FIFO bounded por `max_active_attempts`. Capacidade cheia retém o Job
+para retry em vez de perder o fato. O writer async prioriza essa outbox, envia
+`AttemptProcessExited` e somente seu ACK exato materializa o sucessor
+`AttemptProcessReaped`; o ACK final encerra a cadeia. O Host mantém um pump
+management owned após `Active`, persiste cada fato no writer de sessão e ACKa
+na ordem. Depois do ACK Control, Cancel/Fence também atravessam esse mesmo canal
+management, aguardam o ACK exato do schedule Rust e compartilham a sequência
+outbound com os ACKs de fatos. O E2E Windows comprova as causas físicas
+`CANCELLED`/`FENCED`, os cinco fatos de launch a reap e preserva o supervisor.
+A outbox ainda é volátil sob restart do supervisor,
+portanto recovery durável continua gate aberto.
 
 Replay físico devolve os mesmos bytes sem repetir efeitos. Retry semântico com
 a mesma chave e digest devolve um novo `LaunchAccepted` correlacionado, marcado
@@ -279,11 +317,25 @@ falha de autenticação removem apenas o monitor alvo e agendam termination/reap
 imediato; pulse fresco nunca renova o hard deadline. Drop do monitor encerra o
 ator receiver.
 
-Permanecem pendentes heartbeat semântico no control, rollup de recursos dos
-descendentes/Job e bytes reais de spool,
-`UpdateAttemptAuthority`, `QuerySupervisorState`, outbox e fatos duráveis
-`AttemptProcessExited`/`AttemptProcessReaped`, Cancel/Fence process-real
-pós-Active, terminal durável, matriz Windows packaged/nested/breakaway, backend
+Depois de `Active`, o runner também mantém o heartbeat semântico no mesmo
+Control stream. Uma leitura ociosa acorda no intervalo negociado sem consumir
+bytes nem perder o owner; o sender gera frame novo sequenciado sem `reply_to`,
+com liveness/progress/fase e o mesmo sample real do processo. O Host TS mantém
+um pump permanente, valida relógios/ratchets/recursos, commita o frame, retém
+somente o último snapshot e expira silêncio sem alterar o hard deadline.
+
+O mesmo Control permanece full-duplex para `CancelAttempt`/`FenceAttempt`:
+receive e send têm lanes independentes, mas continuam limitados a um reader e
+um writer. O Host registra a intenção antes do write, aguarda seu commit antes
+de validar resposta precoce e só revoga Active após ACK autenticado. O E2E
+Windows já prova Cancel/Fence, ACK e saída do runner mantendo o supervisor vivo;
+a sequência management `Exited → Reaped` também é persistida e ACKada no
+processo real antes do fechamento do supervisor.
+
+Permanecem pendentes rollup de recursos dos descendentes/Job e bytes reais de
+spool, `UpdateAttemptAuthority`, `QuerySupervisorState`, recovery durável da
+outbox, coordenação terminal para expor Reap na facade Host, terminal durável, matriz
+Windows packaged/nested/breakaway, backend
 de spawn Unix e unlink Unix descriptor-relative. Até esses gates, os binários
 completam bootstrap, autenticação, hidratação, ativação e liveness físico, mas
 recusam trabalho produtivo de agente.

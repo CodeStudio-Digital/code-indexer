@@ -1,4 +1,3 @@
-use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,6 +8,7 @@ use tokio::time::Instant;
 
 use crate::lifecycle::RunnerState;
 
+use super::RunnerExecutionSeed;
 use super::authority::EffectClock;
 use super::driver::ControlDriverEvent;
 use super::session::RunnerControlSession;
@@ -16,10 +16,12 @@ use super::{EffectivePreparedFacts, HydrationToken};
 
 mod activation;
 mod active;
+mod debug;
 mod error;
 mod heartbeat;
 mod inbound;
 mod operation;
+mod provider_context;
 mod termination;
 mod transaction;
 
@@ -42,17 +44,6 @@ pub struct AsyncRunnerControlDriver<S> {
     pending_prepare: Option<AsyncHeldPrepare>,
 }
 
-impl<S> Debug for AsyncRunnerControlDriver<S> {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("AsyncRunnerControlDriver")
-            .field("channel_open", &self.channel.is_some())
-            .field("session", &self.session)
-            .field("pending_prepare", &self.pending_prepare)
-            .finish_non_exhaustive()
-    }
-}
-
 impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
     #[must_use]
     pub const fn state(&self) -> RunnerState {
@@ -66,6 +57,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin + 'static> AsyncRunnerControlDriver<S> {
 
     pub(crate) fn owner_now_unix_ms(&self) -> i64 {
         self.clock.now_unix_ms()
+    }
+
+    pub(crate) fn take_execution_seed(&mut self) -> Option<RunnerExecutionSeed> {
+        self.session.take_execution_seed()
+    }
+
+    pub(crate) fn active_effect_gate(&self) -> Option<super::authority::EffectGate> {
+        self.session.active_effect_gate()
     }
 
     #[cfg(test)]

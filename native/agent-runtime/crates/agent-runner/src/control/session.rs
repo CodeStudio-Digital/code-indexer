@@ -4,6 +4,7 @@ use crate::lifecycle::{RunnerLifecycle, RunnerState};
 
 use super::authority::{ActiveAuthority, EffectGate};
 use super::error::ControlError;
+use super::execution_seed::RunnerExecutionSeed;
 use super::hello::{AgentHelloContext, ConnectionContext};
 use super::launch::RunnerLaunchContext;
 use super::model::{AcceptedTermination, ActivationCache, PreparationState};
@@ -27,6 +28,7 @@ pub struct RunnerControlSession {
     pub(super) termination: Option<AcceptedTermination>,
     pub(super) authority: Option<ActiveAuthority>,
     pub(super) effect_gate: Option<EffectGate>,
+    pub(super) execution_seed: Option<RunnerExecutionSeed>,
     pub(super) next_hydration_seal: u64,
 }
 
@@ -52,6 +54,7 @@ impl RunnerControlSession {
             termination: None,
             authority: None,
             effect_gate: None,
+            execution_seed: None,
             next_hydration_seal: 1,
         })
     }
@@ -86,6 +89,19 @@ impl RunnerControlSession {
         deadline
     }
 
+    pub(in crate::control) fn take_execution_seed(&mut self) -> Option<RunnerExecutionSeed> {
+        if self.lifecycle.state() != RunnerState::Active || self.authority.is_none() {
+            return None;
+        }
+        self.execution_seed.take()
+    }
+
+    pub(in crate::control) fn active_effect_gate(&self) -> Option<EffectGate> {
+        (self.lifecycle.state() == RunnerState::Active)
+            .then(|| self.effect_gate.clone())
+            .flatten()
+    }
+
     pub(in crate::control) fn connection_lost(&mut self) {
         self.revoke_effects();
         self.handshake = HandshakeMachine::default();
@@ -96,6 +112,7 @@ impl RunnerControlSession {
         self.termination = None;
         self.authority = None;
         self.effect_gate = None;
+        self.execution_seed = None;
         let _ignored = self.lifecycle.force_exit();
     }
 }

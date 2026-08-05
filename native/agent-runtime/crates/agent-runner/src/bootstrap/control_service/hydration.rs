@@ -4,6 +4,7 @@ use std::fmt::{self, Debug, Display, Formatter};
 use agent_protocol::generated::v1 as wire;
 
 use crate::control::EffectivePreparedFacts;
+use crate::provider_context::ProviderContextMaterial;
 
 pub(super) mod transport;
 mod verification;
@@ -77,6 +78,22 @@ impl VerifiedRunnerHydration {
             containment,
             ready_at_unix_ms,
         )
+    }
+}
+
+impl ProviderContextMaterial for VerifiedRunnerHydration {
+    fn snapshot_payload(&self, reference: &wire::SnapshotRef) -> Option<&[u8]> {
+        self.snapshots
+            .iter()
+            .find(|snapshot| &snapshot.reference == reference)
+            .map(|snapshot| snapshot.encoded_payload.as_slice())
+    }
+
+    fn artifact_payload(&self, reference: &wire::ArtifactRef) -> Option<&[u8]> {
+        self.artifacts
+            .iter()
+            .find(|artifact| &artifact.reference == reference)
+            .map(|artifact| artifact.encoded_payload.as_slice())
     }
 }
 

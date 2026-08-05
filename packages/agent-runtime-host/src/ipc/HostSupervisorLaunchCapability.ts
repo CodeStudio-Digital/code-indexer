@@ -145,6 +145,7 @@ implements HostSupervisorLaunchCapability {
       handoff,
       nowUnixMs: established.nowUnixMs,
       durableCommitTimeoutMs: options.durableCommitTimeoutMs,
+      commandResponseTimeoutMs: options.responseTimeoutMs,
       integrationMode: options.integrationMode,
     };
     bindHostSupervisorFactDriver(driverOptions, {

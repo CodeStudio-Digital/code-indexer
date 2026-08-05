@@ -8,10 +8,11 @@
   },
   "scripts": {
     "test": "vitest run src/__tests__",
-    "typecheck": "tsc -b ../agent-runtime-contracts tsconfig.json --pretty false"
+    "typecheck": "tsc -b ../agent-runtime-contracts ../provider-sdk/tsconfig.contract.json tsconfig.json --pretty false"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.13.0",
-    "@mcp/agent-runtime-contracts": "workspace:*"
+    "@mcp/agent-runtime-contracts": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*"
   }
 }

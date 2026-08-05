@@ -12,9 +12,10 @@ doctest = false
 
 [dependencies]
 agent-host-bridge = { path = "../agent-host-bridge" }
+agent-session-bridge = { path = "../agent-session-bridge" }
 napi = { workspace = true }
 napi-derive = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "sync"] }
+tokio = { workspace = true, features = ["io-util", "rt", "sync"] }
 zeroize = { workspace = true }
 
 [build-dependencies]

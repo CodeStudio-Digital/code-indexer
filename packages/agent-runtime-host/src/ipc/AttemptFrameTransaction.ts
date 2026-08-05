@@ -22,6 +22,12 @@ interface PendingState {
   deadlineAtUnixMs?: bigint;
   sentAtUnixMs: bigint;
   terminalPayloadSha256?: Uint8Array;
+  providerOperationId?: string;
+  capabilityOperationId?: string;
+  capabilityToolUseId?: string;
+  engineEventPayloadSha256?: Uint8Array;
+  engineEventLocalSequence?: bigint;
+  engineEventRuntimeInstanceId?: string;
   envelopeDigest: Uint8Array;
   header: agentV1Runtime.FrameHeader;
   identity: agentV1Common.AttemptIdentity;
@@ -112,6 +118,12 @@ export function inspectPending(pending: PendingInbound): PendingSnapshot {
     deadlineAtUnixMs: state.deadlineAtUnixMs,
     sentAtUnixMs: state.sentAtUnixMs,
     terminalPayloadSha256: state.terminalPayloadSha256?.slice(),
+    providerOperationId: state.providerOperationId,
+    capabilityOperationId: state.capabilityOperationId,
+    capabilityToolUseId: state.capabilityToolUseId,
+    engineEventPayloadSha256: state.engineEventPayloadSha256?.slice(),
+    engineEventLocalSequence: state.engineEventLocalSequence,
+    engineEventRuntimeInstanceId: state.engineEventRuntimeInstanceId,
     envelopeDigest: state.envelopeDigest.slice(),
     payloadDigest: state.payloadDigest.slice(),
   };

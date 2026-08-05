@@ -50,6 +50,7 @@ function fieldTags(messageBody: string): Map<string, number> {
 describe('Rust agent V1 Protobuf contract', () => {
   const common = readProto('common.proto');
   const artifact = readProto('artifact.proto');
+  const capability = readProto('capability.proto');
   const runtime = readProto('runtime.proto');
   const runnerBootstrap = readProto('runner_bootstrap.proto');
   const sessionStore = readProto('session_store.proto');
@@ -57,6 +58,7 @@ describe('Rust agent V1 Protobuf contract', () => {
   const sources = [
     common,
     artifact,
+    capability,
     runtime,
     runnerBootstrap,
     sessionStore,
@@ -72,8 +74,14 @@ describe('Rust agent V1 Protobuf contract', () => {
     const runtimeImports = [...runtime.matchAll(/import "([^"]+)";/g)].map((match) => match[1]);
     expect(runtimeImports).toEqual([
       'codestudio/agent/v1/artifact.proto',
+      'codestudio/agent/v1/capability.proto',
       'codestudio/agent/v1/common.proto',
+      'codestudio/agent/v1/session_store.proto',
     ]);
+    const capabilityImports = [
+      ...capability.matchAll(/import "([^"]+)";/g),
+    ].map((match) => match[1]);
+    expect(capabilityImports).toEqual(['codestudio/agent/v1/common.proto']);
     const supervisorImports = [...supervisor.matchAll(/import "([^"]+)";/g)].map(
       (match) => match[1],
     );
@@ -85,10 +93,16 @@ describe('Rust agent V1 Protobuf contract', () => {
       'codestudio/agent/v1/common.proto',
       'codestudio/agent/v1/supervisor.proto',
     ]);
+    const sessionStoreImports = [
+      ...sessionStore.matchAll(/import "([^"]+)";/g),
+    ].map((match) => match[1]);
+    expect(sessionStoreImports).toEqual(['codestudio/agent/v1/common.proto']);
 
     for (const imported of [
       ...runtimeImports,
+      ...capabilityImports,
       ...runnerBootstrapImports,
+      ...sessionStoreImports,
       ...supervisorImports,
     ]) {
       expect(() => readFileSync(resolve(protoRoot, imported), 'utf8')).not.toThrow();
@@ -329,6 +343,20 @@ describe('Rust agent V1 Protobuf contract', () => {
       'HydrationChunk',
       'HydrationComplete',
       'HydrationCommitted',
+      'ProviderTurnContext',
+      'AgentDefinitionSnapshotV1',
+      'CapabilitySetSnapshotV1',
+      'ProviderPresetSnapshotV1',
+      'ProviderStart',
+      'ProviderAccepted',
+      'ProviderCancel',
+      'ProviderTextDelta',
+      'ProviderThinkingDelta',
+      'ProviderToolCall',
+      'ProviderUsageEvent',
+      'ProviderTerminal',
+      'EngineEventProposal',
+      'EngineEventCommitted',
       'ResolvedAttemptSpec',
       'PrepareAttempt',
       'AttemptPrepared',
@@ -357,6 +385,16 @@ describe('Rust agent V1 Protobuf contract', () => {
       'HydrationChunk',
       'HydrationComplete',
       'HydrationCommitted',
+      'ProviderStart',
+      'ProviderAccepted',
+      'ProviderCancel',
+      'ProviderTextDelta',
+      'ProviderThinkingDelta',
+      'ProviderToolCall',
+      'ProviderUsageEvent',
+      'ProviderTerminal',
+      'EngineEventProposal',
+      'EngineEventCommitted',
       'Heartbeat',
       'CancelAttempt',
       'FenceAttempt',
@@ -391,6 +429,31 @@ describe('Rust agent V1 Protobuf contract', () => {
       hydration_chunk: 25,
       hydration_complete: 26,
       hydration_committed: 27,
+      provider_start: 28,
+      provider_accepted: 29,
+      provider_cancel: 30,
+      provider_text_delta: 31,
+      provider_thinking_delta: 32,
+      provider_tool_call: 33,
+      provider_usage: 34,
+      provider_terminal: 35,
+      engine_event_proposal: 36,
+      engine_event_committed: 37,
+      capability_prepare: 38,
+      capability_update: 39,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('EngineEventProposal')!))).toEqual({
+      identity: 1,
+      runtime_instance_id: 2,
+      record: 3,
+      expected_payload_sha256: 4,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('EngineEventCommitted')!))).toEqual({
+      identity: 1,
+      runtime_instance_id: 2,
+      local_sequence: 3,
+      event_payload_sha256: 4,
+      commit_receipt: 5,
     });
     expect(Object.fromEntries(fieldTags(messages.get('BindAttemptChannel')!))).toEqual({
       identity: 1,
@@ -453,6 +516,47 @@ describe('Rust agent V1 Protobuf contract', () => {
       item_count: 5,
       total_payload_bytes: 6,
     });
+    expect(Object.fromEntries(fieldTags(messages.get('ProviderTurnContext')!))).toEqual({
+      system: 1,
+      messages: 2,
+      tools: 3,
+      thinking: 4,
+      reasoning_effort: 5,
+      thinking_budget_tokens: 6,
+      previous_response_id: 7,
+      previous_response_message_count: 8,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('ProviderToolDescriptor')!))).toEqual({
+      capability_name: 1,
+      description: 2,
+      encoded_json_schema: 3,
+      schema_sha256: 4,
+      capability_id: 5,
+      capability_version: 6,
+      execution_class: 7,
+      mutates: 8,
+    });
+    expect(Object.fromEntries(
+      fieldTags(messages.get('AgentDefinitionSnapshotV1')!),
+    )).toEqual({
+      schema_version: 1,
+      agent_definition_id: 2,
+      system_prompt_utf8: 3,
+    });
+    expect(Object.fromEntries(
+      fieldTags(messages.get('CapabilitySetSnapshotV1')!),
+    )).toEqual({
+      schema_version: 1,
+      tools: 2,
+    });
+    expect(Object.fromEntries(
+      fieldTags(messages.get('ProviderPresetSnapshotV1')!),
+    )).toEqual({
+      schema_version: 1,
+      effective_preset: 2,
+      thinking: 3,
+      thinking_budget_tokens: 4,
+    });
 
     expect(Object.fromEntries(fieldTags(messages.get('PrepareAttempt')!))).toEqual({
       identity: 1,
@@ -480,8 +584,99 @@ describe('Rust agent V1 Protobuf contract', () => {
     });
   });
 
+  it('defines a pre-dispatch capability decision without granting implicit effects', () => {
+    const messages = namedBlocks(capability, 'message');
+    const executionClasses = namedBlocks(capability, 'enum')
+      .get('CapabilityExecutionClass');
+    expect(executionClasses).toMatch(/CAPABILITY_EXECUTION_CLASS_NATIVE_READ\s*=\s*1\s*;/);
+    expect(executionClasses).toMatch(/CAPABILITY_EXECUTION_CLASS_HOST_CAPABILITY\s*=\s*4\s*;/);
+    expect(Object.fromEntries(fieldTags(messages.get('CapabilityPrepare')!))).toEqual({
+      identity: 1,
+      runtime_instance_id: 2,
+      operation_id: 3,
+      provider_operation_id: 4,
+      tool_use_id: 5,
+      capability_id: 6,
+      capability_version: 7,
+      execution_class: 8,
+      mutates: 9,
+      encoded_json_input: 10,
+      input_sha256: 11,
+      capability_set_sha256: 12,
+      idempotency_key: 13,
+      deadline_at_unix_ms: 14,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('CapabilityUpdate')!))).toEqual({
+      identity: 1,
+      runtime_instance_id: 2,
+      operation_id: 3,
+      tool_use_id: 4,
+      rejected: 10,
+      approval_required: 11,
+      accepted: 12,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('SealedExecutionGrant')!))).toEqual({
+      grant_id: 1,
+      decision_id: 2,
+      capability_id: 3,
+      capability_version: 4,
+      operation_id: 5,
+      tool_use_id: 6,
+      effective_input_sha256: 7,
+      execution_class: 8,
+      mutates: 9,
+      environment_id: 10,
+      environment_version: 11,
+      workspace_lease_id: 12,
+      workspace_lease_version: 13,
+      workspace_fencing_epoch: 14,
+      resource_binding_id: 15,
+      constraints_sha256: 16,
+      policy_version: 17,
+      nonce: 18,
+      issued_at_unix_ms: 19,
+      expires_at_unix_ms: 20,
+      native_filesystem_read: 21,
+    });
+    expect(Object.fromEntries(
+      fieldTags(messages.get('NativeFilesystemReadBinding')!),
+    )).toEqual({
+      canonical_root_path: 1,
+      max_read_bytes: 2,
+      max_output_bytes: 3,
+      require_utf8: 4,
+    });
+  });
+
   it('defines a path-free fenced session-store bridge contract', () => {
     const messages = namedBlocks(sessionStore, 'message');
+    expect(Object.fromEntries(fieldTags(messages.get('EngineEventRecordV1')!))).toEqual({
+      schema_version: 1,
+      identity: 2,
+      runtime_instance_id: 3,
+      local_sequence: 4,
+      provider_started: 10,
+      provider_delta: 11,
+      provider_usage: 12,
+      provider_completed: 13,
+      capability_boundary: 14,
+      terminal: 15,
+      capability_dispatch_started: 16,
+      capability_terminal: 17,
+    });
+    expect(Object.fromEntries(
+      fieldTags(messages.get('EngineProviderDeltaRecordV1')!),
+    )).toEqual({
+      operation_id: 1,
+      utf8_bytes: 2,
+      content_sha256: 3,
+      thinking: 4,
+    });
+    expect(Object.fromEntries(fieldTags(messages.get('EngineTerminalRecordV1')!))).toEqual({
+      classification: 1,
+      reason_code: 2,
+      usage: 3,
+    });
     expect(Object.fromEntries(fieldTags(messages.get('SessionStoreRequest')!))).toEqual({
       open_session_writer: 10,
       commit_session_record: 11,
@@ -491,6 +686,7 @@ describe('Rust agent V1 Protobuf contract', () => {
       archive_session: 15,
       close_session_writer: 16,
       read_committed_session_payload: 17,
+      list_committed_session_records: 18,
     });
     expect(Object.fromEntries(fieldTags(messages.get('CommitSessionRecordReceipt')!))).toEqual({
       session_id: 1,
@@ -527,6 +723,22 @@ describe('Rust agent V1 Protobuf contract', () => {
     expect(Object.fromEntries(fieldTags(messages.get('CommittedSessionPayload')!))).toEqual({
       commit_receipt: 1,
       encoded_payload: 2,
+    });
+    expect(Object.fromEntries(
+      fieldTags(messages.get('ListCommittedSessionRecords')!),
+    )).toEqual({
+      writer_handle: 1,
+      authority: 2,
+      after_global_sequence: 3,
+      max_records: 4,
+    });
+    expect(Object.fromEntries(
+      fieldTags(messages.get('CommittedSessionRecordPage')!),
+    )).toEqual({
+      session_id: 1,
+      records: 2,
+      next_global_sequence: 3,
+      complete: 4,
     });
 
     const declarations = stripComments(sessionStore);

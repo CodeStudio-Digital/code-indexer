@@ -38,12 +38,19 @@ internas somente em `agent-platform` e `agent-protocol`.
 - Windows é a primeira implementação física. Outros targets permanecem
   fail-closed até possuírem a mesma prova bilateral, incluindo UID no Unix.
 
-O carregamento pelo produto é feito por `agent-host-bridge-napi`, wrapper
-Node-API 8 in-process fino. Ele transporta o request gerado, invoca o core e
-adapta I/O async bounded; não constrói owner, aceita PID como autenticação,
-reabre endpoint ou implementa uma segunda validação divergente. Control/Data
-permanecem no mesmo objeto Rust, compartilham cancelamento nativo e possuem
-`close()` explícito; Drop/GC é somente backstop.
+O carregamento pelo produto é feito por `agent-host-bridge-napi`, fachada ABI
+Node-API 8 in-process fina. Para attempts, ela transporta o request gerado,
+invoca `agent-host-bridge` e adapta I/O async bounded; não constrói owner, aceita
+PID como autenticação, reabre endpoint ou implementa uma segunda validação
+divergente. Control/Data permanecem no mesmo objeto Rust, têm lifecycle de
+stream independente e possuem `close()` explícito no owner; Drop/GC é somente
+backstop.
+
+A mesma biblioteca dinâmica verificada também exporta a abertura do
+`agent-session-bridge`, evitando um segundo addon/ABI no produto. Isso é apenas
+composição na borda: `agent-host-bridge` continua sem dependência de storage e
+`agent-session-bridge` continua sem dependência de transporte da attempt. A
+fachada não transfere owner, root de bundle, endpoint ou handle entre os cores.
 
 ## 3. Alternativas rejeitadas
 
@@ -69,7 +76,9 @@ linear deixaria de ser verificável.
 
 ## 4. Impacto
 
-- Grafo nativo passa a 11 crates e 12 arestas internas.
+- Grafo nativo possui 11 crates e 13 arestas internas: a aresta adicional liga
+  somente a fachada ABI `agent-host-bridge-napi` ao core independente
+  `agent-session-bridge`.
 - `supervisor.proto` recebe `HostAttemptBridgeOpenRequest`.
 - `packages/agent-runtime-host` produz e consome o request por owner single-use.
 - O wrapper Node-API é o terceiro artefato hasheado do pacote Rust, ao lado de

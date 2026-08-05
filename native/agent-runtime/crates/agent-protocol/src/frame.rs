@@ -22,6 +22,8 @@ mod payload_identity;
 mod receiver;
 mod secrets;
 mod sender;
+#[cfg(feature = "testing")]
+mod testing;
 
 use secrets::{ScrubbedFrameBody, ScrubbedFramePayload, ScrubbedWireFrame, scrub_body_secrets};
 
@@ -50,7 +52,10 @@ pub use receiver::{
     InboundBinding, InboundFrameError, MAX_REPLAY_WINDOW_ENTRIES, MAX_TRACKED_MESSAGE_IDS,
     PendingInbound, ReplayedFrame,
 };
+pub use sender::CommittedOutbound;
 pub use sender::{CommittedResponse, OutboundFrameError};
+#[cfg(feature = "testing")]
+pub use testing::established_data_duplex;
 
 pub(super) struct ValidatedAttemptFrame {
     header: wire::FrameHeader,

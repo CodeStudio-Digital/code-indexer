@@ -7,11 +7,11 @@ import {
 import type {
   OutboundRequestFacts,
 } from './AttemptCorrelationValidation.js';
+import { assertOutboundEvent } from './AttemptCorrelationValidation.js';
 import { assertPayloadDirection } from './AttemptFrameDirection.js';
 import { OutboundFrameError } from './OutboundFrameError.js';
 import {
   assertBootstrapHostHello,
-  encodeOutboundFrame,
   narrowedFrameMaximum,
   resolveOutboundDeadline,
   sampleBeforeHardDeadline,
@@ -23,7 +23,6 @@ import {
   consumeOutbound,
   inspectOutbound,
   invalidateOutbound,
-  mintOutboundReservation,
 } from './OutboundReservation.js';
 import type { PendingSnapshot } from './AttemptFrameTransaction.js';
 import type {
@@ -31,8 +30,7 @@ import type {
   OutboundAuthorityState,
   ResponseDeadlinePolicy,
 } from './OutboundAuthorityTypes.js';
-
-const MAX_UINT64 = (1n << 64n) - 1n;
+import { prepareOutboundReservation } from './OutboundAuthorityPreparation.js';
 
 export type { ResponseDeadlinePolicy } from './OutboundAuthorityTypes.js';
 
@@ -94,6 +92,23 @@ export class OutboundHeaderAuthority {
       coordinates.sentAtUnixMs,
       coordinates.deadlineAtUnixMs,
       requestFacts,
+    );
+  }
+
+  prepareEvent(
+    payload: agentV1Runtime.FramePayload,
+    deadline: ResponseDeadlinePolicy,
+  ): PendingOutbound {
+    const state = this.#requireState();
+    assertPayloadDirection(state.direction, state.channel, payload);
+    assertOutboundEvent(payload);
+    const coordinates = this.#deadline(deadline);
+    return this.#prepare(
+      payload,
+      'event',
+      undefined,
+      coordinates.sentAtUnixMs,
+      coordinates.deadlineAtUnixMs,
     );
   }
 
@@ -191,33 +206,15 @@ export class OutboundHeaderAuthority {
         'an outbound reservation is already active',
       );
     }
-    const streamSeq = state.committedStreamSeq + 1n;
-    if (streamSeq > MAX_UINT64) {
-      throw new OutboundFrameError('sequence_exhausted', 'outbound sequence exhausted');
-    }
-    const messageId = `outbound:${state.senderId}:${streamSeq}`;
-    const encodedFrame = encodeOutboundFrame(
+    const pending = prepareOutboundReservation(
       state,
-      {
-        streamSeq,
-        messageId,
-        replyToMessageId,
-        sentAtUnixMs,
-        deadlineAtUnixMs,
-      },
       payload,
-      state.maximumFrameBytes,
-    );
-    const pending = mintOutboundReservation({
-      streamSeq,
-      messageId,
-      payloadCase: payload.body.case,
       disposition,
-      payloadDigest: encodedFrame.payloadDigest,
+      replyToMessageId,
       sentAtUnixMs,
+      deadlineAtUnixMs,
       requestFacts,
-      encoded: encodedFrame.encoded,
-    });
+    );
     this.#pending = pending;
     return pending;
   }

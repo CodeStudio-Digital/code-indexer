@@ -205,8 +205,9 @@ Classes A–C não podem ser descartadas ou reordenadas.
 
 ### DUR-016
 
-Runner emite local sequence; Host valida a decisão/fence e o Rust session store
-deduplica e atribui global sequence no commit.
+Runner emite local sequence e propõe o record canônico pelo Data; Host valida a
+decisão/fence e o Rust session store deduplica e atribui global sequence no
+commit. O runner só avança sua sequência depois de receber o receipt exato.
 
 ### DUR-017
 
@@ -216,6 +217,37 @@ Payload hash e idempotency key detectam replay divergente.
 
 Journal não persiste prompt, transcript, base64 ou tool payload bruto por
 default. Usa refs e metadata mínima.
+
+O payload executável inicial dessa fronteira é `EngineEventRecordV1`, Protobuf
+canônico com `schema_version = 1`, `AttemptIdentity`, runtime instance e
+sequência local. Started, usage, provider-completed, capability boundary e
+terminal carregam apenas metadata bounded. Texto/thinking de delta registra
+somente tamanho UTF-8 e SHA-256; bytes integrais pertencem ao transcript/artifact
+protocol.
+
+O sink runner-side implementa `EventSinkPort` e envia o record em
+`EngineEventProposal`. O Host valida os bytes canônicos e deriva operation UUID
+estável por attempt/sequence, mas o commit e a hash chain pertencem ao writer
+Rust acessado por `agent-session-bridge`. `EngineEventCommitted` só volta pelo
+Data depois do receipt físico. O sink só então avança sequência ou publica
+terminal. Replay com payload diferente na mesma sequência falha fechado.
+
+Na fatia física V1, um turno textual produz cinco records consecutivos —
+provider started, delta, usage, provider completed e terminal — e o último usa
+durability autoritativa. Isso comprova a barreira do primeiro turno, não a
+paridade completa das classes A–D, transcript/artifact nem recovery pós-crash.
+Na fatia 1.34, o E2E físico de `native.read_file` produz nove records: primeiro
+provider started, capability boundary, dispatch started, terminal da tool,
+segundo provider started, dois deltas, provider completed e terminal do run.
+Boundary, started, terminal da tool e terminal do run são autoritativos.
+Na fatia 1.35, erro do executor depois do commit de started é convertido em
+terminal `outcome_unknown` autoritativo, sem retry. Se a falha também impedir o
+commit terminal, o started órfão continua exigindo reconciliação no recovery.
+Na fatia 1.36, store e bridge expõem paginação metadata-only autenticada e o
+Host lê cada lifecycle payload somente pelo receipt exato. O scanner revalida
+sequência, hash, encoding e authority, encontra started sem terminal e falha se
+o teto não alcançar o tail. A decisão reconciliada ainda precisa ser persistida
+por uma nova attempt/interaction antes de cumprir R2 por inteiro.
 
 ## 7. Streaming e projeções
 

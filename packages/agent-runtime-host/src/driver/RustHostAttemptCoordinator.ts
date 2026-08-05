@@ -1,21 +1,12 @@
 import { assertHostSupervisorFactIntegrationMode } from './HostSupervisorFactIntegrationGate.js';
 import { DurableSupervisorLaunchBarrier } from './DurableSupervisorLaunchBarrier.js';
-import {
-  RustHostAttemptCoordinatorError,
-  rustHostAttemptAborted,
-  rustHostManagementSequenceFailure,
-} from './RustHostAttemptCoordinatorError.js';
+import { RustHostAttemptCoordinatorError, rustHostAttemptAborted, rustHostManagementSequenceFailure } from './RustHostAttemptCoordinatorError.js';
 import { RustHostAttemptSignalLinks } from './RustHostAttemptSignalLinks.js';
 import { bestEffortAttemptCleanup } from './RustHostAttemptCleanup.js';
 import { openRustAttemptControl } from './RustHostAttemptControlOpen.js';
-import { callOwnedAttemptLifecycle } from './RustHostAttemptLifecycleCall.js';
-import {
-  scrubRustHostAttemptInput,
-  scrubRustHostLaunchInput,
-  scrubRustHostPrepareInput,
-  snapshotRustHostAttemptInput,
-} from './RustHostAttemptInputSnapshot.js';
-import type { ActiveAttemptAuthoritySnapshot } from './HostLifecycleTypes.js';
+import { RustHostActiveAttemptController } from './RustHostActiveAttemptController.js';
+import { scrubRustHostAttemptInput, scrubRustHostLaunchInput, scrubRustHostPrepareInput, snapshotRustHostAttemptInput } from './RustHostAttemptInputSnapshot.js';
+import type { ActiveAttemptAuthoritySnapshot, HostCancelAttemptRequest, HostFenceAttemptRequest } from './HostLifecycleTypes.js';
 import type { ActiveAttemptAuthorityHandle } from './HostLifecycleReceipts.js';
 import { nextCommittedManagementFact } from './RustHostManagementFactSequence.js';
 import type {
@@ -35,6 +26,7 @@ export class RustHostAttemptCoordinator {
   #launch?: RustHostManagementLaunchPort;
   #facts?: RustHostManagementFactPort;
   #lifecycle?: AuthenticatedAttemptLifecyclePort;
+  #active?: RustHostActiveAttemptController;
   #controlOpening = false;
   #started = false;
   #closed = false;
@@ -44,13 +36,9 @@ export class RustHostAttemptCoordinator {
   readonly #signal = new AbortController();
 
   constructor(options: RustHostAttemptCoordinatorOptions) {
-    assertHostSupervisorFactIntegrationMode(
-      options.management.integrationMode,
-    );
+    assertHostSupervisorFactIntegrationMode(options.management.integrationMode);
     this.#bootstrap = options.bootstrap;
-    this.#durableBarrier = new DurableSupervisorLaunchBarrier(
-      options.durableFacts,
-    );
+    this.#durableBarrier = new DurableSupervisorLaunchBarrier(options.durableFacts);
     this.#managementOptions = Object.freeze({ ...options.management });
     this.#control = options.control;
     this.#data = options.data;
@@ -69,6 +57,7 @@ export class RustHostAttemptCoordinator {
     const request = snapshotRustHostAttemptInput(input);
     this.#started = true;
     this.#signals.bindAbort(signal, (cause) => this.abort(cause));
+    this.#signals.bindData(this.#data, (cause) => this.#fail(cause));
     try {
       this.#assertOpen();
       this.#durableBarrier.bindActivationAuthoritySeal(
@@ -83,10 +72,7 @@ export class RustHostAttemptCoordinator {
       ).finally(() => scrubRustHostLaunchInput(request));
       this.#adoptFacts(facts);
 
-      const outcome = await this.#nextCommitted([
-        'launchAccepted',
-        'launchRejected',
-      ]);
+      const outcome = await this.#nextCommitted(['launchAccepted', 'launchRejected']);
       if (outcome.factCase === 'launchRejected') {
         const reasonCode = this.#durableBarrier.releaseRejectedReasonCode();
         this.#closeRejected();
@@ -119,6 +105,7 @@ export class RustHostAttemptCoordinator {
       const active = await lifecycle.activate(prepared);
       this.#assertOpen();
       const authority = lifecycle.consumeActive(active);
+      this.#active!.startFactPump(this.#facts!);
       return { kind: 'active', hello, authority };
     } catch (cause) {
       this.#fail(cause);
@@ -128,31 +115,31 @@ export class RustHostAttemptCoordinator {
     }
   }
 
-  inspectActive(
-    handle: ActiveAttemptAuthorityHandle,
-  ): ActiveAttemptAuthoritySnapshot {
+  inspectActive(handle: ActiveAttemptAuthorityHandle): ActiveAttemptAuthoritySnapshot {
     this.#assertOpen();
-    if (!this.#lifecycle) {
-      throw new RustHostAttemptCoordinatorError(
-        'management_sequence',
-        'active lifecycle authority is unavailable',
-      );
-    }
-    return callOwnedAttemptLifecycle(
-      this.#lifecycle,
-      (lifecycle) => lifecycle.inspectActive(handle),
-      (cause) => this.#fail(cause),
-    );
+    return this.#requireActive().inspect(handle);
+  }
+
+  cancelActive(handle: ActiveAttemptAuthorityHandle, request: HostCancelAttemptRequest): Promise<void> {
+    this.#assertOpen();
+    this.#data.beginTermination?.();
+    return this.#requireActive().cancel(handle, request);
+  }
+
+  fenceActive(handle: ActiveAttemptAuthorityHandle, request: HostFenceAttemptRequest): Promise<void> {
+    this.#assertOpen();
+    this.#data.beginTermination?.();
+    return this.#requireActive().fence(handle, request);
+  }
+
+  waitForPhysicalReap(): Promise<void> {
+    this.#assertOpen();
+    return this.#requireActive().waitForPhysicalReap();
   }
 
   tick(): void {
     this.#assertOpen();
-    if (!this.#lifecycle) return;
-    callOwnedAttemptLifecycle(
-      this.#lifecycle,
-      (lifecycle) => lifecycle.tick(),
-      (cause) => this.#fail(cause),
-    );
+    this.#active?.tick();
   }
 
   abort(cause?: unknown): void {
@@ -163,16 +150,14 @@ export class RustHostAttemptCoordinator {
     return this.#failed || this.#lifecycle?.isFailed === true;
   }
 
+  get failureCause(): unknown {
+    return this.#abortCause;
+  }
+
   async #nextCommitted(
     expected: Parameters<typeof nextCommittedManagementFact>[1],
   ): ReturnType<typeof nextCommittedManagementFact> {
-    const facts = this.#facts;
-    if (!facts) {
-      throw rustHostManagementSequenceFailure(
-        'management fact stream is unavailable',
-      );
-    }
-    return nextCommittedManagementFact(facts, expected, this.#signal.signal);
+    return nextCommittedManagementFact(this.#facts, expected, this.#signal.signal);
   }
 
   #adoptLaunch(capability: RustHostManagementLaunchPort): void {
@@ -200,6 +185,10 @@ export class RustHostAttemptCoordinator {
       throw rustHostAttemptAborted(this.#abortCause);
     }
     this.#lifecycle = lifecycle;
+    this.#active = new RustHostActiveAttemptController(
+      lifecycle,
+      (cause) => this.#fail(cause),
+    );
     this.#signals.bindLifecycle(lifecycle, (cause) => this.#fail(cause));
   }
 
@@ -223,11 +212,13 @@ export class RustHostAttemptCoordinator {
     const launch = this.#launch;
     const facts = this.#facts;
     const lifecycle = this.#lifecycle;
+    const active = this.#active;
     const controlOpening = this.#controlOpening;
     this.#bootstrap = undefined;
     this.#launch = undefined;
     this.#facts = undefined;
     this.#lifecycle = undefined;
+    this.#active = undefined;
     this.#controlOpening = false;
     this.#durableBarrier.discard();
     this.#signals.clear();
@@ -235,6 +226,7 @@ export class RustHostAttemptCoordinator {
       () => this.#signal.abort(cause),
       () => bootstrap?.abort(cause),
       () => launch?.abort(cause),
+      () => active?.abortFactPump(cause),
       () => facts?.abort(cause),
       () => { if (controlOpening) this.#control.abort(cause); },
       () => this.#data.abort(cause),
@@ -244,6 +236,14 @@ export class RustHostAttemptCoordinator {
 
   #assertOpen(): void {
     if (this.#closed) throw rustHostAttemptAborted(this.#abortCause);
+  }
+
+  #requireActive(): RustHostActiveAttemptController {
+    if (this.#active) return this.#active;
+    throw new RustHostAttemptCoordinatorError(
+      'management_sequence',
+      'active lifecycle authority is unavailable',
+    );
   }
 
 }

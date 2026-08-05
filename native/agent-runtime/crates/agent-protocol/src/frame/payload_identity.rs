@@ -45,5 +45,21 @@ const fn identity_field(
         Body::HydrationChunk(value) => Some(("HydrationChunk", value.identity.as_ref())),
         Body::HydrationComplete(value) => Some(("HydrationComplete", value.identity.as_ref())),
         Body::HydrationCommitted(value) => Some(("HydrationCommitted", value.identity.as_ref())),
+        Body::ProviderStart(value) => Some(("ProviderStart", value.identity.as_ref())),
+        Body::ProviderAccepted(value) => Some(("ProviderAccepted", value.identity.as_ref())),
+        Body::ProviderCancel(value) => Some(("ProviderCancel", value.identity.as_ref())),
+        Body::ProviderTextDelta(value) => Some(("ProviderTextDelta", value.identity.as_ref())),
+        Body::ProviderThinkingDelta(value) => {
+            Some(("ProviderThinkingDelta", value.identity.as_ref()))
+        }
+        Body::ProviderToolCall(value) => Some(("ProviderToolCall", value.identity.as_ref())),
+        Body::ProviderUsage(value) => Some(("ProviderUsageEvent", value.identity.as_ref())),
+        Body::ProviderTerminal(value) => Some(("ProviderTerminal", value.identity.as_ref())),
+        Body::EngineEventProposal(value) => Some(("EngineEventProposal", value.identity.as_ref())),
+        Body::EngineEventCommitted(value) => {
+            Some(("EngineEventCommitted", value.identity.as_ref()))
+        }
+        Body::CapabilityPrepare(value) => Some(("CapabilityPrepare", value.identity.as_ref())),
+        Body::CapabilityUpdate(value) => Some(("CapabilityUpdate", value.identity.as_ref())),
     }
 }

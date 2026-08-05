@@ -1,10 +1,13 @@
-import { clone, create } from '@bufbuild/protobuf';
-import { agentV1Supervisor } from '@mcp/agent-runtime-contracts';
 import type { DelimitedByteChannel } from '../ipc/DelimitedByteChannel.js';
 import {
   HostSupervisorFactChannel,
 } from '../ipc/HostSupervisorFactChannel.js';
 import { HostSupervisorFactError } from './HostSupervisorFactError.js';
+import type {
+  HostCancelAttemptRequest,
+  HostFenceAttemptRequest,
+  HostReapAttemptRequest,
+} from './HostLifecycleTypes.js';
 import type {
   DurableSupervisorFactPort,
   HostSupervisorFactDriverOptions,
@@ -20,8 +23,16 @@ import {
 import {
   takeHostSupervisorFactDriverBinding,
 } from './HostSupervisorFactDriverConstruction.js';
+import {
+  aborted,
+  cloneFact,
+  correlationFailure,
+  raceOperation,
+  validTimeout,
+} from './HostSupervisorFactDriverSupport.js';
 
-type LaunchFactPhase = 'outcome' | 'spawned' | 'containment' | 'complete';
+type LaunchFactPhase =
+  | 'outcome' | 'spawned' | 'containment' | 'running' | 'exited' | 'complete';
 
 /**
  * Minimal established-channel first-launch slice. Authentic construction
@@ -33,7 +44,9 @@ export class HostSupervisorFactDriver {
   #phase: LaunchFactPhase = 'outcome';
   #reservationId?: string;
   #runtimeInstanceId?: string;
+  #resourceGroupId?: string;
   readonly #durableCommitTimeoutMs: number;
+  readonly #commandResponseTimeoutMs: number;
   readonly #nowUnixMs: () => bigint;
   #processing = false;
 
@@ -44,11 +57,7 @@ export class HostSupervisorFactDriver {
   ) {
     assertHostSupervisorFactIntegrationMode(options.integrationMode);
     const binding = takeHostSupervisorFactDriverBinding(options, transport);
-    if (
-      !Number.isInteger(options.durableCommitTimeoutMs)
-      || options.durableCommitTimeoutMs <= 0
-      || options.durableCommitTimeoutMs > 60_000
-    ) {
+    if (!validTimeout(options.durableCommitTimeoutMs)) {
       const failure = new HostSupervisorFactError(
         'invalid_handoff',
         'durable commit timeout must be between 1 and 60000 ms',
@@ -56,7 +65,16 @@ export class HostSupervisorFactDriver {
       transport.fail(failure, binding.owner);
       throw failure;
     }
+    if (!validTimeout(options.commandResponseTimeoutMs)) {
+      const failure = new HostSupervisorFactError(
+        'invalid_handoff',
+        'command response timeout must be between 1 and 60000 ms',
+      );
+      transport.fail(failure, binding.owner);
+      throw failure;
+    }
     this.#durableCommitTimeoutMs = options.durableCommitTimeoutMs;
+    this.#commandResponseTimeoutMs = options.commandResponseTimeoutMs;
     this.#nowUnixMs = options.nowUnixMs;
     this.#channel = new HostSupervisorFactChannel(
       transport,
@@ -86,7 +104,7 @@ export class HostSupervisorFactDriver {
         this.#channel.beginReceive(),
         signal,
       );
-      if (outcome.kind === 'replayed') return outcome;
+      if (outcome.kind !== 'pending') return outcome;
       const pending = outcome.pending;
       const factCase = pending.fact.case;
       try {
@@ -131,6 +149,18 @@ export class HostSupervisorFactDriver {
     this.#channel.abort(cause);
   }
 
+  cancel(request: HostCancelAttemptRequest): Promise<void> {
+    return this.#channel.cancel(request, this.#commandResponseTimeoutMs);
+  }
+
+  fence(request: HostFenceAttemptRequest): Promise<void> {
+    return this.#channel.fence(request, this.#commandResponseTimeoutMs);
+  }
+
+  reap(request: HostReapAttemptRequest): Promise<void> {
+    return this.#channel.reap(request, this.#commandResponseTimeoutMs);
+  }
+
   get isPoisoned(): boolean {
     return this.#channel.isPoisoned;
   }
@@ -145,6 +175,8 @@ export class HostSupervisorFactDriver {
         this.#phase === 'containment'
         && factCase === 'attemptContainmentReport'
       )
+      || (this.#phase === 'running' && factCase === 'attemptProcessExited')
+      || (this.#phase === 'exited' && factCase === 'attemptProcessReaped')
     );
     if (!valid) {
       throw new HostSupervisorFactError(
@@ -164,6 +196,14 @@ export class HostSupervisorFactDriver {
     ) {
       throw correlationFailure('containment runtime does not match spawn');
     }
+    if (
+      fact.case === 'attemptProcessExited'
+      && fact.value.runnerProvenance?.runtimeInstanceId !== this.#runtimeInstanceId
+    ) throw correlationFailure('exit runtime does not match spawn');
+    if (fact.case === 'attemptProcessReaped' && (
+      fact.value.runtimeInstanceId !== this.#runtimeInstanceId
+      || fact.value.resourceGroupId !== this.#resourceGroupId
+    )) throw correlationFailure('reap ownership does not match spawn');
   }
 
   #advance(fact: SupervisorLifecycleFact): void {
@@ -172,52 +212,10 @@ export class HostSupervisorFactDriver {
       this.#phase = 'spawned';
     } else if (fact.case === 'attemptProcessSpawned') {
       this.#runtimeInstanceId = fact.value.runnerProvenance!.runtimeInstanceId;
+      this.#resourceGroupId = fact.value.resourceGroupId;
       this.#phase = 'containment';
-    }
+    } else if (fact.case === 'attemptContainmentReport') this.#phase = 'running';
+    else if (fact.case === 'attemptProcessExited') this.#phase = 'exited';
     else this.#phase = 'complete';
   }
-}
-
-function cloneFact(
-  fact: SupervisorLifecycleFact,
-): SupervisorLifecycleFact {
-  const payload = clone(
-    agentV1Supervisor.ManagementPayloadSchema,
-    create(agentV1Supervisor.ManagementPayloadSchema, { body: fact }),
-  );
-  return payload.body as SupervisorLifecycleFact;
-}
-
-function correlationFailure(message: string): HostSupervisorFactError {
-  return new HostSupervisorFactError('invalid_fact', message);
-}
-
-async function raceOperation<T>(
-  operation: Promise<T>,
-  signal: AbortSignal | undefined,
-): Promise<T> {
-  if (!signal) return operation;
-  if (signal?.aborted) throw aborted(signal.reason);
-  let listener: (() => void) | undefined;
-  const barriers: Promise<never>[] = [];
-  if (signal) {
-    const activeSignal = signal;
-    barriers.push(new Promise<never>((_resolve, reject) => {
-      listener = () => reject(aborted(activeSignal.reason));
-      activeSignal.addEventListener('abort', listener, { once: true });
-    }));
-  }
-  try {
-    return await Promise.race([operation, ...barriers]);
-  } finally {
-    if (listener && signal) signal.removeEventListener('abort', listener);
-  }
-}
-
-function aborted(cause: unknown): HostSupervisorFactError {
-  return new HostSupervisorFactError(
-    'aborted',
-    'management fact processing was aborted',
-    cause === undefined ? undefined : { cause },
-  );
 }

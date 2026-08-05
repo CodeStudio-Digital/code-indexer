@@ -9,6 +9,8 @@ type HostLifecycleDriverState =
   | 'persisting'
   | 'activating'
   | 'active'
+  | 'terminating'
+  | 'terminated'
   | 'failed';
 
 export class HostLifecycleDriverPhase {

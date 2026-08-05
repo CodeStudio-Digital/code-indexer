@@ -90,7 +90,7 @@ function invalidConnection(message: string): AttemptControlAdapterError {
   return new AttemptControlAdapterError('invalid_connection', message);
 }
 
-function bestEffort(operation: () => void): void {
+export function bestEffort(operation: () => void): void {
   try {
     operation();
   } catch {

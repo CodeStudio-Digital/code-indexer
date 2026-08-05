@@ -19,6 +19,8 @@ pub(super) mod facts;
 mod inbound;
 mod launch;
 mod launch_registry;
+mod lifecycle_fact_outbox;
+mod lifecycle_reporting;
 mod plan;
 mod provision;
 mod pulse_registry;

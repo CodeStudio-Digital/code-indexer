@@ -142,6 +142,14 @@ export function heartbeatFrame(
   messageId: string,
   streamSeq: bigint,
   headerOverrides = {},
+  valueOverrides: Partial<Pick<
+    agentV1Runtime.Heartbeat,
+    | 'lastAliveAtUnixMs'
+    | 'lastProgressAtUnixMs'
+    | 'lastEventSeq'
+    | 'phase'
+    | 'resources'
+  >> = {},
 ): Uint8Array {
   return encodeAttemptFrame(
     frameHeader(messageId, streamSeq, headerOverrides),
@@ -156,6 +164,7 @@ export function heartbeatFrame(
           lastProgressAtUnixMs: 1n,
           lastEventSeq: 1n,
           phase: agentV1Runtime.PhysicalAttemptPhase.ACTIVE,
+          ...valueOverrides,
         },
       },
     }),

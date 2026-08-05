@@ -21,6 +21,9 @@ describe('NativeHostBridgeConnections', () => {
     expect(fixture.channels.readControl).toHaveBeenCalledWith(64 * 1024);
     pair.control.transport.fail(undefined);
     await settled();
+    expect(fixture.channels.close).not.toHaveBeenCalled();
+    pair.authority.beginCleanup();
+    await settled();
     expect(fixture.channels.close).toHaveBeenCalledOnce();
   });
 
@@ -39,19 +42,22 @@ describe('NativeHostBridgeConnections', () => {
     pair.control.transport.fail(undefined);
   });
 
-  it('shares one close authority across Control and Data', async () => {
+  it('keeps sibling I/O alive until the pair close authority cleans up', async () => {
     const fixture = nativeFixture();
     const pair = connections(fixture.channels);
 
     pair.control.transport.fail(undefined);
     await settled();
 
-    await expect(pair.data.transport.send(Uint8Array.of(1)))
-      .rejects.toMatchObject({ code: 'transport_error' });
-    expect(fixture.channels.close).toHaveBeenCalledOnce();
+    await expect(pair.data.transport.send(Uint8Array.of(1))).resolves.toBeUndefined();
+    expect(fixture.channels.close).not.toHaveBeenCalled();
     expect(pair.authority.beginCleanup()).toMatchObject({
       kind: expect.stringMatching(/closed|native_reaper/),
     });
+    await settled();
+    await expect(pair.data.transport.send(Uint8Array.of(1)))
+      .rejects.toMatchObject({ code: 'transport_error' });
+    expect(fixture.channels.close).toHaveBeenCalledOnce();
   });
 
   it('fails closed when native read exceeds its physical cap', async () => {
@@ -62,6 +68,9 @@ describe('NativeHostBridgeConnections', () => {
     await expect(pair.control.transport.receive()).rejects.toMatchObject({
       code: 'transport_error',
     });
+    await settled();
+    expect(fixture.channels.close).not.toHaveBeenCalled();
+    pair.authority.beginCleanup();
     await settled();
     expect(fixture.channels.close).toHaveBeenCalledOnce();
   });

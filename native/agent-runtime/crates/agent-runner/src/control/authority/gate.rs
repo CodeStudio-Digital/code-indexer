@@ -3,13 +3,12 @@ use std::fmt::{self, Debug, Formatter};
 use std::marker::PhantomData;
 #[cfg(test)]
 use std::rc::Rc;
-#[cfg(test)]
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
 
-use super::ActiveAuthority;
+use super::{ActiveAuthority, AuthorityError};
 #[cfg(test)]
-use super::{AuthorityError, EffectToken, GateIdentity};
+use super::{EffectToken, GateIdentity};
 
 /// Trusted time source installed once by the control owner.
 pub trait EffectClock: Debug + Send + Sync {
@@ -25,7 +24,6 @@ pub struct EffectGate {
 struct EffectGateInner {
     #[cfg(test)]
     identity: Arc<GateIdentity>,
-    #[cfg(test)]
     clock: Arc<dyn EffectClock>,
     state: Mutex<GateState>,
 }
@@ -34,12 +32,10 @@ struct EffectGateInner {
 struct GateState {
     #[cfg(test)]
     fencing_epoch: u64,
-    #[cfg(test)]
     deadline_at_unix_ms: i64,
     #[cfg(test)]
     authority_tag: [u8; 32],
     generation: u64,
-    #[cfg(test)]
     last_observed_at_unix_ms: Option<i64>,
     revoked: bool,
 }
@@ -47,24 +43,18 @@ struct GateState {
 impl EffectGate {
     #[must_use]
     pub(super) fn new(authority: &ActiveAuthority, clock: Arc<dyn EffectClock>) -> Self {
-        #[cfg(not(test))]
-        let _ = (authority, clock);
-
         Self {
             inner: Arc::new(EffectGateInner {
                 #[cfg(test)]
                 identity: Arc::new(GateIdentity),
-                #[cfg(test)]
                 clock,
                 state: Mutex::new(GateState {
                     #[cfg(test)]
                     fencing_epoch: authority.identity.fencing_epoch,
-                    #[cfg(test)]
                     deadline_at_unix_ms: authority.deadline_at_unix_ms,
                     #[cfg(test)]
                     authority_tag: authority.authority_tag,
                     generation: 1,
-                    #[cfg(test)]
                     last_observed_at_unix_ms: None,
                     revoked: false,
                 }),
@@ -72,10 +62,17 @@ impl EffectGate {
         }
     }
 
+    /// Verifies the shared activation authority at an engine checkpoint.
+    pub(crate) fn verify_live(&self) -> Result<(), AuthorityError> {
+        let mut state = self.lock_state()?;
+        self.observe_time(&mut state)?;
+        state.validate_live()
+    }
+
     /// Issues a non-cloneable token from a live authority.
     #[cfg(test)]
     pub(crate) fn token(&self) -> Result<EffectToken, AuthorityError> {
-        let mut state = self.lock_for_dispatch()?;
+        let mut state = self.lock_state()?;
         self.observe_time(&mut state)?;
         state.validate_live()?;
         Ok(EffectToken {
@@ -99,7 +96,7 @@ impl EffectGate {
         if !Arc::ptr_eq(&token.gate_identity, &self.inner.identity) {
             return Err(AuthorityError::InvalidToken);
         }
-        let mut state = self.lock_for_dispatch()?;
+        let mut state = self.lock_state()?;
         self.observe_time(&mut state)?;
         state.validate_token(token)?;
         let permit = EffectDispatchPermit {
@@ -118,15 +115,13 @@ impl EffectGate {
         state.revoke();
     }
 
-    #[cfg(test)]
-    fn lock_for_dispatch(&self) -> Result<MutexGuard<'_, GateState>, AuthorityError> {
+    fn lock_state(&self) -> Result<MutexGuard<'_, GateState>, AuthorityError> {
         self.inner
             .state
             .lock()
             .map_err(|_| AuthorityError::GatePoisoned)
     }
 
-    #[cfg(test)]
     fn observe_time(&self, state: &mut GateState) -> Result<(), AuthorityError> {
         let observed = self.inner.clock.now_unix_ms();
         if let Some(previous) = state.last_observed_at_unix_ms
@@ -141,7 +136,6 @@ impl EffectGate {
 }
 
 impl GateState {
-    #[cfg(test)]
     fn validate_live(&self) -> Result<(), AuthorityError> {
         if self.revoked {
             return Err(AuthorityError::Revoked);

@@ -139,10 +139,16 @@ where
     }
 
     fn physically_drained(&self) -> bool {
+        let host_durability_pending = matches!(
+            self.mode,
+            ServiceMode::Draining(SupervisorManagementTerminal::Shutdown)
+        ) && (self.owner().pending_lifecycle_facts() > 0
+            || self.owner().pending_management_facts() > 0);
         self.pending_write.is_none()
             && self.pending_launch.is_none()
             && self.owner().owned_attempts() == 0
             && self.owner().state().pending_cleanup_count() == 0
+            && !host_durability_pending
     }
 
     #[cfg(test)]

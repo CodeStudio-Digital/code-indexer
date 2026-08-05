@@ -25,6 +25,11 @@ function runtimeInstanceId(
     case 'attemptChannelBound':
     case 'hydrationProgress':
     case 'hydrationCommitted':
+    case 'providerAccepted':
+    case 'engineEventProposal':
+    case 'engineEventCommitted':
+    case 'capabilityPrepare':
+    case 'capabilityUpdate':
       return payload.body.value.runtimeInstanceId;
     case 'prepareAttempt':
     case 'activateAttempt':
@@ -34,6 +39,13 @@ function runtimeInstanceId(
     case 'hydrationManifest':
     case 'hydrationChunk':
     case 'hydrationComplete':
+    case 'providerStart':
+    case 'providerCancel':
+    case 'providerTextDelta':
+    case 'providerThinkingDelta':
+    case 'providerToolCall':
+    case 'providerUsage':
+    case 'providerTerminal':
     case 'agentHello':
     case 'hostHello':
     case 'ack':

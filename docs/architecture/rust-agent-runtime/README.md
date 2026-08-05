@@ -1,27 +1,88 @@
 # Rust Agent Runtime — especificação normativa
 
 > **Status:** especificação final para implementação  
-> **Versão:** 1.11.0
-> **Data-base:** 2026-08-04
+> **Versão:** 1.36.0
+> **Data-base:** 2026-08-05
 > **Autoridade:** este diretório governa o novo runtime de agentes em Rust  
 > **Checklist executiva:** [IMPLEMENTATION-CHECKLIST.md](./IMPLEMENTATION-CHECKLIST.md)
 
-> **Snapshot operacional:** o E2E físico Windows já comprova
+> **Snapshot operacional:** o E2E físico Windows já comprova a lifecycle inteira
 > `Host TS → supervisor → agent-runner → AgentHello → hidratação → Prepared →
-> grant durável → Activate/ACK → Active`, mantém supervisor e runner vivos sob
-> o owner pós-`Active` e reapeia ambos no fechamento. Antes de aceitar o launch,
-> o supervisor exige um `RunnerPulse` físico inicial autenticado, sequenciado e
-> ligado ao PID/endpoint da attempt. Depois do commit de `LaunchAccepted`, um
-> owner permanente bounded retém o monitor; o runner emite pulses periódicos nas
-> fases `Negotiating/Hydrating/Prepared/Active`, silêncio expira somente a
-> attempt alvo e nenhum pulse renova o hard deadline. Cada pulse já mede no
-> Windows o RSS atual/pico, CPU acumulada e handles reais do processo runner;
-> hidratação divergente também falha fechada sem PID órfão. O próximo marco é o
-> heartbeat semântico no canal control e a agregação de descendentes/spool.
-> Depois vêm Cancel/Fence process-real
-> pós-`Active`, fatos duráveis de exit/reap e o primeiro loop de `agent-engine`
-> com Provider Gateway. Engine, providers e tools de produção ainda não estão
-> implementados.
+> Activate/ACK → Active`, com `RunnerPulse`, heartbeat, métricas reais do
+> processo, Cancel/Fence, fatos `Exited/Reaped` duráveis e reap do runner sem
+> derrubar o supervisor. Control, Data e management possuem owners permanentes e
+> deadlines independentes; o término de um stream não fecha implicitamente o
+> irmão. O runner permanece em idle bounded depois do turno e o Host retém Data
+> até a coordenação terminal Control. No Windows, EOF/pipe encerrado esperado é
+> normalizado e uma janela terminal limitada permite que o ACK já escrito seja
+> consumido antes do cleanup. Nenhum pulse ou heartbeat renova hard deadline.
+>
+> O primeiro turno produtivo também atravessa agora o processo e o Named Pipe
+> reais. Depois de `Active`, o `agent-engine` consome o `ProviderGatewayPort`, o
+> runner envia `ProviderStart`, o Gateway TS resolve/executa o provider e devolve
+> `ProviderAccepted`, texto, usage e terminal tipados. O start só é publicado
+> depois do write físico; Accepted é correlacionado ao message-id, digest,
+> operation, runtime instance e clock. Host e runner usam a mesma authority de
+> clock no adapter e toleram somente 50 ms de inversão entre peers locais; o
+> limite superior do Host continua estrito. EOF não vira sucesso, tool arguments
+> são verificados por SHA-256 e somente terminal libera a operação.
+>
+> A durabilidade do turno não cria dependência de storage no engine nem no core
+> `agent-host-bridge`. O runner implementa `EventSinkPort`, codifica
+> `EngineEventRecordV1` e envia `EngineEventProposal` no Data. O Host valida
+> identity/runtime/digest/durability, pede o commit ao writer filesystem Rust
+> fenced através do `agent-session-bridge` e só então responde
+> `EngineEventCommitted` com o receipt hash-chained. Sequência e terminal avançam
+> apenas após esse receipt. O E2E produtivo com tool confirma nove records
+> consecutivos, do primeiro provider-started ao terminal autoritativo do segundo
+> turn, no `conversation.jsonl` nativo.
+>
+> A composição inicial continua tipada, redigida e single-owner: agent
+> definition, capability set, provider preset e task hidratada só ficam
+> executáveis após authority `Active`. A fatia 1.34 implementa a primeira rota
+> nativa aceita: `native.read_file` recebe binding filesystem selado, revalida
+> grant/expiry/authority imediatamente antes do efeito, prova pelo handle final
+> do Windows que o arquivo continua dentro da raiz, aplica quotas e UTF-8, e
+> atravessa records autoritativos distintos de `started` e `terminal`. O
+> resultado bounded volta ao composer com pairing por `toolUseId`; o cursor
+> `response_id/message_count` é preservado e o engine abre o próximo provider
+> turn no mesmo Data owner. Os bytes do contexto entre turns usam `Arc<[u8]>`,
+> sem clone integral permanente. Uma prova duplex cross-crate cobre a sequência
+> completa com sete receipts. O Host agora possui uma policy de produto
+> fail-closed: ela confere o digest do catálogo hidratado, canonicaliza a raiz
+> confiável do workspace fora do input do modelo e sela environment,
+> lease/fencing, quotas, policy, nonce e expiry. O E2E process-real comprova o
+> grant, a leitura por handle final, nove commits físicos e o retorno exato ao
+> segundo provider turn. Isso ainda não torna a tool default nas superfícies do
+> produto: routing/canário continuam abertos. Resume de attempt por checkpoint,
+> fallback/recovery,
+> recovery de started órfão/probe, outras tools, outbox recovery, métricas agregadas,
+> `UpdateAttemptAuthority`, soak/chaos/canário e matriz multiplataforma seguem
+> abertos.
+>
+> A fatia 1.35 fecha a ambiguidade live do executor depois de `started`: erro de
+> runtime/transport vira `outcome_unknown`, recebe terminal autoritativo, chega
+> ao provider como `tool_result` de erro e nunca causa retry interno. Crash/EOF
+> que impeça o próprio commit terminal ainda exige reconciliação pelo journal e
+> permanece aberto.
+>
+> A fatia 1.36 acrescenta o inventário de recovery sem leitura direta de paths:
+> o session store pagina no máximo 256 receipts por vez e revalida a cadeia
+> inteira; o bridge autenticado expõe apenas metadata; o Host lê payloads pelo
+> receipt exato e encontra `started` sem terminal. Scan truncado, terminal
+> divergente, hash ou bytes incompatíveis falham fechado. Persistir a decisão de
+> recovery/probe em nova attempt continua aberto.
+>
+> A fatia 1.36 foi revalidada com format, Clippy estrito e todos os testes do
+> workspace Rust; 51 testes de contratos TS/Rust, typecheck e 355 testes Host;
+> orçamento de LOC (755 módulos produtivos, máximo 250); grafo de 11 crates/14
+> arestas; e a suíte física completa de 5 cenários. O pacote Windows candidato
+> `runtime-v1-f6496fb120c29da50913e04eba033f98b67f85468e85035e34fe5aba6ba39930`
+> (manifest
+> `807b861d2d7093c58af749ef74566fefa5b4389cbc1268acc2f9e336a740fd6e`)
+> passou verify e smoke de addon/runner/supervisor. O gate global de fronteira
+> legado permanece vermelho por drift externo já existente; a baseline não foi
+> ratcheted nesta fatia e nenhum módulo legado foi alterado para ocultá-lo.
 
 ## 1. Objetivo
 
@@ -146,6 +207,8 @@ native/agent-runtime/
     agent-runner/
     agent-protocol/
     agent-engine/
+    agent-host-bridge/
+    agent-host-bridge-napi/
     agent-tools/
     agent-spool/
     agent-session-bridge/

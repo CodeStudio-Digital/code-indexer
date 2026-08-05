@@ -31,6 +31,36 @@ fn reap_interrupts_a_pending_provision_cleanup_retry_immediately() {
 }
 
 #[test]
+fn reap_escalation_preserves_the_original_terminal_cause() {
+    let plan = LaunchPlan::from_validated(&launch_attempt(), [7; 32]).expect("launch plan");
+    let key = plan.ownership_key();
+    let mut state = SupervisorDriverState::default();
+    state
+        .schedule_physical_termination(
+            super::super::state::CleanupTrigger::Cancel,
+            100,
+            120,
+            None,
+            [key.clone()],
+        )
+        .expect("cancel schedule");
+    state
+        .schedule_physical_termination(
+            super::super::state::CleanupTrigger::Reap,
+            101,
+            101,
+            None,
+            [key.clone()],
+        )
+        .expect("reap escalation");
+
+    assert_eq!(
+        state.cleanup_trigger(&key),
+        Ok(super::super::state::CleanupTrigger::Cancel)
+    );
+}
+
+#[test]
 fn immediate_close_interrupts_a_pending_termination_retry() {
     let plan = LaunchPlan::from_validated(&launch_attempt(), [2; 32]).expect("launch plan");
     let key = plan.ownership_key();

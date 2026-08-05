@@ -24,10 +24,14 @@ import {
   waitForFrames,
 } from './host-lifecycle-driver-support.js';
 import {
+  framePayloadSha256,
+} from '../ipc/AttemptFrame.js';
+import {
   attemptPreparedFrame,
   decodeFrame,
   delimit,
   heartbeatFrame,
+  inboundAckFrame,
   resourceBudget,
 } from './attempt-channel-support.js';
 
@@ -87,6 +91,149 @@ describe('host attempt lifecycle driver', () => {
       deadlineAtUnixMs: 60_000n,
     });
     expect(harness.driver.inspectActive(authority).signal.aborted).toBe(false);
+  });
+
+  it('commits and exposes the latest bounded semantic heartbeat', async () => {
+    let now = 10n;
+    const harness = lifecycleHarness(undefined, { clock: () => now });
+    await completeHandshake(harness);
+    const prepared = await completePrepare(harness);
+    const activation = await beginActivation(harness, prepared.receipt);
+    harness.input.write(delimit(activation.ackFrame));
+    const active = await activation.promise;
+    const authority = harness.driver.consumeActive(active);
+    const resources = create(agentV1Common.ResourceSampleSchema, {
+      residentMemoryBytes: 101n,
+      peakResidentMemoryBytes: 202n,
+      cpuTimeMs: 303n,
+      processCount: 1,
+      openFileCount: 404,
+      spoolBytes: 0n,
+    });
+
+    now = 11n;
+    harness.input.write(delimit(heartbeatFrame(
+      'heartbeat-4',
+      4n,
+      { sentAtUnixMs: 11n },
+      {
+        lastAliveAtUnixMs: 11n,
+        lastProgressAtUnixMs: 10n,
+        lastEventSeq: 0n,
+        resources,
+      },
+    )));
+    await vi.waitFor(() => {
+      expect(harness.driver.inspectActive(authority).heartbeat).toBeDefined();
+    });
+
+    expect(harness.driver.inspectActive(authority).heartbeat).toMatchObject({
+      messageId: 'heartbeat-4',
+      observedAtUnixMs: 11n,
+      lastAliveAtUnixMs: 11n,
+      lastProgressAtUnixMs: 10n,
+      lastEventSeq: 0n,
+      phase: agentV1Runtime.PhysicalAttemptPhase.ACTIVE,
+      resources,
+    });
+    expect(harness.driver.inspectActive(authority).signal.aborted).toBe(false);
+    harness.driver.abort();
+  });
+
+  it('revokes Active when the semantic heartbeat deadline expires', async () => {
+    let now = 10n;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const harness = lifecycleHarness(undefined, { clock: () => now });
+      await completeHandshake(harness);
+      const prepared = await completePrepare(harness);
+      const activation = await beginActivation(harness, prepared.receipt);
+      harness.input.write(delimit(activation.ackFrame));
+      const active = await activation.promise;
+      const authority = harness.driver.consumeActive(active);
+      const snapshot = harness.driver.inspectActive(authority);
+
+      now = 5_010n;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(snapshot.signal.aborted).toBe(true);
+      expect(harness.driver.isFailed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends Cancel concurrently with heartbeat receive and revokes on Ack', async () => {
+    const harness = lifecycleHarness();
+    await completeHandshake(harness);
+    const prepared = await completePrepare(harness);
+    const activation = await beginActivation(harness, prepared.receipt);
+    harness.input.write(delimit(activation.ackFrame));
+    const active = await activation.promise;
+    const authority = harness.driver.consumeActive(active);
+    const snapshot = harness.driver.inspectActive(authority);
+
+    const cancellation = harness.driver.cancel(authority, {
+      reason: agentV1Runtime.CancelReason.USER_REQUEST,
+      reasonCode: 'user_request',
+      graceDeadlineAtUnixMs: 1_000n,
+      idempotencyKey: 'cancel:active:1',
+    });
+    await waitForFrames(harness, 4);
+    const request = decodeFrame(harness.capture.frames()[3]!);
+    const payload = fromBinary(
+      agentV1Runtime.FramePayloadSchema,
+      request.encodedPayload,
+    );
+    expect(payload.body).toMatchObject({
+      case: 'cancelAttempt',
+      value: {
+        reason: agentV1Runtime.CancelReason.USER_REQUEST,
+        reasonCode: 'user_request',
+        graceDeadlineAtUnixMs: 1_000n,
+      },
+    });
+    harness.input.write(delimit(inboundAckFrame(
+      'cancel-ack-4',
+      4n,
+      request.header!.messageId,
+      framePayloadSha256(request.encodedPayload),
+    )));
+
+    await expect(cancellation).resolves.toBeUndefined();
+    expect(snapshot.signal.aborted).toBe(true);
+    expect(harness.driver.isFailed).toBe(false);
+  });
+
+  it('sends Fence with newer authority and revokes only after its Ack', async () => {
+    const harness = lifecycleHarness();
+    await completeHandshake(harness);
+    const prepared = await completePrepare(harness);
+    const activation = await beginActivation(harness, prepared.receipt);
+    harness.input.write(delimit(activation.ackFrame));
+    const active = await activation.promise;
+    const authority = harness.driver.consumeActive(active);
+    const snapshot = harness.driver.inspectActive(authority);
+
+    const fencing = harness.driver.fence(authority, {
+      replacementFencingEpoch: 8n,
+      reasonCode: 'superseded',
+      fencedAtUnixMs: 10n,
+      idempotencyKey: 'fence:active:1',
+    });
+    await waitForFrames(harness, 4);
+    expect(snapshot.signal.aborted).toBe(false);
+    const request = decodeFrame(harness.capture.frames()[3]!);
+    harness.input.write(delimit(inboundAckFrame(
+      'fence-ack-4',
+      4n,
+      request.header!.messageId,
+      framePayloadSha256(request.encodedPayload),
+    )));
+
+    await expect(fencing).resolves.toBeUndefined();
+    expect(snapshot.signal.aborted).toBe(true);
+    expect(harness.driver.isFailed).toBe(false);
   });
 
   it('hydrates only after Prepare is committed and before accepting Prepared', async () => {

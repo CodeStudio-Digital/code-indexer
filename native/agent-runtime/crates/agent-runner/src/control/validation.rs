@@ -88,6 +88,7 @@ pub(super) fn validate_prepare(
     )?;
     let expected_artifacts = validated.required_artifacts().cloned().collect();
     let immutable_deadline_at_unix_ms = validated.as_wire().deadline_at_unix_ms;
+    let execution_seed = validated.into_execution_seed();
 
     Ok(ValidatedPrepare {
         identity,
@@ -96,6 +97,7 @@ pub(super) fn validate_prepare(
         spec_sha256,
         expected_snapshots,
         expected_artifacts,
+        execution_seed,
     })
 }
 

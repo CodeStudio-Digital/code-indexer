@@ -49,6 +49,12 @@ export interface NativeHostSupervisorChannel {
   close(): Promise<NativeHostSupervisorCloseReceipt>;
 }
 
+export interface NativeSessionStoreBridge {
+  readonly isClosed: boolean;
+  handle(request: Uint8Array, nowUnixMs: number): Promise<Uint8Array>;
+  close(): Promise<'closed'>;
+}
+
 export interface NativeHostBridgeBinding {
   nativeHostBridgeAbi(): NativeHostBridgeAbi;
   openHostAttemptBridge(
@@ -57,6 +63,12 @@ export interface NativeHostBridgeBinding {
   openHostSupervisorBridge(
     request: Uint8Array,
   ): Promise<NativeHostSupervisorChannel>;
+  openNativeSessionStoreBridge(
+    instanceId: string,
+    rootId: string,
+    rootPath: string,
+    maximumFrameBytes: number,
+  ): NativeSessionStoreBridge;
 }
 
 export function assertNativeHostBridgeBinding(
@@ -67,10 +79,12 @@ export function assertNativeHostBridgeBinding(
   const abiFunction = value.nativeHostBridgeAbi;
   const openFunction = value.openHostAttemptBridge;
   const openSupervisorFunction = value.openHostSupervisorBridge;
+  const openSessionStoreFunction = value.openNativeSessionStoreBridge;
   if (
     typeof abiFunction !== 'function'
     || typeof openFunction !== 'function'
     || typeof openSupervisorFunction !== 'function'
+    || typeof openSessionStoreFunction !== 'function'
   ) throw invalid('exports');
   const abi = abiFunction() as unknown;
   assertAbi(abi, runtimePackage);
@@ -78,7 +92,19 @@ export function assertNativeHostBridgeBinding(
     nativeHostBridgeAbi: abiFunction.bind(value),
     openHostAttemptBridge: openFunction.bind(value),
     openHostSupervisorBridge: openSupervisorFunction.bind(value),
+    openNativeSessionStoreBridge: openSessionStoreFunction.bind(value),
   });
+}
+
+export function assertNativeSessionStoreBridge(
+  value: unknown,
+): asserts value is NativeSessionStoreBridge {
+  if (
+    !record(value)
+    || value.isClosed !== false
+    || typeof value.handle !== 'function'
+    || typeof value.close !== 'function'
+  ) throw invalid('session-store owner');
 }
 
 export function assertNativeHostAttemptChannels(

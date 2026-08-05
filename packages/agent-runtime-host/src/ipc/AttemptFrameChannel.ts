@@ -29,6 +29,18 @@ const DATA_CASES: ReadonlySet<FramePayloadCase> = new Set([
   'hydrationChunk',
   'hydrationComplete',
   'hydrationCommitted',
+  'providerStart',
+  'providerAccepted',
+  'providerCancel',
+  'providerTextDelta',
+  'providerThinkingDelta',
+  'providerToolCall',
+  'providerUsage',
+  'providerTerminal',
+  'engineEventProposal',
+  'engineEventCommitted',
+  'capabilityPrepare',
+  'capabilityUpdate',
 ]);
 
 export function assertPayloadAllowed(

@@ -25,5 +25,23 @@ export function pendingFromValidatedFrame(
     terminalPayloadSha256: body.case === 'terminalProposal'
       ? body.value.terminalPayloadSha256.slice()
       : undefined,
+    providerOperationId: body.case === 'providerStart'
+      ? body.value.operationId
+      : undefined,
+    capabilityOperationId: body.case === 'capabilityPrepare'
+      ? body.value.operationId
+      : undefined,
+    capabilityToolUseId: body.case === 'capabilityPrepare'
+      ? body.value.toolUseId
+      : undefined,
+    engineEventPayloadSha256: body.case === 'engineEventProposal'
+      ? body.value.expectedPayloadSha256.slice()
+      : undefined,
+    engineEventLocalSequence: body.case === 'engineEventProposal'
+      ? body.value.record?.localSequence
+      : undefined,
+    engineEventRuntimeInstanceId: body.case === 'engineEventProposal'
+      ? body.value.runtimeInstanceId
+      : undefined,
   }, validated);
 }

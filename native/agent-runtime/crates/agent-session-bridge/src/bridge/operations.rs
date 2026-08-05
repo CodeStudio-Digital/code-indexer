@@ -12,6 +12,7 @@ use crate::convert::{
     receipt_to_wire, state_to_wire,
 };
 
+mod list;
 mod read;
 
 impl AuthenticatedSessionStoreBridge {
@@ -32,6 +33,7 @@ impl AuthenticatedSessionStoreBridge {
             Body::ArchiveSession(request) => self.archive(request),
             Body::CloseSessionWriter(request) => self.close(request),
             Body::ReadCommittedSessionPayload(request) => self.read_committed_payload(request),
+            Body::ListCommittedSessionRecords(request) => self.list_committed_records(request),
         }
     }
 

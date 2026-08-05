@@ -89,6 +89,8 @@ export function validateSupervisorFact(
     && body.case !== 'launchRejected'
     && body.case !== 'attemptProcessSpawned'
     && body.case !== 'attemptContainmentReport'
+    && body.case !== 'attemptProcessExited'
+    && body.case !== 'attemptProcessReaped'
   ) {
     throw failure('payload_direction', 'payload is not a supervisor lifecycle fact');
   }

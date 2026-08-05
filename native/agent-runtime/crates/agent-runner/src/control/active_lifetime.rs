@@ -9,10 +9,15 @@ use super::{AsyncControlDriverError, AsyncRunnerControlDriver, CancelOutcome, Fe
 use crate::lifecycle::RunnerState;
 
 mod classification;
+mod cleanup;
+mod heartbeat;
 
 use classification::{
     PostActiveDisposition, classify_hard_deadline, classify_post_active_event, is_control_eof,
 };
+use heartbeat::ActiveHeartbeatSchedule;
+
+const TERMINATION_ACK_DRAIN: std::time::Duration = std::time::Duration::from_millis(50);
 
 #[derive(Debug)]
 pub enum ActiveRunnerExitReason {
@@ -43,10 +48,7 @@ pub struct ActiveRunnerCleanup<R> {
 pub struct ActiveRunnerLifetime<S, R> {
     driver: Box<AsyncRunnerControlDriver<S>>,
     resources: R,
-    heartbeat_interval: std::time::Duration,
-    next_heartbeat_at: Instant,
-    last_progress_at_unix_ms: i64,
-    last_event_seq: u64,
+    heartbeat: ActiveHeartbeatSchedule,
 }
 
 impl<S, R> Debug for ActiveRunnerLifetime<S, R>
@@ -83,23 +85,11 @@ where
         driver: AsyncRunnerControlDriver<S>,
         resources: R,
     ) -> Result<Self, AsyncControlDriverError> {
-        let heartbeat_interval = driver.heartbeat_interval()?;
-        let next_heartbeat_at = Instant::now()
-            .checked_add(heartbeat_interval)
-            .ok_or(AsyncControlDriverError::InvalidHeartbeatSchedule)?;
-        let last_progress_at_unix_ms = driver.owner_now_unix_ms();
-        if last_progress_at_unix_ms <= 0 {
-            return Err(AsyncControlDriverError::InvalidClockReading(
-                last_progress_at_unix_ms,
-            ));
-        }
+        let heartbeat = ActiveHeartbeatSchedule::new(&driver)?;
         Ok(Self {
             driver: Box::new(driver),
             resources,
-            heartbeat_interval,
-            next_heartbeat_at,
-            last_progress_at_unix_ms,
-            last_event_seq: 0,
+            heartbeat,
         })
     }
 
@@ -111,6 +101,10 @@ where
     #[must_use]
     pub(crate) const fn is_control_closed(&self) -> bool {
         self.driver.is_closed()
+    }
+
+    pub(crate) const fn resources_mut(&mut self) -> &mut R {
+        &mut self.resources
     }
 
     pub(crate) fn revoke(self) -> ActiveRunnerCleanup<R> {
@@ -126,10 +120,8 @@ where
         self,
         cancellation: &mut EndpointCancellation,
     ) -> ActiveRunnerLifetimeAdvance<S, R> {
-        self.advance_with_resource_sample(cancellation, || {
-            Ok(wire::ResourceSample::default())
-        })
-        .await
+        self.advance_with_resource_sample(cancellation, || Ok(wire::ResourceSample::default()))
+            .await
     }
 
     pub(crate) async fn advance_with_resource_sample<F>(
@@ -148,11 +140,8 @@ where
                 );
             }
         };
-        let heartbeat_wake = self.next_heartbeat_at.min(hard_deadline);
-        let control = Box::pin(
-            self.driver
-                .receive_active(heartbeat_wake, hard_deadline),
-        );
+        let heartbeat_wake = self.heartbeat.next_wake(hard_deadline);
+        let control = Box::pin(self.driver.receive_active(heartbeat_wake, hard_deadline));
         let selected = tokio::select! {
             biased;
             () = cancellation.cancelled() => Selected::LocalCancellation,
@@ -180,28 +169,9 @@ where
                         return cleanup(self, ActiveRunnerExitReason::ProtocolFailure(error));
                     }
                 };
-                if let Err(error) = self
-                    .driver
-                    .send_heartbeat(
-                        self.last_progress_at_unix_ms,
-                        self.last_event_seq,
-                        resources,
-                    )
-                    .await
-                {
+                if let Err(error) = self.heartbeat.emit(&mut self.driver, resources).await {
                     return cleanup(self, ActiveRunnerExitReason::ProtocolFailure(error));
                 }
-                self.next_heartbeat_at = match Instant::now().checked_add(self.heartbeat_interval) {
-                    Some(value) => value,
-                    None => {
-                        return cleanup(
-                            self,
-                            ActiveRunnerExitReason::ProtocolFailure(
-                                AsyncControlDriverError::InvalidHeartbeatSchedule,
-                            ),
-                        );
-                    }
-                };
                 ActiveRunnerLifetimeAdvance::Continue(self)
             }
             Selected::Control(Ok(Some(event))) => {
@@ -215,7 +185,20 @@ where
                         PostActiveDisposition::Continue => {
                             ActiveRunnerLifetimeAdvance::Continue(self)
                         }
-                        PostActiveDisposition::Cleanup(reason) => cleanup(self, reason),
+                        PostActiveDisposition::Cleanup(reason) => {
+                            // V1 has no ACK-of-ACK. Keep the verified Control
+                            // owner alive briefly after the physically flushed
+                            // terminal response so the Host framing loop can
+                            // commit it before Windows reports peer EOF.
+                            if matches!(
+                                reason,
+                                ActiveRunnerExitReason::RemoteCancelled(_)
+                                    | ActiveRunnerExitReason::Fenced(_)
+                            ) {
+                                tokio::time::sleep(TERMINATION_ACK_DRAIN).await;
+                            }
+                            cleanup(self, reason)
+                        }
                     },
                 }
             }
@@ -239,27 +222,6 @@ where
     #[cfg(test)]
     pub(in crate::control) fn effect_gate_for_test(&self) -> Option<super::authority::EffectGate> {
         self.driver.effect_gate_for_test()
-    }
-}
-
-impl<R> ActiveRunnerCleanup<R> {
-    #[must_use]
-    pub(crate) const fn reason(&self) -> &ActiveRunnerExitReason {
-        &self.reason
-    }
-
-    #[must_use]
-    pub(crate) const fn final_state(&self) -> RunnerState {
-        self.final_state
-    }
-
-    pub(crate) fn close_local(self) {
-        drop(self);
-    }
-
-    #[cfg(test)]
-    pub(in crate::control) fn into_test_parts(self) -> (ActiveRunnerExitReason, RunnerState, R) {
-        (self.reason, self.final_state, self.resources)
     }
 }
 

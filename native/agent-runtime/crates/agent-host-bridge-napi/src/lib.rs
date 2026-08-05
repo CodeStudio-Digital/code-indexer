@@ -14,10 +14,12 @@ mod binding;
 mod error;
 mod model;
 mod platform;
+mod session_binding;
 mod supervisor_binding;
 
 pub use binding::{NativeHostAttemptChannels, open_host_attempt_bridge};
 pub use model::{NativeHostBridgeAbi, native_host_bridge_abi};
+pub use session_binding::{NativeSessionStoreBridge, open_native_session_store_bridge};
 pub use supervisor_binding::{
     NativeHostSupervisorChannel, NativeHostSupervisorCloseReceipt, open_host_supervisor_bridge,
 };

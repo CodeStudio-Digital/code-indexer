@@ -1,5 +1,6 @@
 import type { Readable } from 'node:stream';
 import { DelimitedChannelError } from './DelimitedChannelError.js';
+import { withTransportTimeout } from './DelimitedChannelTiming.js';
 
 const MAX_U32_VARINT_BYTES = 5;
 
@@ -16,7 +17,22 @@ export class DelimitedByteReader {
   }
 
   async receive(maximumFrameBytes: number): Promise<Uint8Array | undefined> {
-    const length = await this.#readLength();
+    return this.#receive(maximumFrameBytes);
+  }
+
+  /** Waits indefinitely for the first byte, then bounds frame progress. */
+  async receiveAfterIdle(
+    maximumFrameBytes: number,
+    progressTimeoutMs: number,
+  ): Promise<Uint8Array | undefined> {
+    return this.#receive(maximumFrameBytes, progressTimeoutMs);
+  }
+
+  async #receive(
+    maximumFrameBytes: number,
+    progressTimeoutMs?: number,
+  ): Promise<Uint8Array | undefined> {
+    const length = await this.#readLength(progressTimeoutMs);
     if (length === undefined) return undefined;
     if (length === 0) {
       throw new DelimitedChannelError('empty_frame', 'zero-length frame is forbidden');
@@ -27,7 +43,7 @@ export class DelimitedByteReader {
         `frame length ${length} exceeds hard cap ${maximumFrameBytes}`,
       );
     }
-    return this.#readBody(length);
+    return this.#readBody(length, progressTimeoutMs);
   }
 
   scrub(): void {
@@ -36,14 +52,16 @@ export class DelimitedByteReader {
     this.#chunkOffset = 0;
   }
 
-  async #readLength(): Promise<number | undefined> {
+  async #readLength(progressTimeoutMs?: number): Promise<number | undefined> {
     let value = 0;
+    let started = false;
     for (let index = 0; index < MAX_U32_VARINT_BYTES; index += 1) {
-      const byte = await this.#readByte();
+      const byte = await this.#readByte(started ? progressTimeoutMs : undefined);
       if (byte === undefined) {
         if (index === 0) return undefined;
         throw new DelimitedChannelError('truncated_length', 'frame length is truncated');
       }
+      started = true;
       const payload = byte & 0x7f;
       if (index === MAX_U32_VARINT_BYTES - 1 && (byte & 0xf0) !== 0) {
         throw new DelimitedChannelError('length_overflow', 'frame length exceeds uint32');
@@ -62,14 +80,14 @@ export class DelimitedByteReader {
     throw new DelimitedChannelError('length_overflow', 'frame length exceeds uint32');
   }
 
-  async #readBody(length: number): Promise<Uint8Array> {
+  async #readBody(length: number, progressTimeoutMs?: number): Promise<Uint8Array> {
     const body = new Uint8Array(length);
     let written = 0;
     try {
       while (written < length) {
         if (
           this.#chunkOffset === this.#chunk.byteLength
-          && !(await this.#loadChunk())
+          && !(await this.#loadChunk(progressTimeoutMs))
         ) {
           throw new DelimitedChannelError(
             'truncated_frame',
@@ -92,8 +110,11 @@ export class DelimitedByteReader {
     }
   }
 
-  async #readByte(): Promise<number | undefined> {
-    if (this.#chunkOffset === this.#chunk.byteLength && !(await this.#loadChunk())) {
+  async #readByte(progressTimeoutMs?: number): Promise<number | undefined> {
+    if (
+      this.#chunkOffset === this.#chunk.byteLength
+      && !(await this.#loadChunk(progressTimeoutMs))
+    ) {
       return undefined;
     }
     const byte = this.#chunk[this.#chunkOffset];
@@ -102,9 +123,12 @@ export class DelimitedByteReader {
     return byte;
   }
 
-  async #loadChunk(): Promise<boolean> {
+  async #loadChunk(progressTimeoutMs?: number): Promise<boolean> {
     for (;;) {
-      const next = await this.#iterator.next();
+      const operation = this.#iterator.next();
+      const next = progressTimeoutMs === undefined
+        ? await operation
+        : await withTransportTimeout(operation, progressTimeoutMs, 'read_timeout');
       if (next.done) return false;
       if (!(next.value instanceof Uint8Array)) {
         throw new DelimitedChannelError(

@@ -43,6 +43,10 @@ implements DurableSupervisorFactPort {
     control: DurableSupervisorFactCommitControl,
   ): Promise<void> {
     if (this.#discarded) throw barrierFailure('durable launch barrier is discarded');
+    if (this.#released) {
+      await this.delegate.commit(fact, binding, control);
+      return;
+    }
     const retained = cloneFact(fact);
     await this.delegate.commit(fact, binding, control);
     if (this.#discarded) return;

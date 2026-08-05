@@ -3,6 +3,7 @@ use agent_protocol::generated::v1 as wire;
 use agent_protocol::handshake::HandshakeMachine;
 use agent_protocol::identity::AttemptIdentity;
 
+use crate::control::RunnerExecutionSeed;
 use crate::lifecycle::RunnerLifecycle;
 
 /// Platform facts produced after a validated Prepare authorizes hydration.
@@ -73,6 +74,7 @@ pub(in crate::control) struct ValidatedPrepare {
     pub spec_sha256: [u8; 32],
     pub expected_snapshots: Vec<wire::SnapshotRef>,
     pub expected_artifacts: Vec<wire::ArtifactRef>,
+    pub execution_seed: RunnerExecutionSeed,
 }
 
 #[derive(Debug)]

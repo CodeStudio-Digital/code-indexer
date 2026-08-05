@@ -40,6 +40,38 @@ export interface ActiveAttemptAuthorityFacts {
 export interface ActiveAttemptAuthoritySnapshot
   extends ActiveAttemptAuthorityFacts {
   readonly signal: AbortSignal;
+  readonly heartbeat?: HostHeartbeatSnapshot;
+}
+
+export interface HostHeartbeatSnapshot {
+  readonly messageId: string;
+  readonly observedAtUnixMs: bigint;
+  readonly lastAliveAtUnixMs: bigint;
+  readonly lastProgressAtUnixMs: bigint;
+  readonly lastEventSeq: bigint;
+  readonly phase: agentV1Runtime.PhysicalAttemptPhase;
+  readonly resources: agentV1Common.ResourceSample;
+}
+
+export interface HostCancelAttemptRequest {
+  readonly reason: agentV1Runtime.CancelReason;
+  readonly reasonCode: string;
+  readonly graceDeadlineAtUnixMs: bigint;
+  readonly idempotencyKey: string;
+}
+
+export interface HostFenceAttemptRequest {
+  readonly replacementFencingEpoch: bigint;
+  readonly reasonCode: string;
+  readonly fencedAtUnixMs: bigint;
+  readonly idempotencyKey: string;
+}
+
+export interface HostReapAttemptRequest {
+  readonly runtimeInstanceId: string;
+  readonly reapDeadlineAtUnixMs: bigint;
+  readonly reasonCode: string;
+  readonly idempotencyKey: string;
 }
 
 export interface PreparedDurabilityPort {

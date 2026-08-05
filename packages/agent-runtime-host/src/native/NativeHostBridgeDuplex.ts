@@ -20,8 +20,11 @@ export class NativeHostBridgeDuplex extends Duplex {
     authority: NativeHostBridgeCloseAuthority,
   ) {
     super({
-      allowHalfOpen: false,
-      autoDestroy: true,
+      // Control and Data share one native close authority. A clean EOF on one
+      // read half must not tear down the sibling while its terminal ACK is in
+      // flight; pair cleanup is owned by the attempt lifecycle.
+      allowHalfOpen: true,
+      autoDestroy: false,
       decodeStrings: true,
       highWaterMark: NATIVE_HOST_TRANSPORT_CHUNK_BYTES,
     });
@@ -32,10 +35,18 @@ export class NativeHostBridgeDuplex extends Duplex {
   override _read(): void {
     if (this.#reading || this.destroyed) return;
     this.#reading = true;
-    void this.#authority.read(
-      this.#kind,
-      NATIVE_HOST_TRANSPORT_CHUNK_BYTES,
-    ).then(
+    let read: Promise<Uint8Array | null>;
+    try {
+      read = this.#authority.read(
+        this.#kind,
+        NATIVE_HOST_TRANSPORT_CHUNK_BYTES,
+      );
+    } catch (cause) {
+      this.#reading = false;
+      this.destroy(asError(cause));
+      return;
+    }
+    void read.then(
       (bytes) => this.#completeRead(bytes),
       (cause) => this.destroy(asError(cause)),
     ).finally(() => {
@@ -64,20 +75,17 @@ export class NativeHostBridgeDuplex extends Duplex {
   }
 
   override _final(callback: WriteCallback): void {
-    void this.#authority.close().then(
-      () => callback(),
-      (cause) => callback(asError(cause)),
-    );
+    callback();
   }
 
   override _destroy(
     error: Error | null,
     callback: WriteCallback,
   ): void {
-    void this.#authority.close().then(
-      () => callback(error),
-      (cause) => callback(error ?? asError(cause)),
-    );
+    // Stream failure is reported to the semantic adapter. Only the endpoint
+    // pair owns the shared native close authority and decides when both
+    // Control and Data may be torn down.
+    callback(error);
   }
 
   #completeRead(value: Uint8Array | null): void {

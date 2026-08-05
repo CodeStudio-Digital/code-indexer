@@ -36,6 +36,36 @@ export function sendActivateAttempt(
   );
 }
 
+export function sendCancelAttempt(
+  channel: EstablishedAttemptChannel,
+  value: agentV1Runtime.CancelAttempt,
+  timeoutMs: number,
+): Promise<CommittedOutbound> {
+  return send(
+    channel,
+    create(agentV1Runtime.FramePayloadSchema, {
+      body: { case: 'cancelAttempt', value },
+    }),
+    timeoutMs,
+    'CancelAttempt',
+  );
+}
+
+export function sendFenceAttempt(
+  channel: EstablishedAttemptChannel,
+  value: agentV1Runtime.FenceAttempt,
+  timeoutMs: number,
+): Promise<CommittedOutbound> {
+  return send(
+    channel,
+    create(agentV1Runtime.FramePayloadSchema, {
+      body: { case: 'fenceAttempt', value },
+    }),
+    timeoutMs,
+    'FenceAttempt',
+  );
+}
+
 async function send(
   channel: EstablishedAttemptChannel,
   payload: agentV1Runtime.FramePayload,

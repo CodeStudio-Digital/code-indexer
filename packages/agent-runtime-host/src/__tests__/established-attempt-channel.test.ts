@@ -1,4 +1,4 @@
-import { PassThrough } from 'node:stream';
+import { PassThrough, Writable } from 'node:stream';
 import { fromBinary, toBinary } from '@bufbuild/protobuf';
 import { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import { describe, expect, it, vi } from 'vitest';
@@ -42,6 +42,59 @@ function ackFor(pending: PendingInbound, acknowledgedAtUnixMs = 10n) {
 }
 
 describe('established outbound header authority', () => {
+  it('keeps a permanent receive live while committing a correlated outbound', async () => {
+    const input = new PassThrough();
+    input.write(delimit(agentHelloFrame()));
+    let writeCount = 0;
+    let releaseRequest!: () => void;
+    let publishRequest!: (frame: Uint8Array) => void;
+    const requestBody = new Promise<Uint8Array>((resolve) => {
+      publishRequest = resolve;
+    });
+    const writable = new Writable({
+      write(chunk, _encoding, callback) {
+        writeCount += 1;
+        if (writeCount === 4) {
+          publishRequest(Uint8Array.from(chunk));
+          releaseRequest = () => callback();
+          return;
+        }
+        callback();
+      },
+    });
+    const setup = hostBootstrap([], { readable: input, writable });
+    await setup.bootstrap.receiveAgentHello();
+    const established = await setup.bootstrap.establish(hostHello());
+    const receiving = established.beginReceive();
+    const sending = established.sendNew(activatePayload(), { timeoutMs: 1_000 });
+    const request = decodeFrame(await requestBody);
+    input.write(delimit(inboundAckFrame(
+      'activation-ack-2',
+      2n,
+      request.header!.messageId,
+      framePayloadSha256(request.encodedPayload),
+    )));
+    let received = false;
+    void receiving.then(() => { received = true; });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(received).toBe(false);
+
+    releaseRequest();
+    const outbound = await sending;
+    const inbound = await receiving;
+    if (inbound.kind !== 'pending') throw new Error('pending expected');
+    const binding = inbound.pending.binding();
+    const receipt = established.commitAccepted(inbound.pending);
+
+    expect(outbound.outboundMessageId()).toBe(request.header!.messageId);
+    expect(established.receiptMatches(
+      receipt,
+      binding,
+    )).toBe(true);
+    expect(established.isPoisoned).toBe(false);
+    established.abort();
+  });
+
   it('generates a new envelope for a semantic retry with stable payload', async () => {
     const { established, capture } = await establishedWith([]);
     const payload = preparePayload();

@@ -183,9 +183,17 @@ fn update_schedule(
     ) {
         entry.deadline_at_unix_ms = entry.deadline_at_unix_ms.min(terminate_at_unix_ms);
     }
-    entry.trigger = entry.trigger.max(trigger);
+    entry.trigger = merge_trigger(entry.trigger, trigger);
     entry.hard_deadline_at_unix_ms =
         earliest_deadline(entry.hard_deadline_at_unix_ms, hard_deadline_at_unix_ms);
+}
+
+fn merge_trigger(current: CleanupTrigger, candidate: CleanupTrigger) -> CleanupTrigger {
+    match (current, candidate) {
+        (existing, CleanupTrigger::Reap) if !matches!(existing, CleanupTrigger::Reap) => existing,
+        (CleanupTrigger::Reap, replacement) => replacement,
+        (existing, replacement) => existing.max(replacement),
+    }
 }
 
 const fn can_advance(phase: CleanupPhase) -> bool {

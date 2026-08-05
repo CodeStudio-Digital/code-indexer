@@ -17,6 +17,8 @@ export type HostSupervisorFactErrorCode =
   | 'pending_fact_active'
   | 'invalid_pending_fact'
   | 'invalid_fact'
+  | 'invalid_command'
+  | 'command_ack_timeout'
   | 'invalid_lifecycle_order'
   | 'durable_commit_failed'
   | 'durable_commit_timeout'

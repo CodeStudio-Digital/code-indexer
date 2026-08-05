@@ -1,10 +1,11 @@
 use std::time::Duration;
 
 use agent_platform::containment::ContainmentPort;
+use agent_protocol::generated::v1 as wire;
 
 use super::super::completion_cleanup::CompletionCleanupAttempt;
 use super::super::provision::ProtectedLaunchProvisionPort;
-use super::super::state::{AdmissionClosureReason, CleanupStateError};
+use super::super::state::{AdmissionClosureReason, CleanupStateError, CleanupTrigger};
 use super::super::{CleanupDriveReport, SupervisorDriverError, SupervisorLifecycleCore};
 use super::clock::LifecycleClockSampler;
 use crate::process_table::{ContainmentOperationError, ReapAfterCleanupError, SpawnHandoffState};
@@ -135,21 +136,44 @@ where
                 )?;
                 continue;
             }
+            if !self.can_stage_lifecycle_fact() {
+                report.retained_for_reap += 1;
+                self.state
+                    .schedule_reap_retry(&key, retry_at(before, REAP_RETRY_MS)?)?;
+                continue;
+            }
+            let trigger = self.state.cleanup_trigger(&key)?;
             report.reap_attempts += 1;
+            let mut reaped_at_unix_ms = None;
             let effect = self.ownership.reap_after_cleanup_gated(
                 self.containment.as_ref(),
                 &key,
                 reap_timeout,
                 || {
                     clock.sample().and_then(|after| {
-                        self.state
+                        let validated = self
+                            .state
                             .ensure_cleanup_deadline_for(&key, after)
-                            .map(|()| after)
+                            .map(|()| after);
+                        if validated.is_ok() {
+                            reaped_at_unix_ms = Some(after);
+                        }
+                        validated
                     })
                 },
             );
             match effect {
-                Ok(_) => {
+                Ok(reaped) => {
+                    let reaped_at_unix_ms =
+                        reaped_at_unix_ms.ok_or(CleanupStateError::InvalidTransition)?;
+                    if !self.stage_reaped_lifecycle(
+                        &key,
+                        &reaped,
+                        physical_exit_cause(trigger, reaped.exit_code()),
+                        reaped_at_unix_ms,
+                    ) {
+                        return Err(CleanupStateError::InvalidTransition);
+                    }
                     report.reaped += 1;
                     debug_assert!(!self.completion_cleanup.owns(&key));
                     self.launch_registry.mark_physical_reaped(&key);
@@ -171,6 +195,18 @@ where
             }
         }
         Ok(())
+    }
+}
+
+const fn physical_exit_cause(trigger: CleanupTrigger, exit_code: u32) -> wire::PhysicalExitCause {
+    match trigger {
+        CleanupTrigger::Cancel => wire::PhysicalExitCause::Cancelled,
+        CleanupTrigger::Fence => wire::PhysicalExitCause::Fenced,
+        CleanupTrigger::AuthorityWatchdog => wire::PhysicalExitCause::DeadlineExceeded,
+        CleanupTrigger::ChannelFailure => wire::PhysicalExitCause::HostDisconnected,
+        CleanupTrigger::Shutdown => wire::PhysicalExitCause::HardKilled,
+        CleanupTrigger::Reap if exit_code == 0 => wire::PhysicalExitCause::Cooperative,
+        CleanupTrigger::Reap => wire::PhysicalExitCause::Crashed,
     }
 }
 

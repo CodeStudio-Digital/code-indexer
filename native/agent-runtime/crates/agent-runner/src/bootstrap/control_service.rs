@@ -3,7 +3,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agent_platform::ipc::{EndpointCancellation, ExpectedLocalPeer, ProtectedEndpointError};
 use agent_platform::windows::ipc::VerifiedWindowsEndpointStream;
-use agent_protocol::frame::AsyncEstablishedAttemptChannel;
 use agent_protocol::generated::v1 as wire;
 use agent_protocol::runner_bootstrap::ShapeValidatedRunnerLaunchHandoff;
 use tokio::time::Instant;
@@ -13,6 +12,7 @@ use crate::lifecycle::RunnerState;
 
 use super::PreparedRunnerControlLaunch;
 
+mod active_engine;
 mod data;
 mod drive;
 mod error;
@@ -51,9 +51,16 @@ pub struct ActiveRunnerControlLaunch {
 )]
 pub struct ActiveRunnerResources {
     handoff: ShapeValidatedRunnerLaunchHandoff,
-    data: AsyncEstablishedAttemptChannel<VerifiedWindowsEndpointStream>,
     runner_pulse: RunnerPulsePump,
     hydration: VerifiedRunnerHydration,
+    engine_task: active_engine::ActiveEngineTask,
+}
+
+impl ActiveRunnerResources {
+    async fn shutdown(self) {
+        let Self { engine_task, .. } = self;
+        engine_task.cancel_and_join().await;
+    }
 }
 
 impl Debug for ActiveRunnerControlLaunch {
@@ -93,6 +100,20 @@ impl ActiveRunnerControlLaunch {
     /// Owns the active attempt until a terminal control, deadline, local
     /// cancellation, transport failure, or supervisor reap ends its lifetime.
     pub(crate) async fn run_until_cleanup(mut self, cancellation: &mut EndpointCancellation) {
+        // Give the engine one bounded scheduling turn and prove that its first
+        // Data request is physically committed. Host response/model latency
+        // remains concurrent with the always-responsive Control loop.
+        if !self
+            .lifetime
+            .resources_mut()
+            .engine_task
+            .wait_started()
+            .await
+        {
+            let cleanup = self.lifetime.revoke();
+            cleanup.into_resources().shutdown().await;
+            return;
+        }
         loop {
             match self
                 .lifetime
@@ -103,7 +124,8 @@ impl ActiveRunnerControlLaunch {
                     self.lifetime = next;
                 }
                 ActiveRunnerLifetimeAdvance::CleanupRequired(cleanup) => {
-                    cleanup.close_local();
+                    let resources = cleanup.into_resources();
+                    resources.shutdown().await;
                     return;
                 }
             }
@@ -116,9 +138,10 @@ impl ActiveRunnerControlLaunch {
     }
 }
 
-fn heartbeat_resource_sample() -> Result<wire::ResourceSample, crate::control::AsyncControlDriverError>
-{
-    resource_sample().map_err(|_| crate::control::AsyncControlDriverError::HeartbeatResourceSampleFailed)
+fn heartbeat_resource_sample()
+-> Result<wire::ResourceSample, crate::control::AsyncControlDriverError> {
+    resource_sample()
+        .map_err(|_| crate::control::AsyncControlDriverError::HeartbeatResourceSampleFailed)
 }
 
 impl PreparedRunnerControlLaunch {

@@ -159,6 +159,14 @@ class NativeDataAdapter implements AuthenticatedAttemptDataPort {
     }
   }
 
+  observeFailure(observer: (cause: unknown) => void): () => void {
+    return this.#delegate.observeFailure(observer);
+  }
+
+  beginTermination(): void {
+    this.#delegate.beginTermination();
+  }
+
   abort(cause?: unknown): void {
     this.#delegate.abort(cause);
     this.#pair.abort(cause);

@@ -47,6 +47,7 @@ mod flow;
 mod idempotency;
 mod launch;
 mod launch_clock_failures;
+mod lifecycle_reporting;
 mod provisioning;
 mod registry;
 mod state;

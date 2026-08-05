@@ -9,6 +9,9 @@ import type {
 } from '../ipc/HostSupervisorBootstrapTypes.js';
 import type {
   ActiveAttemptAuthoritySnapshot,
+  HostCancelAttemptRequest,
+  HostFenceAttemptRequest,
+  HostReapAttemptRequest,
 } from './HostLifecycleTypes.js';
 import type {
   ActiveAttemptAuthorityHandle,
@@ -36,6 +39,9 @@ export interface RustHostManagementLaunchPort {
 
 export interface RustHostManagementFactPort {
   processNext(signal?: AbortSignal): Promise<HostSupervisorFactStep>;
+  cancel(request: HostCancelAttemptRequest): Promise<void>;
+  fence(request: HostFenceAttemptRequest): Promise<void>;
+  reap(request: HostReapAttemptRequest): Promise<void>;
   abort(cause?: unknown): void;
 }
 
@@ -53,6 +59,14 @@ export interface AuthenticatedAttemptLifecyclePort {
   inspectActive(
     handle: ActiveAttemptAuthorityHandle,
   ): ActiveAttemptAuthoritySnapshot;
+  cancel(
+    handle: ActiveAttemptAuthorityHandle,
+    request: HostCancelAttemptRequest,
+  ): Promise<void>;
+  fence(
+    handle: ActiveAttemptAuthorityHandle,
+    request: HostFenceAttemptRequest,
+  ): Promise<void>;
   observeFailure(observer: (cause: unknown) => void): () => void;
   abort(): void;
   tick(): void;
@@ -89,6 +103,9 @@ export interface AuthenticatedAttemptDataPort {
     launch: DurableSupervisorLaunchSnapshot,
     context: AuthenticatedAttemptControlContext,
   ): Promise<void>;
+  observeFailure(observer: (cause: unknown) => void): () => void;
+  /** Marks the next physical Data EOF as an authorized Control termination. */
+  beginTermination?(): void;
   abort(cause?: unknown): void;
 }
 

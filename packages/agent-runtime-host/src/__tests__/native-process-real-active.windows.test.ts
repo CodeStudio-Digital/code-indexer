@@ -1,9 +1,12 @@
 import { create } from '@bufbuild/protobuf';
+import { readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
+  agentV1Runtime,
   agentV1Supervisor,
   packProtocolVersion,
 } from '@mcp/agent-runtime-contracts';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   encodeNativeHostSupervisorBridgeOpenRequest,
 } from '../adapters/NativeHostSupervisorBridgeRequest.js';
@@ -22,6 +25,64 @@ const enabled = process.platform === 'win32'
 const physicalIt = enabled ? it : it.skip;
 
 describe('native process-real Rust attempt', () => {
+  physicalIt('executes native.read_file and resumes the provider from its Rust journal', async () => {
+    const fixture = await processRealFixture(false, true);
+    const runtime = await NativeRustHostAttemptRuntime.create(fixture.options);
+    let authority: Parameters<typeof runtime.cancelActive>[0] | undefined;
+    try {
+      const result = await runtime.run(fixture.prepare);
+      expect(result.kind).toBe('active');
+      if (result.kind !== 'active') throw new Error('productive launch rejected');
+      authority = result.authority;
+      expect(fixture.observed.providerGatewayCreated).toBe(true);
+      const journal = join(
+        fixture.sessionRoot!,
+        fixture.options.launch.identity!.sessionId,
+        'conversation.jsonl',
+      );
+      await vi.waitFor(async () => {
+        expect(fixture.observed.providerRunStarted).toBe(true);
+        expect(fixture.observed.providerResolved).toBe(true);
+        expect(fixture.observed.providerRunCount).toBe(2);
+        expect(fixture.observed.toolResultObserved).toBe(true);
+        const lines = (await readFile(journal, 'utf8')).trim().split('\n');
+        expect(lines).toHaveLength(9);
+        expect(lines.map((line) => JSON.parse(line).seq))
+          .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+        expect(lines.map((line) => JSON.parse(line).kind))
+          .toEqual(new Array(9).fill('lifecycle'));
+        expect(lines.map((line) => JSON.parse(line).durability)).toEqual([
+          'durable',
+          'authoritative',
+          'authoritative',
+          'authoritative',
+          'durable',
+          'coalesced',
+          'coalesced',
+          'durable',
+          'authoritative',
+        ]);
+        expect(JSON.parse(lines.at(-1)!).durability).toBe('authoritative');
+      }, { timeout: 10_000, interval: 50 });
+      await expect(runtime.inspectUnresolvedCapabilityDispatches(64))
+        .resolves.toEqual([]);
+      await runtime.cancelActive(result.authority, {
+        reason: agentV1Runtime.CancelReason.USER_REQUEST,
+        reasonCode: 'productive_process_real_complete',
+        graceDeadlineAtUnixMs: BigInt(Date.now() + 750),
+        idempotencyKey: `productive-cancel:${result.hello.provenance?.pid}`,
+      });
+      await runtime.waitForPhysicalReap();
+    } finally {
+      if (authority) {
+        await runtime.close();
+      } else {
+        await runtime.close().catch(() => undefined);
+      }
+      await rm(fixture.sessionRoot!, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   physicalIt('negotiates SupervisorHello over the raw native stream', async () => {
     const fixture = await processRealFixture();
     const request = encodeNativeHostSupervisorBridgeOpenRequest({
@@ -57,6 +118,7 @@ describe('native process-real Rust attempt', () => {
         .toBe('supervisorHello');
     } finally {
       await channel.close();
+      await rm(fixture.sessionRoot!, { recursive: true, force: true });
     }
   }, 120_000);
 
@@ -90,14 +152,68 @@ describe('native process-real Rust attempt', () => {
       await new Promise((resolve) => setTimeout(resolve, 1_200));
       expect(processAlive(supervisorProcessId)).toBe(true);
       expect(processAlive(runnerProcessId)).toBe(true);
+      await vi.waitFor(() => {
+        expect(runtime.inspectActive(result.authority).heartbeat).toBeDefined();
+      }, { timeout: 3_000 });
+      const heartbeat = runtime.inspectActive(result.authority).heartbeat;
+      expect(heartbeat).toMatchObject({
+        lastEventSeq: 0n,
+        phase: agentV1Runtime.PhysicalAttemptPhase.ACTIVE,
+        resources: {
+          processCount: 1,
+          spoolBytes: 0n,
+        },
+      });
+      expect(heartbeat!.resources.residentMemoryBytes).toBeGreaterThan(0n);
+      expect(heartbeat!.resources.peakResidentMemoryBytes)
+        .toBeGreaterThanOrEqual(heartbeat!.resources.residentMemoryBytes);
+      expect(heartbeat!.resources.openFileCount).toBeGreaterThan(0);
+      const activeSnapshot = runtime.inspectActive(result.authority);
+      await runtime.cancelActive(result.authority, {
+        reason: agentV1Runtime.CancelReason.USER_REQUEST,
+        reasonCode: 'process_real_e2e',
+        graceDeadlineAtUnixMs: BigInt(Date.now() + 750),
+        idempotencyKey: `process-real-cancel:${runnerProcessId}`,
+      });
+      expect(activeSnapshot.signal.aborted).toBe(true);
+      expect(runtime.isFailed).toBe(false);
+      await vi.waitFor(() => {
+        expect(processAlive(runnerProcessId)).toBe(false);
+      }, { timeout: 3_000, interval: 25 });
+      await runtime.waitForPhysicalReap();
+      expect(fixture.committedFacts).toEqual([
+        'launchAccepted',
+        'attemptProcessSpawned',
+        'attemptContainmentReport',
+        'attemptProcessExited',
+        'attemptProcessReaped',
+      ]);
+      expect(fixture.observed.exitCause)
+        .toBe(agentV1Supervisor.PhysicalExitCause.CANCELLED);
+      expect(processAlive(supervisorProcessId)).toBe(true);
     } catch (cause) {
+      const failedBeforeClose = runtime.isFailed;
+      const runnerAliveBeforeClose = processAlive(runnerProcessId);
+      const supervisorAliveBeforeClose = processAlive(supervisorProcessId);
+      const journalBeforeClose = await readFile(join(
+        fixture.sessionRoot!,
+        fixture.options.launch.identity!.sessionId,
+        'conversation.jsonl',
+      ), 'utf8').catch((error: unknown) => `unavailable:${String(error)}`);
       const receipt = await runtime.close();
       closed = true;
       throw new Error(
         `process-real attempt failed; supervisor exit=${receipt.exitCode}`
           + ` forced=${receipt.forced}`
           + ` facts=${fixture.committedFacts.join(',')}`
-          + ` hydrationReads=${fixture.observed.readCount}`,
+          + ` hydrationReads=${fixture.observed.readCount}`
+          + ` runtimeFailed=${failedBeforeClose}`
+          + ` failureCause=${String(runtime.failureCause ?? 'none')}`
+          + ` aliveBeforeClose=${supervisorAliveBeforeClose}/${runnerAliveBeforeClose}`
+          + ` provider=${fixture.observed.providerRunStarted}/${fixture.observed.providerResolved}`
+          + ` exitCause=${fixture.observed.exitCause ?? 'none'}`
+          + ` dataFailure=${String(fixture.observed.sourceCloseCause ?? 'none')}`
+          + ` journal=${journalBeforeClose}`,
         { cause },
       );
     } finally {
@@ -105,6 +221,7 @@ describe('native process-real Rust attempt', () => {
         const receipt = await runtime.close();
         expect(receipt.processId).toBe(supervisorProcessId);
       }
+      await rm(fixture.sessionRoot!, { recursive: true, force: true });
     }
     expect(processAlive(supervisorProcessId)).toBe(false);
     expect(processAlive(runnerProcessId)).toBe(false);
@@ -114,12 +231,67 @@ describe('native process-real Rust attempt', () => {
     const fixture = await processRealFixture(true);
     const runtime = await NativeRustHostAttemptRuntime.create(fixture.options);
     const supervisorProcessId = runtime.supervisorProcessId;
-    await expect(runtime.run(fixture.prepare)).rejects.toThrow();
-    const runnerProcessId = fixture.observed.runnerProcessId ?? 0;
-    expect(runnerProcessId).toBeGreaterThan(0);
-    expect(fixture.observed.sourceCloseCause).toBeDefined();
-    const receipt = await runtime.close();
-    expect(receipt.processId).toBe(supervisorProcessId);
+    let runnerProcessId = 0;
+    try {
+      await expect(runtime.run(fixture.prepare)).rejects.toThrow();
+      runnerProcessId = fixture.observed.runnerProcessId ?? 0;
+      expect(runnerProcessId).toBeGreaterThan(0);
+      expect(fixture.observed.sourceCloseCause).toBeDefined();
+      const receipt = await runtime.close();
+      expect(receipt.processId).toBe(supervisorProcessId);
+      expect(processAlive(supervisorProcessId)).toBe(false);
+      expect(processAlive(runnerProcessId)).toBe(false);
+    } finally {
+      await runtime.close().catch(() => undefined);
+      await rm(fixture.sessionRoot!, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  physicalIt('fences Active on the live Control stream and exits its runner', async () => {
+    const fixture = await processRealFixture();
+    const runtime = await NativeRustHostAttemptRuntime.create(fixture.options);
+    const supervisorProcessId = runtime.supervisorProcessId;
+    let runnerProcessId = 0;
+    try {
+      const result = await runtime.run(fixture.prepare);
+      expect(result.kind).toBe('active');
+      if (result.kind !== 'active') throw new Error('process-real launch rejected');
+      runnerProcessId = result.hello.provenance?.pid ?? 0;
+      const snapshot = runtime.inspectActive(result.authority);
+
+      await runtime.fenceActive(result.authority, {
+        replacementFencingEpoch: 8n,
+        reasonCode: 'process_real_superseded',
+        fencedAtUnixMs: BigInt(Date.now()),
+        idempotencyKey: `process-real-fence:${runnerProcessId}`,
+      });
+
+      expect(snapshot.signal.aborted).toBe(true);
+      expect(runtime.isFailed).toBe(false);
+      expect(processAlive(supervisorProcessId)).toBe(true);
+      await vi.waitFor(() => {
+        expect(processAlive(runnerProcessId)).toBe(false);
+      }, { timeout: 3_000, interval: 25 });
+      await runtime.waitForPhysicalReap();
+      expect(fixture.committedFacts.slice(-2)).toEqual([
+        'attemptProcessExited',
+        'attemptProcessReaped',
+      ]);
+      expect(fixture.observed.exitCause)
+        .toBe(agentV1Supervisor.PhysicalExitCause.FENCED);
+    } catch (cause) {
+      throw new Error(
+        `process-real fence failed; facts=${fixture.committedFacts.join(',')}`
+          + ` runtimeFailed=${runtime.isFailed}`
+          + ` alive=${processAlive(supervisorProcessId)}/${processAlive(runnerProcessId)}`
+          + ` provider=${fixture.observed.providerRunStarted}/${fixture.observed.providerResolved}`
+          + ` exitCause=${fixture.observed.exitCause ?? 'none'}`,
+        { cause },
+      );
+    } finally {
+      await runtime.close();
+      await rm(fixture.sessionRoot!, { recursive: true, force: true });
+    }
     expect(processAlive(supervisorProcessId)).toBe(false);
     expect(processAlive(runnerProcessId)).toBe(false);
   }, 120_000);

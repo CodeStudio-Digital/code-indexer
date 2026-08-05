@@ -28,6 +28,33 @@ pub use operations::{
     execute_contained_spawn,
 };
 
+#[cfg(test)]
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "cross-module tests need a receipt that only process_table may construct"
+)]
+pub(crate) fn reaped_attempt_for_test(
+    metadata: AttemptRuntimeMetadata,
+    peak_job_memory_bytes: u64,
+) -> ReapedAttempt {
+    ReapedAttempt::new(
+        metadata,
+        ProcessId(41),
+        0xE000_0001,
+        peak_job_memory_bytes,
+        agent_platform::containment::ContainmentReport {
+            level: agent_platform::containment::ContainmentLevel::Unavailable,
+            enforced_limits: Vec::new(),
+            unsupported_limits: Vec::new(),
+            capabilities: agent_platform::containment::ContainmentCapabilities::default(),
+        },
+        ObservedExit {
+            exit_code: 0xE000_0001,
+            observed_at_unix_ms: 2_000,
+        },
+    )
+}
+
 #[derive(Debug)]
 struct VerifiedReap {
     resource_group_id: ResourceGroupId,

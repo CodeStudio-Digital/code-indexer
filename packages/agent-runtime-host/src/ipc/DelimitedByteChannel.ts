@@ -1,25 +1,17 @@
 import type { Readable, Writable } from 'node:stream';
 import { DelimitedByteReader } from './DelimitedByteReader.js';
 import { DelimitedChannelError } from './DelimitedChannelError.js';
-import { DelimitedFrameWriter } from './DelimitedFrameWriter.js';
 import {
-  boundedTimeout,
-  withTransportTimeout,
-} from './DelimitedChannelTiming.js';
+  type DelimitedByteChannelOptions,
+  resolveDelimitedByteChannelOptions,
+} from './DelimitedByteChannelOptions.js';
+import { DelimitedFrameWriter } from './DelimitedFrameWriter.js';
+import { withTransportTimeout } from './DelimitedChannelTiming.js';
 
 export { DelimitedChannelError } from './DelimitedChannelError.js';
 export type { DelimitedChannelErrorCode } from './DelimitedChannelError.js';
 
-export interface DelimitedByteChannelOptions {
-  maximumFrameBytes: number;
-  maximumTransportChunkBytes?: number;
-  readTimeoutMs?: number;
-  writeTimeoutMs?: number;
-}
-
-const DEFAULT_TRANSPORT_CHUNK_BYTES = 64 * 1024;
-const DEFAULT_READ_TIMEOUT_MS = 30_000;
-const DEFAULT_WRITE_TIMEOUT_MS = 30_000;
+export type { DelimitedByteChannelOptions } from './DelimitedByteChannelOptions.js';
 /**
  * One bounded, length-delimited byte channel. It can be claimed by a semantic
  * owner so retained aliases cannot bypass protocol state.
@@ -42,24 +34,11 @@ export class DelimitedByteChannel {
     private readonly writable: Writable,
     options: DelimitedByteChannelOptions,
   ) {
-    assertPositiveUint32(options.maximumFrameBytes, 'maximumFrameBytes');
-    this.#maximumFrameBytes = options.maximumFrameBytes;
-    this.#maximumTransportChunkBytes = options.maximumTransportChunkBytes
-      ?? Math.min(options.maximumFrameBytes, DEFAULT_TRANSPORT_CHUNK_BYTES);
-    assertPositiveUint32(
-      this.#maximumTransportChunkBytes,
-      'maximumTransportChunkBytes',
-    );
-    this.#readTimeoutMs = boundedTimeout(
-      options.readTimeoutMs,
-      DEFAULT_READ_TIMEOUT_MS,
-      'readTimeoutMs',
-    );
-    this.#writeTimeoutMs = boundedTimeout(
-      options.writeTimeoutMs,
-      DEFAULT_WRITE_TIMEOUT_MS,
-      'writeTimeoutMs',
-    );
+    const resolved = resolveDelimitedByteChannelOptions(options);
+    this.#maximumFrameBytes = resolved.maximumFrameBytes;
+    this.#maximumTransportChunkBytes = resolved.maximumTransportChunkBytes;
+    this.#readTimeoutMs = resolved.readTimeoutMs;
+    this.#writeTimeoutMs = resolved.writeTimeoutMs;
     this.#reader = new DelimitedByteReader(
       readable,
       this.#maximumTransportChunkBytes,
@@ -101,6 +80,29 @@ export class DelimitedByteChannel {
         this.#reader.receive(this.#maximumFrameBytes),
         this.#readTimeoutMs,
         'read_timeout',
+      );
+    } catch (cause) {
+      throw this.#poison(cause);
+    } finally {
+      this.#reading = false;
+    }
+  }
+
+  /** Keeps an authenticated permanent channel idle without disabling the
+   * bounded progress timeout once a frame starts arriving. */
+  async receiveAfterIdle(owner?: object): Promise<Uint8Array | undefined> {
+    this.#assertUsable(owner);
+    if (this.#reading) {
+      throw this.#poison(new DelimitedChannelError(
+        'concurrent_read',
+        'only one receive may be active',
+      ));
+    }
+    this.#reading = true;
+    try {
+      return await this.#reader.receiveAfterIdle(
+        this.#maximumFrameBytes,
+        this.#readTimeoutMs,
       );
     } catch (cause) {
       throw this.#poison(cause);

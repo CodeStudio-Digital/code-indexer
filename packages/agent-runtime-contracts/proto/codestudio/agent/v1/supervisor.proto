@@ -371,7 +371,7 @@ message PulseFrame {
 
 message ManagementAck {
   // For lifecycle outcomes and physical facts, the host emits this ACK only
-  // after its single SQLite writer durably commits the correlated fact.
+  // after its single filesystem session writer durably commits the fact.
   string acknowledged_message_id = 1;
   bytes acknowledged_payload_sha256 = 2;
   int64 acknowledged_at_unix_ms = 3;

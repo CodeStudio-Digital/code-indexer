@@ -69,6 +69,28 @@ where
     C: SupervisorLifecycleClock,
     T: SupervisorOnlineLifecycleTimer,
 {
+    pub(super) async fn queue_next_lifecycle_fact(
+        &mut self,
+    ) -> Option<SupervisorAsyncServiceAdvance<P::Error>> {
+        let mut emission = self.lifecycle.owner_mut().take_lifecycle_fact()?;
+        let failure_key = emission.failure_key().clone();
+        let payload = emission.take_payload();
+        let command_port = self.actor.command_port();
+        let queued = match command_port.enqueue(payload) {
+            Ok(queued) => queued,
+            Err(error) => {
+                return Some(self.close_after_write_failure(error, Some(failure_key)));
+            }
+        };
+        drop(command_port);
+        self.retain_write(
+            queued,
+            PendingWriteCompletion::Fact(Box::new(emission)),
+            Some(failure_key),
+        );
+        Some(self.resume_pending_write().await)
+    }
+
     pub(super) fn retain_write(
         &mut self,
         queued: AsyncQueuedManagementWrite,

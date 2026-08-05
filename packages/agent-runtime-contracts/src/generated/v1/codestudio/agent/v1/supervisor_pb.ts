@@ -1309,7 +1309,7 @@ export const PulseFrameSchema: GenMessage<PulseFrame> = /*@__PURE__*/
 export type ManagementAck = Message<"codestudio.agent.v1.ManagementAck"> & {
   /**
    * For lifecycle outcomes and physical facts, the host emits this ACK only
-   * after its single SQLite writer durably commits the correlated fact.
+   * after its single filesystem session writer durably commits the fact.
    *
    * @generated from field: string acknowledged_message_id = 1;
    */

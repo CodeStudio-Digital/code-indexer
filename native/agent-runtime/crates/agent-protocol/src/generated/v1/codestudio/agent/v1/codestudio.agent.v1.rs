@@ -412,6 +412,197 @@ impl ResourceLimitKind {
         }
     }
 }
+/// Runner -> Host. This is a policy/resource-binding request, never authority
+/// to execute. Input is canonical JSON and remains bounded by the Data channel.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityPrepare {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub provider_operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub capability_id: ::prost::alloc::string::String,
+    #[prost(string, tag="7")]
+    pub capability_version: ::prost::alloc::string::String,
+    #[prost(enumeration="CapabilityExecutionClass", tag="8")]
+    pub execution_class: i32,
+    #[prost(bool, tag="9")]
+    pub mutates: bool,
+    #[prost(bytes="vec", tag="10")]
+    pub encoded_json_input: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="11")]
+    pub input_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="12")]
+    pub capability_set_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="13")]
+    pub idempotency_key: ::prost::alloc::string::String,
+    #[prost(int64, tag="14")]
+    pub deadline_at_unix_ms: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityRejected {
+    #[prost(string, tag="1")]
+    pub decision_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub policy_version: ::prost::alloc::string::String,
+    #[prost(int64, tag="4")]
+    pub decided_at_unix_ms: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityApprovalRequired {
+    #[prost(string, tag="1")]
+    pub decision_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub interaction_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub policy_version: ::prost::alloc::string::String,
+    #[prost(int64, tag="5")]
+    pub decided_at_unix_ms: i64,
+}
+/// Concrete local filesystem authority for a native read. The executor opens
+/// the file first, resolves the final OS handle path and rejects it unless that
+/// path remains inside canonical_root_path. The binding is never model output.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NativeFilesystemReadBinding {
+    #[prost(string, tag="1")]
+    pub canonical_root_path: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub max_read_bytes: u64,
+    #[prost(uint64, tag="3")]
+    pub max_output_bytes: u64,
+    #[prost(bool, tag="4")]
+    pub require_utf8: bool,
+}
+/// Short-lived execution authority. Every resource field is repeated here so
+/// the eventual executor can fail closed without consulting mutable Host state.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SealedExecutionGrant {
+    #[prost(string, tag="1")]
+    pub grant_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub decision_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub capability_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub capability_version: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="7")]
+    pub effective_input_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(enumeration="CapabilityExecutionClass", tag="8")]
+    pub execution_class: i32,
+    #[prost(bool, tag="9")]
+    pub mutates: bool,
+    #[prost(string, tag="10")]
+    pub environment_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="11")]
+    pub environment_version: u64,
+    #[prost(string, optional, tag="12")]
+    pub workspace_lease_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag="13")]
+    pub workspace_lease_version: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag="14")]
+    pub workspace_fencing_epoch: ::core::option::Option<u64>,
+    #[prost(string, tag="15")]
+    pub resource_binding_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="16")]
+    pub constraints_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="17")]
+    pub policy_version: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="18")]
+    pub nonce: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag="19")]
+    pub issued_at_unix_ms: i64,
+    #[prost(int64, tag="20")]
+    pub expires_at_unix_ms: i64,
+    #[prost(message, optional, tag="21")]
+    pub native_filesystem_read: ::core::option::Option<NativeFilesystemReadBinding>,
+}
+/// Host -> Runner. V1 exposes only the pre-dispatch decision. Started and
+/// terminal are authoritative EngineEventRecord bodies rather than duplicate
+/// top-level capability frames; cancel and probe remain future lifecycle work.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityUpdate {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(oneof="capability_update::Decision", tags="10, 11, 12")]
+    pub decision: ::core::option::Option<capability_update::Decision>,
+}
+/// Nested message and enum types in `CapabilityUpdate`.
+pub mod capability_update {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Decision {
+        #[prost(message, tag="10")]
+        Rejected(super::CapabilityRejected),
+        #[prost(message, tag="11")]
+        ApprovalRequired(super::CapabilityApprovalRequired),
+        #[prost(message, tag="12")]
+        Accepted(super::SealedExecutionGrant),
+    }
+}
+/// Immutable execution route resolved before an attempt becomes active.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CapabilityExecutionClass {
+    Unspecified = 0,
+    NativeRead = 1,
+    NativeMutation = 2,
+    NativeProcess = 3,
+    HostCapability = 4,
+    ControlInteractive = 5,
+    NestedCode = 6,
+    RemoteEnvironment = 7,
+}
+impl CapabilityExecutionClass {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CAPABILITY_EXECUTION_CLASS_UNSPECIFIED",
+            Self::NativeRead => "CAPABILITY_EXECUTION_CLASS_NATIVE_READ",
+            Self::NativeMutation => "CAPABILITY_EXECUTION_CLASS_NATIVE_MUTATION",
+            Self::NativeProcess => "CAPABILITY_EXECUTION_CLASS_NATIVE_PROCESS",
+            Self::HostCapability => "CAPABILITY_EXECUTION_CLASS_HOST_CAPABILITY",
+            Self::ControlInteractive => "CAPABILITY_EXECUTION_CLASS_CONTROL_INTERACTIVE",
+            Self::NestedCode => "CAPABILITY_EXECUTION_CLASS_NESTED_CODE",
+            Self::RemoteEnvironment => "CAPABILITY_EXECUTION_CLASS_REMOTE_ENVIRONMENT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CAPABILITY_EXECUTION_CLASS_UNSPECIFIED" => Some(Self::Unspecified),
+            "CAPABILITY_EXECUTION_CLASS_NATIVE_READ" => Some(Self::NativeRead),
+            "CAPABILITY_EXECUTION_CLASS_NATIVE_MUTATION" => Some(Self::NativeMutation),
+            "CAPABILITY_EXECUTION_CLASS_NATIVE_PROCESS" => Some(Self::NativeProcess),
+            "CAPABILITY_EXECUTION_CLASS_HOST_CAPABILITY" => Some(Self::HostCapability),
+            "CAPABILITY_EXECUTION_CLASS_CONTROL_INTERACTIVE" => Some(Self::ControlInteractive),
+            "CAPABILITY_EXECUTION_CLASS_NESTED_CODE" => Some(Self::NestedCode),
+            "CAPABILITY_EXECUTION_CLASS_REMOTE_ENVIRONMENT" => Some(Self::RemoteEnvironment),
+            _ => None,
+        }
+    }
+}
 /// Header for the permanent, bounded host-supervisor management channel.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ManagementFrameHeader {
@@ -881,7 +1072,7 @@ pub struct PulseFrame {
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ManagementAck {
     /// For lifecycle outcomes and physical facts, the host emits this ACK only
-    /// after its single SQLite writer durably commits the correlated fact.
+    /// after its single filesystem session writer durably commits the fact.
     #[prost(string, tag="1")]
     pub acknowledged_message_id: ::prost::alloc::string::String,
     #[prost(bytes="vec", tag="2")]
@@ -1437,6 +1628,774 @@ impl RunnerExpectedPeerRole {
         }
     }
 }
+/// Canonical, bounded payload written by the Host-side Rust event sink. Raw
+/// transcript text is deliberately represented only by byte length and digest;
+/// transcript/artifact publication remains a separate durable protocol.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineProviderStartedRecordV1 {
+    #[prost(string, tag="1")]
+    pub operation_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineProviderDeltaRecordV1 {
+    #[prost(string, tag="1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub utf8_bytes: u64,
+    #[prost(bytes="vec", tag="3")]
+    pub content_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag="4")]
+    pub thinking: bool,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineUsageSnapshotV1 {
+    #[prost(uint64, tag="1")]
+    pub input_tokens: u64,
+    #[prost(uint64, tag="2")]
+    pub output_tokens: u64,
+    #[prost(uint64, tag="3")]
+    pub cached_input_tokens: u64,
+    #[prost(uint64, tag="4")]
+    pub cost_micros: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineProviderUsageRecordV1 {
+    #[prost(string, tag="1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub usage: ::core::option::Option<EngineUsageSnapshotV1>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineProviderCompletedRecordV1 {
+    #[prost(string, tag="1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub response_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineCapabilityBoundaryRecordV1 {
+    #[prost(string, tag="1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub tool_use_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineCapabilityDispatchStartedRecordV1 {
+    #[prost(string, tag="1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub grant_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="4")]
+    pub effective_input_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag="5")]
+    pub started_at_unix_ms: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineCapabilityTerminalRecordV1 {
+    #[prost(string, tag="1")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub grant_id: ::prost::alloc::string::String,
+    #[prost(enumeration="EngineCapabilityTerminalClassificationV1", tag="4")]
+    pub classification: i32,
+    #[prost(string, tag="5")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub result_schema_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag="7")]
+    pub result_schema_version: u32,
+    #[prost(bytes="vec", tag="8")]
+    pub result_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag="9")]
+    pub result_bytes: u64,
+    #[prost(uint64, tag="10")]
+    pub bytes_read: u64,
+    #[prost(uint64, tag="11")]
+    pub bytes_emitted: u64,
+    #[prost(bool, tag="12")]
+    pub truncated: bool,
+    #[prost(uint64, tag="13")]
+    pub duration_ms: u64,
+    #[prost(int64, tag="14")]
+    pub completed_at_unix_ms: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineTerminalRecordV1 {
+    #[prost(enumeration="EngineTerminalClassificationV1", tag="1")]
+    pub classification: i32,
+    #[prost(string, tag="2")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub usage: ::core::option::Option<EngineUsageSnapshotV1>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineEventRecordV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(message, optional, tag="2")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="3")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="4")]
+    pub local_sequence: u64,
+    #[prost(oneof="engine_event_record_v1::Body", tags="10, 11, 12, 13, 14, 15, 16, 17")]
+    pub body: ::core::option::Option<engine_event_record_v1::Body>,
+}
+/// Nested message and enum types in `EngineEventRecordV1`.
+pub mod engine_event_record_v1 {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Body {
+        #[prost(message, tag="10")]
+        ProviderStarted(super::EngineProviderStartedRecordV1),
+        #[prost(message, tag="11")]
+        ProviderDelta(super::EngineProviderDeltaRecordV1),
+        #[prost(message, tag="12")]
+        ProviderUsage(super::EngineProviderUsageRecordV1),
+        #[prost(message, tag="13")]
+        ProviderCompleted(super::EngineProviderCompletedRecordV1),
+        #[prost(message, tag="14")]
+        CapabilityBoundary(super::EngineCapabilityBoundaryRecordV1),
+        #[prost(message, tag="15")]
+        Terminal(super::EngineTerminalRecordV1),
+        #[prost(message, tag="16")]
+        CapabilityDispatchStarted(super::EngineCapabilityDispatchStartedRecordV1),
+        #[prost(message, tag="17")]
+        CapabilityTerminal(super::EngineCapabilityTerminalRecordV1),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStoreAuthority {
+    #[prost(enumeration="StorageGeneration", tag="1")]
+    pub storage_generation: i32,
+    #[prost(uint64, tag="2")]
+    pub lease_epoch: u64,
+    #[prost(string, tag="3")]
+    pub writer_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStoreLimits {
+    #[prost(uint64, tag="1")]
+    pub max_records: u64,
+    #[prost(uint64, tag="2")]
+    pub max_payload_bytes: u64,
+    #[prost(uint64, tag="3")]
+    pub max_authority_transitions: u64,
+}
+/// request_payload_sha256 is
+/// SHA-256("codestudio.agent.session-store-request.v1\0" || encoded_request).
+/// Authentication is the opaque native bridge owner, never a serialized token.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStoreRequestHeader {
+    #[prost(uint32, tag="1")]
+    pub protocol_version: u32,
+    #[prost(string, tag="2")]
+    pub bridge_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub request_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="4")]
+    pub stream_seq: u64,
+    #[prost(int64, tag="5")]
+    pub sent_at_unix_ms: i64,
+    #[prost(int64, tag="6")]
+    pub deadline_at_unix_ms: i64,
+    #[prost(bytes="vec", tag="7")]
+    pub request_payload_sha256: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStoreRequestFrame {
+    #[prost(message, optional, tag="1")]
+    pub header: ::core::option::Option<SessionStoreRequestHeader>,
+    #[prost(bytes="vec", tag="2")]
+    pub encoded_request: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStoreRequest {
+    #[prost(oneof="session_store_request::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18")]
+    pub body: ::core::option::Option<session_store_request::Body>,
+}
+/// Nested message and enum types in `SessionStoreRequest`.
+pub mod session_store_request {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Body {
+        #[prost(message, tag="10")]
+        OpenSessionWriter(super::OpenSessionWriter),
+        #[prost(message, tag="11")]
+        CommitSessionRecord(super::CommitSessionRecord),
+        #[prost(message, tag="12")]
+        PublishSessionProjection(super::PublishSessionProjection),
+        #[prost(message, tag="13")]
+        QuerySessionState(super::QuerySessionState),
+        #[prost(message, tag="14")]
+        TransferSessionStorageGeneration(super::TransferSessionStorageGeneration),
+        #[prost(message, tag="15")]
+        ArchiveSession(super::ArchiveSession),
+        #[prost(message, tag="16")]
+        CloseSessionWriter(super::CloseSessionWriter),
+        #[prost(message, tag="17")]
+        ReadCommittedSessionPayload(super::ReadCommittedSessionPayload),
+        #[prost(message, tag="18")]
+        ListCommittedSessionRecords(super::ListCommittedSessionRecords),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OpenSessionWriter {
+    #[prost(string, tag="1")]
+    pub root_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(message, optional, tag="4")]
+    pub limits: ::core::option::Option<SessionStoreLimits>,
+    #[prost(string, tag="5")]
+    pub idempotency_key: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitSessionRecord {
+    #[prost(string, tag="1")]
+    pub writer_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(enumeration="SessionRecordKind", tag="4")]
+    pub kind: i32,
+    #[prost(enumeration="SessionDurabilityClass", tag="5")]
+    pub durability: i32,
+    #[prost(bytes="vec", tag="6")]
+    pub encoded_payload: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="7")]
+    pub expected_payload_sha256: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PublishSessionProjection {
+    #[prost(string, tag="1")]
+    pub writer_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub projection_kind: ::prost::alloc::string::String,
+    #[prost(uint64, tag="5")]
+    pub projection_version: u64,
+    #[prost(bytes="vec", tag="6")]
+    pub expected_commit_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="7")]
+    pub encoded_projection: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct QuerySessionState {
+    #[prost(string, tag="1")]
+    pub writer_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+}
+/// Reads bytes only when the exact operation, kind, hash and length were
+/// committed by the currently fenced writer. A content hash alone is never a
+/// read capability.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ReadCommittedSessionPayload {
+    #[prost(string, tag="1")]
+    pub writer_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(enumeration="SessionRecordKind", tag="4")]
+    pub kind: i32,
+    #[prost(bytes="vec", tag="5")]
+    pub expected_payload_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag="6")]
+    pub expected_payload_bytes: u64,
+}
+/// Bounded, metadata-only cursor over the already-validated journal. Payloads
+/// remain path-free and require ReadCommittedSessionPayload with the exact
+/// receipt fields returned here.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListCommittedSessionRecords {
+    #[prost(string, tag="1")]
+    pub writer_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(uint64, tag="3")]
+    pub after_global_sequence: u64,
+    #[prost(uint32, tag="4")]
+    pub max_records: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TransferSessionStorageGeneration {
+    #[prost(string, tag="1")]
+    pub root_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(enumeration="StorageGeneration", tag="3")]
+    pub source_generation: i32,
+    #[prost(enumeration="StorageGeneration", tag="4")]
+    pub target_generation: i32,
+    #[prost(uint64, tag="5")]
+    pub expected_source_lease_epoch: u64,
+    #[prost(message, optional, tag="6")]
+    pub next_authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(bytes="vec", tag="7")]
+    pub verified_manifest_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="8")]
+    pub idempotency_key: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ArchiveSession {
+    #[prost(string, tag="1")]
+    pub writer_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="4")]
+    pub expected_previous_commit_sha256: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CloseSessionWriter {
+    #[prost(string, tag="1")]
+    pub writer_handle: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+}
+/// response_payload_sha256 is
+/// SHA-256("codestudio.agent.session-store-response.v1\0" || encoded_response).
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStoreResponseHeader {
+    #[prost(uint32, tag="1")]
+    pub protocol_version: u32,
+    #[prost(string, tag="2")]
+    pub bridge_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub request_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="4")]
+    pub stream_seq: u64,
+    #[prost(int64, tag="5")]
+    pub completed_at_unix_ms: i64,
+    #[prost(bytes="vec", tag="6")]
+    pub response_payload_sha256: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStoreResponseFrame {
+    #[prost(message, optional, tag="1")]
+    pub header: ::core::option::Option<SessionStoreResponseHeader>,
+    #[prost(bytes="vec", tag="2")]
+    pub encoded_response: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionStoreResponse {
+    #[prost(oneof="session_store_response::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19")]
+    pub body: ::core::option::Option<session_store_response::Body>,
+}
+/// Nested message and enum types in `SessionStoreResponse`.
+pub mod session_store_response {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Body {
+        #[prost(message, tag="10")]
+        SessionWriterOpened(super::SessionWriterOpened),
+        #[prost(message, tag="11")]
+        CommitSessionRecordReceipt(super::CommitSessionRecordReceipt),
+        #[prost(message, tag="12")]
+        SessionProjectionPublished(super::SessionProjectionPublished),
+        #[prost(message, tag="13")]
+        SessionState(super::SessionState),
+        #[prost(message, tag="14")]
+        SessionStorageTransferred(super::SessionStorageTransferred),
+        #[prost(message, tag="15")]
+        SessionArchived(super::SessionArchived),
+        #[prost(message, tag="16")]
+        SessionWriterClosed(super::SessionWriterClosed),
+        #[prost(message, tag="17")]
+        Failure(super::SessionStoreFailure),
+        #[prost(message, tag="18")]
+        CommittedSessionPayload(super::CommittedSessionPayload),
+        #[prost(message, tag="19")]
+        CommittedSessionRecordPage(super::CommittedSessionRecordPage),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionWriterOpened {
+    #[prost(string, tag="1")]
+    pub writer_handle: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(uint64, tag="4")]
+    pub committed_records: u64,
+    #[prost(bytes="vec", tag="5")]
+    pub last_commit_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag="6")]
+    pub archived: bool,
+    #[prost(bool, tag="7")]
+    pub replay: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommitSessionRecordReceipt {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(uint64, tag="4")]
+    pub global_sequence: u64,
+    #[prost(enumeration="SessionRecordKind", tag="5")]
+    pub kind: i32,
+    #[prost(enumeration="SessionDurabilityClass", tag="6")]
+    pub durability: i32,
+    #[prost(bytes="vec", tag="7")]
+    pub previous_commit_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="8")]
+    pub payload_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="9")]
+    pub commit_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag="10")]
+    pub payload_bytes: u64,
+    #[prost(bool, tag="11")]
+    pub replay: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionProjectionPublished {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(string, tag="4")]
+    pub projection_kind: ::prost::alloc::string::String,
+    #[prost(uint64, tag="5")]
+    pub projection_version: u64,
+    #[prost(bytes="vec", tag="6")]
+    pub commit_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="7")]
+    pub projection_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag="8")]
+    pub replay: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionState {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(uint64, tag="3")]
+    pub committed_records: u64,
+    #[prost(bytes="vec", tag="4")]
+    pub last_commit_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag="5")]
+    pub archived: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommittedSessionPayload {
+    #[prost(message, optional, tag="1")]
+    pub commit_receipt: ::core::option::Option<CommitSessionRecordReceipt>,
+    #[prost(bytes="vec", tag="2")]
+    pub encoded_payload: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CommittedSessionRecordPage {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="2")]
+    pub records: ::prost::alloc::vec::Vec<CommitSessionRecordReceipt>,
+    #[prost(uint64, tag="3")]
+    pub next_global_sequence: u64,
+    #[prost(bool, tag="4")]
+    pub complete: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStorageTransferred {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(enumeration="StorageGeneration", tag="2")]
+    pub source_generation: i32,
+    #[prost(message, optional, tag="3")]
+    pub activated_authority: ::core::option::Option<SessionStoreAuthority>,
+    #[prost(bytes="vec", tag="4")]
+    pub verified_manifest_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="5")]
+    pub activation_receipt_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bool, tag="6")]
+    pub replay: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionArchived {
+    #[prost(message, optional, tag="1")]
+    pub archive_receipt: ::core::option::Option<CommitSessionRecordReceipt>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionWriterClosed {
+    #[prost(string, tag="1")]
+    pub session_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub authority: ::core::option::Option<SessionStoreAuthority>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SessionStoreFailure {
+    #[prost(enumeration="SessionStoreFailureCode", tag="1")]
+    pub code: i32,
+    #[prost(string, tag="2")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="3")]
+    pub redacted_detail: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, tag="4")]
+    pub retryable: bool,
+}
+// This IDL is the only cross-language authority for the Rust session store.
+// Filesystem paths and credentials are deliberately absent. A native
+// in-process bridge resolves root_id and owns the authenticated capability.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StorageGeneration {
+    Unspecified = 0,
+    TypescriptFsV1 = 1,
+    RustFsV1 = 2,
+}
+impl StorageGeneration {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STORAGE_GENERATION_UNSPECIFIED",
+            Self::TypescriptFsV1 => "STORAGE_GENERATION_TYPESCRIPT_FS_V1",
+            Self::RustFsV1 => "STORAGE_GENERATION_RUST_FS_V1",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STORAGE_GENERATION_UNSPECIFIED" => Some(Self::Unspecified),
+            "STORAGE_GENERATION_TYPESCRIPT_FS_V1" => Some(Self::TypescriptFsV1),
+            "STORAGE_GENERATION_RUST_FS_V1" => Some(Self::RustFsV1),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SessionRecordKind {
+    Unspecified = 0,
+    Conversation = 1,
+    LifecycleEvent = 2,
+    MetricRollup = 3,
+    ToolOutput = 4,
+    Checkpoint = 5,
+    Plan = 6,
+    Task = 7,
+    Input = 8,
+    Memory = 9,
+    Subagent = 10,
+    Archive = 11,
+}
+impl SessionRecordKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SESSION_RECORD_KIND_UNSPECIFIED",
+            Self::Conversation => "SESSION_RECORD_KIND_CONVERSATION",
+            Self::LifecycleEvent => "SESSION_RECORD_KIND_LIFECYCLE_EVENT",
+            Self::MetricRollup => "SESSION_RECORD_KIND_METRIC_ROLLUP",
+            Self::ToolOutput => "SESSION_RECORD_KIND_TOOL_OUTPUT",
+            Self::Checkpoint => "SESSION_RECORD_KIND_CHECKPOINT",
+            Self::Plan => "SESSION_RECORD_KIND_PLAN",
+            Self::Task => "SESSION_RECORD_KIND_TASK",
+            Self::Input => "SESSION_RECORD_KIND_INPUT",
+            Self::Memory => "SESSION_RECORD_KIND_MEMORY",
+            Self::Subagent => "SESSION_RECORD_KIND_SUBAGENT",
+            Self::Archive => "SESSION_RECORD_KIND_ARCHIVE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SESSION_RECORD_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "SESSION_RECORD_KIND_CONVERSATION" => Some(Self::Conversation),
+            "SESSION_RECORD_KIND_LIFECYCLE_EVENT" => Some(Self::LifecycleEvent),
+            "SESSION_RECORD_KIND_METRIC_ROLLUP" => Some(Self::MetricRollup),
+            "SESSION_RECORD_KIND_TOOL_OUTPUT" => Some(Self::ToolOutput),
+            "SESSION_RECORD_KIND_CHECKPOINT" => Some(Self::Checkpoint),
+            "SESSION_RECORD_KIND_PLAN" => Some(Self::Plan),
+            "SESSION_RECORD_KIND_TASK" => Some(Self::Task),
+            "SESSION_RECORD_KIND_INPUT" => Some(Self::Input),
+            "SESSION_RECORD_KIND_MEMORY" => Some(Self::Memory),
+            "SESSION_RECORD_KIND_SUBAGENT" => Some(Self::Subagent),
+            "SESSION_RECORD_KIND_ARCHIVE" => Some(Self::Archive),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SessionDurabilityClass {
+    Unspecified = 0,
+    Authoritative = 1,
+    Durable = 2,
+    Coalesced = 3,
+}
+impl SessionDurabilityClass {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SESSION_DURABILITY_CLASS_UNSPECIFIED",
+            Self::Authoritative => "SESSION_DURABILITY_CLASS_AUTHORITATIVE",
+            Self::Durable => "SESSION_DURABILITY_CLASS_DURABLE",
+            Self::Coalesced => "SESSION_DURABILITY_CLASS_COALESCED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SESSION_DURABILITY_CLASS_UNSPECIFIED" => Some(Self::Unspecified),
+            "SESSION_DURABILITY_CLASS_AUTHORITATIVE" => Some(Self::Authoritative),
+            "SESSION_DURABILITY_CLASS_DURABLE" => Some(Self::Durable),
+            "SESSION_DURABILITY_CLASS_COALESCED" => Some(Self::Coalesced),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum EngineCapabilityTerminalClassificationV1 {
+    Unspecified = 0,
+    Succeeded = 1,
+    Failed = 2,
+    Cancelled = 3,
+    OutcomeUnknown = 4,
+}
+impl EngineCapabilityTerminalClassificationV1 {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_UNSPECIFIED",
+            Self::Succeeded => "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_SUCCEEDED",
+            Self::Failed => "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_FAILED",
+            Self::Cancelled => "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_CANCELLED",
+            Self::OutcomeUnknown => "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_OUTCOME_UNKNOWN",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_UNSPECIFIED" => Some(Self::Unspecified),
+            "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_SUCCEEDED" => Some(Self::Succeeded),
+            "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_FAILED" => Some(Self::Failed),
+            "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_CANCELLED" => Some(Self::Cancelled),
+            "ENGINE_CAPABILITY_TERMINAL_CLASSIFICATION_V1_OUTCOME_UNKNOWN" => Some(Self::OutcomeUnknown),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum EngineTerminalClassificationV1 {
+    Unspecified = 0,
+    Completed = 1,
+    Failed = 2,
+    Interrupted = 3,
+}
+impl EngineTerminalClassificationV1 {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "ENGINE_TERMINAL_CLASSIFICATION_V1_UNSPECIFIED",
+            Self::Completed => "ENGINE_TERMINAL_CLASSIFICATION_V1_COMPLETED",
+            Self::Failed => "ENGINE_TERMINAL_CLASSIFICATION_V1_FAILED",
+            Self::Interrupted => "ENGINE_TERMINAL_CLASSIFICATION_V1_INTERRUPTED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "ENGINE_TERMINAL_CLASSIFICATION_V1_UNSPECIFIED" => Some(Self::Unspecified),
+            "ENGINE_TERMINAL_CLASSIFICATION_V1_COMPLETED" => Some(Self::Completed),
+            "ENGINE_TERMINAL_CLASSIFICATION_V1_FAILED" => Some(Self::Failed),
+            "ENGINE_TERMINAL_CLASSIFICATION_V1_INTERRUPTED" => Some(Self::Interrupted),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SessionStoreFailureCode {
+    Unspecified = 0,
+    InvalidRequest = 1,
+    Unauthenticated = 2,
+    StaleAuthority = 3,
+    WriterActive = 4,
+    WriterNotFound = 5,
+    DivergentReplay = 6,
+    LimitExceeded = 7,
+    CorruptBundle = 8,
+    UnsafeStorage = 9,
+    ConcurrentMutation = 10,
+    UnsupportedOperation = 11,
+    Internal = 12,
+}
+impl SessionStoreFailureCode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SESSION_STORE_FAILURE_CODE_UNSPECIFIED",
+            Self::InvalidRequest => "SESSION_STORE_FAILURE_CODE_INVALID_REQUEST",
+            Self::Unauthenticated => "SESSION_STORE_FAILURE_CODE_UNAUTHENTICATED",
+            Self::StaleAuthority => "SESSION_STORE_FAILURE_CODE_STALE_AUTHORITY",
+            Self::WriterActive => "SESSION_STORE_FAILURE_CODE_WRITER_ACTIVE",
+            Self::WriterNotFound => "SESSION_STORE_FAILURE_CODE_WRITER_NOT_FOUND",
+            Self::DivergentReplay => "SESSION_STORE_FAILURE_CODE_DIVERGENT_REPLAY",
+            Self::LimitExceeded => "SESSION_STORE_FAILURE_CODE_LIMIT_EXCEEDED",
+            Self::CorruptBundle => "SESSION_STORE_FAILURE_CODE_CORRUPT_BUNDLE",
+            Self::UnsafeStorage => "SESSION_STORE_FAILURE_CODE_UNSAFE_STORAGE",
+            Self::ConcurrentMutation => "SESSION_STORE_FAILURE_CODE_CONCURRENT_MUTATION",
+            Self::UnsupportedOperation => "SESSION_STORE_FAILURE_CODE_UNSUPPORTED_OPERATION",
+            Self::Internal => "SESSION_STORE_FAILURE_CODE_INTERNAL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SESSION_STORE_FAILURE_CODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "SESSION_STORE_FAILURE_CODE_INVALID_REQUEST" => Some(Self::InvalidRequest),
+            "SESSION_STORE_FAILURE_CODE_UNAUTHENTICATED" => Some(Self::Unauthenticated),
+            "SESSION_STORE_FAILURE_CODE_STALE_AUTHORITY" => Some(Self::StaleAuthority),
+            "SESSION_STORE_FAILURE_CODE_WRITER_ACTIVE" => Some(Self::WriterActive),
+            "SESSION_STORE_FAILURE_CODE_WRITER_NOT_FOUND" => Some(Self::WriterNotFound),
+            "SESSION_STORE_FAILURE_CODE_DIVERGENT_REPLAY" => Some(Self::DivergentReplay),
+            "SESSION_STORE_FAILURE_CODE_LIMIT_EXCEEDED" => Some(Self::LimitExceeded),
+            "SESSION_STORE_FAILURE_CODE_CORRUPT_BUNDLE" => Some(Self::CorruptBundle),
+            "SESSION_STORE_FAILURE_CODE_UNSAFE_STORAGE" => Some(Self::UnsafeStorage),
+            "SESSION_STORE_FAILURE_CODE_CONCURRENT_MUTATION" => Some(Self::ConcurrentMutation),
+            "SESSION_STORE_FAILURE_CODE_UNSUPPORTED_OPERATION" => Some(Self::UnsupportedOperation),
+            "SESSION_STORE_FAILURE_CODE_INTERNAL" => Some(Self::Internal),
+            _ => None,
+        }
+    }
+}
 /// Header common to every length-delimited frame. Field numbers 1-20 are
 /// normative and must never be renumbered or reused.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1500,7 +2459,7 @@ pub struct Frame {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FramePayload {
-    #[prost(oneof="frame_payload::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27")]
+    #[prost(oneof="frame_payload::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39")]
     pub body: ::core::option::Option<frame_payload::Body>,
 }
 /// Nested message and enum types in `FramePayload`.
@@ -1543,6 +2502,30 @@ pub mod frame_payload {
         HydrationComplete(super::HydrationComplete),
         #[prost(message, tag="27")]
         HydrationCommitted(super::HydrationCommitted),
+        #[prost(message, tag="28")]
+        ProviderStart(super::ProviderStart),
+        #[prost(message, tag="29")]
+        ProviderAccepted(super::ProviderAccepted),
+        #[prost(message, tag="30")]
+        ProviderCancel(super::ProviderCancel),
+        #[prost(message, tag="31")]
+        ProviderTextDelta(super::ProviderTextDelta),
+        #[prost(message, tag="32")]
+        ProviderThinkingDelta(super::ProviderThinkingDelta),
+        #[prost(message, tag="33")]
+        ProviderToolCall(super::ProviderToolCall),
+        #[prost(message, tag="34")]
+        ProviderUsage(super::ProviderUsageEvent),
+        #[prost(message, tag="35")]
+        ProviderTerminal(super::ProviderTerminal),
+        #[prost(message, tag="36")]
+        EngineEventProposal(super::EngineEventProposal),
+        #[prost(message, tag="37")]
+        EngineEventCommitted(super::EngineEventCommitted),
+        #[prost(message, tag="38")]
+        CapabilityPrepare(super::CapabilityPrepare),
+        #[prost(message, tag="39")]
+        CapabilityUpdate(super::CapabilityUpdate),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1718,6 +2701,339 @@ pub struct HydrationCommitted {
     pub item_count: u32,
     #[prost(uint64, tag="6")]
     pub total_payload_bytes: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderTextContent {
+    #[prost(oneof="provider_text_content::Body", tags="1, 2")]
+    pub body: ::core::option::Option<provider_text_content::Body>,
+}
+/// Nested message and enum types in `ProviderTextContent`.
+pub mod provider_text_content {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Body {
+        #[prost(string, tag="1")]
+        InlineUtf8(::prost::alloc::string::String),
+        #[prost(message, tag="2")]
+        Artifact(super::ArtifactRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderToolUseContent {
+    #[prost(string, tag="1")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub capability_name: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="3")]
+    pub encoded_json_arguments: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="4")]
+    pub arguments_sha256: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderToolResultContent {
+    #[prost(string, tag="1")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(bool, tag="4")]
+    pub is_error: bool,
+    #[prost(bool, tag="5")]
+    pub truncated: bool,
+    #[prost(uint64, optional, tag="6")]
+    pub original_bytes: ::core::option::Option<u64>,
+    #[prost(oneof="provider_tool_result_content::Content", tags="2, 3")]
+    pub content: ::core::option::Option<provider_tool_result_content::Content>,
+}
+/// Nested message and enum types in `ProviderToolResultContent`.
+pub mod provider_tool_result_content {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Content {
+        #[prost(string, tag="2")]
+        InlineUtf8(::prost::alloc::string::String),
+        #[prost(message, tag="3")]
+        Artifact(super::ArtifactRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderContentBlock {
+    #[prost(oneof="provider_content_block::Body", tags="1, 2, 3, 4")]
+    pub body: ::core::option::Option<provider_content_block::Body>,
+}
+/// Nested message and enum types in `ProviderContentBlock`.
+pub mod provider_content_block {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Body {
+        #[prost(message, tag="1")]
+        Text(super::ProviderTextContent),
+        #[prost(message, tag="2")]
+        ToolUse(super::ProviderToolUseContent),
+        #[prost(message, tag="3")]
+        ToolResult(super::ProviderToolResultContent),
+        #[prost(message, tag="4")]
+        Attachment(super::ArtifactRef),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProviderMessage {
+    #[prost(enumeration="ProviderMessageRole", tag="1")]
+    pub role: i32,
+    #[prost(message, repeated, tag="2")]
+    pub content: ::prost::alloc::vec::Vec<ProviderContentBlock>,
+    #[prost(enumeration="ProviderMessagePhase", tag="3")]
+    pub phase: i32,
+    #[prost(bool, tag="4")]
+    pub is_meta: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderToolDescriptor {
+    #[prost(string, tag="1")]
+    pub capability_name: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub description: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="3")]
+    pub encoded_json_schema: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="4")]
+    pub schema_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="5")]
+    pub capability_id: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub capability_version: ::prost::alloc::string::String,
+    #[prost(enumeration="CapabilityExecutionClass", tag="7")]
+    pub execution_class: i32,
+    #[prost(bool, tag="8")]
+    pub mutates: bool,
+}
+/// Canonical payload for ResolvedAttemptSpec.agent_definition_snapshot in the
+/// initial-turn V1 composer. SnapshotRef.schema_id is the fully-qualified
+/// message name and both schema versions must be exactly 1.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentDefinitionSnapshotV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub agent_definition_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub system_prompt_utf8: ::prost::alloc::string::String,
+}
+/// Canonical payload for ResolvedAttemptSpec.capability_set_snapshot. The
+/// runner validates descriptor uniqueness and each JSON schema digest before a
+/// ProviderTurnContext can be composed.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CapabilitySetSnapshotV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(message, repeated, tag="2")]
+    pub tools: ::prost::alloc::vec::Vec<ProviderToolDescriptor>,
+}
+/// Canonical payload for ResolvedAttemptSpec.preset_snapshot. Provider/model
+/// and reasoning effort remain sealed by ProviderBinding; this payload controls
+/// only turn-level inference options.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderPresetSnapshotV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, optional, tag="2")]
+    pub effective_preset: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, tag="3")]
+    pub thinking: bool,
+    #[prost(uint64, optional, tag="4")]
+    pub thinking_budget_tokens: ::core::option::Option<u64>,
+}
+/// Transport-independent engine input. Attempt identity, provider binding,
+/// operation identity, idempotency and deadlines are intentionally absent: the
+/// runner adapter seals them from the hydrated ResolvedAttemptSpec.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProviderTurnContext {
+    #[prost(message, optional, tag="1")]
+    pub system: ::core::option::Option<ProviderTextContent>,
+    #[prost(message, repeated, tag="2")]
+    pub messages: ::prost::alloc::vec::Vec<ProviderMessage>,
+    #[prost(message, repeated, tag="3")]
+    pub tools: ::prost::alloc::vec::Vec<ProviderToolDescriptor>,
+    #[prost(bool, tag="4")]
+    pub thinking: bool,
+    #[prost(string, optional, tag="5")]
+    pub reasoning_effort: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag="6")]
+    pub thinking_budget_tokens: ::core::option::Option<u64>,
+    #[prost(string, optional, tag="7")]
+    pub previous_response_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag="8")]
+    pub previous_response_message_count: ::core::option::Option<u64>,
+}
+/// Runner -> Host. Starts one logical provider operation. Credentials and
+/// vendor clients never cross this frame; the Host resolves the sealed binding.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProviderStart {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub binding: ::core::option::Option<ProviderBinding>,
+    #[prost(message, optional, tag="4")]
+    pub system: ::core::option::Option<ProviderTextContent>,
+    #[prost(message, repeated, tag="5")]
+    pub messages: ::prost::alloc::vec::Vec<ProviderMessage>,
+    #[prost(message, repeated, tag="6")]
+    pub tools: ::prost::alloc::vec::Vec<ProviderToolDescriptor>,
+    #[prost(bool, tag="7")]
+    pub thinking: bool,
+    #[prost(string, optional, tag="8")]
+    pub reasoning_effort: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag="9")]
+    pub thinking_budget_tokens: ::core::option::Option<u64>,
+    #[prost(string, optional, tag="10")]
+    pub previous_response_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag="11")]
+    pub previous_response_message_count: ::core::option::Option<u64>,
+    #[prost(int64, tag="12")]
+    pub deadline_at_unix_ms: i64,
+    #[prost(string, tag="13")]
+    pub idempotency_key: ::prost::alloc::string::String,
+}
+/// Host -> Runner. Commits registry ownership before any provider delta.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderAccepted {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="4")]
+    pub request_payload_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag="5")]
+    pub accepted_at_unix_ms: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderCancel {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub idempotency_key: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderTextDelta {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub event_sequence: u64,
+    #[prost(string, tag="4")]
+    pub text: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="5")]
+    pub item_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration="ProviderMessagePhase", tag="6")]
+    pub phase: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderThinkingDelta {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub event_sequence: u64,
+    #[prost(string, tag="4")]
+    pub text: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderToolCall {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub event_sequence: u64,
+    #[prost(string, tag="4")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub capability_name: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="6")]
+    pub encoded_json_arguments: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="7")]
+    pub arguments_sha256: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderUsage {
+    #[prost(uint64, tag="1")]
+    pub input_tokens: u64,
+    #[prost(uint64, tag="2")]
+    pub output_tokens: u64,
+    #[prost(uint64, optional, tag="3")]
+    pub prompt_tokens_total: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag="4")]
+    pub cache_creation_input_tokens: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag="5")]
+    pub cache_read_input_tokens: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag="6")]
+    pub thinking_tokens: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag="7")]
+    pub cost_micros: ::core::option::Option<u64>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderUsageEvent {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub event_sequence: u64,
+    #[prost(message, optional, tag="4")]
+    pub usage: ::core::option::Option<ProviderUsage>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProviderTerminal {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub event_sequence: u64,
+    #[prost(enumeration="ProviderTerminalClassification", tag="4")]
+    pub classification: i32,
+    #[prost(string, tag="5")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="6")]
+    pub response_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="7")]
+    pub final_usage: ::core::option::Option<ProviderUsage>,
+    #[prost(int64, tag="8")]
+    pub completed_at_unix_ms: i64,
+    #[prost(uint64, optional, tag="9")]
+    pub response_message_count: ::core::option::Option<u64>,
+}
+/// Runner -> Host. Proposes one canonical engine record for the fenced Rust
+/// session writer. The Host validates semantic authority before asking the
+/// native store to commit it.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineEventProposal {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub record: ::core::option::Option<EngineEventRecordV1>,
+    #[prost(bytes="vec", tag="4")]
+    pub expected_payload_sha256: ::prost::alloc::vec::Vec<u8>,
+}
+/// Host -> Runner. Returned only after the exact proposal crossed the native
+/// filesystem journal and produced its hash-chained store receipt.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EngineEventCommitted {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(uint64, tag="3")]
+    pub local_sequence: u64,
+    #[prost(bytes="vec", tag="4")]
+    pub event_payload_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="5")]
+    pub commit_receipt: ::core::option::Option<CommitSessionRecordReceipt>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TaskInput {
@@ -2018,6 +3334,99 @@ impl TransportChannel {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
+pub enum ProviderMessageRole {
+    Unspecified = 0,
+    User = 1,
+    Assistant = 2,
+    Tool = 3,
+}
+impl ProviderMessageRole {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "PROVIDER_MESSAGE_ROLE_UNSPECIFIED",
+            Self::User => "PROVIDER_MESSAGE_ROLE_USER",
+            Self::Assistant => "PROVIDER_MESSAGE_ROLE_ASSISTANT",
+            Self::Tool => "PROVIDER_MESSAGE_ROLE_TOOL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PROVIDER_MESSAGE_ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+            "PROVIDER_MESSAGE_ROLE_USER" => Some(Self::User),
+            "PROVIDER_MESSAGE_ROLE_ASSISTANT" => Some(Self::Assistant),
+            "PROVIDER_MESSAGE_ROLE_TOOL" => Some(Self::Tool),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ProviderMessagePhase {
+    Unspecified = 0,
+    Commentary = 1,
+    FinalAnswer = 2,
+}
+impl ProviderMessagePhase {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "PROVIDER_MESSAGE_PHASE_UNSPECIFIED",
+            Self::Commentary => "PROVIDER_MESSAGE_PHASE_COMMENTARY",
+            Self::FinalAnswer => "PROVIDER_MESSAGE_PHASE_FINAL_ANSWER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PROVIDER_MESSAGE_PHASE_UNSPECIFIED" => Some(Self::Unspecified),
+            "PROVIDER_MESSAGE_PHASE_COMMENTARY" => Some(Self::Commentary),
+            "PROVIDER_MESSAGE_PHASE_FINAL_ANSWER" => Some(Self::FinalAnswer),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ProviderTerminalClassification {
+    Unspecified = 0,
+    Completed = 1,
+    Failed = 2,
+    Cancelled = 3,
+}
+impl ProviderTerminalClassification {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "PROVIDER_TERMINAL_CLASSIFICATION_UNSPECIFIED",
+            Self::Completed => "PROVIDER_TERMINAL_CLASSIFICATION_COMPLETED",
+            Self::Failed => "PROVIDER_TERMINAL_CLASSIFICATION_FAILED",
+            Self::Cancelled => "PROVIDER_TERMINAL_CLASSIFICATION_CANCELLED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PROVIDER_TERMINAL_CLASSIFICATION_UNSPECIFIED" => Some(Self::Unspecified),
+            "PROVIDER_TERMINAL_CLASSIFICATION_COMPLETED" => Some(Self::Completed),
+            "PROVIDER_TERMINAL_CLASSIFICATION_FAILED" => Some(Self::Failed),
+            "PROVIDER_TERMINAL_CLASSIFICATION_CANCELLED" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
 pub enum AttemptTrigger {
     Unspecified = 0,
     Initial = 1,
@@ -2202,539 +3611,6 @@ impl TerminalClassification {
             "TERMINAL_CLASSIFICATION_FAILED" => Some(Self::Failed),
             "TERMINAL_CLASSIFICATION_ABORTED" => Some(Self::Aborted),
             "TERMINAL_CLASSIFICATION_INTERRUPTED" => Some(Self::Interrupted),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreAuthority {
-    #[prost(enumeration="StorageGeneration", tag="1")]
-    pub storage_generation: i32,
-    #[prost(uint64, tag="2")]
-    pub lease_epoch: u64,
-    #[prost(string, tag="3")]
-    pub writer_id: ::prost::alloc::string::String,
-}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreLimits {
-    #[prost(uint64, tag="1")]
-    pub max_records: u64,
-    #[prost(uint64, tag="2")]
-    pub max_payload_bytes: u64,
-    #[prost(uint64, tag="3")]
-    pub max_authority_transitions: u64,
-}
-/// request_payload_sha256 is
-/// SHA-256("codestudio.agent.session-store-request.v1\0" || encoded_request).
-/// Authentication is the opaque native bridge owner, never a serialized token.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreRequestHeader {
-    #[prost(uint32, tag="1")]
-    pub protocol_version: u32,
-    #[prost(string, tag="2")]
-    pub bridge_instance_id: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub request_id: ::prost::alloc::string::String,
-    #[prost(uint64, tag="4")]
-    pub stream_seq: u64,
-    #[prost(int64, tag="5")]
-    pub sent_at_unix_ms: i64,
-    #[prost(int64, tag="6")]
-    pub deadline_at_unix_ms: i64,
-    #[prost(bytes="vec", tag="7")]
-    pub request_payload_sha256: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreRequestFrame {
-    #[prost(message, optional, tag="1")]
-    pub header: ::core::option::Option<SessionStoreRequestHeader>,
-    #[prost(bytes="vec", tag="2")]
-    pub encoded_request: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreRequest {
-    #[prost(oneof="session_store_request::Body", tags="10, 11, 12, 13, 14, 15, 16, 17")]
-    pub body: ::core::option::Option<session_store_request::Body>,
-}
-/// Nested message and enum types in `SessionStoreRequest`.
-pub mod session_store_request {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Body {
-        #[prost(message, tag="10")]
-        OpenSessionWriter(super::OpenSessionWriter),
-        #[prost(message, tag="11")]
-        CommitSessionRecord(super::CommitSessionRecord),
-        #[prost(message, tag="12")]
-        PublishSessionProjection(super::PublishSessionProjection),
-        #[prost(message, tag="13")]
-        QuerySessionState(super::QuerySessionState),
-        #[prost(message, tag="14")]
-        TransferSessionStorageGeneration(super::TransferSessionStorageGeneration),
-        #[prost(message, tag="15")]
-        ArchiveSession(super::ArchiveSession),
-        #[prost(message, tag="16")]
-        CloseSessionWriter(super::CloseSessionWriter),
-        #[prost(message, tag="17")]
-        ReadCommittedSessionPayload(super::ReadCommittedSessionPayload),
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct OpenSessionWriter {
-    #[prost(string, tag="1")]
-    pub root_id: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="3")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(message, optional, tag="4")]
-    pub limits: ::core::option::Option<SessionStoreLimits>,
-    #[prost(string, tag="5")]
-    pub idempotency_key: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CommitSessionRecord {
-    #[prost(string, tag="1")]
-    pub writer_handle: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(string, tag="3")]
-    pub operation_id: ::prost::alloc::string::String,
-    #[prost(enumeration="SessionRecordKind", tag="4")]
-    pub kind: i32,
-    #[prost(enumeration="SessionDurabilityClass", tag="5")]
-    pub durability: i32,
-    #[prost(bytes="vec", tag="6")]
-    pub encoded_payload: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="7")]
-    pub expected_payload_sha256: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct PublishSessionProjection {
-    #[prost(string, tag="1")]
-    pub writer_handle: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(string, tag="3")]
-    pub operation_id: ::prost::alloc::string::String,
-    #[prost(string, tag="4")]
-    pub projection_kind: ::prost::alloc::string::String,
-    #[prost(uint64, tag="5")]
-    pub projection_version: u64,
-    #[prost(bytes="vec", tag="6")]
-    pub expected_commit_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="7")]
-    pub encoded_projection: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct QuerySessionState {
-    #[prost(string, tag="1")]
-    pub writer_handle: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-}
-/// Reads bytes only when the exact operation, kind, hash and length were
-/// committed by the currently fenced writer. A content hash alone is never a
-/// read capability.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ReadCommittedSessionPayload {
-    #[prost(string, tag="1")]
-    pub writer_handle: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(string, tag="3")]
-    pub operation_id: ::prost::alloc::string::String,
-    #[prost(enumeration="SessionRecordKind", tag="4")]
-    pub kind: i32,
-    #[prost(bytes="vec", tag="5")]
-    pub expected_payload_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(uint64, tag="6")]
-    pub expected_payload_bytes: u64,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct TransferSessionStorageGeneration {
-    #[prost(string, tag="1")]
-    pub root_id: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(enumeration="StorageGeneration", tag="3")]
-    pub source_generation: i32,
-    #[prost(enumeration="StorageGeneration", tag="4")]
-    pub target_generation: i32,
-    #[prost(uint64, tag="5")]
-    pub expected_source_lease_epoch: u64,
-    #[prost(message, optional, tag="6")]
-    pub next_authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(bytes="vec", tag="7")]
-    pub verified_manifest_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, tag="8")]
-    pub idempotency_key: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ArchiveSession {
-    #[prost(string, tag="1")]
-    pub writer_handle: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(string, tag="3")]
-    pub operation_id: ::prost::alloc::string::String,
-    #[prost(bytes="vec", tag="4")]
-    pub expected_previous_commit_sha256: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CloseSessionWriter {
-    #[prost(string, tag="1")]
-    pub writer_handle: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-}
-/// response_payload_sha256 is
-/// SHA-256("codestudio.agent.session-store-response.v1\0" || encoded_response).
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreResponseHeader {
-    #[prost(uint32, tag="1")]
-    pub protocol_version: u32,
-    #[prost(string, tag="2")]
-    pub bridge_instance_id: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub request_id: ::prost::alloc::string::String,
-    #[prost(uint64, tag="4")]
-    pub stream_seq: u64,
-    #[prost(int64, tag="5")]
-    pub completed_at_unix_ms: i64,
-    #[prost(bytes="vec", tag="6")]
-    pub response_payload_sha256: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreResponseFrame {
-    #[prost(message, optional, tag="1")]
-    pub header: ::core::option::Option<SessionStoreResponseHeader>,
-    #[prost(bytes="vec", tag="2")]
-    pub encoded_response: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreResponse {
-    #[prost(oneof="session_store_response::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18")]
-    pub body: ::core::option::Option<session_store_response::Body>,
-}
-/// Nested message and enum types in `SessionStoreResponse`.
-pub mod session_store_response {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Body {
-        #[prost(message, tag="10")]
-        SessionWriterOpened(super::SessionWriterOpened),
-        #[prost(message, tag="11")]
-        CommitSessionRecordReceipt(super::CommitSessionRecordReceipt),
-        #[prost(message, tag="12")]
-        SessionProjectionPublished(super::SessionProjectionPublished),
-        #[prost(message, tag="13")]
-        SessionState(super::SessionState),
-        #[prost(message, tag="14")]
-        SessionStorageTransferred(super::SessionStorageTransferred),
-        #[prost(message, tag="15")]
-        SessionArchived(super::SessionArchived),
-        #[prost(message, tag="16")]
-        SessionWriterClosed(super::SessionWriterClosed),
-        #[prost(message, tag="17")]
-        Failure(super::SessionStoreFailure),
-        #[prost(message, tag="18")]
-        CommittedSessionPayload(super::CommittedSessionPayload),
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionWriterOpened {
-    #[prost(string, tag="1")]
-    pub writer_handle: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="3")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(uint64, tag="4")]
-    pub committed_records: u64,
-    #[prost(bytes="vec", tag="5")]
-    pub last_commit_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bool, tag="6")]
-    pub archived: bool,
-    #[prost(bool, tag="7")]
-    pub replay: bool,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CommitSessionRecordReceipt {
-    #[prost(string, tag="1")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub operation_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="3")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(uint64, tag="4")]
-    pub global_sequence: u64,
-    #[prost(enumeration="SessionRecordKind", tag="5")]
-    pub kind: i32,
-    #[prost(enumeration="SessionDurabilityClass", tag="6")]
-    pub durability: i32,
-    #[prost(bytes="vec", tag="7")]
-    pub previous_commit_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="8")]
-    pub payload_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="9")]
-    pub commit_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(uint64, tag="10")]
-    pub payload_bytes: u64,
-    #[prost(bool, tag="11")]
-    pub replay: bool,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionProjectionPublished {
-    #[prost(string, tag="1")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub operation_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="3")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(string, tag="4")]
-    pub projection_kind: ::prost::alloc::string::String,
-    #[prost(uint64, tag="5")]
-    pub projection_version: u64,
-    #[prost(bytes="vec", tag="6")]
-    pub commit_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="7")]
-    pub projection_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bool, tag="8")]
-    pub replay: bool,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionState {
-    #[prost(string, tag="1")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(uint64, tag="3")]
-    pub committed_records: u64,
-    #[prost(bytes="vec", tag="4")]
-    pub last_commit_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bool, tag="5")]
-    pub archived: bool,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CommittedSessionPayload {
-    #[prost(message, optional, tag="1")]
-    pub commit_receipt: ::core::option::Option<CommitSessionRecordReceipt>,
-    #[prost(bytes="vec", tag="2")]
-    pub encoded_payload: ::prost::alloc::vec::Vec<u8>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStorageTransferred {
-    #[prost(string, tag="1")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(enumeration="StorageGeneration", tag="2")]
-    pub source_generation: i32,
-    #[prost(message, optional, tag="3")]
-    pub activated_authority: ::core::option::Option<SessionStoreAuthority>,
-    #[prost(bytes="vec", tag="4")]
-    pub verified_manifest_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="5")]
-    pub activation_receipt_sha256: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bool, tag="6")]
-    pub replay: bool,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionArchived {
-    #[prost(message, optional, tag="1")]
-    pub archive_receipt: ::core::option::Option<CommitSessionRecordReceipt>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionWriterClosed {
-    #[prost(string, tag="1")]
-    pub session_id: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="2")]
-    pub authority: ::core::option::Option<SessionStoreAuthority>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct SessionStoreFailure {
-    #[prost(enumeration="SessionStoreFailureCode", tag="1")]
-    pub code: i32,
-    #[prost(string, tag="2")]
-    pub reason_code: ::prost::alloc::string::String,
-    #[prost(string, optional, tag="3")]
-    pub redacted_detail: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(bool, tag="4")]
-    pub retryable: bool,
-}
-// This IDL is the only cross-language authority for the Rust session store.
-// Filesystem paths and credentials are deliberately absent. A native
-// in-process bridge resolves root_id and owns the authenticated capability.
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum StorageGeneration {
-    Unspecified = 0,
-    TypescriptFsV1 = 1,
-    RustFsV1 = 2,
-}
-impl StorageGeneration {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "STORAGE_GENERATION_UNSPECIFIED",
-            Self::TypescriptFsV1 => "STORAGE_GENERATION_TYPESCRIPT_FS_V1",
-            Self::RustFsV1 => "STORAGE_GENERATION_RUST_FS_V1",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "STORAGE_GENERATION_UNSPECIFIED" => Some(Self::Unspecified),
-            "STORAGE_GENERATION_TYPESCRIPT_FS_V1" => Some(Self::TypescriptFsV1),
-            "STORAGE_GENERATION_RUST_FS_V1" => Some(Self::RustFsV1),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum SessionRecordKind {
-    Unspecified = 0,
-    Conversation = 1,
-    LifecycleEvent = 2,
-    MetricRollup = 3,
-    ToolOutput = 4,
-    Checkpoint = 5,
-    Plan = 6,
-    Task = 7,
-    Input = 8,
-    Memory = 9,
-    Subagent = 10,
-    Archive = 11,
-}
-impl SessionRecordKind {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "SESSION_RECORD_KIND_UNSPECIFIED",
-            Self::Conversation => "SESSION_RECORD_KIND_CONVERSATION",
-            Self::LifecycleEvent => "SESSION_RECORD_KIND_LIFECYCLE_EVENT",
-            Self::MetricRollup => "SESSION_RECORD_KIND_METRIC_ROLLUP",
-            Self::ToolOutput => "SESSION_RECORD_KIND_TOOL_OUTPUT",
-            Self::Checkpoint => "SESSION_RECORD_KIND_CHECKPOINT",
-            Self::Plan => "SESSION_RECORD_KIND_PLAN",
-            Self::Task => "SESSION_RECORD_KIND_TASK",
-            Self::Input => "SESSION_RECORD_KIND_INPUT",
-            Self::Memory => "SESSION_RECORD_KIND_MEMORY",
-            Self::Subagent => "SESSION_RECORD_KIND_SUBAGENT",
-            Self::Archive => "SESSION_RECORD_KIND_ARCHIVE",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "SESSION_RECORD_KIND_UNSPECIFIED" => Some(Self::Unspecified),
-            "SESSION_RECORD_KIND_CONVERSATION" => Some(Self::Conversation),
-            "SESSION_RECORD_KIND_LIFECYCLE_EVENT" => Some(Self::LifecycleEvent),
-            "SESSION_RECORD_KIND_METRIC_ROLLUP" => Some(Self::MetricRollup),
-            "SESSION_RECORD_KIND_TOOL_OUTPUT" => Some(Self::ToolOutput),
-            "SESSION_RECORD_KIND_CHECKPOINT" => Some(Self::Checkpoint),
-            "SESSION_RECORD_KIND_PLAN" => Some(Self::Plan),
-            "SESSION_RECORD_KIND_TASK" => Some(Self::Task),
-            "SESSION_RECORD_KIND_INPUT" => Some(Self::Input),
-            "SESSION_RECORD_KIND_MEMORY" => Some(Self::Memory),
-            "SESSION_RECORD_KIND_SUBAGENT" => Some(Self::Subagent),
-            "SESSION_RECORD_KIND_ARCHIVE" => Some(Self::Archive),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum SessionDurabilityClass {
-    Unspecified = 0,
-    Authoritative = 1,
-    Durable = 2,
-    Coalesced = 3,
-}
-impl SessionDurabilityClass {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "SESSION_DURABILITY_CLASS_UNSPECIFIED",
-            Self::Authoritative => "SESSION_DURABILITY_CLASS_AUTHORITATIVE",
-            Self::Durable => "SESSION_DURABILITY_CLASS_DURABLE",
-            Self::Coalesced => "SESSION_DURABILITY_CLASS_COALESCED",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "SESSION_DURABILITY_CLASS_UNSPECIFIED" => Some(Self::Unspecified),
-            "SESSION_DURABILITY_CLASS_AUTHORITATIVE" => Some(Self::Authoritative),
-            "SESSION_DURABILITY_CLASS_DURABLE" => Some(Self::Durable),
-            "SESSION_DURABILITY_CLASS_COALESCED" => Some(Self::Coalesced),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum SessionStoreFailureCode {
-    Unspecified = 0,
-    InvalidRequest = 1,
-    Unauthenticated = 2,
-    StaleAuthority = 3,
-    WriterActive = 4,
-    WriterNotFound = 5,
-    DivergentReplay = 6,
-    LimitExceeded = 7,
-    CorruptBundle = 8,
-    UnsafeStorage = 9,
-    ConcurrentMutation = 10,
-    UnsupportedOperation = 11,
-    Internal = 12,
-}
-impl SessionStoreFailureCode {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "SESSION_STORE_FAILURE_CODE_UNSPECIFIED",
-            Self::InvalidRequest => "SESSION_STORE_FAILURE_CODE_INVALID_REQUEST",
-            Self::Unauthenticated => "SESSION_STORE_FAILURE_CODE_UNAUTHENTICATED",
-            Self::StaleAuthority => "SESSION_STORE_FAILURE_CODE_STALE_AUTHORITY",
-            Self::WriterActive => "SESSION_STORE_FAILURE_CODE_WRITER_ACTIVE",
-            Self::WriterNotFound => "SESSION_STORE_FAILURE_CODE_WRITER_NOT_FOUND",
-            Self::DivergentReplay => "SESSION_STORE_FAILURE_CODE_DIVERGENT_REPLAY",
-            Self::LimitExceeded => "SESSION_STORE_FAILURE_CODE_LIMIT_EXCEEDED",
-            Self::CorruptBundle => "SESSION_STORE_FAILURE_CODE_CORRUPT_BUNDLE",
-            Self::UnsafeStorage => "SESSION_STORE_FAILURE_CODE_UNSAFE_STORAGE",
-            Self::ConcurrentMutation => "SESSION_STORE_FAILURE_CODE_CONCURRENT_MUTATION",
-            Self::UnsupportedOperation => "SESSION_STORE_FAILURE_CODE_UNSUPPORTED_OPERATION",
-            Self::Internal => "SESSION_STORE_FAILURE_CODE_INTERNAL",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "SESSION_STORE_FAILURE_CODE_UNSPECIFIED" => Some(Self::Unspecified),
-            "SESSION_STORE_FAILURE_CODE_INVALID_REQUEST" => Some(Self::InvalidRequest),
-            "SESSION_STORE_FAILURE_CODE_UNAUTHENTICATED" => Some(Self::Unauthenticated),
-            "SESSION_STORE_FAILURE_CODE_STALE_AUTHORITY" => Some(Self::StaleAuthority),
-            "SESSION_STORE_FAILURE_CODE_WRITER_ACTIVE" => Some(Self::WriterActive),
-            "SESSION_STORE_FAILURE_CODE_WRITER_NOT_FOUND" => Some(Self::WriterNotFound),
-            "SESSION_STORE_FAILURE_CODE_DIVERGENT_REPLAY" => Some(Self::DivergentReplay),
-            "SESSION_STORE_FAILURE_CODE_LIMIT_EXCEEDED" => Some(Self::LimitExceeded),
-            "SESSION_STORE_FAILURE_CODE_CORRUPT_BUNDLE" => Some(Self::CorruptBundle),
-            "SESSION_STORE_FAILURE_CODE_UNSAFE_STORAGE" => Some(Self::UnsafeStorage),
-            "SESSION_STORE_FAILURE_CODE_CONCURRENT_MUTATION" => Some(Self::ConcurrentMutation),
-            "SESSION_STORE_FAILURE_CODE_UNSUPPORTED_OPERATION" => Some(Self::UnsupportedOperation),
-            "SESSION_STORE_FAILURE_CODE_INTERNAL" => Some(Self::Internal),
             _ => None,
         }
     }

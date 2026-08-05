@@ -3,6 +3,8 @@
 use agent_protocol::generated::v1 as wire;
 use agent_protocol::wire_identity::identity_from_wire;
 
+use super::RunnerExecutionSeed;
+
 #[path = "spec_validation/budget.rs"]
 mod budget;
 #[path = "spec_validation/error.rs"]
@@ -75,6 +77,11 @@ impl ValidatedSpec {
             .chain(attachments)
             .chain(self.spec.checkpoint_input.iter())
             .chain(self.spec.transcript_input.iter())
+    }
+
+    #[must_use]
+    pub(super) fn into_execution_seed(self) -> RunnerExecutionSeed {
+        RunnerExecutionSeed::from_validated(self.spec)
     }
 }
 

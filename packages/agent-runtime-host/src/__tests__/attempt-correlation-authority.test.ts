@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AttemptCorrelationAuthority,
 } from '../ipc/AttemptCorrelationAuthority.js';
+import { assertOutboundResponse } from '../ipc/AttemptCorrelationValidation.js';
 
 const DIGEST = Uint8Array.from(
   { length: 32 },
@@ -181,6 +182,87 @@ describe('attempt correlation authority', () => {
       'prepare-request',
       100n,
     )).toThrow(expect.objectContaining({ code: 'correlation_mismatch' }));
+  });
+
+  it('binds ProviderAccepted to the exact ProviderStart operation, digest, and clock', () => {
+    const accepted = (operationId: string, digest: Uint8Array, at: bigint) => create(
+      agentV1Runtime.FramePayloadSchema,
+      {
+        body: {
+          case: 'providerAccepted',
+          value: {
+            operationId,
+            requestPayloadSha256: digest,
+            acceptedAtUnixMs: at,
+          },
+        },
+      },
+    );
+    const inbound = {
+      token: 1n,
+      messageId: 'provider-start/1',
+      streamSeq: 1n,
+      payloadCase: 'providerStart' as const,
+      sentAtUnixMs: 100n,
+      envelopeDigest: DIGEST,
+      payloadDigest: DIGEST,
+      providerOperationId: 'provider-operation/1',
+    };
+
+    expect(() => assertOutboundResponse(
+      accepted('provider-operation/1', DIGEST, 99n),
+      inbound,
+      120n,
+    )).not.toThrow();
+    for (const forged of [
+      accepted('provider-operation/other', DIGEST, 110n),
+      accepted('provider-operation/1', new Uint8Array(32), 110n),
+      accepted('provider-operation/1', DIGEST, 49n),
+      accepted('provider-operation/1', DIGEST, 121n),
+    ]) {
+      expect(() => assertOutboundResponse(forged, inbound, 120n)).toThrow(
+        expect.objectContaining({ code: 'invalid_correlation' }),
+      );
+    }
+  });
+
+  it('binds CapabilityUpdate to the exact CapabilityPrepare operation and tool use', () => {
+    const update = (operationId: string, toolUseId: string) => create(
+      agentV1Runtime.FramePayloadSchema,
+      {
+        body: {
+          case: 'capabilityUpdate',
+          value: { operationId, toolUseId },
+        },
+      },
+    );
+    const inbound = {
+      token: 1n,
+      messageId: 'capability-prepare/1',
+      streamSeq: 1n,
+      payloadCase: 'capabilityPrepare' as const,
+      sentAtUnixMs: 100n,
+      envelopeDigest: DIGEST,
+      payloadDigest: DIGEST,
+      capabilityOperationId: 'capability-operation/1',
+      capabilityToolUseId: 'tool-use/1',
+    };
+
+    expect(() => assertOutboundResponse(
+      update('capability-operation/1', 'tool-use/1'),
+      inbound,
+      120n,
+    )).not.toThrow();
+    expect(() => assertOutboundResponse(
+      update('capability-operation/other', 'tool-use/1'),
+      inbound,
+      120n,
+    )).toThrow(expect.objectContaining({ code: 'invalid_correlation' }));
+    expect(() => assertOutboundResponse(
+      update('capability-operation/1', 'tool-use/other'),
+      inbound,
+      120n,
+    )).toThrow(expect.objectContaining({ code: 'invalid_correlation' }));
   });
 
   it.each([

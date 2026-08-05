@@ -5,7 +5,7 @@ use zeroize::Zeroize;
 use super::io::{read_first_byte, read_frame_after_first};
 use super::{AsyncDelimitedFrameChannel, AsyncFramingError};
 
-pub(crate) enum IdleReceiveOutcome {
+pub enum IdleReceiveOutcome {
     Idle,
     Frame(Vec<u8>),
 }

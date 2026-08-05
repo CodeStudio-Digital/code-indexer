@@ -59,6 +59,18 @@ function payloadIdentity(
     case 'hydrationChunk':
     case 'hydrationComplete':
     case 'hydrationCommitted':
+    case 'providerStart':
+    case 'providerAccepted':
+    case 'providerCancel':
+    case 'providerTextDelta':
+    case 'providerThinkingDelta':
+    case 'providerToolCall':
+    case 'providerUsage':
+    case 'providerTerminal':
+    case 'engineEventProposal':
+    case 'engineEventCommitted':
+    case 'capabilityPrepare':
+    case 'capabilityUpdate':
       return {
         name: payload.body.case,
         identity: payload.body.value.identity,

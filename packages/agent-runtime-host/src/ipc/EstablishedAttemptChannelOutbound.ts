@@ -79,4 +79,16 @@ export class EstablishedAttemptChannelOutbound {
       this.sender.commit(outbound),
     );
   }
+
+  async sendEvent(
+    payload: agentV1Runtime.FramePayload,
+    deadline: ResponseDeadlinePolicy,
+  ): Promise<CommittedOutbound> {
+    const outbound = this.sender.prepareEvent(payload, deadline);
+    await this.transport.send(sharedOutboundBytes(outbound), this.owner);
+    return mintCommittedOutbound(
+      this.receiptBinding,
+      this.sender.commit(outbound),
+    );
+  }
 }

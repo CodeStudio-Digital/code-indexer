@@ -3,7 +3,9 @@ syntax = "proto3";
 package codestudio.agent.v1;
 
 import "codestudio/agent/v1/artifact.proto";
+import "codestudio/agent/v1/capability.proto";
 import "codestudio/agent/v1/common.proto";
+import "codestudio/agent/v1/session_store.proto";
 
 enum TransportChannel {
   TRANSPORT_CHANNEL_UNSPECIFIED = 0;
@@ -71,6 +73,18 @@ message FramePayload {
     HydrationChunk hydration_chunk = 25;
     HydrationComplete hydration_complete = 26;
     HydrationCommitted hydration_committed = 27;
+    ProviderStart provider_start = 28;
+    ProviderAccepted provider_accepted = 29;
+    ProviderCancel provider_cancel = 30;
+    ProviderTextDelta provider_text_delta = 31;
+    ProviderThinkingDelta provider_thinking_delta = 32;
+    ProviderToolCall provider_tool_call = 33;
+    ProviderUsageEvent provider_usage = 34;
+    ProviderTerminal provider_terminal = 35;
+    EngineEventProposal engine_event_proposal = 36;
+    EngineEventCommitted engine_event_committed = 37;
+    CapabilityPrepare capability_prepare = 38;
+    CapabilityUpdate capability_update = 39;
   }
 }
 
@@ -177,6 +191,228 @@ message HydrationCommitted {
   bytes manifest_payload_sha256 = 4;
   uint32 item_count = 5;
   uint64 total_payload_bytes = 6;
+}
+
+enum ProviderMessageRole {
+  PROVIDER_MESSAGE_ROLE_UNSPECIFIED = 0;
+  PROVIDER_MESSAGE_ROLE_USER = 1;
+  PROVIDER_MESSAGE_ROLE_ASSISTANT = 2;
+  PROVIDER_MESSAGE_ROLE_TOOL = 3;
+}
+
+enum ProviderMessagePhase {
+  PROVIDER_MESSAGE_PHASE_UNSPECIFIED = 0;
+  PROVIDER_MESSAGE_PHASE_COMMENTARY = 1;
+  PROVIDER_MESSAGE_PHASE_FINAL_ANSWER = 2;
+}
+
+message ProviderTextContent {
+  oneof body {
+    string inline_utf8 = 1;
+    ArtifactRef artifact = 2;
+  }
+}
+
+message ProviderToolUseContent {
+  string tool_use_id = 1;
+  string capability_name = 2;
+  bytes encoded_json_arguments = 3;
+  bytes arguments_sha256 = 4;
+}
+
+message ProviderToolResultContent {
+  string tool_use_id = 1;
+  oneof content {
+    string inline_utf8 = 2;
+    ArtifactRef artifact = 3;
+  }
+  bool is_error = 4;
+  bool truncated = 5;
+  optional uint64 original_bytes = 6;
+}
+
+message ProviderContentBlock {
+  oneof body {
+    ProviderTextContent text = 1;
+    ProviderToolUseContent tool_use = 2;
+    ProviderToolResultContent tool_result = 3;
+    ArtifactRef attachment = 4;
+  }
+}
+
+message ProviderMessage {
+  ProviderMessageRole role = 1;
+  repeated ProviderContentBlock content = 2;
+  ProviderMessagePhase phase = 3;
+  bool is_meta = 4;
+}
+
+message ProviderToolDescriptor {
+  string capability_name = 1;
+  string description = 2;
+  bytes encoded_json_schema = 3;
+  bytes schema_sha256 = 4;
+  string capability_id = 5;
+  string capability_version = 6;
+  CapabilityExecutionClass execution_class = 7;
+  bool mutates = 8;
+}
+
+// Canonical payload for ResolvedAttemptSpec.agent_definition_snapshot in the
+// initial-turn V1 composer. SnapshotRef.schema_id is the fully-qualified
+// message name and both schema versions must be exactly 1.
+message AgentDefinitionSnapshotV1 {
+  uint32 schema_version = 1;
+  string agent_definition_id = 2;
+  string system_prompt_utf8 = 3;
+}
+
+// Canonical payload for ResolvedAttemptSpec.capability_set_snapshot. The
+// runner validates descriptor uniqueness and each JSON schema digest before a
+// ProviderTurnContext can be composed.
+message CapabilitySetSnapshotV1 {
+  uint32 schema_version = 1;
+  repeated ProviderToolDescriptor tools = 2;
+}
+
+// Canonical payload for ResolvedAttemptSpec.preset_snapshot. Provider/model
+// and reasoning effort remain sealed by ProviderBinding; this payload controls
+// only turn-level inference options.
+message ProviderPresetSnapshotV1 {
+  uint32 schema_version = 1;
+  optional string effective_preset = 2;
+  bool thinking = 3;
+  optional uint64 thinking_budget_tokens = 4;
+}
+
+// Transport-independent engine input. Attempt identity, provider binding,
+// operation identity, idempotency and deadlines are intentionally absent: the
+// runner adapter seals them from the hydrated ResolvedAttemptSpec.
+message ProviderTurnContext {
+  ProviderTextContent system = 1;
+  repeated ProviderMessage messages = 2;
+  repeated ProviderToolDescriptor tools = 3;
+  bool thinking = 4;
+  optional string reasoning_effort = 5;
+  optional uint64 thinking_budget_tokens = 6;
+  optional string previous_response_id = 7;
+  optional uint64 previous_response_message_count = 8;
+}
+
+// Runner -> Host. Starts one logical provider operation. Credentials and
+// vendor clients never cross this frame; the Host resolves the sealed binding.
+message ProviderStart {
+  AttemptIdentity identity = 1;
+  string operation_id = 2;
+  ProviderBinding binding = 3;
+  ProviderTextContent system = 4;
+  repeated ProviderMessage messages = 5;
+  repeated ProviderToolDescriptor tools = 6;
+  bool thinking = 7;
+  optional string reasoning_effort = 8;
+  optional uint64 thinking_budget_tokens = 9;
+  optional string previous_response_id = 10;
+  optional uint64 previous_response_message_count = 11;
+  int64 deadline_at_unix_ms = 12;
+  string idempotency_key = 13;
+}
+
+// Host -> Runner. Commits registry ownership before any provider delta.
+message ProviderAccepted {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string operation_id = 3;
+  bytes request_payload_sha256 = 4;
+  int64 accepted_at_unix_ms = 5;
+}
+
+message ProviderCancel {
+  AttemptIdentity identity = 1;
+  string operation_id = 2;
+  string reason_code = 3;
+  string idempotency_key = 4;
+}
+
+message ProviderTextDelta {
+  AttemptIdentity identity = 1;
+  string operation_id = 2;
+  uint64 event_sequence = 3;
+  string text = 4;
+  optional string item_id = 5;
+  ProviderMessagePhase phase = 6;
+}
+
+message ProviderThinkingDelta {
+  AttemptIdentity identity = 1;
+  string operation_id = 2;
+  uint64 event_sequence = 3;
+  string text = 4;
+}
+
+message ProviderToolCall {
+  AttemptIdentity identity = 1;
+  string operation_id = 2;
+  uint64 event_sequence = 3;
+  string tool_use_id = 4;
+  string capability_name = 5;
+  bytes encoded_json_arguments = 6;
+  bytes arguments_sha256 = 7;
+}
+
+message ProviderUsage {
+  uint64 input_tokens = 1;
+  uint64 output_tokens = 2;
+  optional uint64 prompt_tokens_total = 3;
+  optional uint64 cache_creation_input_tokens = 4;
+  optional uint64 cache_read_input_tokens = 5;
+  optional uint64 thinking_tokens = 6;
+  optional uint64 cost_micros = 7;
+}
+
+message ProviderUsageEvent {
+  AttemptIdentity identity = 1;
+  string operation_id = 2;
+  uint64 event_sequence = 3;
+  ProviderUsage usage = 4;
+}
+
+enum ProviderTerminalClassification {
+  PROVIDER_TERMINAL_CLASSIFICATION_UNSPECIFIED = 0;
+  PROVIDER_TERMINAL_CLASSIFICATION_COMPLETED = 1;
+  PROVIDER_TERMINAL_CLASSIFICATION_FAILED = 2;
+  PROVIDER_TERMINAL_CLASSIFICATION_CANCELLED = 3;
+}
+
+message ProviderTerminal {
+  AttemptIdentity identity = 1;
+  string operation_id = 2;
+  uint64 event_sequence = 3;
+  ProviderTerminalClassification classification = 4;
+  string reason_code = 5;
+  optional string response_id = 6;
+  ProviderUsage final_usage = 7;
+  int64 completed_at_unix_ms = 8;
+  optional uint64 response_message_count = 9;
+}
+
+// Runner -> Host. Proposes one canonical engine record for the fenced Rust
+// session writer. The Host validates semantic authority before asking the
+// native store to commit it.
+message EngineEventProposal {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  EngineEventRecordV1 record = 3;
+  bytes expected_payload_sha256 = 4;
+}
+
+// Host -> Runner. Returned only after the exact proposal crossed the native
+// filesystem journal and produced its hash-chained store receipt.
+message EngineEventCommitted {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  uint64 local_sequence = 3;
+  bytes event_payload_sha256 = 4;
+  CommitSessionRecordReceipt commit_receipt = 5;
 }
 
 enum AttemptTrigger {

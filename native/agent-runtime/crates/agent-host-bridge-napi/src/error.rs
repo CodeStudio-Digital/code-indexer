@@ -38,6 +38,14 @@ pub fn supervisor(source: &agent_host_bridge::HostSupervisorBridgeError) -> Erro
     Error::new(Status::GenericFailure, source.to_string())
 }
 
+pub fn session(source: agent_session_bridge::SessionStoreBridgeError) -> Error {
+    Error::new(Status::GenericFailure, source.to_string())
+}
+
+pub fn session_state(message: &'static str) -> Error {
+    Error::new(Status::GenericFailure, message)
+}
+
 #[cfg(windows)]
 pub fn supervisor_cleanup(message: &str) -> Error {
     Error::new(

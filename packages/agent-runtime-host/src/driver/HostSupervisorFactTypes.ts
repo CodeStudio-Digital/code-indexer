@@ -7,7 +7,9 @@ export type SupervisorLifecycleFactCase =
   | 'launchAccepted'
   | 'launchRejected'
   | 'attemptProcessSpawned'
-  | 'attemptContainmentReport';
+  | 'attemptContainmentReport'
+  | 'attemptProcessExited'
+  | 'attemptProcessReaped';
 
 export type SupervisorLifecycleFact = Extract<
   agentV1Supervisor.ManagementPayload['body'],
@@ -76,6 +78,7 @@ export interface HostSupervisorFactDriverOptions {
   readonly handoff: HostSupervisorFactHandoff;
   readonly nowUnixMs: () => bigint;
   readonly durableCommitTimeoutMs: number;
+  readonly commandResponseTimeoutMs: number;
   readonly integrationMode: 'test' | 'shadow';
 }
 
@@ -88,5 +91,13 @@ export type HostSupervisorFactStep =
   | {
     readonly kind: 'replayed';
     readonly factCase: SupervisorLifecycleFactCase;
+    readonly messageId: string;
+  }
+  | {
+    readonly kind: 'command_acknowledged';
+    readonly commandCase:
+      | 'cancelAttemptProcess'
+      | 'fenceAttemptProcess'
+      | 'reapAttemptProcess';
     readonly messageId: string;
   };

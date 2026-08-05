@@ -18,5 +18,7 @@ pub mod pulse_channel;
 pub mod runner_bootstrap;
 pub mod semantic_hash;
 pub mod supervisor_bootstrap;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod version;
 pub mod wire_identity;

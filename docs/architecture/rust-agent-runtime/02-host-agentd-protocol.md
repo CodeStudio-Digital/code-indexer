@@ -646,7 +646,8 @@ da spec.
 | `ResolveInteraction` | Resolve interaction ID exato |
 | `UpdateModelBinding` | Atualiza binding resolvido/versionado |
 | `ProviderEvent` | Stream/terminal de provider operation |
-| `CapabilityUpdate` | Policy/approval/dispatch/progress/terminal |
+| `EngineEventCommitted` | Confirma record do engine somente após receipt do journal Rust |
+| `CapabilityUpdate` | Decisão pré-dispatch `rejected|approval_required|accepted` |
 | `ChildRunUpdate` | Estado/ref/resultado limitado de child |
 | `ArtifactCommitAck` | Confirma promoção durável |
 | `CheckpointCommitted` | Confirma checkpoint/cursor durable |
@@ -671,9 +672,8 @@ da spec.
 | `InteractionRequest` | Solicita input humano |
 | `ProviderStart` | Abre provider operation no host |
 | `ProviderCancel` | Cancela provider por operation ID |
+| `EngineEventProposal` | Propõe record canônico do engine, inclusive capability started/terminal, ao writer filesystem fenced |
 | `CapabilityPrepare` | Solicita binding/policy/intent |
-| `CapabilityDispatchStarted` | Marca fronteira do efeito |
-| `CapabilityTerminal` | Resultado ou unknown |
 | `CapabilityCancel` | Cancela tool por operation ID |
 | `CapabilityProbe` | Reconcilia sem repetir |
 | `SpawnChildRun` | Solicita child run durável |
@@ -685,6 +685,22 @@ da spec.
 | `Ack` | Confirma frame crítico |
 
 ## 10. Provider Gateway
+
+Na V1 do turno inicial, três snapshots possuem payload Protobuf executável e
+schema ID igual ao nome fully-qualified da mensagem:
+
+- `AgentDefinitionSnapshotV1` fornece `agent_definition_id` e system prompt;
+- `CapabilitySetSnapshotV1` fornece somente descriptors visíveis;
+- `ProviderPresetSnapshotV1` fornece thinking e budget, enquanto
+  provider/model/reasoning effort continuam selados por `ProviderBinding`.
+
+Ref, `schema_version = 1`, SHA-256 hidratado, encoding canônico e coerência com
+a `ResolvedAttemptSpec` são obrigatórios. Nome de capability é único e o digest
+do JSON schema é refeito no runner. O composer roda depois da transferência
+verificada e antes do commit de `AttemptPrepared`; qualquer divergência fecha a
+attempt sem provider operation. Essa versão aceita somente trigger `initial`.
+Resume/fallback/recovery e presença de checkpoint/transcript falham fechados
+até seus contratos versionados próprios.
 
 `ProviderStart` contém:
 
@@ -715,6 +731,11 @@ done
 error
 ```
 
+`ProviderTerminal` preserva o par opcional
+`response_id/response_message_count` emitido pelo adapter stateful. O runner só
+reutiliza o cursor quando ambos existem; caso contrário envia o contexto
+bounded completo, sem inferir contagem.
+
 ### IPC-017
 
 OAuth, credentials, retry físico e adapters pertencem ao host.
@@ -727,6 +748,27 @@ Runner decide fallback lógico apenas após terminal tipado do gateway.
 
 Provider operation registry é bounded e indexado por attempt/operation. Fence
 cancela a operação mesmo se o runner já morreu.
+
+### IPC-019A — barreira durável do turno
+
+O `EventSinkPort` do engine pertence ao runner. Para cada evento, ele codifica
+um `EngineEventRecordV1` canônico e envia `EngineEventProposal` no mesmo canal
+Data autenticado, com identity, runtime instance, sequência local e SHA-256 dos
+bytes exatos. O Host valida a autoridade sem reescrever o record e pede o commit
+ao writer filesystem Rust fenced. Somente depois do receipt hash-chained ele
+responde `EngineEventCommitted`, repetindo sequência e digest da proposta.
+
+Provider events e receipts de durabilidade compartilham uma lane Host outbound
+bounded. O encerramento de Control não fecha Data implicitamente, e Data é
+retido até o cleanup coordenado da attempt. A sequência do sink e a publicação
+terminal NÃO avançam antes do receipt. Replay idêntico retorna o receipt
+existente; payload divergente na mesma operação falha fechado.
+
+A implementação V1 usa o wrapper Node-API verificado como fachada ABI para dois
+cores independentes: `agent-host-bridge` possui apenas transporte efêmero da
+attempt, enquanto `agent-session-bridge` possui apenas a capability do writer
+filesystem. O primeiro não depende de storage e o segundo não recebe endpoint
+de runner.
 
 ## 11. Capability Gateway
 
@@ -770,9 +812,11 @@ Para tool nativa:
 2. host resolve environment/policy e persiste boundary;
 3. host retorna grant;
 4. Rust revalida hash/expiry/fence;
-5. Rust envia `CapabilityDispatchStarted`;
+5. Rust propõe `EngineEventRecordV1.capability_dispatch_started` e aguarda o
+   receipt autoritativo;
 6. Rust executa;
-7. Rust envia `CapabilityTerminal`.
+7. Rust propõe `EngineEventRecordV1.capability_terminal` e aguarda o receipt
+   autoritativo.
 
 ### IPC-021
 
@@ -1437,6 +1481,41 @@ O host envia `UpdateAttemptAuthority` pelo management channel com epoch e
 `leaseExpiresAt`. O supervisor nunca cria/estende authority, limita qualquer
 update ao hard deadline imutável e encerra o resource group quando lease ou
 pulse expira. Assim, host travado com pipe ainda aberto não mantém attempt viva.
+
+### IPC-049
+
+`CapabilityPrepare` trafega runner → Host no Data channel já autenticado. Ele é
+somente pedido de policy/resource binding e NÃO autoriza efeito. O payload liga
+identity/runtime, operation do provider e da capability, tool use, capability
+ID/versão, execution class, mutation, input JSON bounded com SHA-256, snapshot
+de capabilities, idempotency key e deadline.
+
+O Host responde `CapabilityUpdate` no mesmo stop-and-wait, com `reply_to`,
+`operation_id` e `tool_use_id` exatos e exatamente uma decisão
+`rejected|approval_required|accepted`. Um aceite carrega
+`SealedExecutionGrant`, repetindo todos os recursos necessários para validação
+fail-closed no executor. `CapabilityUpdate` termina nessa decisão e nunca é
+usado como prova de execução. Na implementação 1.35, `started` e terminal são
+records semânticos distintos dentro de `EngineEventProposal/Committed`; ambos
+cruzam o writer filesystem autoritativo. A primeira execução concreta é
+`native.read_file`, com binding/root/quota selados e validação de path pelo
+handle final no Windows. O resultado volta pareado ao próximo `ProviderStart`;
+o resolver Host confere o digest do catálogo hidratado, canonicaliza a raiz
+confiável fora do input e sela environment, lease/fence, quotas, policy, nonce
+e expiry. O E2E process-real comprova essa sequência. Falha live do executor
+pós-started vira terminal `outcome_unknown` e não é repetida. Recovery/probe
+quando o terminal não pôde ser persistido e demais execution classes permanecem
+abertos.
+
+### IPC-050
+
+Recovery NÃO lê `conversation.jsonl` nem payload paths pelo TypeScript. O Host
+usa `ListCommittedSessionRecords` com writer/authority atuais, cursor global e
+página máxima de 256 receipts. O store revalida a cadeia inteira mesmo quando
+retorna somente uma página; payload continua separado e só atravessa
+`ReadCommittedSessionPayload` com operation/kind/hash/length exatos. O scanner
+Host possui teto total explícito, valida encoding canônico e apenas classifica
+`started` sem terminal. Essa leitura nunca autoriza probe, retry ou novo efeito.
 
 ## 20. Verificação obrigatória
 

@@ -2,6 +2,7 @@ export type HostDataChannelErrorCode =
   | 'invalid_provision'
   | 'invalid_binding'
   | 'invalid_hydration'
+  | 'provider_failure'
   | 'unexpected_payload'
   | 'source_failure';
 

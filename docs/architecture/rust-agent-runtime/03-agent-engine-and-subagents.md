@@ -112,6 +112,27 @@ Cada turno segue:
 13. decidir próximo provider turn, wait ou terminal;
 14. criar checkpoint em barreiras definidas.
 
+Na implementação 1.36, os passos 8–11 atravessam uma primeira rota completa
+para `native.read_file`: o `ProviderToolCall` é ligado ao descriptor versionado,
+o Host decide `allow|ask|deny`, o grant aceito carrega binding filesystem
+concreto e o Rust revalida authority/expiry/input imediatamente antes do efeito.
+`started` e `terminal` são bodies distintos de `EngineEventRecordV1` com
+durabilidade autoritativa, não mensagens paralelas com semântica duplicada. O
+resultado bounded é inserido como `tool_result` pareado, o cursor stateful do
+provider é preservado e o engine retorna `CapabilityDispatch -> Composing ->
+ProviderStream`. O loop respeita `maxTurns` e `maxToolCalls` antes do efeito. A
+policy Host liga o pedido ao digest do catálogo hidratado, canonicaliza a raiz
+confiável fora do input do modelo e sela environment, lease/fence, quotas,
+nonce e expiry. O E2E process-real cruza o efeito e retoma o provider. Outras
+execution classes e resume de attempt por checkpoint continuam abertos. Se o
+executor perde seu resultado depois do receipt `started`, o engine executa uma
+vez, grava `outcome_unknown` e entrega erro ao provider; não há retry interno.
+Reconciliação de `started` órfão quando o commit terminal não foi possível e
+probe de handlers externos continuam abertos. O inventário já é bounded e
+path-free: o Host pagina receipts autenticados, lê payloads por prova exata e
+detecta started órfão sem repetir o efeito. Falta persistir a decisão de
+recovery numa nova attempt/interaction.
+
 ### ENG-007
 
 Authority e deadline são revalidados antes dos passos 5, 9, 10, 13 e 14.
@@ -170,6 +191,18 @@ O contexto tem camadas:
 5. memory/index refs recuperados;
 6. tool descriptors visíveis;
 7. artifacts explicitamente hidratados.
+
+O composer V1 inicial consome agent definition, capability set e provider
+preset como mensagens Protobuf canônicas ligadas aos respectivos
+`SnapshotRef`. Task inline vira conteúdo user; task artifact precisa ser texto
+UTF-8 hidratado e attachments permanecem refs. O resultado serializado é
+rejeitado antes de `Prepared` se ultrapassar o menor teto entre hot transcript
+e IPC. O composer de capability 1.33 deriva o próximo contexto canônico do
+contexto já validado, anexa exatamente um assistant `tool_use` e um tool
+`tool_result`, e preserva `response_id/message_count`. Os bytes entre turns são
+compartilhados por `Arc<[u8]>`. Isso é continuação dentro da mesma attempt, não
+resume de attempt: transcript/checkpoint permanecem contratos separados e não
+podem ser tratados como bytes livres.
 
 ### ENG-015
 

@@ -10,6 +10,7 @@
 pub mod bootstrap;
 mod environment;
 mod error;
+pub mod filesystem;
 pub mod ipc;
 mod launch;
 mod lifecycle;
