@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { ChatDelta } from '@mcp/code-agent/core/messages.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
@@ -143,15 +143,6 @@ function reportingProvider(report: string): ChatProvider {
 }
 
 describe('runSubagent limits', () => {
-  beforeEach(() => {
-    process.env.CODER_SUBAGENT_SALVAGE_TIMEOUT_MS = '20';
-  });
-
-  afterEach(() => {
-    delete process.env.CODER_SUBAGENT_SALVAGE_TIMEOUT_MS;
-    delete process.env.CODER_SUBAGENT_SAME_OPERATION_MAX;
-  });
-
   it('reports tool_budget (not error) when the tool-call cap is reached', async () => {
     const progress: string[] = [];
     const result = await runSubagent(parent(toolCallingProvider()), {
@@ -177,6 +168,7 @@ describe('runSubagent limits', () => {
       initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'hang' }] }],
       maxTurns: 10,
       limits: { timeoutMs: 5_000, stallMs: 20 },
+      salvageTimeoutMs: 20,
     });
 
     expect(result.reason).toBe('error');
@@ -200,7 +192,6 @@ describe('runSubagent limits', () => {
   });
 
   it('stops an unlimited subagent that repeats one stable operation without progress', async () => {
-    process.env.CODER_SUBAGENT_SAME_OPERATION_MAX = '3';
     const progress: string[] = [];
     const result = await runSubagent(parent(toolCallingProvider()), {
       systemPrompt: 'You are a test subagent.',
@@ -208,6 +199,7 @@ describe('runSubagent limits', () => {
       initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'repeat forever' }] }],
       maxTurns: 0,
       limits: { maxToolCalls: 0, timeoutMs: 0, stallMs: 5_000 },
+      sameOperationMax: 3,
       onProgress: (event) => {
         if (event.note) progress.push(event.note);
       },
@@ -386,6 +378,7 @@ describe('runSubagent limits', () => {
       initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'hang' }] }],
       maxTurns: 0,
       limits: { maxToolCalls: 0, timeoutMs: 20, stallMs: 5_000 },
+      salvageTimeoutMs: 20,
     });
 
     expect(result.reason).toBe('time_budget');
@@ -435,6 +428,7 @@ describe('runSubagent limits', () => {
       [{
         task: 'wait', label: 'waiter', maxTurns: 0,
         limits: { maxToolCalls: 0, timeoutMs: 20, stallMs: 5_000 },
+        salvageTimeoutMs: 20,
       }],
       'You are a test subagent.',
       null,

@@ -212,12 +212,11 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     expect(names).toContain('run_command');
   });
 
-  it('CODER_TOOL_CAP_DEFAULT=0 restores the legacy model-cap-only behavior (capInfo null)', () => {
+  it('ignores the retired tool-cap env switch and keeps the product cap', () => {
     process.env.CODER_TOOL_CAP_DEFAULT = '0';
     const res = buildTools(makeArgs('claude-opus-4-7'));
-    expect(res.capInfo).toBeNull();
-    expect(res.tools.map((t) => t.name)).toContain('git_commit');
-    expect(res.tools.map((t) => t.name)).toContain('cf__deploy_worker');
+    expect(res.capInfo?.cap).toBe(28);
+    expect(res.tools).toHaveLength(28);
   });
 
   it('subagents/tests (activeTiers null) are exempt from the default cap', () => {
@@ -232,14 +231,12 @@ describe('buildTools — priority trim at a weak-model cap', () => {
     expect(a).toBe(b);
   });
 
-  it('CODER_PRIORITY_TRIM_DISABLE=1 restores the legacy alphabetical tail-cut', () => {
+  it('ignores the retired trim kill switch and keeps priority selection', () => {
     process.env.CODER_PRIORITY_TRIM_DISABLE = '1';
     const names = buildTools(makeArgs('glm-4.5-flash')).tools.map((t) => t.name);
-    // Legacy cut remains alphabetical over the non-protected bucket, while
-    // the minimal write pair survives independently of the kill switch.
     expect(names).toContain('write_file');
-    expect(names).not.toContain('todo_write');
-    expect(names).toContain('create_file');
+    expect(names).toContain('read_file');
+    expect(names).not.toContain('create_file');
   });
 
   it('keeps a surgical Company loop instead of the complete master tier', () => {
@@ -498,11 +495,11 @@ describe('buildTools — terse descriptions for compact-catalog models', () => {
     expect(byName.get('create_goal')).toBe('create_goal description.');
   });
 
-  it('legacy mode (CODER_TOOL_CAP_DEFAULT=0): large-catalog model keeps full descriptions (byte parity)', () => {
+  it('retired tool-cap env cannot restore the large legacy catalog', () => {
     process.env.CODER_TOOL_CAP_DEFAULT = '0';
     const tools = buildTools(makeArgs('claude-opus-4-7')).tools;
-    expect(tools.find((t) => t.name === 'mcp__search')?.description).toBe(
-      `mcp__search description. ${TAIL}`,
-    );
+    expect(tools).toHaveLength(28);
+    expect(tools.find((t) => t.name === 'mcp__search')?.description)
+      .toBe('mcp__search description.');
   });
 });

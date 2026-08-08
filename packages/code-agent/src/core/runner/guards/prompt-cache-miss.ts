@@ -10,15 +10,6 @@ export interface PromptCacheMissObservation {
   maxMisses: number;
 }
 
-function positiveEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw != null && raw !== '') {
-    const value = Number(raw);
-    if (Number.isFinite(value) && value > 0) return Math.floor(value);
-  }
-  return fallback;
-}
-
 /**
  * Protects expensive OpenRouter agent loops from repeatedly re-sending a
  * large prefix at full input price. Unknown/missing usage is not classified
@@ -29,8 +20,8 @@ export function observePromptCache(
   usage: ChatUsage | null,
   previousConsecutiveMisses: number,
 ): PromptCacheMissObservation {
-  const thresholdTokens = positiveEnv('CODER_CACHE_MISS_GUARD_PROMPT_TOKENS', 100_000);
-  const maxMisses = positiveEnv('CODER_CACHE_MISS_GUARD_MAX', 2);
+  const thresholdTokens = 100_000;
+  const maxMisses = 2;
   const promptTokens = promptTokensTotal(usage);
   const cachedTokens =
     typeof usage?.cache_read_input_tokens === 'number'

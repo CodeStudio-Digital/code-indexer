@@ -1,7 +1,7 @@
 /**
  * Tests for CoderTunables — focus on the contract that A1 added:
  *
- *   - envTunables() reads CODER_* env vars with hardcoded fallbacks
+ *   - envTunables() is the stable compatibility fallback
  *   - mergeTunables() honors only finite positive numbers in the override
  *   - DEFAULT_TUNABLES matches the legacy hardcoded constants
  *
@@ -14,8 +14,10 @@ import {
   DEFAULT_TUNABLES,
   envTunables,
   mergeTunables,
+  tunablesFromRuntimePolicy,
   type CoderTunables,
 } from '../tunables.js';
+import type { ResolvedRuntimePolicyV1 } from '@mcp/agent-runtime-contracts';
 
 const ENV_KEYS = [
   'CODER_PUSH_TIME_CAP',
@@ -27,6 +29,28 @@ const ENV_KEYS = [
 ];
 
 describe('CoderTunables', () => {
+  it('projects an immutable runtime policy without consulting process.env', () => {
+    process.env.CODER_PUSH_TIME_CAP = '999999';
+    const policy = {
+      context: {
+        toolResultChars: 42_000,
+        subagentToolResultChars: 12_000,
+        unrestrictedToolResultChars: 1_000_000,
+        unrestrictedSubagentToolResultChars: 500_000,
+        turnBudgetChars: 30_000,
+        interventionCooldownTurns: 5,
+      },
+    } as ResolvedRuntimePolicyV1;
+
+    expect(tunablesFromRuntimePolicy(policy)).toEqual({
+      pushTimeCap: 42_000,
+      subagentPushTimeCap: 12_000,
+      unrestrictedPushTimeCap: 1_000_000,
+      unrestrictedSubagentPushTimeCap: 500_000,
+      turnBudgetChars: 30_000,
+      interventionCooldownTurns: 5,
+    });
+  });
   const original: Record<string, string | undefined> = {};
 
   beforeEach(() => {
@@ -63,18 +87,13 @@ describe('CoderTunables', () => {
       expect(envTunables()).toEqual(DEFAULT_TUNABLES);
     });
 
-    it('honors each CODER_* env var', () => {
+    it('ignores process env overrides', () => {
       process.env.CODER_PUSH_TIME_CAP = '48000';
       process.env.CODER_SUBAGENT_PUSH_TIME_CAP = '20000';
       process.env.CODER_TURN_BUDGET_CHARS = '60000';
       process.env.CODER_TOOL_MISUSE_INTERVENTION_COOLDOWN = '10';
       const t = envTunables();
-      expect(t.pushTimeCap).toBe(48_000);
-      expect(t.subagentPushTimeCap).toBe(20_000);
-      expect(t.turnBudgetChars).toBe(60_000);
-      expect(t.interventionCooldownTurns).toBe(10);
-      // Untouched keys keep defaults.
-      expect(t.unrestrictedPushTimeCap).toBe(DEFAULT_TUNABLES.unrestrictedPushTimeCap);
+      expect(t).toEqual(DEFAULT_TUNABLES);
     });
 
     it('falls back to default when env value is not a finite positive number', () => {

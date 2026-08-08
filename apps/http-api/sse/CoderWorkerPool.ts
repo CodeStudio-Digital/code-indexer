@@ -59,6 +59,7 @@ import {
   classifyCoderTerminalOutcome,
   normalizeCoderTerminalSignal,
   type ControlPlaneEventType,
+  type ResolvedRuntimePolicyV1,
 } from '@mcp/agent-runtime-contracts';
 import {
   releaseSessionWriterLeaseForOwner,
@@ -336,6 +337,8 @@ export interface CoderWorkerPoolOpts {
    * their respective feature flags.
    */
   getControlPlaneStore?: () => ControlPlaneAuthority | null;
+  /** Resolves one immutable policy immediately before an attempt starts. */
+  resolveRuntimePolicy?: () => ResolvedRuntimePolicyV1;
 }
 
 export interface SessionRuntimeContext {
@@ -447,6 +450,8 @@ export interface RunFreshOpts {
    * credentials.
    */
   controlPlaneRunContext?: ControlPlaneRunContext;
+  /** Host-only attempt snapshot; callers normally let the pool resolve it. */
+  runtimePolicy?: ResolvedRuntimePolicyV1;
 }
 
 /**
@@ -573,6 +578,7 @@ export class CoderWorkerPool {
    */
   async runFresh(sessionId: SessionId, opts: RunFreshOpts): Promise<CoderRunBus> {
     const { controlPlaneRunContext, ...workerOpts } = opts;
+    const runtimePolicy = workerOpts.runtimePolicy ?? this.opts.resolveRuntimePolicy?.();
     let entry: PoolEntry;
     try {
       entry = await this.ensureEntry(sessionId);
@@ -620,6 +626,7 @@ export class CoderWorkerPool {
     try {
       await bridge.request('runFresh', {
         ...workerOpts,
+        ...(runtimePolicy ? { runtimePolicy } : {}),
         runId,
         controlPlaneParentAgentRunId: controlPlaneRunContext?.agentRunId,
       }, { timeoutMs: 60_000 });

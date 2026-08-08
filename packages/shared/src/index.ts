@@ -10,6 +10,7 @@ export * from './utils/index-ignore.js';
 export * from './utils/project-ignore.js';
 export * from './utils/map-with-concurrency.js';
 export * from './utils/native-fetch.js';
+export * from './utils/untrusted-capability-metadata.js';
 export * from './attachments/policy.js';
 export * from './editor/completion-prefilter.js';
 export * from './git/push-with-auto-update.js';

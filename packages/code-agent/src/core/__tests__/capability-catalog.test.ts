@@ -3,6 +3,8 @@ import {
   auditCapabilityDescriptors,
   deriveCapabilityDescriptor,
   resolveCapabilitySet,
+  resolveProviderCapabilityProjection,
+  sanitizeUntrustedCapabilityMetadata,
 } from '../capability-catalog.js';
 import type { CoderTool } from '../tool.js';
 import type { AgentRunId } from '@mcp/agent-runtime-contracts';
@@ -38,6 +40,24 @@ describe('deriveCapabilityDescriptor', () => {
     expect(descriptor.source.kind).toBe('mcp_internal');
   });
 
+  it('models execute/control boundaries as local effects even without workspace mutation', () => {
+    const { descriptor } = deriveCapabilityDescriptor(
+      tool({
+        name: 'spawn_agent',
+        source: 'native',
+        mutates: false,
+        executionClass: 'execute',
+        effectBoundary: 'nested',
+      }),
+    );
+    expect(descriptor.execution.class).toBe('execute');
+    expect(descriptor.execution.mutates).toBe(false);
+    expect(descriptor.execution.sideEffect).toMatchObject({
+      kind: 'local',
+      ambiguousOutcome: 'mark_outcome_unknown',
+    });
+  });
+
   it('forces conservative posture on an external tool that lies about mutation', () => {
     const { descriptor, optimisticExternalMetadata } = deriveCapabilityDescriptor(
       tool({ name: 'mcp__mail__send', source: 'mcp_external', mutates: false, riskLevel: 'read' }),
@@ -67,6 +87,26 @@ describe('deriveCapabilityDescriptor', () => {
     expect(attested.descriptor.source.metadataTrust).toBe('attested');
     expect(attested.descriptor.execution.mutates).toBe(false);
     expect(attested.optimisticExternalMetadata).toBe(false);
+  });
+
+  it('uses contributor provenance carried by plugin tools', () => {
+    const { descriptor } = deriveCapabilityDescriptor(tool({
+      name: 'plugin__acme__read',
+      source: 'mcp_external',
+      mutates: false,
+      capabilityProvenance: {
+        kind: 'plugin',
+        providerId: 'acme',
+        provenanceRef: 'plugin:acme',
+        attestationRef: 'manifest:sha256:123',
+      },
+    }));
+    expect(descriptor.source).toMatchObject({
+      kind: 'plugin',
+      providerId: 'acme',
+      provenanceRef: 'plugin:acme',
+      metadataTrust: 'attested',
+    });
   });
 
   it('throws for an indescribable tool (missing source)', () => {
@@ -123,5 +163,57 @@ describe('auditCapabilityDescriptors', () => {
       'indescribable',
       'optimistic_external_metadata',
     ]);
+  });
+});
+
+describe('resolveProviderCapabilityProjection', () => {
+  const authorized = [
+    tool({ name: 'read_file', source: 'native', mutates: false }),
+    tool({ name: 'edit_file', source: 'native', mutates: true }),
+  ];
+
+  it('keeps authorization identity stable while projection identity changes', () => {
+    const readOnly = resolveProviderCapabilityProjection(
+      authorized,
+      [{ name: 'read_file', description: 'read', parameters: { type: 'object' } }],
+      { agentRunId: RUN },
+    );
+    const expanded = resolveProviderCapabilityProjection(
+      authorized,
+      [
+        { name: 'read_file', description: 'read', parameters: { type: 'object' } },
+        { name: 'edit_file', description: 'edit', parameters: { type: 'object' } },
+      ],
+      { agentRunId: RUN },
+    );
+
+    expect(readOnly.set.hash).toBe(expanded.set.hash);
+    expect(readOnly.projection.digest).not.toBe(expanded.projection.digest);
+    expect(readOnly.projection.capabilitySetHash).toBe(readOnly.set.hash);
+  });
+
+  it('rejects a provider descriptor outside the authorized attempt set', () => {
+    expect(() => resolveProviderCapabilityProjection(
+      authorized,
+      [{ name: 'late_mcp', description: '', parameters: {} }],
+      { agentRunId: RUN },
+    )).toThrow(/unauthorized tool 'late_mcp'/);
+  });
+});
+
+describe('sanitizeUntrustedCapabilityMetadata', () => {
+  it('bounds external descriptions, depth, and total schema bytes', () => {
+    const deep: Record<string, unknown> = {};
+    let cursor = deep;
+    for (let index = 0; index < 20; index += 1) {
+      cursor.next = {};
+      cursor = cursor.next as Record<string, unknown>;
+    }
+    cursor.description = 'x'.repeat(100_000);
+    const sanitized = sanitizeUntrustedCapabilityMetadata('d'.repeat(10_000), deep);
+
+    expect(sanitized.description).toHaveLength(4_096);
+    expect(Buffer.byteLength(JSON.stringify(sanitized.schema), 'utf8')).toBeLessThanOrEqual(64 * 1_024);
+    expect(sanitized.truncated).toBe(true);
   });
 });

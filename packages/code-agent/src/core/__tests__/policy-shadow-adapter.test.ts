@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   asAgentRunId,
   asSessionId,
@@ -18,15 +18,6 @@ import type {
   PolicyShadowPersistencePort,
 } from '../policy-shadow-persistence.js';
 
-const FLAGS = [
-  'CODER_POLICY_ENGINE_SHADOW',
-  'CODER_CAPABILITY_CATALOG_SHADOW',
-  'CODER_HOOK_BUS_V1',
-  'CODER_RESOURCE_GRANTS',
-  'CODER_POLICY_ENGINE_ENFORCE',
-] as const;
-
-let previous: Record<string, string | undefined>;
 const SESSION_ID = asSessionId('11111111-1111-4111-8111-111111111111');
 const ROOT_RUN_ID = asAgentRunId('22222222-2222-4222-8222-222222222222');
 const FOREGROUND_RUN_ID = asAgentRunId('33333333-3333-4333-8333-333333333333');
@@ -101,24 +92,16 @@ function comparisonCount(): number {
 
 beforeEach(() => {
   persistence = recordingPersistence();
-  previous = Object.fromEntries(FLAGS.map((f) => [f, process.env[f]]));
-  for (const f of FLAGS) delete process.env[f];
-});
-
-afterEach(() => {
-  for (const f of FLAGS) {
-    if (previous[f] === undefined) delete process.env[f];
-    else process.env[f] = previous[f];
-  }
 });
 
 describe('createPolicyShadowPort', () => {
   it('returns null when every flag is off (port absent = byte-identical path)', () => {
-    expect(createPolicyShadowPort(makeDeps())).toBeNull();
+    expect(createPolicyShadowPort(makeDeps({
+      mode: { shadow: false, catalog: false, enforce: false, resourceGrants: false },
+    }))).toBeNull();
   });
 
   it('shadow on: persists decision + comparison with latency and never refuses', async () => {
-    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
     const created = createPolicyShadowPort(makeDeps())!;
     const registry = makeRegistry();
 
@@ -133,7 +116,6 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('shadow on: a plan-mode deny still returns refuse:false without ENFORCE', async () => {
-    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
     const created = createPolicyShadowPort(makeDeps({}, { planMode: true, planApproved: false }))!;
     const registry = makeRegistry();
 
@@ -146,9 +128,10 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('ENFORCE on: refuses a shadow deny with a structured refusal', async () => {
-    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
-    process.env.CODER_POLICY_ENGINE_ENFORCE = '1';
-    const created = createPolicyShadowPort(makeDeps({}, { planMode: true, planApproved: false }))!;
+    const created = createPolicyShadowPort(makeDeps(
+      { mode: { enforce: true } },
+      { planMode: true, planApproved: false },
+    ))!;
     const registry = makeRegistry();
 
     const denied = await created.port(invocation('edit_file', registry.get('edit_file')!));
@@ -160,23 +143,22 @@ describe('createPolicyShadowPort', () => {
     expect(allowed).toEqual({ refuse: false });
   });
 
-  it('kill switch: flipping the flag off mid-run stops evaluations and persistence', async () => {
-    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
+  it('captures mode once so process env cannot change authority mid-run', async () => {
     const created = createPolicyShadowPort(makeDeps())!;
     const registry = makeRegistry();
 
     await created.port(invocation('read_file', registry.get('read_file')!));
     expect(comparisonCount()).toBe(1);
 
-    delete process.env.CODER_POLICY_ENGINE_SHADOW;
+    process.env.CODER_POLICY_ENGINE_SHADOW = '0';
     const after = await created.port(invocation('read_file', registry.get('read_file')!));
     expect(after).toEqual({ refuse: false });
-    expect(created.metrics.evaluations).toBe(1); // unchanged
-    expect(comparisonCount()).toBe(1); // no new rows
+    expect(created.metrics.evaluations).toBe(2);
+    expect(comparisonCount()).toBe(2);
+    delete process.env.CODER_POLICY_ENGINE_SHADOW;
   });
 
   it('an internal error is contained: counted, refuse:false, run unaffected', async () => {
-    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
     const created = createPolicyShadowPort(makeDeps())!;
     // A broken tool (no source) makes deriveCapabilityDescriptor throw.
     const broken = { name: 'broken' } as unknown as CoderTool;
@@ -188,7 +170,6 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('contains a filesystem persistence error without dual-writing elsewhere', async () => {
-    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
     persistence.recordDecision = async () => {
       throw new Error('bundle unavailable');
     };
@@ -205,8 +186,7 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('fails closed opaquely on an internal evaluation error only in ENFORCE', async () => {
-    process.env.CODER_POLICY_ENGINE_ENFORCE = '1';
-    const created = createPolicyShadowPort(makeDeps())!;
+    const created = createPolicyShadowPort(makeDeps({ mode: { enforce: true } }))!;
     const broken = { name: 'broken' } as unknown as CoderTool;
 
     const result = await created.port(invocation('broken', broken));
@@ -220,8 +200,6 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('catalog flag: records the resolved capability set once per run', async () => {
-    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
-    process.env.CODER_CAPABILITY_CATALOG_SHADOW = '1';
     const created = createPolicyShadowPort(makeDeps())!;
     const registry = makeRegistry();
 
@@ -233,8 +211,6 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('scopes the same authority to child foreground/background mode and task paths', async () => {
-    process.env.CODER_HOOK_BUS_V1 = '1';
-    process.env.CODER_POLICY_ENGINE_ENFORCE = '1';
     const bus = new HookBus();
     bus.register({
       hookId: 'shared-authority-ask',
@@ -253,7 +229,7 @@ describe('createPolicyShadowPort', () => {
         reasonCode: 'approval_required',
       }),
     });
-    const created = createPolicyShadowPort(makeDeps({ hookBus: bus }))!;
+    const created = createPolicyShadowPort(makeDeps({ hookBus: bus, mode: { enforce: true } }))!;
     const registry = makeRegistry();
     const foreground = created.createScopedPort({
       getLegacyContext: () => ({
@@ -308,8 +284,6 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('records a scoped child capability set from its filtered registry, not the root surface', async () => {
-    process.env.CODER_POLICY_ENGINE_SHADOW = '1';
-    process.env.CODER_CAPABILITY_CATALOG_SHADOW = '1';
     const created = createPolicyShadowPort(makeDeps())!;
     const rootRegistry = makeRegistry();
     const childRegistry = new ToolRegistry();
@@ -337,8 +311,6 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('does not execute original mutating input when a hook requires patched-input reevaluation', async () => {
-    process.env.CODER_HOOK_BUS_V1 = '1';
-    process.env.CODER_POLICY_ENGINE_ENFORCE = '1';
     const bus = new HookBus();
     bus.register({
       hookId: 'rewrite-path',
@@ -369,7 +341,7 @@ describe('createPolicyShadowPort', () => {
       },
     });
     const registry = makeRegistry();
-    const created = createPolicyShadowPort(makeDeps({ hookBus: bus }))!;
+    const created = createPolicyShadowPort(makeDeps({ hookBus: bus, mode: { enforce: true } }))!;
     const result = await created.port({
       ...invocation('edit_file', mutating),
       toolInput: { path: 'original.ts' },
@@ -385,10 +357,10 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('fails closed when resource grants are enabled without a bound grant id/nonce', async () => {
-    process.env.CODER_RESOURCE_GRANTS = '1';
-    process.env.CODER_POLICY_ENGINE_ENFORCE = '1';
     const registry = makeRegistry();
-    const created = createPolicyShadowPort(makeDeps())!;
+    const created = createPolicyShadowPort(makeDeps({
+      mode: { enforce: true, resourceGrants: true },
+    }))!;
 
     const result = await created.port(invocation('edit_file', registry.get('edit_file')!));
 
@@ -399,8 +371,6 @@ describe('createPolicyShadowPort', () => {
   });
 
   it('fails closed when hook constraints lack a sealed resource binding', async () => {
-    process.env.CODER_HOOK_BUS_V1 = '1';
-    process.env.CODER_POLICY_ENGINE_ENFORCE = '1';
     const bus = new HookBus();
     bus.register({
       hookId: 'constrain-path',
@@ -425,7 +395,7 @@ describe('createPolicyShadowPort', () => {
       }),
     });
     const registry = makeRegistry();
-    const created = createPolicyShadowPort(makeDeps({ hookBus: bus }))!;
+    const created = createPolicyShadowPort(makeDeps({ hookBus: bus, mode: { enforce: true } }))!;
 
     const result = await created.port(invocation('edit_file', registry.get('edit_file')!));
 

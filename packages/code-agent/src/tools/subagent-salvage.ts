@@ -13,6 +13,7 @@ export interface SalvageSummaryArgs {
   collected: SubagentCollected;
   sandboxViolations: string[];
   parentSignal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export async function buildSubagentSalvageSummary(args: SalvageSummaryArgs): Promise<{
@@ -23,7 +24,9 @@ export async function buildSubagentSalvageSummary(args: SalvageSummaryArgs): Pro
   if (args.parentSignal?.aborted) return { text: deterministic, usage: zeroUsage() };
 
   const abort = new AbortController();
-  const timeoutMs = envMs('CODER_SUBAGENT_SALVAGE_TIMEOUT_MS', 30_000);
+  const timeoutMs = Number.isFinite(args.timeoutMs) && (args.timeoutMs ?? 0) > 0
+    ? Math.floor(args.timeoutMs!)
+    : 30_000;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const consumePromise = consumeStream({
@@ -112,11 +115,4 @@ function serializeBlock(block: Record<string, unknown>): string {
 
 function zeroUsage(): ChatUsage {
   return { input_tokens: 0, output_tokens: 0 };
-}
-
-function envMs(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
 }

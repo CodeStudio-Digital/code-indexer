@@ -28,11 +28,14 @@ export function pendingFromValidatedFrame(
     providerOperationId: body.case === 'providerStart'
       ? body.value.operationId
       : undefined,
-    capabilityOperationId: body.case === 'capabilityPrepare'
+    capabilityOperationId: body.case === 'capabilityPrepare' || body.case === 'capabilityExecute'
       ? body.value.operationId
       : undefined,
-    capabilityToolUseId: body.case === 'capabilityPrepare'
+    capabilityToolUseId: body.case === 'capabilityPrepare' || body.case === 'capabilityExecute'
       ? body.value.toolUseId
+      : undefined,
+    capabilityGrantId: body.case === 'capabilityExecute'
+      ? body.value.grantId
       : undefined,
     engineEventPayloadSha256: body.case === 'engineEventProposal'
       ? body.value.expectedPayloadSha256.slice()

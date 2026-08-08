@@ -21,16 +21,8 @@ import { ToolRegistry } from '../registry.js';
 import type { CoderTool } from '../tool.js';
 import { createPolicyShadowPort } from '../policy-shadow-adapter.js';
 
-const FLAGS = [
-  'CODER_POLICY_ENGINE_SHADOW',
-  'CODER_CAPABILITY_CATALOG_SHADOW',
-  'CODER_HOOK_BUS_V1',
-  'CODER_RESOURCE_GRANTS',
-  'CODER_POLICY_ENGINE_ENFORCE',
-] as const;
 const SENTINEL = 'SECRET-BURNIN-INPUT-VALUE';
 
-let previous: Record<string, string | undefined>;
 let temporaryRoot: string;
 let sessions: FsSessionStore;
 
@@ -63,19 +55,11 @@ beforeEach(async () => {
       ],
     },
   });
-  previous = Object.fromEntries(FLAGS.map((flag) => [flag, process.env[flag]]));
-  for (const flag of FLAGS) delete process.env[flag];
-  process.env.CODER_POLICY_ENGINE_SHADOW = '1';
-  process.env.CODER_CAPABILITY_CATALOG_SHADOW = '1';
 });
 
 afterEach(async () => {
   await sessions.close();
   await rm(temporaryRoot, { recursive: true, force: true });
-  for (const flag of FLAGS) {
-    if (previous[flag] === undefined) delete process.env[flag];
-    else process.env[flag] = previous[flag];
-  }
 });
 
 describe('policy shadow filesystem burn-in', () => {

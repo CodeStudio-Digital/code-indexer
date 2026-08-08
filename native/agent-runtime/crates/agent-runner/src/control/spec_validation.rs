@@ -53,9 +53,9 @@ impl ValidatedSpec {
     }
 
     #[must_use]
-    pub(super) fn required_snapshots(&self) -> [&wire::SnapshotRef; 7] {
+    pub(super) fn required_snapshots(&self) -> Vec<&wire::SnapshotRef> {
         snapshots::required_snapshots(&self.spec)
-            .unwrap_or_else(|| unreachable!("validated spec always has seven snapshots"))
+            .unwrap_or_else(|| unreachable!("validated spec always has its required snapshots"))
     }
 
     pub(super) fn required_artifacts(&self) -> impl Iterator<Item = &wire::ArtifactRef> {

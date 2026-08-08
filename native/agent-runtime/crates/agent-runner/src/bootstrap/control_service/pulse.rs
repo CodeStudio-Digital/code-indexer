@@ -109,12 +109,12 @@ mod tests {
     use super::resource_sample;
 
     #[test]
-    fn pulse_resource_sample_uses_live_process_counters() {
+    fn pulse_resource_sample_uses_live_process_and_job_counters() {
         let sample = resource_sample().expect("runner process resource sample");
 
         assert!(sample.resident_memory_bytes > 0);
         assert!(sample.peak_resident_memory_bytes >= sample.resident_memory_bytes);
-        assert_eq!(sample.process_count, 1);
+        assert!(sample.process_count >= 1);
         assert!(sample.open_file_count > 0);
         assert_eq!(sample.spool_bytes, 0);
     }

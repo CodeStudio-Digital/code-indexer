@@ -30,7 +30,6 @@ import type { ToolCallLedgerEntry } from '@mcp/code-agent/core/tool-call-ledger.
 import {
   checkDupCall,
   createInvocationGuardState,
-  dedupPolicyMode,
   normalizeGuardInput,
 } from '../guards/tuple-hash-dedup.js';
 import type { NoProgressTracker } from '../guards/no-progress.js';
@@ -347,9 +346,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
   const results: DispatchedToolResult[] = [];
   const retrievalPlan = planRetrievalBatch(args.toolUses, {
     ...args.retrievalBatch,
-    enabled:
-      args.retrievalBatch !== undefined
-      && process.env.CODER_RETRIEVAL_GUARD !== '0',
+    enabled: args.retrievalBatch !== undefined,
   });
   let toolLoopDetected = false;
   // PR 5 — which guard fired last. Tracked so the Executing node can
@@ -441,7 +438,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
     // Policy: disabled tools hard-block; every other registered capability
     // flows through the normal gates, executes, and is pinned at the result
     // tail. Goal state has no special dispatch authority.
-    const pinDisabled = process.env.CODER_TOOL_PIN_DISABLE === '1';
     // Disabled/policy-blocked capabilities are a security boundary, not a
     // pinning feature. The pin kill switch may suppress hidden-tool discovery,
     // but it must never make a blocked registered tool executable.
@@ -462,7 +458,6 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       }
     }
     const hiddenFromModel =
-      !pinDisabled &&
       !!tool &&
       !!args.visibleToolNames &&
       !args.visibleToolNames.has(tu.name) &&
@@ -495,13 +490,11 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
       args.turn,
       tu.id,
     ) ?? null;
-    // Hybrid/observe never turn a historical read into a hard error. Preserve
-    // the mtime/coverage-aware non-error pointer, but ignore the legacy string
-    // refusal and fetch fresh content. `force_reread:true` already makes the
-    // bridge return null and also bypasses the local reuse path below.
+    // Historical reads never turn into a hard error. Preserve a non-error
+    // pointer, but ignore obsolete string refusals and fetch fresh content.
     const enforcePreReadResult =
       preReadRefusal !== null &&
-      (typeof preReadRefusal !== 'string' || dedupPolicyMode() === 'legacy');
+      typeof preReadRefusal !== 'string';
     if (enforcePreReadResult) {
       const content = typeof preReadRefusal === 'string' ? preReadRefusal : preReadRefusal.content;
       const isError = typeof preReadRefusal === 'string' ? true : preReadRefusal.isError ?? true;
@@ -816,7 +809,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
             ) ?? null;
             const enforcePreReadResult =
               preReadRefusal !== null
-              && (typeof preReadRefusal !== 'string' || dedupPolicyMode() === 'legacy');
+              && typeof preReadRefusal !== 'string';
             if (enforcePreReadResult) {
               const content = typeof preReadRefusal === 'string'
                 ? preReadRefusal
@@ -1038,7 +1031,7 @@ export async function dispatchTools(args: DispatchArgs): Promise<DispatchResult>
         isRepeatable,
         // C2-b — opt-in error-signal classification (reset the streak when the
         // failure category changes). Off by default → identical legacy behavior.
-        classifyErrors: process.env.CODER_FAILURE_CLASSIFICATION === '1',
+        classifyErrors: true,
       });
       if (verdict.kind === 'reminder') {
         finalContent =

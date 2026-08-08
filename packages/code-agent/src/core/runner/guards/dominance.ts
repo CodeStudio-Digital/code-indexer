@@ -6,8 +6,8 @@
  * turn runaways in telemetry) even when other tools intersperse enough to keep
  * the doom-loop fuzzy window from closing.
  *
- * Window + ratio come from `constants.ts` (`CODER_DOMINANCE_WINDOW`=15,
- * `CODER_DOMINANCE_RATIO`=0.8). The zero-text condition is deliberate: when the
+ * Window + ratio come from fixed product constants (8 turns, 0.75). The
+ * zero-text condition is deliberate: when the
  * agent narrates a turn it's reasoning, not stuck, so we stay quiet — keeps the
  * false-positive rate near zero for a guard that forces a Planning turn.
  *
@@ -44,9 +44,9 @@ export interface CheckDominanceArgs {
   /** True when the assistant emitted any non-empty text alongside the tools. */
   hadText: boolean;
   state: DominanceState;
-  /** Window size in turns (default source: CODER_DOMINANCE_WINDOW=15). */
+  /** Window size in turns (product default 8). */
   window: number;
-  /** Dominance fraction in (0,1] (default source: CODER_DOMINANCE_RATIO=0.8). */
+  /** Dominance fraction in (0,1] (product default 0.75). */
   ratio: number;
 }
 

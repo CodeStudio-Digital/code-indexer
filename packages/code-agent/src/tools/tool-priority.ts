@@ -49,6 +49,7 @@ import {
  * session-class-agnostic floor.
  */
 export const NEVER_TRIM: ReadonlySet<string> = new Set([
+  'capability_catalog',
   'find_tools',
   'expand_toolset',
   'code_exec',

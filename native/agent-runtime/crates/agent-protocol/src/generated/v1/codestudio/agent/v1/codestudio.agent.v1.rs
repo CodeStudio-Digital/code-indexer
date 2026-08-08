@@ -558,6 +558,85 @@ pub mod capability_update {
         Accepted(super::SealedExecutionGrant),
     }
 }
+/// Runner -> Host after the authoritative CapabilityDispatchStarted record is
+/// durable. The Host resolves this reference against its exact prepared grant;
+/// provider input is never trusted a second time and an operation is executed
+/// at most once per physical Host session.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityExecute {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub grant_id: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="6")]
+    pub effective_input_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(int64, tag="7")]
+    pub deadline_at_unix_ms: i64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityExecutionSucceeded {
+    #[prost(string, tag="1")]
+    pub schema_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag="2")]
+    pub schema_version: u32,
+    #[prost(bytes="vec", tag="3")]
+    pub encoded_result: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="4")]
+    pub result_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag="5")]
+    pub bytes_read: u64,
+    #[prost(uint64, tag="6")]
+    pub bytes_emitted: u64,
+    #[prost(bool, tag="7")]
+    pub truncated: bool,
+    #[prost(uint64, tag="8")]
+    pub duration_ms: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityExecutionFailure {
+    #[prost(string, tag="1")]
+    pub reason_code: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub duration_ms: u64,
+}
+/// Host -> Runner. A Host executor exception after dispatch started is encoded
+/// as outcome_unknown. The runner commits that terminal classification and does
+/// not retry the physical effect.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CapabilityExecutionResult {
+    #[prost(message, optional, tag="1")]
+    pub identity: ::core::option::Option<AttemptIdentity>,
+    #[prost(string, tag="2")]
+    pub runtime_instance_id: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub operation_id: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub tool_use_id: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub grant_id: ::prost::alloc::string::String,
+    #[prost(oneof="capability_execution_result::Outcome", tags="10, 11, 12, 13")]
+    pub outcome: ::core::option::Option<capability_execution_result::Outcome>,
+}
+/// Nested message and enum types in `CapabilityExecutionResult`.
+pub mod capability_execution_result {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="10")]
+        Succeeded(super::CapabilityExecutionSucceeded),
+        #[prost(message, tag="11")]
+        Failed(super::CapabilityExecutionFailure),
+        #[prost(message, tag="12")]
+        Cancelled(super::CapabilityExecutionFailure),
+        #[prost(message, tag="13")]
+        OutcomeUnknown(super::CapabilityExecutionFailure),
+    }
+}
 /// Immutable execution route resolved before an attempt becomes active.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -2459,7 +2538,7 @@ pub struct Frame {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FramePayload {
-    #[prost(oneof="frame_payload::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39")]
+    #[prost(oneof="frame_payload::Body", tags="10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41")]
     pub body: ::core::option::Option<frame_payload::Body>,
 }
 /// Nested message and enum types in `FramePayload`.
@@ -2526,6 +2605,10 @@ pub mod frame_payload {
         CapabilityPrepare(super::CapabilityPrepare),
         #[prost(message, tag="39")]
         CapabilityUpdate(super::CapabilityUpdate),
+        #[prost(message, tag="40")]
+        CapabilityExecute(super::CapabilityExecute),
+        #[prost(message, tag="41")]
+        CapabilityExecutionResult(super::CapabilityExecutionResult),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2836,6 +2919,33 @@ pub struct ProviderPresetSnapshotV1 {
     #[prost(uint64, optional, tag="4")]
     pub thinking_budget_tokens: ::core::option::Option<u64>,
 }
+/// Optional process adapter sealed into an attempt that deliberately selects
+/// the Codex app-server provider. The runner constructs the fixed, fail-closed
+/// argv; executable arguments are intentionally not data in this contract.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CodexAppServerProcessSnapshotV1 {
+    #[prost(uint32, tag="1")]
+    pub schema_version: u32,
+    #[prost(string, tag="2")]
+    pub candidate_version: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub protocol_version: ::prost::alloc::string::String,
+    #[prost(bytes="vec", tag="4")]
+    pub protocol_schema_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="5")]
+    pub executable: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub working_directory: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="7")]
+    pub environment: ::prost::alloc::vec::Vec<ProcessEnvironmentVariable>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProcessEnvironmentVariable {
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub value: ::prost::alloc::string::String,
+}
 /// Transport-independent engine input. Attempt identity, provider binding,
 /// operation identity, idempotency and deadlines are intentionally absent: the
 /// runner adapter seals them from the hydrated ResolvedAttemptSpec.
@@ -3138,6 +3248,8 @@ pub struct ResolvedAttemptSpec {
     pub deadline_at_unix_ms: i64,
     #[prost(message, optional, tag="25")]
     pub agent_definition_snapshot: ::core::option::Option<SnapshotRef>,
+    #[prost(message, optional, tag="26")]
+    pub codex_app_server_process_snapshot: ::core::option::Option<SnapshotRef>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrepareAttempt {

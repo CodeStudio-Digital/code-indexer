@@ -26,8 +26,8 @@
  * `running` whose orchestrator never even started because the worker
  * crashed mid-`runCoder()` invocation).
  */
-const DEFAULT_INTERVAL_MS = Number(process.env.CODER_WATCHDOG_INTERVAL_MS ?? 5 * 60 * 1000);
-const DEFAULT_STALE_AFTER_MS = Number(process.env.CODER_WATCHDOG_STALE_AFTER_MS ?? 10 * 60 * 1000);
+const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
+const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
 
 export interface CoderWatchdogHandle {
   /** Stop the periodic sweep. Idempotent. */

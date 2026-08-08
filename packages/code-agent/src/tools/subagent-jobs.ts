@@ -70,12 +70,8 @@ export type WaitResult =
   | { kind: 'empty' }
   | { kind: 'not_found' };
 
-function maxJobs(): number {
-  return Number(process.env.CODER_BACKGROUND_JOBS_MAX ?? 3) || 3;
-}
-function collectedTtlMs(): number {
-  return Number(process.env.CODER_BACKGROUND_JOB_TTL_MS ?? 30 * 60_000) || 30 * 60_000;
-}
+const DEFAULT_MAX_JOBS = 3;
+const DEFAULT_COLLECTED_TTL_MS = 30 * 60_000;
 
 export interface CreateJobArgs {
   sessionId: SessionId;
@@ -90,10 +86,13 @@ export class SubagentJobManager {
   private readonly bySession = new Map<SessionId, Map<string, SubagentJob>>();
   private readonly activityCbs = new Set<(sessionId: SessionId, active: number) => void>();
 
+  constructor(private readonly limits: { maxJobs?: number; collectedTtlMs?: number } = {}) {}
+
   create(args: CreateJobArgs): SubagentJob | { error: string } {
     this.sweep(args.sessionId);
-    if (this.activeCount(args.sessionId) >= maxJobs()) {
-      return { error: `background job limit reached (${maxJobs()}). collect_agents on an outstanding job before spawning more.` };
+    const maxJobs = this.limits.maxJobs ?? DEFAULT_MAX_JOBS;
+    if (this.activeCount(args.sessionId) >= maxJobs) {
+      return { error: `background job limit reached (${maxJobs}). collect_agents on an outstanding job before spawning more.` };
     }
     let resolveSettled!: () => void;
     const settled = new Promise<void>((res) => { resolveSettled = res; });
@@ -245,7 +244,7 @@ export class SubagentJobManager {
     const groups = this.bySession.get(sessionId);
     if (!groups) return;
     const now = Date.now();
-    const ttl = collectedTtlMs();
+    const ttl = this.limits.collectedTtlMs ?? DEFAULT_COLLECTED_TTL_MS;
     for (const [id, j] of groups) {
       // The TTL is post-ack cleanup only. Expiring an uncollected terminal
       // would discard its full report and silently release the completion

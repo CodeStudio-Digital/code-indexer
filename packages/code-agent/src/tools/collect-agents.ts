@@ -18,7 +18,7 @@ import {
   type BackgroundAgentSlot,
 } from '@mcp/code-agent/tools/subagent-jobs.js';
 
-const HEARTBEAT_MS = Number(process.env.CODER_PARALLEL_HEARTBEAT_MS ?? 15000) || 15_000;
+const HEARTBEAT_MS = 15_000;
 
 function fmtMs(ms: number): string {
   if (ms < 1000) return `${ms}ms`;

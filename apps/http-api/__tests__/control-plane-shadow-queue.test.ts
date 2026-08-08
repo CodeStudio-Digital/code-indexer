@@ -56,12 +56,11 @@ describe('control-plane observational write queue', () => {
   });
 
   it('never exceeds the queue cap under a pure observational burst', async () => {
-    vi.stubEnv('CODER_RUNTIME_JOURNAL_QUEUE_CAP', '32');
     const appendToolBoundary = vi.fn();
     const store = { appendToolBoundary } as never;
     const pending: Promise<void>[] = [];
 
-    for (let index = 0; index < 100; index += 1) {
+    for (let index = 0; index < 2_200; index += 1) {
       pending.push(mirrorLocalCoderToolBoundary(store, context, {
         phase: 'started',
         toolUseId: `tool-${index}`,
@@ -71,13 +70,13 @@ describe('control-plane observational write queue', () => {
     }
 
     expect(snapshotCoderControlPlaneShadowMetrics().queue).toMatchObject({
-      depth: 32,
-      highWatermark: 32,
-      dropped: 68,
+      depth: 2_048,
+      highWatermark: 2_048,
+      dropped: 152,
     });
     await Promise.all(pending);
     await drainLocalCoderShadowWrites();
-    expect(appendToolBoundary).toHaveBeenCalledTimes(32);
+    expect(appendToolBoundary).toHaveBeenCalledTimes(2_048);
     expect(snapshotCoderControlPlaneShadowMetrics().queue.depth).toBe(0);
   });
 });

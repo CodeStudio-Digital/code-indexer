@@ -7,8 +7,7 @@
  * runner options + injection state.
  */
 import type { RunContext } from '../machine/types.js';
-import { shouldNudgeSelfReview, isSelfReviewDecline } from '../assembly/self-review-gate.js';
-import { selfReviewMaxNudges } from '../constants.js';
+import { isSelfReviewDecline } from '../assembly/self-review-gate.js';
 
 /**
  * Latch the self_review nudge off when the user explicitly declines review
@@ -30,15 +29,6 @@ export function applySelfReviewDecline(ctx: RunContext, userText: string): void 
  * subagents/tests that don't provide signals.
  */
 export async function computeSelfReviewNudge(ctx: RunContext): Promise<boolean> {
-  // Review is a costly second model pipeline, not a mandatory completion
-  // ceremony. Keep it opt-in; the self_review tool remains discoverable for
-  // security-sensitive work or when the user explicitly requests a review.
-  if (process.env.CODER_SELF_REVIEW !== '1') return false;
-  const sr = ctx.injectionState.selfReview;
-  if (sr.suppressed) return false;
-  const signals = await ctx.opts.collectSelfReviewSignals?.() ?? null;
-  if (!signals) return (await ctx.opts.hasReviewableChanges?.()) ?? false;
-  const nudge = shouldNudgeSelfReview(signals, sr, { maxReviews: selfReviewMaxNudges() });
-  if (nudge) sr.lastNudgedFingerprint = signals.pendingFingerprint;
-  return nudge;
+  void ctx;
+  return false;
 }

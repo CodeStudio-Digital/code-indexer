@@ -86,3 +86,19 @@ export interface ResolvedCapabilitySet {
   promptSummaryRef: string;
   resolvedAt: string;
 }
+
+/**
+ * Versioned provider-facing view over an immutable attempt capability set.
+ * Authorization is represented by `capabilitySetHash`; changing visibility
+ * or activation creates a new projection digest without changing that hash.
+ */
+export interface ProviderCapabilityProjection {
+  ref: string;
+  digest: string;
+  capabilitySetHash: string;
+  catalogVersion: string;
+  capabilityIds: CapabilityId[];
+  providerDescriptorsRef: string;
+  promptSummaryRef: string;
+  schemaBytes: number;
+}

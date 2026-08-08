@@ -1,10 +1,19 @@
 use agent_protocol::generated::v1 as wire;
 use agent_tools::capability::{
-    CapabilityApproval, CapabilityDecision, CapabilityInvocation, CapabilityRejection,
-    ExecutionClass, NativeFilesystemReadBinding, SealedExecutionGrant,
+    CapabilityApproval, CapabilityDecision, CapabilityExecutionOutcome, CapabilityFailure,
+    CapabilityInvocation, CapabilityOutput, CapabilityRejection, ExecutionClass,
+    NativeFilesystemReadBinding, SealedExecutionGrant,
 };
+use sha2::{Digest, Sha256};
+use wire::capability_execution_result::Outcome;
 
 use super::CapabilityGatewayError;
+
+#[cfg(test)]
+mod tests;
+
+const MAX_RESULT_IDENTIFIER_BYTES: usize = 1_024;
+const MAX_EXECUTION_DURATION_MS: u64 = 24 * 60 * 60 * 1_000;
 
 pub(super) const fn execution_class_to_wire(
     value: ExecutionClass,
@@ -122,4 +131,78 @@ fn execution_class_from_wire(value: i32) -> Result<ExecutionClass, CapabilityGat
             }
         },
     )
+}
+
+pub(super) fn outcome_from_wire(
+    result: wire::CapabilityExecutionResult,
+    invocation: &CapabilityInvocation,
+    grant: &SealedExecutionGrant,
+    maximum_output_bytes: usize,
+) -> Result<CapabilityExecutionOutcome, CapabilityGatewayError> {
+    if result.operation_id != invocation.operation_id
+        || result.tool_use_id != invocation.tool_use_id
+        || result.grant_id != grant.grant_id
+    {
+        return Err(CapabilityGatewayError::ContradictoryDecision("execution"));
+    }
+    match result.outcome {
+        Some(Outcome::Succeeded(value)) => {
+            if !bounded_identifier(&value.schema_id)
+                || value.schema_version == 0
+                || value.encoded_result.is_empty()
+                || value.encoded_result.len() > maximum_output_bytes
+                || value.result_sha256.len() != 32
+                || Sha256::digest(&value.encoded_result).as_slice() != value.result_sha256
+                || value.bytes_emitted
+                    != u64::try_from(value.encoded_result.len()).unwrap_or(u64::MAX)
+                || value.duration_ms > MAX_EXECUTION_DURATION_MS
+            {
+                return Err(CapabilityGatewayError::ContradictoryDecision(
+                    "execution result",
+                ));
+            }
+            let result_sha256 = value
+                .result_sha256
+                .try_into()
+                .map_err(|_| CapabilityGatewayError::ContradictoryDecision("result digest"))?;
+            Ok(CapabilityExecutionOutcome::Succeeded(CapabilityOutput {
+                schema_id: value.schema_id,
+                schema_version: value.schema_version,
+                encoded_result: value.encoded_result,
+                result_sha256,
+                bytes_read: value.bytes_read,
+                bytes_emitted: value.bytes_emitted,
+                truncated: value.truncated,
+                duration_ms: value.duration_ms,
+            }))
+        }
+        Some(Outcome::Failed(value)) => Ok(CapabilityExecutionOutcome::Failed(failure(value)?)),
+        Some(Outcome::Cancelled(value)) => {
+            Ok(CapabilityExecutionOutcome::Cancelled(failure(value)?))
+        }
+        Some(Outcome::OutcomeUnknown(value)) => {
+            Ok(CapabilityExecutionOutcome::OutcomeUnknown(failure(value)?))
+        }
+        None => Err(CapabilityGatewayError::ContradictoryDecision(
+            "execution outcome",
+        )),
+    }
+}
+
+fn failure(
+    value: wire::CapabilityExecutionFailure,
+) -> Result<CapabilityFailure, CapabilityGatewayError> {
+    if !bounded_identifier(&value.reason_code) || value.duration_ms > MAX_EXECUTION_DURATION_MS {
+        return Err(CapabilityGatewayError::ContradictoryDecision(
+            "execution failure",
+        ));
+    }
+    Ok(CapabilityFailure {
+        reason_code: value.reason_code,
+        duration_ms: value.duration_ms,
+    })
+}
+
+fn bounded_identifier(value: &str) -> bool {
+    !value.is_empty() && value.len() <= MAX_RESULT_IDENTIFIER_BYTES && !value.contains('\0')
 }

@@ -14,7 +14,7 @@
  *   - When `sessionStore` is undefined, the bridge becomes a no-op and
  *     the orchestrator never throws.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
 import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
@@ -106,19 +106,13 @@ function setup(
     provider: {} as never,
     parentTools: [],
     sessionStore: store as unknown as FsSessionStore | undefined,
+    executeTasksRetryConfig: { maxRetries: 0, initialMs: 0, maxMs: 0, jitter: 0 },
   });
   return { tool, ctx, runner, store };
 }
 
 beforeEach(() => {
   vi.mocked(runSubagent).mockReset();
-  // PR-C: pin retries off so the PR-B persistence test expectations
-  // (one row per outcome) hold. Retry behavior is covered separately.
-  vi.stubEnv('CODER_TASK_MAX_RETRIES', '0');
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
 });
 
 describe('execute_tasks persistence bridge (PR-B)', () => {
@@ -310,6 +304,7 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
       provider: {} as never,
       parentTools: [],
       sessionStore: undefined,
+      executeTasksRetryConfig: { maxRetries: 0, initialMs: 0, maxMs: 0, jitter: 0 },
     });
     const result = await tool.handler({}, ctx);
     expect(result.isError).toBeFalsy();

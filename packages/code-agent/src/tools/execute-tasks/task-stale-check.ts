@@ -117,10 +117,6 @@ export interface ShouldSkipResult {
 export async function shouldSkipTask(
   args: ShouldSkipArgs,
 ): Promise<ShouldSkipResult> {
-  // Global bypass via env.
-  if (process.env.CODER_TASKS_DISABLE_SKIP_STALE === '1') {
-    return { skip: false, fingerprint: null };
-  }
   // Per-task bypass.
   if (args.task.force_run) {
     return { skip: false, fingerprint: null };

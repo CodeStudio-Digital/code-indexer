@@ -10,7 +10,7 @@ import { getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilitie
  * path (CODER_NEW_COMPACTION=0). New path uses token-based limits derived
  * from the model's effective context window. Will be removed.
  */
-export const PRUNE_MINIMUM = Number(process.env.CODER_PRUNE_MINIMUM ?? 60_000);
+export const PRUNE_MINIMUM = 20_000;
 
 /**
  * How many chars of the most-recent history are guaranteed to survive
@@ -18,7 +18,7 @@ export const PRUNE_MINIMUM = Number(process.env.CODER_PRUNE_MINIMUM ?? 60_000);
  *
  * @deprecated See `PRUNE_MINIMUM`.
  */
-export const PRUNE_PROTECT = Number(process.env.CODER_PRUNE_PROTECT ?? 80_000);
+export const PRUNE_PROTECT = 40_000;
 
 /** Fraction of context window (in chars) at which compaction triggers. */
 const TRIGGER_RATIO = 0.90;
@@ -35,8 +35,8 @@ const CHARS_PER_TOKEN = 4;
 // Both are env-overridable for field tuning without a release.
 /** @deprecated Fixed buffer goes negative on short windows — use
  *  `autocompactBufferTokens(effective)`; kept for the legacy char path. */
-export const AUTOCOMPACT_BUFFER_TOKENS = Number(process.env.CODER_AUTOCOMPACT_BUFFER ?? 50_000);
-export const PROTECT_TOKEN_RATIO = Number(process.env.CODER_PROTECT_RATIO ?? 0.55);
+export const AUTOCOMPACT_BUFFER_TOKENS = 20_000;
+export const PROTECT_TOKEN_RATIO = 0.55;
 
 /**
  * Ratio of the effective window at which compaction fires — the single knob
@@ -53,11 +53,7 @@ export const DEFAULT_COMPACT_TRIGGER_RATIO = 0.90;
 
 /** Env-resolved trigger ratio, clamped so a typo can't disable compaction. */
 export function resolveTriggerRatio(): number {
-  const raw = process.env.CODER_COMPACT_TRIGGER_RATIO;
-  if (!raw) return DEFAULT_COMPACT_TRIGGER_RATIO;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return DEFAULT_COMPACT_TRIGGER_RATIO;
-  return Math.min(0.95, Math.max(0.5, n));
+  return DEFAULT_COMPACT_TRIGGER_RATIO;
 }
 
 /**
@@ -69,19 +65,14 @@ export function resolveTriggerRatio(): number {
  * breaker silenced it). `CODER_AUTOCOMPACT_BUFFER` still wins when set.
  */
 export function autocompactBufferTokens(effective: number): number {
-  const env = process.env.CODER_AUTOCOMPACT_BUFFER;
-  if (env != null && env !== '') {
-    const n = Number(env);
-    if (Number.isFinite(n) && n > 0) return Math.floor(n);
-  }
   const slack = Math.floor(effective * (1 - resolveTriggerRatio()));
-  return Math.min(50_000, Math.max(1_000, slack));
+  return Math.min(AUTOCOMPACT_BUFFER_TOKENS, Math.max(1_000, slack));
 }
 
 // Phase D multidimensional triggers — see CompactionTriggerInputs.
-export const COMPACT_CUMULATIVE_RATIO = Number(process.env.CODER_COMPACT_CUMULATIVE_RATIO ?? 10);
-export const COMPACT_POLLING_TRIGGER_RATIO = Number(process.env.CODER_COMPACT_POLLING_TRIGGER_RATIO ?? 0.5);
-export const COMPACT_STUCK_TURN_CAP = Number(process.env.CODER_COMPACT_STUCK_TURN_CAP ?? 8);
+export const COMPACT_CUMULATIVE_RATIO = 10;
+export const COMPACT_POLLING_TRIGGER_RATIO = 0.5;
+export const COMPACT_STUCK_TURN_CAP = 8;
 
 /**
  * Pure inputs for the trigger decision. Pass `null` for branches that don't
@@ -206,9 +197,9 @@ export function computeCompactionTrigger(inp: CompactionTriggerInputs): Compacti
   return { shouldCompact: false, reason: 'none', detail: '' };
 }
 
-/** Feature flag — set to 0 to fall back to the legacy char-based path. */
+/** The context-aware compaction path is mandatory. */
 export function isNewCompactionEnabled(): boolean {
-  return process.env.CODER_NEW_COMPACTION !== '0';
+  return true;
 }
 
 export interface CompactionLimits {

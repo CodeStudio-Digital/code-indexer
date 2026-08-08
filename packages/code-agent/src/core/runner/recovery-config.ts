@@ -23,8 +23,8 @@ export const RECOVERY_KINDS = [
 export type RecoveryKind = typeof RECOVERY_KINDS[number];
 
 /**
- * Caps are read lazily from env each time tryRecord runs so tests can
- * mutate process.env after the runner module is loaded. Defaults below.
+ * Recovery caps are product invariants. Keeping them together makes the
+ * circuit-breaker policy reviewable without exposing process-wide switches.
  */
 export const RECOVERY_CAP_DEFAULTS: Record<RecoveryKind, number> = {
   'provider-400-retry': 3,
@@ -47,37 +47,17 @@ export const RECOVERY_CAP_DEFAULTS: Record<RecoveryKind, number> = {
   // history; if 3 compactions still overflow, the context is irreducible.
   'context-overflow': 3,
 };
-const RECOVERY_CAP_ENV_KEYS: Record<RecoveryKind, string> = {
-  'provider-400-retry': 'CODER_RECOVERY_400_MAX',
-  'provider-401-refresh': 'CODER_RECOVERY_401_MAX',
-  'provider-transient-retry': 'CODER_RECOVERY_TRANSIENT_MAX',
-  'provider-unknown-retry': 'CODER_RECOVERY_UNKNOWN_MAX',
-  'provider-thinking-timeout': 'CODER_RECOVERY_THINKING_MAX',
-  'provider-fallback': 'CODER_RECOVERY_FALLBACK_MAX',
-  'compact-failure': 'CODER_RECOVERY_COMPACT_MAX',
-  'context-overflow': 'CODER_RECOVERY_OVERFLOW_MAX',
-};
 export function recoveryCap(kind: RecoveryKind): number {
-  const envVal = process.env[RECOVERY_CAP_ENV_KEYS[kind]];
-  if (envVal != null && envVal !== '') {
-    const n = Number(envVal);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
   return RECOVERY_CAP_DEFAULTS[kind];
 }
 
 /**
  * PR-3 (R4): how many user-message turns to keep raw past the compaction
- * boundary. Mirrors kimi-cli's `max_preserved_messages=2`. Lazy-resolved
- * so tests can override post-import.
+ * boundary. Mirrors kimi-cli's `max_preserved_messages=2` with the
+ * telemetry-proven local posture of four turns.
  */
 export function preserveLastNTurns(): number {
-  const v = process.env.CODER_COMPACT_PRESERVE_LAST_N_TURNS;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return 2;
+  return 4;
 }
 
 /**
@@ -86,37 +66,16 @@ export function preserveLastNTurns(): number {
  * `wait_exponential_jitter(initial=0.3, max=5, jitter=0.5)`. Returns a
  * delay in milliseconds for the given 1-based attempt number.
  *
- * Read lazily so tests can override after import.
  */
 export function transientRetryMaxPerTurn(): number {
-  const v = process.env.CODER_TRANSIENT_RETRY_MAX_PER_TURN;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
   return 3;
 }
 export function transientRetryInitialMs(): number {
-  const v = process.env.CODER_TRANSIENT_RETRY_INITIAL_MS;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
   return 300;
 }
 export function transientRetryMaxMs(): number {
-  const v = process.env.CODER_TRANSIENT_RETRY_MAX_MS;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
   return 5000;
 }
 export function transientRetryJitter(): number {
-  const v = process.env.CODER_TRANSIENT_RETRY_JITTER;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
   return 0.5;
 }

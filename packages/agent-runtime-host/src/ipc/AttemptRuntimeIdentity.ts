@@ -30,6 +30,8 @@ function runtimeInstanceId(
     case 'engineEventCommitted':
     case 'capabilityPrepare':
     case 'capabilityUpdate':
+    case 'capabilityExecute':
+    case 'capabilityExecutionResult':
       return payload.body.value.runtimeInstanceId;
     case 'prepareAttempt':
     case 'activateAttempt':

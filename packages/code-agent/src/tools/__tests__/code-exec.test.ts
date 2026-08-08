@@ -838,7 +838,6 @@ describe('code_exec invocation-local stable reuse', () => {
   });
 
   it('a populated legacy table cannot discard any Promise.all sibling', async () => {
-    vi.stubEnv('CODER_DEDUP_POLICY', 'hybrid');
     const registry = new ToolRegistry();
     registry.register(stableRead(async (args) => ok(`result:${args.path}`)));
     const { buildNestedToolObserver } = await import('@mcp/code-agent/core/runner/guards/nested-observer.js');
@@ -861,8 +860,6 @@ describe('code_exec invocation-local stable reuse', () => {
         tools.read_file({path:'service.php'})
       ]);`,
     }, { ...makeCtx(), nestedToolObserver: observer });
-    vi.unstubAllEnvs();
-
     expect(result.isError).toBeFalsy();
     for (const path of ['component.ts', 'template.html', 'spec.ts', 'service.php']) {
       expect(result.content).toContain(`result:${path}`);

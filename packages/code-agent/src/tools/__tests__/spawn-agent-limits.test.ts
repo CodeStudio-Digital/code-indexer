@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { MICRO_AGENT_PROFILES } from '../micro-agent-profiles.js';
 import { limitsForAgent, type NormalizedAgent } from '../spawn-agent-core.js';
 import { buildResearchPolicy, RESEARCH_DEPTH_DEFAULTS, type ResearchDepth } from '../subagent-research-policy.js';
@@ -23,8 +23,6 @@ function agent(
 }
 
 describe('spawn agent limits', () => {
-  afterEach(() => vi.unstubAllEnvs());
-
   it('defaults every capability to a flat hard cap when no research policy exists', () => {
     const expected = {
       explore: { maxToolCalls: 80, timeoutMs: 840_000 },
@@ -76,43 +74,40 @@ describe('spawn agent limits', () => {
     expect(limits.timeoutMs).toBe(840_000);
   });
 
-  it('treats an explicit env 0 as unlimited (operator escape hatch)', () => {
+  it('ignores retired process-env escape hatches', () => {
     for (const profile of ['explore', 'implement', 'verify', 'review', 'full'] as const) {
       const prefix = `CODER_SPAWN_${profile.toUpperCase()}`;
-      vi.stubEnv(`${prefix}_MAX_TOOLS`, '0');
-      vi.stubEnv(`${prefix}_TIMEOUT_MS`, '0');
+      process.env[`${prefix}_MAX_TOOLS`] = '0';
+      process.env[`${prefix}_TIMEOUT_MS`] = '0';
       const limits = limitsForAgent(agent(profile));
-      expect(limits.maxToolCalls).toBe(0);
-      expect(limits.timeoutMs).toBe(0);
+      expect(limits.maxToolCalls).toBeGreaterThan(0);
+      expect(limits.timeoutMs).toBeGreaterThan(0);
       expect(limits.stallMs).toBeGreaterThan(0);
+      delete process.env[`${prefix}_MAX_TOOLS`];
+      delete process.env[`${prefix}_TIMEOUT_MS`];
     }
   });
 
-  it('hot-applies positive operator overrides on the next dispatch', () => {
+  it('keeps limits stable when retired env values change', () => {
     const target = agent('explore');
-    vi.stubEnv('CODER_SPAWN_EXPLORE_MAX_TOOLS', '0');
-    vi.stubEnv('CODER_SPAWN_EXPLORE_TIMEOUT_MS', '0');
-    expect(limitsForAgent(target)).toMatchObject({ maxToolCalls: 0, timeoutMs: 0 });
-
-    vi.stubEnv('CODER_SPAWN_EXPLORE_MAX_TOOLS', '12');
-    vi.stubEnv('CODER_SPAWN_EXPLORE_TIMEOUT_MS', '300000');
-    expect(limitsForAgent(target)).toMatchObject({ maxToolCalls: 12, timeoutMs: 300000 });
+    process.env.CODER_SPAWN_EXPLORE_MAX_TOOLS = '12';
+    process.env.CODER_SPAWN_EXPLORE_TIMEOUT_MS = '300000';
+    expect(limitsForAgent(target)).toMatchObject({ maxToolCalls: 80, timeoutMs: 840000 });
+    delete process.env.CODER_SPAWN_EXPLORE_MAX_TOOLS;
+    delete process.env.CODER_SPAWN_EXPLORE_TIMEOUT_MS;
   });
 
-  it('lets the DB per-profile override beat env and defaults, per axis', () => {
-    vi.stubEnv('CODER_SPAWN_EXPLORE_MAX_TOOLS', '999');
-    vi.stubEnv('CODER_SPAWN_EXPLORE_TIMEOUT_MS', '999000');
+  it('lets the DB per-profile override beat defaults, per axis', () => {
     const deps = {
       resolveLimitsForProfile: (id?: string) =>
         id === 'explore' ? { maxToolCalls: 40, timeoutMs: null } : undefined,
     };
     const limits = limitsForAgent(agent('explore', 'deep'), deps);
-    expect(limits.maxToolCalls).toBe(40);      // DB wins over env 999
-    expect(limits.timeoutMs).toBe(999_000);    // null axis falls through to env
+    expect(limits.maxToolCalls).toBe(40);
+    expect(limits.timeoutMs).toBe(RESEARCH_DEPTH_DEFAULTS.deep.softTimeTargetMs * 2);
   });
 
   it('honors an explicit DB 0 as unlimited even with env and derived defaults set', () => {
-    vi.stubEnv('CODER_SPAWN_EXPLORE_MAX_TOOLS', '50');
     const deps = {
       resolveLimitsForProfile: () => ({ maxToolCalls: 0, timeoutMs: null }),
     };

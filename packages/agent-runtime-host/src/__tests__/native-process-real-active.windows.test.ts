@@ -2,6 +2,7 @@ import { create } from '@bufbuild/protobuf';
 import { readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  agentV1Common,
   agentV1Runtime,
   agentV1Supervisor,
   packProtocolVersion,
@@ -23,8 +24,114 @@ import { processRealFixture } from './native-process-real-active-support.js';
 const enabled = process.platform === 'win32'
   && process.env.MCP_RUST_AGENT_PROCESS_REAL_E2E === '1';
 const physicalIt = enabled ? it : it.skip;
+const codexEnabled = enabled
+  && typeof process.env.MCP_CODEX_B2_BINARY === 'string'
+  && typeof process.env.MCP_CODEX_B2_VERSION === 'string'
+  && /^[a-f0-9]{64}$/.test(process.env.MCP_CODEX_B2_SCHEMA_DIGEST ?? '');
+const codexPhysicalIt = codexEnabled ? it : it.skip;
 
 describe('native process-real Rust attempt', () => {
+  codexPhysicalIt('runs Codex app-server inside the attempt Job and reaps the complete tree', async () => {
+    const fixture = await processRealFixture(false, true, {
+      binary: process.env.MCP_CODEX_B2_BINARY!,
+      candidateVersion: process.env.MCP_CODEX_B2_VERSION!,
+      protocolSchemaDigest: process.env.MCP_CODEX_B2_SCHEMA_DIGEST!,
+    });
+    const runtime = await NativeRustHostAttemptRuntime.create(fixture.options);
+    let authority: Parameters<typeof runtime.cancelActive>[0] | undefined;
+    let phase = 'launch';
+    let containedProcessCount = 0;
+    let journalRecordCount = 0;
+    try {
+      const result = await runtime.run(fixture.prepare);
+      expect(result.kind).toBe('active');
+      if (result.kind !== 'active') throw new Error('Codex B2 launch rejected');
+      authority = result.authority;
+      phase = 'process-containment';
+      const journal = join(
+        fixture.sessionRoot!,
+        fixture.options.launch.identity!.sessionId,
+        'conversation.jsonl',
+      );
+      await vi.waitFor(async () => {
+        const heartbeat = runtime.inspectActive(result.authority).heartbeat;
+        containedProcessCount = heartbeat?.resources.processCount ?? 0;
+        expect(containedProcessCount).toBeGreaterThanOrEqual(2);
+      }, { timeout: 15_000, interval: 100 });
+      phase = 'terminal-journal';
+      try {
+        await vi.waitFor(async () => {
+          const lines = (await readFile(journal, 'utf8')).trim().split('\n');
+          journalRecordCount = lines.length;
+          expect(lines.length).toBeGreaterThanOrEqual(9);
+          expect(JSON.parse(lines.at(-1)!).durability).toBe('authoritative');
+        }, { timeout: 90_000, interval: 100 });
+      } catch (error) {
+        const captured = await readFile(journal, 'utf8').catch(() => '<journal unavailable>');
+        throw new Error(`Codex B2 journal did not become terminal:\n${captured}`, { cause: error });
+      }
+      phase = 'capability-settlement';
+      await expect(runtime.inspectUnresolvedCapabilityDispatches(64))
+        .resolves.toEqual([]);
+      expect(fixture.observed.capabilityPrepareCount).toBe(1);
+      expect(fixture.observed.providerRunStarted).not.toBe(true);
+      expect(fixture.observed.containment?.effectiveContainment).toMatchObject({
+        level: agentV1Common.ContainmentLevel.HARD_AGGREGATE,
+        capabilities: { processTree: true },
+      });
+      phase = 'cancel';
+      await runtime.cancelActive(result.authority, {
+        reason: agentV1Runtime.CancelReason.USER_REQUEST,
+        reasonCode: 'codex_supervised_b2_complete',
+        graceDeadlineAtUnixMs: BigInt(Date.now() + 750),
+        idempotencyKey: `codex-b2-cancel:${result.hello.provenance?.pid}`,
+      });
+      phase = 'physical-reap';
+      await runtime.waitForPhysicalReap();
+      expect(fixture.committedFacts.slice(-2)).toEqual([
+        'attemptProcessExited',
+        'attemptProcessReaped',
+      ]);
+      expect(fixture.observed.reaped?.resourceGroupId).not.toBe('');
+      expect(fixture.observed.finalResources?.peakResidentMemoryBytes ?? 0n)
+        .toBeGreaterThan(0n);
+      process.stdout.write(`${JSON.stringify({
+        kind: 'CODEX_SUPERVISED_B2_EVIDENCE',
+        candidateVersion: process.env.MCP_CODEX_B2_VERSION,
+        protocolSchemaDigest: process.env.MCP_CODEX_B2_SCHEMA_DIGEST,
+        containedProcessCount,
+        capabilityPrepareCount: fixture.observed.capabilityPrepareCount,
+        journalRecordCount,
+        containmentLevel: fixture.observed.containment?.effectiveContainment?.level,
+        processTreeOwned: fixture.observed.containment?.effectiveContainment?.capabilities?.processTree,
+        resourceGroupId: fixture.observed.reaped?.resourceGroupId,
+        peakResidentMemoryBytes: String(
+          fixture.observed.finalResources?.peakResidentMemoryBytes ?? 0n,
+        ),
+        committedFacts: fixture.committedFacts,
+      })}\n`);
+      phase = 'complete';
+    } catch (error) {
+      const journal = fixture.sessionRoot
+        ? join(fixture.sessionRoot, fixture.options.launch.identity!.sessionId, 'conversation.jsonl')
+        : '';
+      const captured = journal
+        ? await readFile(journal, 'utf8').catch(() => '<journal unavailable>')
+        : '<journal unavailable>';
+      throw new Error([
+        `Codex B2 failed during ${phase}`,
+        `facts=${fixture.committedFacts.join(',')}`,
+        `providerRuns=${fixture.observed.providerRunCount}`,
+        `toolResultObserved=${String(fixture.observed.toolResultObserved)}`,
+        captured,
+      ].join('\n'), { cause: error });
+    } finally {
+      if (authority) await runtime.close();
+      else await runtime.close().catch(() => undefined);
+      await rm(fixture.sessionRoot!, { recursive: true, force: true });
+    }
+  }, 180_000);
+
   physicalIt('executes native.read_file and resumes the provider from its Rust journal', async () => {
     const fixture = await processRealFixture(false, true);
     const runtime = await NativeRustHostAttemptRuntime.create(fixture.options);
@@ -160,10 +267,10 @@ describe('native process-real Rust attempt', () => {
         lastEventSeq: 0n,
         phase: agentV1Runtime.PhysicalAttemptPhase.ACTIVE,
         resources: {
-          processCount: 1,
           spoolBytes: 0n,
         },
       });
+      expect(heartbeat!.resources.processCount).toBeGreaterThanOrEqual(1);
       expect(heartbeat!.resources.residentMemoryBytes).toBeGreaterThan(0n);
       expect(heartbeat!.resources.peakResidentMemoryBytes)
         .toBeGreaterThanOrEqual(heartbeat!.resources.residentMemoryBytes);

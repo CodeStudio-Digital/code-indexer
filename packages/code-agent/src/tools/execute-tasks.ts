@@ -76,10 +76,7 @@ import { shouldSkipTask } from './execute-tasks/task-stale-check.js';
 export const DEFAULT_TASK_BUDGET_RESPONSE_TIMEOUT_MS = 30_000;
 
 function taskBudgetResponseTimeoutMs(): number {
-  const parsed = Number(process.env.CODER_TASKS_BUDGET_RESPONSE_TIMEOUT_MS);
-  return Number.isFinite(parsed) && parsed > 0
-    ? Math.max(1, Math.floor(parsed))
-    : DEFAULT_TASK_BUDGET_RESPONSE_TIMEOUT_MS;
+  return DEFAULT_TASK_BUDGET_RESPONSE_TIMEOUT_MS;
 }
 
 async function waitForBudgetAnswer(
@@ -88,6 +85,7 @@ async function waitForBudgetAnswer(
     provideUserInput(value: string, askId?: string): boolean;
   },
   askId: string,
+  timeoutMs = DEFAULT_TASK_BUDGET_RESPONSE_TIMEOUT_MS,
 ): Promise<string> {
   const fallback = 'cancel_pending';
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -103,7 +101,7 @@ async function waitForBudgetAnswer(
         // concurrently torn down and its input registry is unavailable.
       }
       resolve(fallback);
-    }, taskBudgetResponseTimeoutMs());
+      }, timeoutMs);
     timeout.unref?.();
   });
   try {
@@ -387,7 +385,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       // becomes a no-op). When over, the orchestrator asks the user via
       // runner.waitForUserInput on a budget-specific askId so the call
       // doesn't clash with a concurrent ask_user/submit_plan.
-      const tokenCap = loadDefaultTokenCap();
+      const tokenCap = deps.executeTasksTokenCap ?? loadDefaultTokenCap();
       const budget = new BudgetTracker({ tokensCap: tokenCap });
       const runnerForAsk = ctx.runner;
       const askUserBudget: BudgetAskCallback | undefined = runnerForAsk
@@ -396,7 +394,11 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
             runnerForAsk.emit('budget_request', { ask_id: askId, run_id: runId, ...req });
             // Budget UI is advisory, never an unbounded execution lock. If no
             // compatible surface answers, cancel queued work conservatively.
-            const raw = await waitForBudgetAnswer(runnerForAsk, askId);
+            const raw = await waitForBudgetAnswer(
+              runnerForAsk,
+              askId,
+              deps.executeTasksBudgetResponseTimeoutMs ?? taskBudgetResponseTimeoutMs(),
+            );
             return parseBudgetAnswer(raw);
           }
         : undefined;
@@ -674,6 +676,7 @@ async function runGroupParallel(
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
         toolSelectionFilter: deps.toolSelectionFilter,
         externalToolTiers: deps.externalToolTiers,
+        maxParallel: deps.maxParallel,
       },
       specs,
       MICRO_AGENT_PROFILES.implement.systemPrompt, // global fallback (never used - per-spec wins)
@@ -914,7 +917,7 @@ async function runOneTask(
       shouldStop: status === 'done' || status === 'interrupted',
       errorMessage: error,
     };
-  });
+  }, { config: deps.executeTasksRetryConfig });
 
   // Task-level finalization (fires ONCE with the FINAL attempt's outcome).
   const taskResult = {

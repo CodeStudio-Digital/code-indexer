@@ -17,11 +17,7 @@ import {
 import { readChapterBoundarySync } from './conversation-chapter-codec.js';
 import { compactionBoundary, finiteNumber } from './session-projection.js';
 import { FsSessionDirectory } from './session-directory.js';
-import type {
-  FsCoderMessageRow,
-  FsMessagePage,
-  FsSessionWithMessages,
-} from './types.js';
+import type { FsCoderMessageRow, FsMessagePage, FsSessionWithMessages } from './types.js';
 import type { FsConversationChapterSourcePage } from './history-metrics-types.js';
 
 interface HydratedConversation {

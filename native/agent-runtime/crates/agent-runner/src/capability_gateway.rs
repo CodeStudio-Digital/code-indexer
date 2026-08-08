@@ -2,7 +2,10 @@ use std::future::Future;
 use std::sync::Arc;
 
 use agent_protocol::generated::v1 as wire;
-use agent_tools::capability::{CapabilityDecision, CapabilityGatewayPort, CapabilityInvocation};
+use agent_tools::capability::{
+    CapabilityDecision, CapabilityExecutionOutcome, CapabilityExecutorPort, CapabilityGatewayPort,
+    CapabilityInvocation, ExecutionClass, SealedExecutionGrant,
+};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
@@ -13,7 +16,7 @@ mod error;
 mod mapping;
 
 pub use error::CapabilityGatewayError;
-use mapping::{decision_from_wire, execution_class_to_wire};
+use mapping::{decision_from_wire, execution_class_to_wire, outcome_from_wire};
 
 #[derive(Debug)]
 pub struct CapabilityDataGateway<S, C> {
@@ -105,5 +108,44 @@ where
         invocation: CapabilityInvocation,
     ) -> impl Future<Output = Result<CapabilityDecision, Self::Error>> + Send {
         self.prepare_inner(invocation)
+    }
+}
+
+impl<S, C> CapabilityExecutorPort for CapabilityDataGateway<S, C>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    C: ProviderDataClock,
+{
+    type Error = CapabilityGatewayError;
+
+    async fn execute(
+        &mut self,
+        invocation: &CapabilityInvocation,
+        grant: &SealedExecutionGrant,
+    ) -> Result<CapabilityExecutionOutcome, Self::Error> {
+        if invocation.execution_class != ExecutionClass::HostCapability
+            || grant.execution_class != ExecutionClass::HostCapability
+        {
+            return Err(CapabilityGatewayError::ContradictoryDecision(
+                "host execution class",
+            ));
+        }
+        let execute = wire::CapabilityExecute {
+            identity: Some(self.identity.clone()),
+            runtime_instance_id: self.runtime_instance_id.clone(),
+            operation_id: invocation.operation_id.clone(),
+            tool_use_id: invocation.tool_use_id.clone(),
+            grant_id: grant.grant_id.clone(),
+            effective_input_sha256: invocation.input_sha256.to_vec(),
+            deadline_at_unix_ms: invocation.deadline_at_unix_ms,
+        };
+        let result = self
+            .client
+            .lock()
+            .await
+            .execute_capability(execute, self.timing, self.clock.as_ref())
+            .await
+            .map_err(CapabilityGatewayError::Data)?;
+        outcome_from_wire(result, invocation, grant, self.maximum_input_bytes)
     }
 }

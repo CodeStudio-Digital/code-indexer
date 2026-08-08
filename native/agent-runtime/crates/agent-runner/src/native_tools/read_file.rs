@@ -17,11 +17,15 @@ const MAX_NATIVE_READ_BYTES: u64 = 64 * 1_024 * 1_024;
 pub struct NativeToolExecutor;
 
 #[derive(Debug)]
-pub struct NativeToolExecutorError(tokio::task::JoinError);
+pub enum NativeToolExecutorError {
+    Worker(tokio::task::JoinError),
+}
 
 impl Display for NativeToolExecutorError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        write!(formatter, "native tool worker failed: {}", self.0)
+        match self {
+            Self::Worker(error) => write!(formatter, "native tool worker failed: {error}"),
+        }
     }
 }
 
@@ -42,7 +46,7 @@ impl CapabilityExecutorPort for NativeToolExecutor {
         };
         tokio::task::spawn_blocking(move || execute_read(&request, started))
             .await
-            .map_err(NativeToolExecutorError)
+            .map_err(NativeToolExecutorError::Worker)
     }
 }
 

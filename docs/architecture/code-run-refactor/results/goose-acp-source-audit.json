@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-04",
+  "candidate": "goose_api",
+  "repository": "https://github.com/aaif-goose/goose",
+  "commit": "b4dd5fb5875878943724cba4468313f6038afd2b",
+  "protocol": "agent-client-protocol",
+  "schema": {
+    "path": "crates/goose/acp-schema.json",
+    "bytes": 249297,
+    "sha256": "a11855b3e3335b422ed36602abc4db70a89df3c590c767eedc36e5dafcdb7681"
+  },
+  "sourceChecks": {
+    "sessionScopedLifecycle": true,
+    "promptCancellationToken": true,
+    "customSessionDelete": true,
+    "emptyBuiltinSelectionSupported": true,
+    "nonEmptyMcpServersOverrideConfiguredExtensions": true,
+    "filesystemAndTerminalCapabilitiesNegotiated": true
+  },
+  "status": "protocol_qualified_for_b0",
+  "liveRunCompleted": false,
+  "nextRequiredBoundary": "attempt_scoped_mcp_toolhost_facade"
+}

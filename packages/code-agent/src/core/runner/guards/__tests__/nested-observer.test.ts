@@ -131,22 +131,6 @@ describe('nested invocation-local dedup', () => {
     expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)).toBeNull();
   });
 
-  it('observe mode emits shadow instead of blocking the 3rd mutation', () => {
-    const previous = process.env.CODER_DEDUP_POLICY;
-    process.env.CODER_DEDUP_POLICY = 'observe';
-    try {
-      const obs = buildNestedToolObserver(deps());
-      const opts = { repeatPolicy: 'mutating' as const, executionClass: 'write' as const };
-      expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)).toBeNull();
-      expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)?.action).toBe('warn');
-      expect(obs.beforeNestedCall('edit_file', { path: 'a.ts' }, opts)).toMatchObject({
-        action: 'shadow', wouldBlock: true,
-      });
-    } finally {
-      if (previous === undefined) delete process.env.CODER_DEDUP_POLICY;
-      else process.env.CODER_DEDUP_POLICY = previous;
-    }
-  });
 });
 
 describe('nested failure-streak (shared state, pre-check enforcement)', () => {
@@ -298,14 +282,14 @@ describe('observer robustness + telemetry sink', () => {
   });
 });
 
-describe('kill switch', () => {
-  it('CODER_NESTED_GUARDS_DISABLE=1 turns the factory gate off', () => {
+describe('mandatory nested guards', () => {
+  it('ignores the retired kill switch', () => {
     const prev = process.env.CODER_NESTED_GUARDS_DISABLE;
     try {
       delete process.env.CODER_NESTED_GUARDS_DISABLE;
       expect(nestedGuardsEnabled()).toBe(true);
       process.env.CODER_NESTED_GUARDS_DISABLE = '1';
-      expect(nestedGuardsEnabled()).toBe(false);
+      expect(nestedGuardsEnabled()).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.CODER_NESTED_GUARDS_DISABLE;
       else process.env.CODER_NESTED_GUARDS_DISABLE = prev;

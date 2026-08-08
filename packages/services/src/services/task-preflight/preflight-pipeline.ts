@@ -111,11 +111,6 @@ export interface SessionTitleRunResult {
   error?: string;
 }
 
-function envInt(name: string, fallback: number): number {
-  const value = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
 export class TaskPreflightService {
   constructor(private readonly deps: TaskPreflightDeps) {}
 
@@ -154,7 +149,7 @@ export class TaskPreflightService {
 
       const userMessage = cleanSessionTitleSeed(input.userMessage);
       if (!userMessage) return done({ status: 'parse_fail', ...ids, error: 'empty title seed' });
-      const timeoutMs = input.timeoutMs ?? envInt('CODER_PREFLIGHT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
+      const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const result = await callConfiguredChat(binding, [
         {
           role: 'system',
@@ -210,8 +205,8 @@ export class TaskPreflightService {
 
       const { toolCatalog, memoryIndex, skillCatalog, workspaceProjects } =
         preparePreflightCatalogs(this.deps, input);
-      const maxTools = input.maxTools ?? envInt('CODER_PREFLIGHT_MAX_TOOLS', DEFAULT_MAX_TOOLS);
-      const timeoutMs = input.timeoutMs ?? envInt('CODER_PREFLIGHT_TIMEOUT_MS', DEFAULT_TIMEOUT_MS);
+      const maxTools = input.maxTools ?? DEFAULT_MAX_TOOLS;
+      const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
       const messages = buildPreflightMessages({
         userMessage: input.userMessage,
         toolCatalog,

@@ -298,10 +298,12 @@ export interface RunCoderOptions {
   /**
    * Per-session resolved tunables (push caps, turn budget, intervention
    * cooldown). When omitted, the runner falls back to `envTunables()`
-   * → `process.env.CODER_*` with hardcoded defaults — bit-identical to
+   * → stable product defaults — bit-identical to
    * pre-A1 behavior.
    */
   tunables?: import('@mcp/code-agent/core/tunables.js').CoderTunables;
+  /** Immutable, host-resolved policy snapshot for this attempt. */
+  runtimePolicy?: import('@mcp/agent-runtime-contracts').ResolvedRuntimePolicyV1;
   /**
    * Explicit tool-permission-mode override for this run. When omitted, the
    * effective mode resolves as: company runs → 'unrestricted' (V1 has no

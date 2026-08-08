@@ -20,14 +20,6 @@ import { join } from 'node:path';
 const DEFAULT_EXT_CATALOG_MAX = 40;
 const DEFAULT_SKILLS_MAX = 30;
 
-// 0 is honored (means "show none") so each cap doubles as a kill-switch for
-// external-tool / skill exposure while preflight keeps seeding profile/pins/
-// memories. Negatives and NaN fall back to the default.
-function envInt(name: string, fallback: number): number {
-  const value = Number.parseInt(process.env[name] ?? '', 10);
-  return Number.isFinite(value) && value >= 0 ? value : fallback;
-}
-
 /**
  * Merge the static native/tier catalog with cached external MCP tools.
  * Native names win on collision (an external server can't shadow a native
@@ -44,7 +36,7 @@ export function buildPreflightToolCatalog(
     const external = enumerate(dbPath).tools
       .filter((t) => !nativeNames.has(t.name))
       .sort((a, b) => a.name.localeCompare(b.name))
-      .slice(0, envInt('CODER_PREFLIGHT_EXT_CATALOG_MAX', DEFAULT_EXT_CATALOG_MAX))
+      .slice(0, DEFAULT_EXT_CATALOG_MAX)
       .map((t) => ({ name: t.name, tier: t.tier, description: t.description }));
     return external.length > 0 ? [...nativeMeta, ...external] : nativeMeta;
   } catch {
@@ -79,7 +71,7 @@ export function buildPreflightSkillCatalog(
       [projectId],
       activeSkillIds,
     )
-      .slice(0, envInt('CODER_PREFLIGHT_SKILLS_MAX', DEFAULT_SKILLS_MAX))
+      .slice(0, DEFAULT_SKILLS_MAX)
       .map((s) => {
         const definition = typeof (skillStore as SkillStore & { getSkill?: unknown }).getSkill === 'function'
           ? skillStore.getSkill(s.id)

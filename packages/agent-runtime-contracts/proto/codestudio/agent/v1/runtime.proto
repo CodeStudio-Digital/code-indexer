@@ -85,6 +85,8 @@ message FramePayload {
     EngineEventCommitted engine_event_committed = 37;
     CapabilityPrepare capability_prepare = 38;
     CapabilityUpdate capability_update = 39;
+    CapabilityExecute capability_execute = 40;
+    CapabilityExecutionResult capability_execution_result = 41;
   }
 }
 
@@ -283,6 +285,24 @@ message ProviderPresetSnapshotV1 {
   optional string effective_preset = 2;
   bool thinking = 3;
   optional uint64 thinking_budget_tokens = 4;
+}
+
+// Optional process adapter sealed into an attempt that deliberately selects
+// the Codex app-server provider. The runner constructs the fixed, fail-closed
+// argv; executable arguments are intentionally not data in this contract.
+message CodexAppServerProcessSnapshotV1 {
+  uint32 schema_version = 1;
+  string candidate_version = 2;
+  string protocol_version = 3;
+  bytes protocol_schema_sha256 = 4;
+  string executable = 5;
+  string working_directory = 6;
+  repeated ProcessEnvironmentVariable environment = 7;
+}
+
+message ProcessEnvironmentVariable {
+  string name = 1;
+  string value = 2;
 }
 
 // Transport-independent engine input. Attempt identity, provider binding,
@@ -485,6 +505,7 @@ message ResolvedAttemptSpec {
   ResourceBudget resource_budget = 23;
   int64 deadline_at_unix_ms = 24;
   SnapshotRef agent_definition_snapshot = 25;
+  SnapshotRef codex_app_server_process_snapshot = 26;
 }
 
 message PrepareAttempt {

@@ -114,7 +114,7 @@ export interface RunContext {
   consecutiveLargePromptCacheMisses: number;
   /** Latched once the long-prompt cache-miss guard trips. */
   cacheMissGuardError: Error | null;
-  /** Legacy rollback-only tuple table (`CODER_DEDUP_POLICY=legacy`). */
+  /** Deprecated compatibility table; cleared while callers migrate. */
   dupCalls: Map<string, DupCallEntry>;
   /** Cross-turn post-result observation + monotonic workspace state epoch. */
   noProgressTracker: NoProgressTracker;
@@ -214,6 +214,8 @@ export interface RunContext {
       tools: import('../assembly/tools.js').SerializedTool[];
       json: string | null;
       fingerprint: string | null;
+      capabilitySetDigest: string | null;
+      projectionDigest: string | null;
     }>;
   } | null;
   /**
@@ -259,16 +261,6 @@ export interface RunContext {
    * run; fresh run starts empty.
    */
   failureStreaks: import('../guards/failure-streak.js').FailureStreakState;
-  /**
-   * P0 — per-turn doom-loop rolling window (strict full-sig + fuzzy
-   * name-only). Catches the model emitting the same tool-call signature N
-   * turns in a row when no single call duplicates a prior one — rotating
-   * args defeat tuple-hash, once-per-turn defeats the dup-call cap (the
-   * `create_goal`×37 / `git_status`×109 patterns seen in telemetry). Fed
-   * every Executing turn; checked as a backstop AFTER the per-call guards.
-   * Reset when it FIRES (not on Planning) so it keeps its cross-cycle reach.
-   */
-  doomLoop: import('../guards/doom-loop.js').DoomLoopState;
   /**
    * P0 — dominance rolling window (last N tool-turns + whether each carried
    * assistant text). Catches one tool grinding a long window with ZERO text
@@ -672,6 +664,8 @@ export interface BridgeCallbacks {
     visibleToolsCount?: number;
     /** Prompt-cache diagnostics (mig 143) — see telemetry/prefix-head.ts. */
     toolsFingerprint?: string | null;
+    capabilitySetDigest?: string | null;
+    projectionDigest?: string | null;
     prefixHeadHash?: string | null;
     reducerStats?: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null;
     responseMeta: import('@mcp/code-agent/core/messages.js').ChatProviderResponseMeta | null;

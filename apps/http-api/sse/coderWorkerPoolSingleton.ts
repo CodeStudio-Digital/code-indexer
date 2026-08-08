@@ -14,7 +14,6 @@
 import { loadConfig } from '@mcp/shared/utils/config.js';
 import {
   CoderWorkerPool,
-  DEFAULT_CODER_WORKER_HEAP_MB,
   type CoderWorkerDocDeps,
   type SessionRuntimeContext,
 } from './CoderWorkerPool.js';
@@ -22,6 +21,7 @@ import type { SessionId } from '@mcp/session-storage';
 import type { McpExternalPool } from './McpExternalPool.js';
 import type { ControlPlaneAuthority } from '../file-control-plane-store.js';
 import { resolveWorkerFile, type ResolvedWorker } from './workerFileResolution.js';
+import { resolveAppRuntimePolicy } from '../runtime-policy.js';
 
 let cachedPool: CoderWorkerPool | null = null;
 /**
@@ -91,10 +91,7 @@ export function getCoderWorkerPool(): CoderWorkerPool {
     );
   }
   const { dbPath } = loadConfig();
-  const configuredHeapMb = Number(process.env.CODER_WORKER_HEAP_MB);
-  const workerHeapMb = Number.isFinite(configuredHeapMb) && configuredHeapMb >= 256
-    ? Math.floor(configuredHeapMb)
-    : DEFAULT_CODER_WORKER_HEAP_MB;
+  const initialRuntimePolicy = resolveAppRuntimePolicy(dbPath);
   cachedPool = new CoderWorkerPool({
     workerFile: resolved.file,
     workerExecArgv: resolved.execArgv,
@@ -118,9 +115,9 @@ export function getCoderWorkerPool(): CoderWorkerPool {
       }
       await release(context);
     },
-    workerMaxOldGenerationSizeMb: workerHeapMb,
-    ttlMs: Number(process.env.CODER_WORKER_TTL_MS) || undefined,
-    postRunLingerMs: Number(process.env.CODER_WORKER_POST_RUN_LINGER_MS) || undefined,
+    workerMaxOldGenerationSizeMb: initialRuntimePolicy.host.workerHeapMb,
+    ttlMs: initialRuntimePolicy.host.workerIdleTtlMs,
+    postRunLingerMs: initialRuntimePolicy.host.workerPostRunLingerMs,
     log: (level, msg) => {
       if (level === 'error') console.error(msg);
       else if (level === 'warn') console.warn(msg);
@@ -137,6 +134,7 @@ export function getCoderWorkerPool(): CoderWorkerPool {
     // the legacy per-worker manager.
     getMcpExternalPool: () => mcpPoolBox.pool,
     getControlPlaneStore: () => controlPlaneBox.store,
+    resolveRuntimePolicy: () => resolveAppRuntimePolicy(dbPath),
   });
   return cachedPool;
 }

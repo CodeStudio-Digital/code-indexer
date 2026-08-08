@@ -33,13 +33,12 @@ const TURN_ULTRA_KEYWORD_RE = /\bultracode\b/i;
  * full Ultra posture (max reasoning, workflow tool, proactive delegation)
  * without touching the session's sticky execution mode. Deliberately only the
  * unambiguous token — bare "ultra" appears in normal prose (and in talk ABOUT
- * the mode) far too often. Kill switch: CODER_ULTRA_KEYWORD=0.
+ * the mode) far too often.
  */
 export function detectTurnUltraKeyword(
   userMessage: string | null | undefined,
   sessionUltraEnabled: boolean,
 ): boolean {
   if (sessionUltraEnabled) return false;
-  if (process.env.CODER_ULTRA_KEYWORD === '0') return false;
   return TURN_ULTRA_KEYWORD_RE.test(userMessage ?? '');
 }

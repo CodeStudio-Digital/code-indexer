@@ -574,7 +574,7 @@ const readFile: CoderTool = {
     const endLineArg = typeof args.end_line === 'number' ? args.end_line : undefined;
     const force = args.force === true;
     // auto_full env-toggle preserved for tests; not exposed in schema.
-    const autoFull = process.env.CODER_READ_FILE_AUTOFULL_DISABLE !== '1';
+    const autoFull = true;
     const AUTO_FULL_THRESHOLD = 800;
     // Default window when a large file is read without a range and without force.
     const DEFAULT_READ_LINES = 400;

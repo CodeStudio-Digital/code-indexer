@@ -168,15 +168,7 @@ export function mountCoderSummarizeClearRoute(
             ReturnType<typeof sessionStore.commitConversationChapter>
           >;
       try {
-        result = await (
-          process.env.CODER_CONVERSATION_CHAPTERS === '0'
-            ? sessionStore.setCompactionBoundary(
-                id,
-                renderResumeV3(summary),
-                boundarySeq,
-                'manual',
-              )
-            : sessionStore.commitConversationChapter({
+        result = await sessionStore.commitConversationChapter({
                 sessionId: id,
                 expectedBoundarySeq:
                   data.session.summary_boundary_id ?? 0,
@@ -195,8 +187,7 @@ export function mountCoderSummarizeClearRoute(
                 metricsJson: summary.metrics
                   ? JSON.stringify(summary.metrics)
                   : null,
-              })
-        );
+              });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         await sessionStore.finishCompactionAttempt(id, attemptId, {

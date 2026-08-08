@@ -17,14 +17,6 @@ import { previewToolArgs, stableArgsKey } from '../dup-utils.js';
 
 export const DUP_REFUSE_MIN = 3;
 
-export type DedupPolicyMode = 'hybrid' | 'observe' | 'legacy';
-
-/** Resolve on every call so tests/operators can change the kill switch live. */
-export function dedupPolicyMode(): DedupPolicyMode {
-  const raw = process.env.CODER_DEDUP_POLICY?.trim().toLowerCase();
-  return raw === 'observe' || raw === 'legacy' ? raw : 'hybrid';
-}
-
 interface InvocationGuardEntry extends DupCallEntry {
   stateEpoch: number;
 }
@@ -107,12 +99,7 @@ export type DupVerdict =
       refusalKind: 'dedup';
       refuseText: string;
     })
-  | (VerdictCommon & {
-      kind: 'shadow';
-      action: 'shadow';
-      wouldBlock: true;
-      reminderText: string;
-    });
+  ;
 
 export interface CheckDupArgs {
   name: string;
@@ -124,9 +111,9 @@ export interface CheckDupArgs {
   repeatPolicy?: ToolRepeatPolicy;
   turn: number;
   useId: string;
-  /** Legacy run-wide table, consulted only in CODER_DEDUP_POLICY=legacy. */
+  /** Deprecated compatibility input; invocationState is authoritative. */
   dupCalls?: Map<string, DupCallEntry>;
-  /** Local state for hybrid/observe. Created by the caller per invocation scope. */
+  /** Local state created by the caller per invocation scope. */
   invocationState?: InvocationGuardState;
   stateEpoch?: number;
   forceReread?: boolean;
@@ -136,14 +123,9 @@ export function checkDupCall(args: CheckDupArgs): DupVerdict {
   const normalizedInput = args.normalizedInput ?? args.input;
   const key = invocationGuardKey(args.name, normalizedInput);
   const repeatPolicy = args.repeatPolicy ?? (args.isRepeatable ? 'pollable' : 'stable');
-  const mode = dedupPolicyMode();
 
   if (args.forceReread === true || isForceReread(args.input)) {
     return allowVerdict(args, key, 'force-reread', args.stateEpoch ?? args.invocationState?.stateEpoch ?? 0);
-  }
-
-  if (mode === 'legacy') {
-    return checkLegacy({ ...args, key, repeatPolicy });
   }
 
   // Reads/snapshots can be coalesced by the caller inside this scope, but a
@@ -210,24 +192,6 @@ export function checkDupCall(args: CheckDupArgs): DupVerdict {
     };
   }
 
-  if (mode === 'observe') {
-    return {
-      kind: 'shadow',
-      action: 'shadow',
-      reason: 'mutating-repeat-shadow',
-      shouldReflect: false,
-      affectsFailureStreak: false,
-      count: entry.count,
-      sourceTool: args.name,
-      originToolUseId: args.useId,
-      stateEpoch: state.stateEpoch,
-      wouldBlock: true,
-      entry,
-      key,
-      reminderText,
-    };
-  }
-
   return {
     kind: 'refuse',
     action: 'block',
@@ -244,68 +208,6 @@ export function checkDupCall(args: CheckDupArgs): DupVerdict {
     refuseText: buildRefuseText({
       name: args.name,
       input: normalizedInput,
-      firstTurn: entry.firstTurn,
-      count: entry.count,
-    }),
-  };
-}
-
-function checkLegacy(
-  args: CheckDupArgs & { key: string; repeatPolicy: ToolRepeatPolicy },
-): DupVerdict {
-  const table = args.dupCalls ?? new Map<string, DupCallEntry>();
-  if (args.repeatPolicy === 'pollable' || args.repeatPolicy === 'volatile') {
-    return allowVerdict(args, args.key, 'legacy-repeatable', 0);
-  }
-  const previous = table.get(args.key);
-  const entry: DupCallEntry = previous
-    ? { count: previous.count + 1, firstTurn: previous.firstTurn, lastUseId: args.useId }
-    : { count: 1, firstTurn: args.turn, lastUseId: args.useId };
-  table.set(args.key, entry);
-  const common = {
-    count: entry.count,
-    sourceTool: args.name,
-    originToolUseId: args.useId,
-    stateEpoch: 0,
-    entry,
-    key: args.key,
-  };
-  if (entry.count === 1) {
-    return {
-      ...common,
-      kind: 'allow',
-      action: 'allow',
-      reason: 'legacy-first-call',
-      shouldReflect: false,
-      affectsFailureStreak: true,
-    };
-  }
-  if (entry.count < DUP_REFUSE_MIN) {
-    return {
-      ...common,
-      kind: 'allow-with-reminder',
-      action: 'warn',
-      reason: 'legacy-repeat-warning',
-      shouldReflect: false,
-      affectsFailureStreak: true,
-      reminderText: buildReminderText({
-        name: args.name,
-        input: args.normalizedInput ?? args.input,
-        firstTurn: entry.firstTurn,
-      }),
-    };
-  }
-  return {
-    ...common,
-    kind: 'refuse',
-    action: 'block',
-    reason: 'legacy-repeat-blocked',
-    refusalKind: 'dedup',
-    shouldReflect: true,
-    affectsFailureStreak: false,
-    refuseText: buildRefuseText({
-      name: args.name,
-      input: args.normalizedInput ?? args.input,
       firstTurn: entry.firstTurn,
       count: entry.count,
     }),

@@ -20,6 +20,7 @@ import {
   asSessionId,
   type SessionId,
 } from '@mcp/session-storage';
+import { resolveRuntimePolicyV1 } from '@mcp/agent-runtime-host';
 import {
   type ControlPlaneRunContext,
 } from '@mcp/store/control-plane/index.js';
@@ -199,6 +200,36 @@ describe('CoderWorkerPool', () => {
     });
     return pool;
   }
+
+  it('resolves one immutable policy and sends it with the worker attempt', async () => {
+    const runtimePolicy = resolveRuntimePolicyV1({
+      resolvedAt: '2026-08-05T20:00:00.000Z',
+      operator: {
+        revision: 'operator-test',
+        values: { context: { toolResultChars: 48_000 } },
+      },
+    });
+    pool = new CoderWorkerPool({
+      workerFile: 'mock-worker.js',
+      dbPath: ':memory:',
+      resolveSessionRuntimeContext: resolveTestSessionRuntimeContext,
+      resolveRuntimePolicy: () => runtimePolicy,
+      postRunLingerMs: 60_000,
+      log: () => undefined,
+    });
+
+    await pool.runFresh(sid(98), { userMessage: 'first' });
+
+    expect(mockWorker.state.hosts[0].bridge.requests.at(-1)).toMatchObject({
+      type: 'runFresh',
+      payload: {
+        runtimePolicy: {
+          policyDigest: runtimePolicy.policyDigest,
+          context: { toolResultChars: 48_000 },
+        },
+      },
+    });
+  });
 
   it('waits for the main writer handoff before spawning the session worker', async () => {
     let releaseHandoff!: () => void;

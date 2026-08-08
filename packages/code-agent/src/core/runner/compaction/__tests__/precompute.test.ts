@@ -102,11 +102,11 @@ describe('shouldKickPrecompute', () => {
     expect(shouldKickPrecompute(0.95)).toBe(true);
   });
 
-  it('CODER_COMPACT_PRECOMPUTE=0 disables the kick', () => {
+  it('cannot be disabled by the retired env flag', () => {
     const prev = process.env.CODER_COMPACT_PRECOMPUTE;
     try {
       process.env.CODER_COMPACT_PRECOMPUTE = '0';
-      expect(shouldKickPrecompute(0.95)).toBe(false);
+      expect(shouldKickPrecompute(0.95)).toBe(true);
     } finally {
       if (prev === undefined) delete process.env.CODER_COMPACT_PRECOMPUTE;
       else process.env.CODER_COMPACT_PRECOMPUTE = prev;

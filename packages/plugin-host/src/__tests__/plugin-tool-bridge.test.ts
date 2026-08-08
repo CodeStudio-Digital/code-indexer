@@ -44,9 +44,9 @@ describe('buildPluginTools', () => {
       maxInlineChars: 12_000,
       preserveOnError: true,
     });
-    expect(echo.mutates).toBe(false);
-    expect(echo.parallelSafe).toBe(true);
-    expect(echo.riskLevel).toBe('read');
+    expect(echo.mutates).toBe(true);
+    expect(echo.parallelSafe).toBe(false);
+    expect(echo.riskLevel).toBe('write');
 
     // empty parameters get coerced to a valid object JSON schema
     expect(tools[1].parameters).toEqual({ type: 'object', properties: {} });

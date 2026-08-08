@@ -441,6 +441,8 @@ describe('Rust agent V1 Protobuf contract', () => {
       engine_event_committed: 37,
       capability_prepare: 38,
       capability_update: 39,
+      capability_execute: 40,
+      capability_execution_result: 41,
     });
     expect(Object.fromEntries(fieldTags(messages.get('EngineEventProposal')!))).toEqual({
       identity: 1,

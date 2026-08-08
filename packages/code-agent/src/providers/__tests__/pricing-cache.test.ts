@@ -1,7 +1,7 @@
 /**
  * Pricing resolver — locks the resolution precedence and the cost math.
  *
- *   env override > DB (provider-qualified > bare) > static (exact > prefix) > none
+ *   DB (provider-qualified > bare) > static (exact > prefix) > none
  *
  * Also pins the reported-bug fix: claude-opus-4-8[1m] must resolve to the
  * 1M-tier static row, NOT inherit opus-4-7 via the broad 'claude-opus' prefix.
@@ -29,12 +29,12 @@ afterEach(() => {
 });
 
 describe('resolvePricingWithSource — precedence', () => {
-  it('env override wins over everything', () => {
+  it('ignores the retired process-env pricing override', () => {
     process.env.CODER_MODEL_PRICING = JSON.stringify({ 'claude-opus-4-7': { input: 1, output: 2 } });
     clearOverrideForTest();
     const r = resolvePricingWithSource('anthropic', 'claude-opus-4-7');
-    expect(r.source).toBe('env');
-    expect(r.pricing?.input).toBe(1);
+    expect(r.source).toBe('static');
+    expect(r.pricing?.input).toBe(5);
   });
 
   it('DB provider-qualified beats bare DB row', () => {
@@ -57,7 +57,7 @@ describe('resolvePricingWithSource — precedence', () => {
     expect(resolvePricingWithSource(null, 'gpt-4o').pricing?.input).toBe(2.0);
   });
 
-  it('falls back to the static table when no DB/env row', () => {
+  it('falls back to the static table when no DB row', () => {
     const r = resolvePricingWithSource('anthropic', 'claude-opus-4-7');
     expect(r.source).toBe('static');
     expect(r.pricing?.input).toBe(5);

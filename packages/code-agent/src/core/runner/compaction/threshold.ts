@@ -95,11 +95,7 @@ export const DEFAULT_PROTECT_RATIO = 0.3;
 
 /** Env-resolved protect ratio, clamped so a typo can't zero/expand the tail. */
 export function resolveProtectRatio(): number {
-  const raw = process.env.CODER_COMPACT_PROTECT_RATIO;
-  if (!raw) return DEFAULT_PROTECT_RATIO;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return DEFAULT_PROTECT_RATIO;
-  return Math.min(0.6, Math.max(0.05, n));
+  return DEFAULT_PROTECT_RATIO;
 }
 
 export function computeProtectTokens(inp: ProtectTokensInputs): number {
@@ -123,12 +119,10 @@ export function computeProtectTokens(inp: ProtectTokensInputs): number {
 export const DEFAULT_RECEDE_TAIL_RATIO = 0.5;
 
 export function resolveRecedeTailRatio(): number {
-  const raw = process.env.CODER_COMPACT_RECEDE_TAIL_RATIO;
-  const n = raw ? Number(raw) : NaN;
-  const ratio = Number.isFinite(n) ? n : DEFAULT_RECEDE_TAIL_RATIO;
-  // Clamp against the RESOLVED trigger ratio (not the constant) so an env
-  // override of the trigger keeps the post-compaction prompt below it.
-  return Math.min(resolveTriggerRatio() - 0.05, Math.max(resolveProtectRatio(), ratio));
+  return Math.min(
+    resolveTriggerRatio() - 0.05,
+    Math.max(resolveProtectRatio(), DEFAULT_RECEDE_TAIL_RATIO),
+  );
 }
 
 /**
@@ -146,20 +140,12 @@ export const DEFAULT_MIN_TAIL_FRACTION = 0.1;
 
 /** Absolute floor of recent renderable turns. Clamped to ≥ 0. */
 export function resolveMinTailTurns(): number {
-  const raw = process.env.CODER_COMPACT_MIN_TAIL_TURNS;
-  if (!raw) return DEFAULT_MIN_TAIL_TURNS;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return DEFAULT_MIN_TAIL_TURNS;
-  return Math.floor(n);
+  return DEFAULT_MIN_TAIL_TURNS;
 }
 
 /** Fractional floor on the visible renderable turns. Clamped to 0–0.6. */
 export function resolveMinTailFraction(): number {
-  const raw = process.env.CODER_COMPACT_MIN_TAIL_FRACTION;
-  if (raw == null || raw === '') return DEFAULT_MIN_TAIL_FRACTION;
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return DEFAULT_MIN_TAIL_FRACTION;
-  return Math.min(0.6, Math.max(0, n));
+  return DEFAULT_MIN_TAIL_FRACTION;
 }
 
 /**
@@ -202,11 +188,7 @@ export const DEFAULT_CONTEXT_SPILL_RATIO = 1;
  * (`0` return), restoring legacy behaviour (only the user's cap applies).
  */
 export function resolveContextSpillRatio(): number {
-  const raw = process.env.CODER_CONTEXT_SPILL_RATIO;
-  if (raw == null || raw === '') return DEFAULT_CONTEXT_SPILL_RATIO;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return n;
+  return DEFAULT_CONTEXT_SPILL_RATIO;
 }
 
 /**
@@ -234,13 +216,10 @@ export function resolveFinalizeCap(userCap: number, model: string, contextWindow
 }
 
 /**
- * Durable auto-compaction toggle (`MCP_DURABLE_COMPACTION`, default ON). When
- * on, each in-memory compaction is also persisted as a boundary + summary so
+ * Durable auto-compaction is an invariant. Each in-memory compaction is also
+ * persisted as a boundary + summary so
  * the reduced context (and its cost) carries to the next run.
  */
 export function durableCompactionEnabled(): boolean {
-  const raw = process.env.MCP_DURABLE_COMPACTION;
-  if (raw == null || raw === '') return true;
-  const v = raw.toLowerCase();
-  return v !== '0' && v !== 'false' && v !== 'off';
+  return true;
 }

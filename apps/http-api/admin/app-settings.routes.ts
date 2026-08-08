@@ -12,6 +12,7 @@
 import { Hono } from 'hono';
 import { AppSettingsStore } from '@mcp/store/app-settings-store.js';
 import { APP_SETTINGS, SETTING_CATEGORIES, getSettingDef } from '@mcp/store/app-settings-catalog.js';
+import { resolveAppRuntimePolicy } from '../runtime-policy.js';
 
 /**
  * Hook the Electron main sets at boot so a settings-driven restart
@@ -63,6 +64,8 @@ export function createAppSettingsRouter(dbPath: string): Hono {
       return c.json({
         items,
         categories: SETTING_CATEGORIES,
+        runtimePolicy: resolveAppRuntimePolicy(dbPath),
+        runtimePolicyAppliesTo: 'new_attempts_only',
       });
     } finally {
       store.close();
@@ -98,6 +101,8 @@ export function createAppSettingsRouter(dbPath: string): Hono {
         updated: keys.length,
         restartNeeded,
         appliedToProcessEnv: keys.length,
+        runtimePolicyAppliesTo: 'new_attempts_only',
+        runtimePolicy: resolveAppRuntimePolicy(dbPath),
       });
     } finally {
       store.close();

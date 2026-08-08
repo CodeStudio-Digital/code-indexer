@@ -78,14 +78,17 @@ export class RecoveringNode implements BehaviorNode {
 
     const kind = classifyKind(lastEvent.status, lastEvent.code);
     const attempts = bumpRecovery(ctx, kind);
-    const cap = recoveryCap(kind);
+    const cap = kind === 'provider-transient-retry' && ctx.opts.runtimePolicy
+      ? ctx.opts.runtimePolicy.provider.transientRetriesPerRun
+      : recoveryCap(kind);
 
     // R5's per-logical-call bound used to exist only as an unused config
     // function. Enforce it before the much larger run-lifetime circuit breaker
     // so one persistent 429 cannot consume the entire cap in a single turn.
     if (kind === 'provider-transient-retry') {
       ctx.transientRetriesThisTurn += 1;
-      const turnCap = transientRetryMaxPerTurn();
+      const turnCap = ctx.opts.runtimePolicy?.provider.transientRetriesPerTurn
+        ?? transientRetryMaxPerTurn();
       if (ctx.transientRetriesThisTurn > turnCap) {
         ctx.emit('recovery_aborted', {
           kind,

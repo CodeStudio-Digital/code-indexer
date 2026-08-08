@@ -161,18 +161,17 @@ describe('workflow durable checkpoint', () => {
   it('does not dispatch a stale workflow after lease expiry/takeover', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    vi.stubEnv('CODER_ORCHESTRATION_LEASE_MS', '60000');
     expect(await saveWorkflow(sessionId, record(), store)).toBe(true);
     expect(
       await tryAcquireWorkflowRun(sessionId, 'wf_restart', store),
     ).toBe(true);
 
-    vi.setSystemTime(new Date('2026-01-01T00:01:01.000Z'));
+    vi.setSystemTime(new Date('2026-01-01T00:02:01.000Z'));
     const winner = await fsStore.tryAcquireOrchestrationCheckpoint(
       sessionId,
       'workflow',
       'wf_restart',
-      60_000,
+      120_000,
     );
     expect(winner).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
@@ -191,7 +190,6 @@ describe('workflow durable checkpoint', () => {
       'wf_restart',
       winner!,
     );
-    vi.unstubAllEnvs();
   });
 
   it('cleans the active-agent registry and emits no spawn when the pre-dispatch fence fails', async () => {

@@ -370,8 +370,7 @@ export const DEFAULT_ATTACH_REPLAY_MAX_EVENTS = 600;
 
 /** Hard safety cap for reconstructible cross-turn state (most-recent wins). */
 export function attachReplayCap(): number {
-  const n = Number.parseInt(process.env.CODER_ATTACH_REPLAY_MAX_EVENTS ?? '', 10);
-  return Number.isFinite(n) && n > 0 ? n : DEFAULT_ATTACH_REPLAY_MAX_EVENTS;
+  return DEFAULT_ATTACH_REPLAY_MAX_EVENTS;
 }
 
 /**
@@ -382,7 +381,7 @@ export function attachReplayCap(): number {
  * making every cursorless remount pay for the whole 2,000-row ring.
  */
 export function attachReplayTrimEnabled(): boolean {
-  return process.env.CODER_ATTACH_REPLAY_TRIM !== '0';
+  return true;
 }
 
 /**

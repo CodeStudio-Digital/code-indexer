@@ -35,6 +35,7 @@ const HOST_TO_RUNNER_DATA = new Set([
   'providerTerminal',
   'engineEventCommitted',
   'capabilityUpdate',
+  'capabilityExecutionResult',
 ]);
 
 const RUNNER_TO_HOST_DATA = new Set([
@@ -45,6 +46,7 @@ const RUNNER_TO_HOST_DATA = new Set([
   'providerCancel',
   'engineEventProposal',
   'capabilityPrepare',
+  'capabilityExecute',
 ]);
 
 export function assertPayloadDirection(

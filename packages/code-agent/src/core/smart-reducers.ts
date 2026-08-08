@@ -234,8 +234,7 @@ export function reduceGitDiff({ content, cap }: ReducerInput): ReducerOutput {
 const GREP_PATH_RE = /^(.+?):(\d+):/;
 
 function grepPerFileCap(): number {
-  const value = Number(process.env.CODER_GREP_PER_FILE_CAP ?? 8);
-  return Number.isFinite(value) && value >= 1 ? Math.min(1000, Math.floor(value)) : 8;
+  return 10;
 }
 
 export function reduceGrep({ content, cap }: ReducerInput): ReducerOutput {

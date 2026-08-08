@@ -224,6 +224,5 @@ export function terseDescription(desc: string): string {
  * within a session.
  */
 export function maybeTerse(desc: string): string {
-  if (process.env.CODER_TERSE_TOOLS !== '1') return desc;
-  return terseDescription(desc);
+  return desc;
 }

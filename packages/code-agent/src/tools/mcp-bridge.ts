@@ -18,30 +18,18 @@ import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
 import { capToolContent } from '@mcp/code-agent/core/runner/pure-helpers.js';
 import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 
-const READ_FILE_HARD_MAX = Number(process.env.CODER_READ_FILE_HARD_MAX ?? 800);
-const MCP_PATHOLOGICAL_OUTPUT_CHARS = Number(
-  process.env.CODER_MCP_PATHOLOGICAL_OUTPUT_CHARS ?? 8_000_000,
-);
-const MCP_PATHOLOGICAL_STORE_MAX_CHARS = Number(
-  process.env.CODER_MCP_PATHOLOGICAL_STORE_MAX_CHARS ?? 32_000_000,
-);
+const READ_FILE_HARD_MAX = 800;
+const MCP_PATHOLOGICAL_OUTPUT_CHARS = 8_000_000;
+const MCP_PATHOLOGICAL_STORE_MAX_CHARS = 32_000_000;
 /**
  * "Unrestricted tool output" overrides — picked when the active session has
  * `unrestricted_tool_output = 1`. Deliberately not Infinity so the cap arithmetic
  * keeps working on pathological outputs. Auto-compaction in the runner still
  * runs above PRUNE_MINIMUM, so this is not a context-window bypass.
  */
-const UNRESTRICTED_READ_FILE_HARD_MAX = Number(
-  process.env.CODER_UNRESTRICTED_READ_FILE_HARD_MAX ?? 5_000,
-);
+const UNRESTRICTED_READ_FILE_HARD_MAX = 5_000;
 
-function loadDisabledTools(): Set<string> {
-  const raw = process.env.CODER_DISABLED_MCP_TOOLS;
-  if (!raw) return new Set();
-  return new Set(raw.split(',').map((s) => s.trim()).filter(Boolean));
-}
-
-const TERSE_TOOLS = process.env.CODER_TERSE_TOOLS === '1';
+const TERSE_TOOLS = false;
 
 function terseDescription(desc: string): string {
   if (!TERSE_TOOLS || desc.length <= 150) return desc;
@@ -217,13 +205,10 @@ export class McpToolBridge {
     if (!this.client) throw new Error('McpToolBridge not connected');
     const res = await this.client.listTools();
 
-    const disabled = loadDisabledTools();
-
     // Sort by name so the tools array is bit-stable across sessions — critical
     // for prompt caching (ZAI/GLM auto-cache and Anthropic ephemeral cache both
     // require an identical prefix to hit).
     const sortedTools = [...res.tools]
-      .filter((t) => !disabled.has(t.name))
       .sort((a, b) => a.name.localeCompare(b.name));
 
     return sortedTools.map((t): CoderTool => {
@@ -238,6 +223,11 @@ export class McpToolBridge {
         description: terseDescription(t.description ?? ''),
         parameters: publicSchema,
         source: 'mcp',
+        capabilityProvenance: {
+          kind: 'mcp_internal',
+          providerId: 'code-indexer',
+          provenanceRef: 'mcp-internal:code-indexer',
+        },
         handler: async (args: Record<string, unknown>, toolCtx: ToolContext): Promise<ToolResult> => {
           if (!this.client) {
             return err('MCP client disconnected', {

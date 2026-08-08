@@ -61,14 +61,7 @@ export interface SubagentBoardPostRef {
   timestamp: string;
 }
 
-const MAX_MEMOS = (() => {
-  const v = process.env.CODER_SUBAGENT_MAX_MEMOS;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return 50;
-})();
+const MAX_MEMOS = 50;
 const MAX_SNAPSHOTS = 20;
 const MAX_BOARD_POSTS = 20;
 

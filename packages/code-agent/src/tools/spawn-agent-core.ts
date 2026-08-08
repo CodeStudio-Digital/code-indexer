@@ -33,14 +33,6 @@ export interface NormalizedAgent {
   researchPolicy?: SubagentResearchPolicy;
 }
 
-function envBudget(name: string, fallback: number, allowZero = false): number {
-  const parsed = Number(process.env[name] ?? fallback);
-  if (!Number.isFinite(parsed)) return fallback;
-  const value = Math.floor(parsed);
-  if (allowZero ? value < 0 : value <= 0) return fallback;
-  return value;
-}
-
 const SPAWN_LIMIT_DEFAULTS: Record<MicroAgentCapability, Required<SubagentLimits>> = {
   explore: {
     // `maxToolCalls` is a budget of tool *CALLS* (invocations), NOT the number
@@ -93,7 +85,7 @@ function derivedSpawnDefaults(agent: NormalizedAgent): { maxToolCalls: number; t
 }
 
 export interface SpawnLimitDeps {
-  /** Admin per-profile hard-cap overrides (DB); wins over env and defaults. */
+  /** Admin per-profile hard-cap overrides (DB); wins over product defaults. */
   resolveLimitsForProfile?: (profileId?: string) => ProfileLimitOverride | undefined;
 }
 
@@ -101,15 +93,12 @@ export function limitsForAgent(agent: NormalizedAgent, deps?: SpawnLimitDeps): S
   const defaults = SPAWN_LIMIT_DEFAULTS[agent.type];
   const derived = derivedSpawnDefaults(agent);
   const override = deps?.resolveLimitsForProfile?.(agent.profile.id);
-  const prefix = `CODER_SPAWN_${agent.type.toUpperCase()}`;
-  // Layers per axis: DB per-profile override > env > depth-derived/flat
-  // default. Env resolves on every dispatch so settings hot-apply without
-  // restarting the worker. Zero is a first-class value at any layer
-  // (explicit unlimited); null/unset falls through to the next layer.
+  // Layers per axis: DB per-profile override > depth-derived/flat default.
+  // Zero is a first-class value (explicit unlimited); null/unset falls through.
   return {
-    maxToolCalls: override?.maxToolCalls ?? envBudget(`${prefix}_MAX_TOOLS`, derived.maxToolCalls, true),
-    timeoutMs: override?.timeoutMs ?? envBudget(`${prefix}_TIMEOUT_MS`, derived.timeoutMs, true),
-    stallMs: envBudget(`${prefix}_STALL_MS`, defaults.stallMs),
+    maxToolCalls: override?.maxToolCalls ?? derived.maxToolCalls,
+    timeoutMs: override?.timeoutMs ?? derived.timeoutMs,
+    stallMs: defaults.stallMs,
   };
 }
 

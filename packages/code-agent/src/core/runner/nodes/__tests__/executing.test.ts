@@ -192,7 +192,7 @@ describe('ExecutingNode', () => {
     }));
   });
 
-  it('only exposes get_tool_output when a real recovery snapshot exists', async () => {
+  it('keeps get_tool_output projected before and after the first recovery snapshot', async () => {
     const seenWithoutSnapshot: string[] = [];
     const withoutSnapshot = makeTestContext({
       provider: makeStreamingProvider(
@@ -207,7 +207,7 @@ describe('ExecutingNode', () => {
     });
 
     await new ExecutingNode().execute(withoutSnapshot.ctx, null);
-    expect(seenWithoutSnapshot).not.toContain('get_tool_output');
+    expect(seenWithoutSnapshot).toContain('get_tool_output');
 
     const seenWithSnapshot: string[] = [];
     const withSnapshot = makeTestContext({
@@ -224,6 +224,7 @@ describe('ExecutingNode', () => {
 
     await new ExecutingNode().execute(withSnapshot.ctx, null);
     expect(seenWithSnapshot).toContain('get_tool_output');
+    expect(seenWithSnapshot).toEqual(seenWithoutSnapshot);
   });
 
   it('emits CleanFinish when the assistant returns text and no tool_use', async () => {
@@ -295,8 +296,7 @@ describe('ExecutingNode', () => {
     expect(observedSessionId).toBe(sessionId);
   });
 
-  it('blocks a hallucinated create_goal when update_goal is unavailable even with pinning off', async () => {
-    vi.stubEnv('CODER_TOOL_PIN_DISABLE', '1');
+  it('blocks a hallucinated create_goal when update_goal is unavailable', async () => {
     let createCalls = 0;
     const { ctx } = makeTestContext({
       provider: makeStreamingProvider([
@@ -1132,102 +1132,6 @@ describe('ExecutingNode', () => {
     expect(payload?.severity).toBe('refused');
   });
 
-  it('legacy rollback routes to ToolLoopDetected when the FUZZY signature window fills', async () => {
-    // The fuzzy (name-only) guard catches the real-world create_goal×37
-    // pattern: args rotate every turn so tuple-hash never sees a repeat and
-    // the dup-call cap stays at 1. This is precisely what the unwired guard
-    // was missing in production.
-    const deltas: ChatDelta[] = [
-      { type: 'tool_call_start', id: 'tg', name: 'create_goal' },
-      { type: 'tool_call_end', id: 'tg', name: 'create_goal', input: { text: 'goal-N' } },
-      { type: 'usage', usage: { input_tokens: 50, output_tokens: 5 } as ChatUsage },
-      { type: 'done', stop_reason: 'tool_use' },
-    ];
-    const { ctx, recordedEvents } = makeTestContext({
-      provider: makeStreamingProvider(deltas),
-      registry: makeRegistry({ create_goal: () => 'goal set' }),
-      toolContext: emptyToolContext(),
-    });
-    // 5 prior name-only sigs; this turn's push makes 6 matching → fuzzy fires
-    // (default 4-of-6). Strict stays empty (args differ), proving it's the
-    // fuzzy variant — not strict — that caught the loop.
-    ctx.doomLoop.fuzzy = ['create_goal', 'create_goal', 'create_goal', 'create_goal', 'create_goal'];
-
-    vi.stubEnv('CODER_DEDUP_POLICY', 'legacy');
-    const event = await new ExecutingNode().execute(ctx, null);
-    vi.unstubAllEnvs();
-
-    expect(event.kind).toBe('ToolLoopDetected');
-    if (event.kind === 'ToolLoopDetected') expect(event.guard).toBe('doom-loop');
-
-    const intervention = recordedEvents.find((e) => e.event === 'tool_loop_intervention');
-    const payload = intervention?.args[0] as { kind?: string; severity?: string };
-    expect(payload?.kind).toBe('doom-loop-fuzzy');
-    expect(payload?.severity).toBe('refused');
-
-    // State reset on fire so the next accumulation starts clean (no
-    // Executing↔Planning oscillation).
-    expect(ctx.doomLoop.fuzzy).toHaveLength(0);
-    expect(ctx.doomLoop.strict).toHaveLength(0);
-  });
-
-  it('legacy rollback routes to ToolLoopDetected when the STRICT signature window repeats', async () => {
-    const deltas: ChatDelta[] = [
-      { type: 'tool_call_start', id: 'ts', name: 'scan' },
-      { type: 'tool_call_end', id: 'ts', name: 'scan', input: { path: 'a.ts' } },
-      { type: 'usage', usage: { input_tokens: 50, output_tokens: 5 } as ChatUsage },
-      { type: 'done', stop_reason: 'tool_use' },
-    ];
-    const { ctx, recordedEvents } = makeTestContext({
-      provider: makeStreamingProvider(deltas),
-      registry: makeRegistry({ scan: () => 'scanned' }),
-      toolContext: emptyToolContext(),
-    });
-    // Two prior identical full-signatures; this turn is the 3rd. Keys are
-    // sorted by toolCallsSignature.
-    const sig = 'scan:{"path":"a.ts"}';
-    ctx.doomLoop.strict = [sig, sig];
-
-    // NOTE: this repo's .env cranks CODER_DOOM_LOOP_THRESHOLD to 100 — which
-    // also exceeds the 10-entry window, so the strict guard can NEVER fire in
-    // that config. Pin the documented default so the wiring is asserted
-    // deterministically regardless of ambient env.
-    vi.stubEnv('CODER_DOOM_LOOP_THRESHOLD', '3');
-    vi.stubEnv('CODER_DEDUP_POLICY', 'legacy');
-    try {
-      const event = await new ExecutingNode().execute(ctx, null);
-      expect(event.kind).toBe('ToolLoopDetected');
-      const intervention = recordedEvents.find((e) => e.event === 'tool_loop_intervention');
-      expect((intervention?.args[0] as { kind?: string })?.kind).toBe('doom-loop-strict');
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it('does NOT trip the doom-loop for a repeatable polling tool (list_* exemption)', async () => {
-    // list_subordinates is registered as pollable — a master polling it
-    // every turn is the workflow, not a loop. It must be filtered out before
-    // the window so a long poll is never derailed into Planning.
-    const deltas: ChatDelta[] = [
-      { type: 'tool_call_start', id: 'tl', name: 'list_subordinates' },
-      { type: 'tool_call_end', id: 'tl', name: 'list_subordinates', input: {} },
-      { type: 'usage', usage: { input_tokens: 50, output_tokens: 5 } as ChatUsage },
-      { type: 'done', stop_reason: 'tool_use' },
-    ];
-    const { ctx } = makeTestContext({
-      provider: makeStreamingProvider(deltas),
-      registry: makeRegistry({ list_subordinates: () => 'still working' }),
-      toolContext: emptyToolContext(),
-    });
-    // Even with a full fuzzy window of prior polls, the exemption means this
-    // turn contributes no block → no fire.
-    ctx.doomLoop.fuzzy = Array(6).fill('list_subordinates');
-
-    const event = await new ExecutingNode().execute(ctx, null);
-
-    expect(event.kind).toBe('TurnSucceeded');
-  });
-
   it('routes to ToolLoopDetected{guard:"dominance"} when one tool grinds a silent window', async () => {
     // Dominance catches the silent-grind runaway: one tool owning a long
     // window with ZERO assistant text (session 609's 700-turn read_file/grep).
@@ -1242,25 +1146,18 @@ describe('ExecutingNode', () => {
       registry: makeRegistry({ read_file: () => 'contents' }),
       toolContext: emptyToolContext(),
     });
-    // Small window so the test is fast + deterministic regardless of .env.
-    vi.stubEnv('CODER_DOMINANCE_WINDOW', '3');
-    vi.stubEnv('CODER_DOMINANCE_RATIO', '0.8'); // ceil(0.8*3)=3 → all 3 must match
-    // Two prior silent read_file turns; this turn fills the 3-slot window with
-    // no assistant text → grind detected.
-    ctx.dominance.window = [
-      { name: 'read_file', hadText: false },
-      { name: 'read_file', hadText: false },
-    ];
-    try {
-      const event = await new ExecutingNode().execute(ctx, null);
-      expect(event.kind).toBe('ToolLoopDetected');
-      if (event.kind === 'ToolLoopDetected') expect(event.guard).toBe('dominance');
-      const intervention = recordedEvents.find((e) => e.event === 'tool_loop_intervention');
-      expect((intervention?.args[0] as { kind?: string })?.kind).toBe('dominance');
-      expect(ctx.dominance.window).toHaveLength(0); // reset on fire
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    // Seven prior silent read_file turns; this turn fills the fixed 8-slot
+    // product window with no assistant text → grind detected.
+    ctx.dominance.window = Array.from({ length: 7 }, () => ({
+      name: 'read_file',
+      hadText: false,
+    }));
+    const event = await new ExecutingNode().execute(ctx, null);
+    expect(event.kind).toBe('ToolLoopDetected');
+    if (event.kind === 'ToolLoopDetected') expect(event.guard).toBe('dominance');
+    const intervention = recordedEvents.find((e) => e.event === 'tool_loop_intervention');
+    expect((intervention?.args[0] as { kind?: string })?.kind).toBe('dominance');
+    expect(ctx.dominance.window).toHaveLength(0); // reset on fire
   });
 
   it('stays quiet when the dominating tool turns carry assistant text', async () => {
@@ -1277,39 +1174,10 @@ describe('ExecutingNode', () => {
       registry: makeRegistry({ read_file: () => 'contents' }),
       toolContext: emptyToolContext(),
     });
-    vi.stubEnv('CODER_DOMINANCE_WINDOW', '3');
-    vi.stubEnv('CODER_DOMINANCE_RATIO', '0.8');
-    ctx.dominance.window = [
-      { name: 'read_file', hadText: false },
-      { name: 'read_file', hadText: false },
-    ];
-    try {
-      const event = await new ExecutingNode().execute(ctx, null);
-      expect(event.kind).toBe('TurnSucceeded');
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it('does NOT fuzzy-fire when reading files (read_file is fuzzy-exempt)', async () => {
-    // The fuzzy guard only watches state-churn tools; reading different files
-    // is productive work and must never be flagged — gpt-5.5 reads 1/turn, so
-    // a handful of sequential reads would otherwise trip the name-only window.
-    const deltas: ChatDelta[] = [
-      { type: 'tool_call_start', id: 'tr', name: 'read_file' },
-      { type: 'tool_call_end', id: 'tr', name: 'read_file', input: { path: 'unique-A.ts' } },
-      { type: 'usage', usage: { input_tokens: 50, output_tokens: 5 } as ChatUsage },
-      { type: 'done', stop_reason: 'tool_use' },
-    ];
-    const { ctx } = makeTestContext({
-      provider: makeStreamingProvider(deltas),
-      registry: makeRegistry({ read_file: () => 'file body' }),
-      toolContext: emptyToolContext(),
-    });
-    // Even with a full fuzzy window of prior reads, read_file isn't in the
-    // fuzzy allowlist → this turn contributes a blank fuzzy sig → no fire.
-    ctx.doomLoop.fuzzy = Array(6).fill('read_file');
-
+    ctx.dominance.window = Array.from({ length: 7 }, () => ({
+      name: 'read_file',
+      hadText: false,
+    }));
     const event = await new ExecutingNode().execute(ctx, null);
     expect(event.kind).toBe('TurnSucceeded');
   });
@@ -1743,9 +1611,9 @@ describe('thinkingOnlyBudgetMs', () => {
     expect(thinkingOnlyBudgetMs(undefined, 10)).toBe(960_000);
   });
 
-  it('resolves the base from CODER_STREAM_THINKING_ONLY_TIMEOUT_MS at call time', () => {
+  it('uses the fixed thinking-only budget despite retired env overrides', () => {
     vi.stubEnv('CODER_STREAM_THINKING_ONLY_TIMEOUT_MS', '60000');
-    expect(thinkingOnlyBudgetMs(undefined, 0)).toBe(60_000);
-    expect(thinkingOnlyBudgetMs('high', 1)).toBe(180_000); // 60k * 1.5 * 2
+    expect(thinkingOnlyBudgetMs(undefined, 0)).toBe(240_000);
+    expect(thinkingOnlyBudgetMs('high', 1)).toBe(720_000); // 240k * 1.5 * 2
   });
 });

@@ -33,10 +33,7 @@ import {
   allPriorReadsElided,
   lastMutationTurn,
   findToolResultByUseId,
-  extractReadPreview,
   buildSimpleLineDiff,
-  buildRichRefusal,
-  buildAutoDowngradeResponse,
 } from "@mcp/code-agent/core/compaction.js";
 import {
   evaluateSoftAgentDecisionGuardrail,
@@ -68,7 +65,6 @@ import {
   type ResolvedToolOutputPolicy,
 } from '@mcp/code-agent/core/tool-output-policy.js';
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
-import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
 import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
@@ -125,15 +121,10 @@ export type { CompactionCheckpoint, RunResult, RunnerOptions, StopReason, Transi
  * The legacy sliding-window logic (KEEP_LAST_TOOL_TURNS, HARD_CAP_CHARS) is
  * removed because it mutated old blocks every turn, busting the cache.
  */
-function positiveEnvNumber(key: string, fallback: number): number {
-  const parsed = Number(process.env[key] ?? fallback);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-}
-
-const PUSH_TIME_CAP = positiveEnvNumber('CODER_PUSH_TIME_CAP', 24_000);
+const PUSH_TIME_CAP = 24_000;
 /** Tighter per-block cap used inside subagents — they accumulate many small
  *  tool results in a short window, so a 12k cap fits ~10 turns under the budget. */
-const SUBAGENT_PUSH_TIME_CAP = positiveEnvNumber('CODER_SUBAGENT_PUSH_TIME_CAP', 12_000);
+const SUBAGENT_PUSH_TIME_CAP = 12_000;
 /**
  * "Unrestricted tool output" ceilings — picked when a session has
  * `unrestricted_tool_output = 1`. Deliberately NOT `Infinity` so that
@@ -144,7 +135,7 @@ const SUBAGENT_PUSH_TIME_CAP = positiveEnvNumber('CODER_SUBAGENT_PUSH_TIME_CAP',
  * arrive intact in the turn that produced them.
  */
 // (Tunable constants — UNRESTRICTED_PUSH_TIME_CAP / UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP /
-// TURN_BUDGET_CHARS / DOOM_LOOP_FUZZY_THRESHOLD /
+// TURN_BUDGET_CHARS /
 // POLLING_STUCK_* / SUMMARIZER_* / canRunSummarizer — moved to
 // './runner/constants.ts'.)
 // Post-legacy-removal: only constants actively consumed by the BT
@@ -161,7 +152,6 @@ export { canRunSummarizer };
 
 // (Pre-class helpers + tunable constants extracted to ./runner/* sub-modules —
 // see the import block above. The corresponding doc-blocks live in those files.)
-import { envInt, doomLoopThreshold } from './runner/constants.js';
 import {
   capFor,
   type ToolOutputCapLevel,
@@ -188,7 +178,6 @@ import { runBehaviorTree } from './runner/orchestrator.js';
 // `BridgeCallbacks`.
 import { persistTurnTelemetry as persistTurnTelemetryPure } from './runner/telemetry/persist-turn.js';
 import { checkTaskModeGate } from './runner/guards/task-mode-gate.js';
-import { dedupPolicyMode } from './runner/guards/tuple-hash-dedup.js';
 
 // Result-dedup markers and polling call-count caps belonged only to the removed
 // legacy loop. The active BT retains result-aware polling-stuck detection.
@@ -196,13 +185,12 @@ import { buildPollingStuckRefusal } from './runner/markers.js';
 export { buildPollingStuckRefusal };
 
 // (previewToolArgs / stableArgsKey / readDupThreshold / readDupWindow /
-// readAutoDowngradeEnabled moved to './runner/dup-utils.ts'.)
+// read helpers moved to './runner/dup-utils.ts'.)
 import {
   previewToolArgs,
   stableArgsKey,
   readDupThreshold,
   readDupWindow,
-  readAutoDowngradeEnabled,
 } from './runner/dup-utils.js';
 export { stableArgsKey };
 
@@ -236,12 +224,12 @@ export { backoffDelayMs };
 // session state is now the only authority for top-level run limits.
 
 /** How often (in turns) to re-inject the deliverable reminder for subordinate agents. */
-const SUBORDINATE_REMINDER_INTERVAL = Number(process.env.CODER_SUBORDINATE_REMINDER_INTERVAL ?? 8);
+const SUBORDINATE_REMINDER_INTERVAL = 8;
 const SUBORDINATE_REMINDER_MSG =
   '[System reminder] Before you stop or consider the task done, your LAST action MUST be ' +
   '`post_to_board` with kind="deliverable" summarizing your work. Never finish silently — ' +
   'the master is waiting for your report and cannot see your work any other way.';
-const PRESERVED_TOOL_OUTPUT_CAP = positiveEnvNumber('CODER_PRESERVED_TOOL_OUTPUT_CAP', 200_000);
+const PRESERVED_TOOL_OUTPUT_CAP = 200_000;
 
 // (toolCallsSignature + toolNamesSignature moved to './runner/signatures.ts'.)
 import { toolCallsSignature, toolNamesSignature } from './runner/signatures.js';
@@ -428,29 +416,23 @@ export function compactHistoryForLLM(
   // from that point on, and telemetry showed a mid-run flush trading ~2k
   // freed chars for a ~70k-token uncached re-prefill. So the per-turn view
   // only DETECTS retirements; they are APPLIED durably by the Compacting
-  // node, the one pass that rewrites the prefix anyway. Env overrides:
-  // CODER_REDUCER_FLUSH_CHARS=0 restores legacy apply-immediately, a
-  // positive value restores the tranche behavior.
+  // node, the one pass that rewrites the prefix anyway. The 32 KiB tranche is
+  // now the product invariant; the legacy immediate/defer-all switches were
+  // removed after the cache-preservation behavior became authoritative.
   let working = messages;
-  if (process.env.CODER_ROLLING_REDUCER !== '0') {
-    const flushRaw = Number.parseInt(process.env.CODER_REDUCER_FLUSH_CHARS ?? '', 10);
-    const flushThresholdChars = Number.isFinite(flushRaw) && flushRaw >= 0
-      ? flushRaw
-      : Number.POSITIVE_INFINITY;
-    const rolled = applyRollingReduction(messages, { flushThresholdChars });
-    onReducerStats?.({
-      retired: rolled.reduced,
-      freedChars: rolled.freedChars,
-      pendingRetired: rolled.pendingRetired,
-      pendingChars: rolled.pendingChars,
-    });
-    if (rolled.reduced > 0) {
-      console.log(
-        `[coder] rolling reducer retired ${rolled.reduced} stale tool_result(s) ` +
-          `(~${rolled.freedChars} chars freed, ${rolled.pendingRetired} pending below flush threshold)`,
-      );
-      working = rolled.messages;
-    }
+  const rolled = applyRollingReduction(messages, { flushThresholdChars: 32_768 });
+  onReducerStats?.({
+    retired: rolled.reduced,
+    freedChars: rolled.freedChars,
+    pendingRetired: rolled.pendingRetired,
+    pendingChars: rolled.pendingChars,
+  });
+  if (rolled.reduced > 0) {
+    console.log(
+      `[coder] rolling reducer retired ${rolled.reduced} stale tool_result(s) ` +
+        `(~${rolled.freedChars} chars freed, ${rolled.pendingRetired} pending below flush threshold)`,
+    );
+    working = rolled.messages;
   }
   // Frente B (PR 2 da reavaliação) — char-based `compactMessages` foi
   // REMOVIDO. A compactação destrutiva agora é feita exclusivamente pelo
@@ -1746,19 +1728,6 @@ export class CoderRunner extends EventEmitter {
               },
             };
           }
-          if (!rolloutEnabled('CODER_SMART_REDUCER_ROLLOUT_PERCENT', this.runId)) {
-            return {
-              content,
-              report: {
-                kind: 'none' as const,
-                technique: 'rollout-bypass',
-                rawChars: content.length,
-                shapedChars: content.length,
-                cap,
-                preserved: ['full_before_hard_cap'],
-              },
-            };
-          }
           return applySmartReducerDetailed(toolName, content, cap, {
             query: this.getLastUserText(),
             args: meta?.input,
@@ -1800,7 +1769,7 @@ export class CoderRunner extends EventEmitter {
             manager: getSubagentJobManager(),
             sessionId: this.sessionId!,
             signal,
-            capMs: Number(process.env.CODER_BACKGROUND_PARK_CAP_MS ?? 30 * 60_000) || 30 * 60_000,
+            capMs: 30 * 60_000,
             waitForMessage: (s) => this.waitForPendingMessage(s),
             hasPendingMessage: () => this.hasPendingUserMessages(),
             pushNotice: (text) => this.pushUserMessage(text),
@@ -1885,6 +1854,8 @@ export class CoderRunner extends EventEmitter {
     eligibleToolsDefChars?: number;
     visibleToolsCount?: number;
     toolsFingerprint?: string | null;
+    capabilitySetDigest?: string | null;
+    projectionDigest?: string | null;
     prefixHeadHash?: string | null;
     reducerStats?: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null;
     responseMeta: ChatProviderResponseMeta | null;
@@ -1913,6 +1884,8 @@ export class CoderRunner extends EventEmitter {
       eligibleToolsDefChars: input.eligibleToolsDefChars,
       visibleToolsCount: input.visibleToolsCount,
       toolsFingerprint: input.toolsFingerprint,
+      capabilitySetDigest: input.capabilitySetDigest,
+      projectionDigest: input.projectionDigest,
       prefixHeadHash: input.prefixHeadHash,
       reducerStats: input.reducerStats,
       responseMeta: input.responseMeta,
@@ -2015,49 +1988,10 @@ export class CoderRunner extends EventEmitter {
         return null;
       }
 
-      // Hybrid/observe never refuse a stable read because it appeared in a
-      // prior turn. Keep the attempt in the ledger (the real result will be
-      // post-processed normally) and reserve the old behavior for rollback.
-      if (dedupPolicyMode() !== 'legacy') {
-        this.setTransition('pre-read-shadow-allowed');
-        return null;
-      }
-
-      if (readAutoDowngradeEnabled()) {
-        this.setTransition('pre-read-auto-downgraded');
-        const content = buildAutoDowngradeResponse(toolName, path, prior, window, this.messages);
-        // The downgrade delivered a POINTER, not content — keep the ledger
-        // honest (only calls that put content into context count as reads).
-        prior.pop();
-        return { content, isError: false };
-      }
-
-      const firstPrior = prior.find((p) => p !== prior[prior.length - 1]) ?? prior[0];
-      const priorResult = findToolResultByUseId(firstPrior.useId, this.messages);
-      const preview = priorResult && !priorResult.isElided
-        ? extractReadPreview(priorResult.content)
-        : undefined;
-      let currentMtimeMs: number | undefined;
-      try {
-        currentMtimeMs = fsStatSync(pathResolve(this.opts.toolContext.cwd, path)).mtimeMs;
-      } catch {
-        /* path may not exist anymore */
-      }
-      this.setTransition('pre-read-blocked');
-      const refusal = buildRichRefusal({
-        toolName,
-        path,
-        prior: prior.slice(0, -1),
-        windowTurns: window,
-        currentMtimeMs,
-        // Drives the refusal wording: present → "content is in your context";
-        // absent (prior reads elided/compacted) → honest force_reread pointer.
-        contextPreview: preview,
-      });
-      // A refused attempt never delivered content — drop it from the ledger
-      // so refusals can't compound into more "prior reads".
-      prior.pop();
-      return refusal;
+      // Historical reads are observation signals only. A real fresh read is
+      // always allowed; local batch coalescing remains handled downstream.
+      this.setTransition('pre-read-shadow-allowed');
+      return null;
     }
 
     // P1b — coverage pointer for overlapping-but-not-identical ranges. The

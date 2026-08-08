@@ -101,8 +101,8 @@ impl ActiveRunnerControlLaunch {
     /// cancellation, transport failure, or supervisor reap ends its lifetime.
     pub(crate) async fn run_until_cleanup(mut self, cancellation: &mut EndpointCancellation) {
         // Give the engine one bounded scheduling turn and prove that its first
-        // Data request is physically committed. Host response/model latency
-        // remains concurrent with the always-responsive Control loop.
+        // provider request is physically committed. Provider response/model
+        // latency remains concurrent with the always-responsive Control loop.
         if !self
             .lifetime
             .resources_mut()
@@ -115,6 +115,11 @@ impl ActiveRunnerControlLaunch {
             return;
         }
         loop {
+            if self.lifetime.resources_mut().engine_task.is_finished() {
+                let cleanup = self.lifetime.revoke();
+                cleanup.into_resources().shutdown().await;
+                return;
+            }
             match self
                 .lifetime
                 .advance_with_resource_sample(cancellation, heartbeat_resource_sample)

@@ -50,30 +50,12 @@ export function stableArgsKey(input: unknown): string {
 /**
  * Read observation threshold. On the Nth same path/slice this enables
  * mutation, context-visibility, and coverage checks. Hybrid/observe still
- * execute a fresh cross-turn read; only the temporary legacy policy may turn
- * the observation into a refusal. Lazy-resolved so tests can override.
+ * execute a fresh cross-turn read. These values are product invariants, not
+ * deployment configuration.
  */
 export function readDupThreshold(): number {
-  const v = process.env.CODER_READ_DUP_THRESHOLD;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
   return 2; // observe the second identical (path,slice) read
 }
 export function readDupWindow(): number {
-  const v = process.env.CODER_READ_DUP_WINDOW;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
   return 20;
-}
-
-/**
- * Legacy rollback toggle. When enabled under CODER_DEDUP_POLICY=legacy, the
- * pre-read guard returns a skeleton-style pointer instead of a hard refusal.
- */
-export function readAutoDowngradeEnabled(): boolean {
-  return process.env.CODER_READ_AUTO_DOWNGRADE === '1';
 }

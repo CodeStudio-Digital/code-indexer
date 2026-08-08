@@ -114,7 +114,7 @@ describe('resolveTaskLimit (per-kind + complexity composition)', () => {
     expect(out.timeoutMs).toBe(DEFAULT_LIMITS.investigate.timeoutMs / 2);
   });
 
-  it('lets the admin per-profile override replace env/defaults before complexity scaling', () => {
+  it('lets the admin per-profile override replace defaults before complexity scaling', () => {
     vi.stubEnv('CODER_TASK_INVESTIGATE_MAX_TOOLS', '999');
     const out = resolveTaskLimit(
       task({ kind: 'investigate', estimated_complexity: 'small' }),
@@ -133,11 +133,11 @@ describe('resolveTaskLimit (per-kind + complexity composition)', () => {
     expect(out.timeoutMs).toBe(0);
   });
 
-  it('hot-applies and scales a positive operator override', () => {
+  it('ignores retired process-env task limits', () => {
     vi.stubEnv('CODER_TASK_INVESTIGATE_MAX_TOOLS', '40');
     vi.stubEnv('CODER_TASK_INVESTIGATE_TIMEOUT_MS', '600000');
     const out = resolveTaskLimit(task({ kind: 'investigate', estimated_complexity: 'small' }));
-    expect(out.maxToolCalls).toBe(20);
-    expect(out.timeoutMs).toBe(300000);
+    expect(out.maxToolCalls).toBe(DEFAULT_LIMITS.investigate.maxToolCalls / 2);
+    expect(out.timeoutMs).toBe(DEFAULT_LIMITS.investigate.timeoutMs / 2);
   });
 });

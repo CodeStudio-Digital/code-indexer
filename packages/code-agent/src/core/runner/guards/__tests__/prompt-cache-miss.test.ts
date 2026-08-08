@@ -1,10 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   observePromptCache,
   promptCacheMissGuardMessage,
 } from '../prompt-cache-miss.js';
-
-afterEach(() => vi.unstubAllEnvs());
 
 describe('prompt-cache miss guard', () => {
   it('trips after two explicit misses above 100k tokens', () => {
@@ -53,13 +51,15 @@ describe('prompt-cache miss guard', () => {
     }, 1).consecutiveMisses).toBe(0);
   });
 
-  it('honors configurable thresholds and miss count', () => {
-    vi.stubEnv('CODER_CACHE_MISS_GUARD_PROMPT_TOKENS', '10');
-    vi.stubEnv('CODER_CACHE_MISS_GUARD_MAX', '1');
+  it('ignores retired process-env thresholds', () => {
+    process.env.CODER_CACHE_MISS_GUARD_PROMPT_TOKENS = '10';
+    process.env.CODER_CACHE_MISS_GUARD_MAX = '1';
     expect(observePromptCache('openrouter', {
       input_tokens: 10,
       output_tokens: 1,
       cache_read_input_tokens: 0,
-    }, 0)).toMatchObject({ consecutiveMisses: 1, tripped: true });
+    }, 0)).toMatchObject({ consecutiveMisses: 0, tripped: false });
+    delete process.env.CODER_CACHE_MISS_GUARD_PROMPT_TOKENS;
+    delete process.env.CODER_CACHE_MISS_GUARD_MAX;
   });
 });

@@ -168,6 +168,17 @@ export function assertOutboundResponse(
     ) throw outboundError('CapabilityUpdate contradicts its CapabilityPrepare');
     return;
   }
+  if (
+    inbound.payloadCase === 'capabilityExecute'
+    && payload.body.case === 'capabilityExecutionResult'
+  ) {
+    if (
+      payload.body.value.operationId !== inbound.capabilityOperationId
+      || payload.body.value.toolUseId !== inbound.capabilityToolUseId
+      || payload.body.value.grantId !== inbound.capabilityGrantId
+    ) throw outboundError('CapabilityExecutionResult contradicts its execute request');
+    return;
+  }
   throw outboundError(
     `payload ${payload.body.case ?? 'missing'} cannot respond to ${inbound.payloadCase ?? 'missing'}`,
   );

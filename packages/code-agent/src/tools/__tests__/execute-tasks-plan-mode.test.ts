@@ -8,7 +8,7 @@
  *  - no approved list + user approves → switch to build, no waves run;
  *  - already-approved list → no second prompt, transition + waves run.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
@@ -79,6 +79,7 @@ function setup(opts: SetupOpts = {}) {
     provider: {} as never,
     parentTools: [],
     sessionStore: undefined,
+    executeTasksRetryConfig: { maxRetries: 0, initialMs: 0, maxMs: 0, jitter: 0 },
   });
   return { tool, ctx, runner };
 }
@@ -95,11 +96,6 @@ function approvedState(tasks: CoderTask[]): TasksState {
 
 beforeEach(() => {
   vi.mocked(runSubagent).mockReset();
-  vi.stubEnv('CODER_TASK_MAX_RETRIES', '0');
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
 });
 
 describe('execute_tasks — plan mode', () => {

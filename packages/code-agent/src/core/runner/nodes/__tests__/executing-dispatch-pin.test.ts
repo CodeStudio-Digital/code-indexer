@@ -11,9 +11,9 @@
  *     never pinned (closes the historical disabled-tools-execute hole)
  *   - goal state does not special-case hidden create_goal calls
  *   - visible tool → untouched
- *   - CODER_TOOL_PIN_DISABLE=1 → hidden-call pinning off; hard blocks remain
+ *   - pinning is mandatory; hard blocks always win before pinning
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool, ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { DupCallEntry } from '../../machine/types.js';
@@ -45,10 +45,6 @@ function pinArgs(registry: ToolRegistry, overrides?: Partial<DispatchArgs>): Dis
     ...overrides,
   };
 }
-
-afterEach(() => {
-  delete process.env.CODER_TOOL_PIN_DISABLE;
-});
 
 describe('dispatchTools — hidden-call pin', () => {
   it('hidden registered tool executes, gains the [toolset] suffix, and pins', async () => {
@@ -167,8 +163,7 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(args._pins.has('hidden_tool')).toBe(true);
   });
 
-  it('CODER_TOOL_PIN_DISABLE=1 disables pinning but preserves hard blocks', async () => {
-    process.env.CODER_TOOL_PIN_DISABLE = '1';
+  it('preserves hard blocks before hidden-tool pinning', async () => {
     const registry = new ToolRegistry();
     let ran = false;
     registry.register(makeTool('hidden_tool', {
@@ -188,8 +183,7 @@ describe('dispatchTools — hidden-call pin', () => {
     expect(args._pins.size).toBe(0);
   });
 
-  it('preserves nested capability hard blocks when pinning is disabled', async () => {
-    process.env.CODER_TOOL_PIN_DISABLE = '1';
+  it('preserves nested capability hard blocks', async () => {
     const registry = new ToolRegistry();
     const hidden = makeTool('hidden_tool');
     registry.register(hidden);

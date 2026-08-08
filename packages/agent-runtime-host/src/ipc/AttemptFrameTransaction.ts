@@ -25,6 +25,7 @@ interface PendingState {
   providerOperationId?: string;
   capabilityOperationId?: string;
   capabilityToolUseId?: string;
+  capabilityGrantId?: string;
   engineEventPayloadSha256?: Uint8Array;
   engineEventLocalSequence?: bigint;
   engineEventRuntimeInstanceId?: string;
@@ -121,6 +122,7 @@ export function inspectPending(pending: PendingInbound): PendingSnapshot {
     providerOperationId: state.providerOperationId,
     capabilityOperationId: state.capabilityOperationId,
     capabilityToolUseId: state.capabilityToolUseId,
+    capabilityGrantId: state.capabilityGrantId,
     engineEventPayloadSha256: state.engineEventPayloadSha256?.slice(),
     engineEventLocalSequence: state.engineEventLocalSequence,
     engineEventRuntimeInstanceId: state.engineEventRuntimeInstanceId,

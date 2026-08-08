@@ -69,6 +69,83 @@ describe('Host provider Data session', () => {
     await expect(serving).resolves.toBeUndefined();
   });
 
+  it('executes an accepted Host capability over the correlated Data lane', async () => {
+    const setup = await hydratedChannel(fakeProvider(async function* () {
+      yield { type: 'done' };
+    }));
+    let executionCount = 0;
+    const capabilityGateway = new CapabilityGateway(setup.bound.context, {
+      async resolve(request) {
+        return {
+          case: 'accepted',
+          value: create(agentV1Capability.SealedExecutionGrantSchema, {
+            grantId: 'grant/host/1',
+            decisionId: 'decision/host/1',
+            capabilityId: request.capabilityId,
+            capabilityVersion: request.capabilityVersion,
+            operationId: request.operationId,
+            toolUseId: request.toolUseId,
+            effectiveInputSha256: request.inputSha256,
+            executionClass: request.executionClass,
+            mutates: request.mutates,
+            environmentId: 'environment/host-test',
+            environmentVersion: 1n,
+            resourceBindingId: 'binding/host-test',
+            constraintsSha256: new Uint8Array(32).fill(4),
+            policyVersion: 'policy/host-test/v1',
+            nonce: new Uint8Array(32).fill(5),
+            issuedAtUnixMs: 10n,
+            expiresAtUnixMs: 1_000n,
+          }),
+        };
+      },
+    }, () => 10n, undefined, {
+      async execute() {
+        executionCount += 1;
+        return {
+          case: 'succeeded',
+          schemaId: 'test.host-result.v1',
+          schemaVersion: 1,
+          encodedResult: new TextEncoder().encode('{"ok":true}'),
+          bytesRead: 11n,
+          truncated: false,
+          durationMs: 2n,
+        };
+      },
+    });
+    const session = setup.bound.intoProviderSession(
+      setup.gateway,
+      undefined,
+      capabilityGateway,
+    );
+    const controller = new AbortController();
+    const serving = session.run(controller.signal);
+
+    await sendRunnerCapabilityPrepare(setup.runner, setup.limits, 6n, true);
+    const update = await receiveRunnerProviderEvent(setup.runner);
+    expect(update.payload.body.case).toBe('capabilityUpdate');
+    if (update.payload.body.case !== 'capabilityUpdate'
+      || update.payload.body.value.decision.case !== 'accepted') {
+      throw new Error('expected accepted Host capability grant');
+    }
+    await sendRunnerCapabilityExecute(
+      setup.runner,
+      setup.limits,
+      7n,
+      update.payload.body.value.decision.value.grantId,
+    );
+    const result = await receiveRunnerProviderEvent(setup.runner);
+
+    expect(result.frame.header?.replyToMessageId).toBe('capability-execute/1');
+    expect(result.payload.body.case).toBe('capabilityExecutionResult');
+    if (result.payload.body.case === 'capabilityExecutionResult') {
+      expect(result.payload.body.value.outcome.case).toBe('succeeded');
+    }
+    expect(executionCount).toBe(1);
+    controller.abort(new Error('test complete'));
+    await expect(serving).resolves.toBeUndefined();
+  });
+
   it('commits an engine proposal before returning its correlated native receipt', async () => {
     const setup = await hydratedChannel(fakeProvider(async function* () {
       yield { type: 'done' };
@@ -370,6 +447,7 @@ async function sendRunnerCapabilityPrepare(
   runner: Parameters<typeof receiveRunnerProviderEvent>[0],
   limits: agentV1Common.FrameLimits,
   sequence: bigint,
+  hostCapability = false,
 ): Promise<void> {
   const encodedJsonInput = new TextEncoder().encode('{"path":"a"}');
   const payload = create(agentV1Runtime.FramePayloadSchema, {
@@ -381,9 +459,12 @@ async function sendRunnerCapabilityPrepare(
         operationId: 'capability/tool/1',
         providerOperationId: 'provider-operation/1',
         toolUseId: 'tool/1',
-        capabilityId: 'native.read_file',
+        capabilityId: hostCapability ? 'host.test_tool' : 'native.read_file',
         capabilityVersion: '1',
-        executionClass: agentV1Capability.CapabilityExecutionClass.NATIVE_READ,
+        executionClass: hostCapability
+          ? agentV1Capability.CapabilityExecutionClass.HOST_CAPABILITY
+          : agentV1Capability.CapabilityExecutionClass.NATIVE_READ,
+        mutates: hostCapability,
         encodedJsonInput,
         inputSha256: createHash('sha256').update(encodedJsonInput).digest(),
         capabilitySetSha256: new Uint8Array(32).fill(3),
@@ -394,6 +475,35 @@ async function sendRunnerCapabilityPrepare(
   });
   await runner.send(encodeAttemptFrame(
     runnerHeader('capability-prepare/1', sequence),
+    agentV1Runtime.TransportChannel.DATA,
+    payload,
+    Number(limits.maxFrameBytes),
+  ));
+}
+
+async function sendRunnerCapabilityExecute(
+  runner: Parameters<typeof receiveRunnerProviderEvent>[0],
+  limits: agentV1Common.FrameLimits,
+  sequence: bigint,
+  grantId: string,
+): Promise<void> {
+  const encodedJsonInput = new TextEncoder().encode('{"path":"a"}');
+  const payload = create(agentV1Runtime.FramePayloadSchema, {
+    body: {
+      case: 'capabilityExecute',
+      value: create(agentV1Capability.CapabilityExecuteSchema, {
+        identity: identity(),
+        runtimeInstanceId: RUNTIME,
+        operationId: 'capability/tool/1',
+        toolUseId: 'tool/1',
+        grantId,
+        effectiveInputSha256: createHash('sha256').update(encodedJsonInput).digest(),
+        deadlineAtUnixMs: 5_000n,
+      }),
+    },
+  });
+  await runner.send(encodeAttemptFrame(
+    runnerHeader('capability-execute/1', sequence),
     agentV1Runtime.TransportChannel.DATA,
     payload,
     Number(limits.maxFrameBytes),

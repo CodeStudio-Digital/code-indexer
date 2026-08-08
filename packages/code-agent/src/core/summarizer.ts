@@ -127,18 +127,11 @@ export function summaryV2ToLegacy(s: CompactionSummaryV2): CompactionSummary {
 }
 
 export function isStructuredSummaryEnabled(): boolean {
-  // Coupled to the master compaction flag — if the new path is on, use the
-  // 9-section prompt. CODER_STRUCTURED_SUMMARY=0 forces back to the legacy
-  // 6-field shape for diagnostics.
-  if (process.env.CODER_STRUCTURED_SUMMARY === '0') return false;
-  return process.env.CODER_NEW_COMPACTION !== '0';
+  return true;
 }
 
 export function isSummarizerEnabled(): boolean {
-  // Default ON (opt-out via CODER_SUMMARIZER_ENABLE=0). The summarizer uses
-  // a cheap model and preserves semantic context far better than the
-  // deterministic `[compacted: N]` markers.
-  return process.env.CODER_SUMMARIZER_ENABLE !== '0';
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +143,7 @@ export function isSummarizerEnabled(): boolean {
  * cheapest model's context window (~100K tokens ≈ ~400K chars for Haiku).
  * Default 120K chars ≈ 30K tokens — safe for any provider.
  */
-const SUMMARIZER_BUDGET = Number(process.env.CODER_SUMMARIZER_BUDGET ?? 120_000);
+const SUMMARIZER_BUDGET = 120_000;
 
 /** How many messages from the start to always include (context/setup). */
 const HEAD_COUNT = 10;

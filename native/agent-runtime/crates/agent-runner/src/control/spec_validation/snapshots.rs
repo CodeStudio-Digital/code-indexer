@@ -11,7 +11,7 @@ pub(super) fn validate_required_snapshots(
     let snapshots = required_snapshots(spec).ok_or_else(|| first_missing_snapshot(spec))?;
     let mut refs = BTreeSet::new();
 
-    for (field, snapshot) in snapshot_fields(snapshots) {
+    for (field, snapshot) in snapshot_fields(&snapshots) {
         validate_snapshot(field, snapshot)?;
         if !refs.insert(snapshot.r#ref.as_str()) {
             return Err(SpecValidationError::DuplicateSnapshotRef { field });
@@ -22,8 +22,8 @@ pub(super) fn validate_required_snapshots(
 
 pub(super) fn required_snapshots(
     spec: &wire::ResolvedAttemptSpec,
-) -> Option<[&wire::SnapshotRef; 7]> {
-    Some([
+) -> Option<Vec<&wire::SnapshotRef>> {
+    let mut snapshots = vec![
         spec.verifier_policy_snapshot.as_ref()?,
         spec.capability_set_snapshot.as_ref()?,
         spec.environment_snapshot.as_ref()?,
@@ -31,33 +31,40 @@ pub(super) fn required_snapshots(
         spec.policy_snapshot.as_ref()?,
         spec.preset_snapshot.as_ref()?,
         spec.agent_definition_snapshot.as_ref()?,
-    ])
+    ];
+    if spec
+        .provider_binding
+        .as_ref()
+        .is_some_and(|binding| binding.effective_provider == "codex_app_server")
+    {
+        snapshots.push(spec.codex_app_server_process_snapshot.as_ref()?);
+    } else if let Some(snapshot) = spec.codex_app_server_process_snapshot.as_ref() {
+        snapshots.push(snapshot);
+    }
+    Some(snapshots)
 }
 
-const fn snapshot_fields(
-    snapshots: [&wire::SnapshotRef; 7],
-) -> [(&'static str, &wire::SnapshotRef); 7] {
-    let [
-        verifier,
-        capabilities,
-        environment,
-        lease,
-        policy,
-        preset,
-        definition,
-    ] = snapshots;
-    [
-        ("verifier_policy_snapshot", verifier),
-        ("capability_set_snapshot", capabilities),
-        ("environment_snapshot", environment),
-        ("workspace_lease_snapshot", lease),
-        ("policy_snapshot", policy),
-        ("preset_snapshot", preset),
-        ("agent_definition_snapshot", definition),
-    ]
+fn snapshot_fields<'a>(
+    snapshots: &'a [&'a wire::SnapshotRef],
+) -> impl Iterator<Item = (&'static str, &'a wire::SnapshotRef)> {
+    const FIELDS: [&str; 8] = [
+        "verifier_policy_snapshot",
+        "capability_set_snapshot",
+        "environment_snapshot",
+        "workspace_lease_snapshot",
+        "policy_snapshot",
+        "preset_snapshot",
+        "agent_definition_snapshot",
+        "codex_app_server_process_snapshot",
+    ];
+    FIELDS.into_iter().zip(snapshots.iter().copied())
 }
 
 fn first_missing_snapshot(spec: &wire::ResolvedAttemptSpec) -> SpecValidationError {
+    let codex_snapshot_required = spec
+        .provider_binding
+        .as_ref()
+        .is_some_and(|binding| binding.effective_provider == "codex_app_server");
     let missing = [
         (
             "verifier_policy_snapshot",
@@ -77,6 +84,10 @@ fn first_missing_snapshot(spec: &wire::ResolvedAttemptSpec) -> SpecValidationErr
         (
             "agent_definition_snapshot",
             spec.agent_definition_snapshot.is_none(),
+        ),
+        (
+            "codex_app_server_process_snapshot",
+            codex_snapshot_required && spec.codex_app_server_process_snapshot.is_none(),
         ),
     ]
     .into_iter()

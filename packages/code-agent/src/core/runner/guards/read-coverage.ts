@@ -30,7 +30,7 @@
  */
 
 export function readCoverageEnabled(): boolean {
-  return process.env.CODER_READ_COVERAGE_DISABLE !== '1';
+  return true;
 }
 
 export interface ServedSegment {

@@ -35,7 +35,7 @@ import type {
 } from '@mcp/code-agent/core/tool.js';
 
 export function nestedGuardsEnabled(): boolean {
-  return process.env.CODER_NESTED_GUARDS_DISABLE !== '1';
+  return true;
 }
 
 /** Preview cap for telemetry records — full outputs stay in the script. */

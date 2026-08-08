@@ -17,6 +17,7 @@ import type { ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
 import { mcpAuthClientErrorMessage } from '@mcp/services/mcp-client/auth/domain/errors.js';
+import { sanitizeUntrustedCapabilityMetadata } from '@mcp/code-agent/core/capability-catalog.js';
 
 /** Per-server connection state. */
 export type McpConnectionState = 'connected' | 'disconnected' | 'error';
@@ -297,7 +298,11 @@ export class McpServerManager {
 
         for (const t of sorted) {
           const prefixedName = `ext_${serverId}__${t.name}`;
-          const schema = (t.inputSchema ?? { type: 'object', properties: {} }) as unknown as JsonSchema;
+          const sanitized = sanitizeUntrustedCapabilityMetadata(
+            t.description,
+            t.inputSchema ?? { type: 'object', properties: {} },
+          );
+          const schema = sanitized.schema as unknown as JsonSchema;
 
           tierMap.set(prefixedName, conn.config.default_tier);
 
@@ -309,24 +314,22 @@ export class McpServerManager {
           // Server authors can opt non-conventional names in through future
           // MCP metadata without changing guard code.
           const repeatable = /^(?:wait_for|await|poll|tail|monitor)_/.test(t.name);
-          const annotations = t.annotations as {
-            readOnlyHint?: boolean;
-          } | undefined;
-          const hasReadOnlyHint = typeof annotations?.readOnlyHint === 'boolean';
-          const readOnly = annotations?.readOnlyHint === true;
-
           allTools.push({
             name: prefixedName,
-            description: t.description ?? '',
+            description: sanitized.description,
             parameters: schema,
             source: 'mcp_external',
+            capabilityProvenance: {
+              kind: 'mcp_external',
+              providerId: 'mcp-external',
+              serverId,
+              provenanceRef: `mcp-server:${serverId}`,
+            },
             handler: this.createHandler(serverId, t.name),
             repeatPolicy: repeatable ? 'pollable' : 'stable',
-            ...(hasReadOnlyHint ? {
-              mutates: !readOnly,
-              parallelSafe: readOnly,
-              riskLevel: readOnly ? 'read' as const : 'write' as const,
-            } : {}),
+            mutates: true,
+            parallelSafe: false,
+            riskLevel: 'write',
           });
         }
       } catch (e) {

@@ -70,33 +70,12 @@ export function applyComplexityToLimits(
   };
 }
 
-// ─── Env tuning ─────────────────────────────────────────────────
-
-function readNonNegativeIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw === '') return fallback;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
-}
-
-function readPositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw === '') return fallback;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-}
-
-function envKeyForKind(kind: TaskKind, suffix: 'MAX_TOOLS' | 'TIMEOUT_MS'): string {
-  return `CODER_TASK_${kind.toUpperCase()}_${suffix}`;
-}
-
 /**
  * Compose the effective `TaskLimit` for a single task:
  *   1. start from per-kind defaults
- *   2. apply env overrides (per kind for tool count/timeout, shared for stall)
- *   3. replace with the admin per-profile override where set (DB; explicit 0
+ *   2. replace with the admin per-profile override where set (DB; explicit 0
  *      stays unlimited at every complexity)
- *   4. apply complexity multiplier
+ *   3. apply complexity multiplier
  *
  * Returned shape is wire-compatible with `SubagentLimits` — passed
  * straight through to `runSubagent` / `runParallelAgents`.
@@ -108,11 +87,9 @@ export function resolveTaskLimit(
   const kind = taskKind(task);
   const defaults = DEFAULT_LIMITS[kind];
   const base: TaskLimit = {
-    maxToolCalls: override?.maxToolCalls
-      ?? readNonNegativeIntEnv(envKeyForKind(kind, 'MAX_TOOLS'), defaults.maxToolCalls),
-    timeoutMs: override?.timeoutMs
-      ?? readNonNegativeIntEnv(envKeyForKind(kind, 'TIMEOUT_MS'), defaults.timeoutMs),
-    stallMs: readPositiveIntEnv('CODER_TASK_STALL_MS', 120_000),
+    maxToolCalls: override?.maxToolCalls ?? defaults.maxToolCalls,
+    timeoutMs: override?.timeoutMs ?? defaults.timeoutMs,
+    stallMs: 120_000,
   };
   return applyComplexityToLimits(task.estimated_complexity, base);
 }
@@ -236,8 +213,5 @@ export class BudgetTracker {
 
 /** Read the default token cap from env (0 / unset → unlimited). */
 export function loadDefaultTokenCap(): number | null {
-  const raw = process.env.CODER_TASKS_DEFAULT_TOKEN_CAP;
-  if (!raw) return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+  return null;
 }

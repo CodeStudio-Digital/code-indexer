@@ -31,9 +31,7 @@ const DEFAULT_SPILL_HEAD_CHARS = 8192;
  * pre-emit irreducible bypass instead of looping.
  */
 function spillHeadChars(protectTokens: number): number {
-  const raw = Number(process.env.CODER_COMPACT_SPILL_HEAD_CHARS);
-  const base = Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_SPILL_HEAD_CHARS;
-  return Math.max(256, Math.min(base, protectTokens));
+  return Math.max(256, Math.min(DEFAULT_SPILL_HEAD_CHARS, protectTokens));
 }
 
 export interface SpillOversizedResult {

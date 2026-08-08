@@ -182,8 +182,8 @@ describe('CompactingNode', () => {
   });
 
   it('falls back to mechanical truncation instead of aborting when over the recovery cap', async () => {
-    vi.stubEnv('CODER_RECOVERY_COMPACT_MAX', '1');
     const { ctx, recordedEvents } = makeTestContext();
+    ctx.recovery.set('compact-failure', 3);
     const messages: AgentMessage[] = [];
     for (let i = 0; i < 20; i++) {
       messages.push(user(`u${i}`));
@@ -192,14 +192,7 @@ describe('CompactingNode', () => {
     const originalLength = messages.length;
     ctx.messages = messages;
 
-    // First call: 1/1 still under cap → ProviderError (retry).
-    const first = await new CompactingNode({
-      protectTokensOverride: 10,
-      summarizeOverride: async () => null,
-    }).execute(ctx, null);
-    expect(first.kind).toBe('ProviderError');
-
-    // Second call: 2/1 over cap → deterministic head-drop, run survives.
+    // The next failure is over the product cap → deterministic head-drop.
     const second = await new CompactingNode({
       protectTokensOverride: 10,
       summarizeOverride: async () => null,
@@ -219,12 +212,12 @@ describe('CompactingNode', () => {
   });
 
   it('still aborts over cap when the failure came from the user abort signal', async () => {
-    vi.stubEnv('CODER_RECOVERY_COMPACT_MAX', '0');
     const abort = new AbortController();
     abort.abort();
     const { ctx, recordedEvents } = makeTestContext({
       toolContext: { signal: abort.signal } as never,
     });
+    ctx.recovery.set('compact-failure', 3);
     const messages: AgentMessage[] = [];
     for (let i = 0; i < 20; i++) {
       messages.push(user(`u${i}`));
@@ -232,7 +225,7 @@ describe('CompactingNode', () => {
     }
     ctx.messages = messages;
 
-    // Cap 0 → the first failure is already over cap; aborted signal blocks
+    // Already at the product cap; the next failure is over it. Aborted signal blocks
     // the mechanical fallback (a cancelled run must stay cancelled).
     const event = await new CompactingNode({
       protectTokensOverride: 10,

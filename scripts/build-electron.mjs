@@ -174,7 +174,18 @@ run('pnpm', ['run', 'electron:rebuild']);
 
 // 4. electron-builder
 const builderArgs = ['exec', 'electron-builder', '--config', 'apps/electron/electron-builder.json'];
-if (target) builderArgs.push('--' + target);
+if (target) {
+  const platformFlag = {
+    win32: '--win',
+    darwin: '--mac',
+    linux: '--linux',
+  }[process.platform];
+  const targets = target.split(',').map((value) => value.trim()).filter(Boolean);
+  if (!platformFlag || targets.length === 0) {
+    throw new Error(`unsupported electron-builder target: ${target}`);
+  }
+  builderArgs.push(platformFlag, ...targets);
+}
 if (requireSigning) builderArgs.push('--config.forceCodeSigning=true');
 run('pnpm', builderArgs);
 

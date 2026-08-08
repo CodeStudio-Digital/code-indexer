@@ -86,6 +86,10 @@ export interface CompactionCheckpointResult {
 }
 
 export interface RunnerOptions {
+  /** Immutable host-resolved policy snapshot for this attempt. */
+  runtimePolicy?: import('@mcp/agent-runtime-contracts').ResolvedRuntimePolicyV1;
+  /** Catalog entries authorized for the attempt but not dispatched as tools. */
+  catalogOnlyCapabilities?: readonly import('@mcp/code-agent/core/tool.js').CoderTool[];
   provider: ChatProvider;
   /** Optional zero-temperature auxiliary binding; falls back to `provider`. */
   compactionProvider?: ChatProvider;
@@ -128,10 +132,7 @@ export interface RunnerOptions {
    * root port directly, this binds the child's background mode and task scope.
    */
   policyShadowScopeFactory?: (sessionContext: PolicyShadowSessionContext) => PolicyShadowPort;
-  /**
-   * Per-run lifecycle HookBus. Absent when CODER_HOOK_BUS_V1 is off, keeping
-   * provider/capability/run paths byte-identical to the legacy runtime.
-   */
+  /** Per-run lifecycle HookBus. The host always supplies one. */
   hookBus?: import('@mcp/code-agent/core/hook-bus.js').HookBus;
   /**
    * Ultra execution identity for this run — 'session' when the sticky
@@ -163,7 +164,7 @@ export interface RunnerOptions {
   preservedToolOutputCap?: number;
   /**
    * Per-session resolved tunables. When omitted, falls back to `envTunables()`
-   * (i.e. `process.env.CODER_*` with hardcoded defaults).
+   * (i.e. the stable product defaults).
    */
   tunables?: CoderTunables;
   /**
@@ -333,36 +334,6 @@ export interface RunnerOptions {
   synthesizeMemoryQuery?: (
     tail: ReadonlyArray<{ role: 'user' | 'assistant'; text: string }>,
   ) => Promise<string | null>;
-  /**
-   * True when this session has active (un-kept/un-reverted) file snapshots
-   * worth a self-review. Consulted each turn by the dynamic-injection node to
-   * decide whether to surface the `self_review` reminder — gated by the
-   * CODER_SELF_REVIEW toggle. Unset = no reminder (and tests stay quiet).
-   */
-  hasReviewableChanges?: () => boolean | Promise<boolean>;
-  /**
-   * Fix A — richer self_review nudge signals (supersedes `hasReviewableChanges`
-   * for the nudge decision). Lets the Executing node nudge ONLY when there are
-   * UNREVIEWED changes, instead of every turn with any pending snapshot (which
-   * is forever, since `self_review` never closes snapshots — the session-887
-   * doom-loop). Host reads the snapshot + review stores; unset on
-   * subagents/tests → the node falls back to `hasReviewableChanges`.
-   */
-  collectSelfReviewSignals?: () => ({
-    /** `${activeBaselineCount}:${maxLastEditedAtMs}`; '' when no active snapshots. */
-    pendingFingerprint: string;
-    /** ms-epoch of the newest active snapshot edit, or null when none. */
-    lastEditAt: number | null;
-    /** ms-epoch of the most recent completed auto self_review, or null. */
-    lastReviewAt: number | null;
-    /** total completed auto self_reviews this session (drives the hard-stop). */
-    totalAutoReviews: number;
-  } | null) | Promise<{
-    pendingFingerprint: string;
-    lastEditAt: number | null;
-    lastReviewAt: number | null;
-    totalAutoReviews: number;
-  } | null>;
   /**
    * Session State Block data — host-provided sync read of the session's
    * persisted state (goal, active plan, todos, notes, changed files,

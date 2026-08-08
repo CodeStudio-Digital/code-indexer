@@ -12,7 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { ToolRegistry } from '@mcp/code-agent/core/registry.js';
-import type { ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import { filterByTiers, getToolTier } from '@mcp/code-agent/tools/tiers.js';
@@ -64,6 +64,8 @@ export interface BuildToolsArgs {
   terseDescriptionsLock?: boolean;
   toolContext: ToolContext;
   provider: ChatProvider;
+  /** Non-tool capabilities (currently skills) in the immutable attempt set. */
+  catalogOnlyCapabilities?: readonly CoderTool[];
 }
 
 /** Trim stats for the turn — null when the model cap didn't fire. */
@@ -83,6 +85,8 @@ export interface BuildToolsResult {
   eligibleToolsDefChars: number;
   /** Names the downstream relevance selector must never remove. */
   protectedToolNames: ReadonlySet<string>;
+  /** Authorized post-policy/pre-cap tools used to derive every projection. */
+  authorizedTools: readonly CoderTool[];
 }
 
 const BUILD_TASK_LIST_SCHEMA: JsonSchema = {
@@ -244,14 +248,10 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
   // find_tools/pinning for cold capabilities. The default is run-constant,
   // so membership only changes across runs —
   // never mid-run — which preserves the prompt-cache contract. Pins and the
-  // protected floor still survive the cap. `CODER_TOOL_CAP_DEFAULT=0`
-  // disables the default (legacy: model cap only). Applies only to
+  // protected floor still survive the cap. Applies only to
   // tier-managed sessions: `activeTiers === null` (subagents/tests) relies
   // on the full registry being exposed — see the invariant on BuildToolsArgs.
-  const defaultCapRaw = Number.parseInt(process.env.CODER_TOOL_CAP_DEFAULT ?? '', 10);
-  const defaultSessionCap = Number.isFinite(defaultCapRaw) && defaultCapRaw >= 0
-    ? defaultCapRaw
-    : 28;
+  const defaultSessionCap = 28;
   const sessionCap = args.sessionToolCap != null && args.sessionToolCap > 0
     ? args.sessionToolCap
     : args.activeTiers !== null
@@ -270,19 +270,10 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     const keptDynamicPins = dynamicPinnedNewestFirst.slice(0, dynamicRoom);
     protectedBucket = [...hardProtectedBucket, ...keptDynamicPins];
     const room = Math.max(0, maxTools - protectedBucket.length);
-    const legacy = process.env.CODER_PRIORITY_TRIM_DISABLE === '1';
-    let keptOthers: typeof filtered;
-    let cutNames: string[];
-    if (legacy) {
-      // Kill switch — the historical alphabetical tail-cut.
-      const sorted = [...others].sort((a, b) => a.name.localeCompare(b.name));
-      keptOthers = sorted.slice(0, room);
-      cutNames = sorted.slice(room).map((t) => t.name);
-    } else {
-      const sel = selectUnderCap(others, room, (n) => getToolTier(n, args.externalToolTiers));
-      keptOthers = sel.kept;
-      cutNames = sel.dropped;
-    }
+    const selection = selectUnderCap(others, room, (name) =>
+      getToolTier(name, args.externalToolTiers));
+    const keptOthers = selection.kept;
+    const cutNames = selection.dropped;
     const droppedDynamicPins = dynamicPinnedNewestFirst.slice(keptDynamicPins.length);
     filtered = [...protectedBucket, ...keptOthers];
     capInfo = {
@@ -301,7 +292,7 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
         ? 'session preflight cap'
         : 'default session cap';
     console.log(
-      `[coder] tool cap: ${totalBefore} → ${filtered.length} (${capSource} ${maxTools} for ${args.provider.model}, strategy=${legacy ? 'legacy' : 'priority'}) — ` +
+      `[coder] tool cap: ${totalBefore} → ${filtered.length} (${capSource} ${maxTools} for ${args.provider.model}, strategy=priority) — ` +
         `${hardProtectedBucket.length} hard protected, ${keptDynamicPins.length}/${dynamicPinnedByName.size} dynamic pins kept, ` +
         `${keptOthers.length}/${others.length} others kept, ${capInfo.dropped} dropped${overflow}. ` +
         `Dropped: ${[...droppedDynamicPins.map((tool) => tool.name), ...cutNames].slice(0, 20).join(', ')}` +
@@ -364,6 +355,10 @@ export function buildTools(args: BuildToolsArgs): BuildToolsResult {
     capInfo,
     eligibleToolsDefChars,
     protectedToolNames: new Set(protectedBucket.map((tool) => tool.name)),
+    authorizedTools: [
+      ...eligibleBeforeCap,
+      ...(args.catalogOnlyCapabilities ?? []),
+    ],
   };
 }
 

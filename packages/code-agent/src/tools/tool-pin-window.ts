@@ -19,9 +19,7 @@
 export const DEFAULT_DYNAMIC_TOOL_PIN_LIMIT = 16;
 
 export function resolveDynamicToolPinLimit(): number {
-  const raw = Number.parseInt(process.env.CODER_DYNAMIC_TOOL_PIN_LIMIT ?? '', 10);
-  if (!Number.isFinite(raw)) return DEFAULT_DYNAMIC_TOOL_PIN_LIMIT;
-  return Math.max(1, Math.min(64, raw));
+  return DEFAULT_DYNAMIC_TOOL_PIN_LIMIT;
 }
 
 export function touchDynamicToolPin(

@@ -72,6 +72,10 @@ export class HostProviderDataSession {
           await this.#prepareCapability(pending, body.value);
           continue;
         }
+        if (body.case === 'capabilityExecute' && this.capabilityGateway) {
+          await this.#executeCapability(pending, body.value);
+          continue;
+        }
         this.channel.reject(pending);
       }
     } catch (cause) {
@@ -153,6 +157,27 @@ export class HostProviderDataSession {
       );
       if (!this.channel.receiptMatches(receipt, binding)) {
         throw failure('CapabilityUpdate receipt is foreign');
+      }
+    });
+  }
+
+  async #executeCapability(
+    pending: Parameters<EstablishedAttemptChannel['commitAccepted']>[0],
+    execute: agentV1Capability.CapabilityExecute,
+  ): Promise<void> {
+    const result = await this.capabilityGateway!.execute(execute);
+    await this.#lane.run(async () => {
+      const binding = pending.binding();
+      const response = create(agentV1Runtime.FramePayloadSchema, {
+        body: { case: 'capabilityExecutionResult', value: result },
+      });
+      const receipt = await this.channel.commitResponse(
+        pending,
+        response,
+        { timeoutMs: this.context.timeoutMs },
+      );
+      if (!this.channel.receiptMatches(receipt, binding)) {
+        throw failure('CapabilityExecutionResult receipt is foreign');
       }
     });
   }

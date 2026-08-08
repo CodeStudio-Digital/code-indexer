@@ -1,6 +1,6 @@
 # 04 — Plano de migração, validação e retirada
 
-> **Status:** plano anterior à execução  
+> **Status:** P0-P2 e bridge P3 local executados; gate P3 físico e P4-P6 pendentes
 > **Regra:** nenhuma fase promove apenas por código escrito
 
 ## 1. Princípios
@@ -107,6 +107,13 @@ Matrizes mínimas:
 Gate `P3`: equivalência funcional executável e nenhuma regressão crítica de
 segurança/dados.
 
+### Estado local em 2026-08-05
+
+A bridge de código e o corpus local estão implementados no documento 11. Esse
+slice prova o dispatch único e os controles antes do executor, mas não fecha o
+gate acima: MCP/plugin externos físicos, subagentes/Company completos,
+restart/recovery e comparação no build instalado permanecem obrigatórios.
+
 ## 7. P4 — Canário por attempt
 
 Roteamento é escolhido antes do launch e persistido. Fallback só ocorre antes
@@ -203,9 +210,10 @@ Checklist de conclusão:
 - [ ] flags, rows, código e telemetria mortos foram retirados;
 - [ ] não resta executor TypeScript novo ou fallback indefinido.
 
-## 13. Aprovação necessária
+## 13. Registro de aprovação
 
-Antes de P0 virar implementação, revisar e aprovar:
+A execução de P0-P2 e do adapter B2 foi autorizada em 2026-08-05. A aprovação
+confirmou:
 
 1. regra de baseline efetivo;
 2. campos finais da `RuntimePolicy`;
@@ -215,3 +223,6 @@ Antes de P0 virar implementação, revisar e aprovar:
 6. budgets de desempenho;
 7. corpus de aceitação;
 8. owners/expiries de compatibilidade.
+
+Esta autorização não promove o runtime em produção. P3-P6 continuam exigindo
+os gates executáveis deste documento e os receipts descritos no documento 10.

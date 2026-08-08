@@ -421,7 +421,7 @@ const read_file = defineTool({
       const endLineArg = args.end_line as number | undefined;
       let startLine = startLineArg ?? 1;
       const maxLines = (args.max_lines as number | undefined) ?? 400;
-      const autoFull = process.env.CODER_READ_FILE_AUTOFULL_DISABLE !== '1';
+      const autoFull = true;
       try {
         const content = readFileSync(abs, 'utf-8');
         const lines = content.split('\n');
@@ -470,7 +470,7 @@ const read_file = defineTool({
     const endLine = args.end_line as number | undefined;
     const maxLines = (args.max_lines as number) ?? 400;
     const force = args.force === true;
-    const autoFull = process.env.CODER_READ_FILE_AUTOFULL_DISABLE !== '1';
+    const autoFull = true;
     let start = startLine ?? 1;
     let headerNote = '';
 

@@ -93,16 +93,7 @@ export function mergeDBCapabilities(
 let cachedOverride: Record<string, ModelCapability> | null = null;
 
 function loadOverride(): Record<string, ModelCapability> {
-  if (cachedOverride) return cachedOverride;
-  const raw = process.env.CODER_MODEL_CAPS;
-  if (!raw) return (cachedOverride = {});
-  try {
-    cachedOverride = JSON.parse(raw) as Record<string, ModelCapability>;
-  } catch (e) {
-    console.warn(`[coder] invalid CODER_MODEL_CAPS JSON: ${e instanceof Error ? e.message : String(e)}`);
-    cachedOverride = {};
-  }
-  return cachedOverride;
+  return cachedOverride ?? (cachedOverride = {});
 }
 
 /**

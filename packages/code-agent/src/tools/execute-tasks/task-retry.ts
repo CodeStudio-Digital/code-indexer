@@ -86,18 +86,11 @@ export interface TaskRetryConfig {
   jitter: number;
 }
 
-function readPositiveIntEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw === '') return fallback;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
-}
-
 export function loadRetryConfig(): TaskRetryConfig {
   return {
-    maxRetries: readPositiveIntEnv('CODER_TASK_MAX_RETRIES', 2),
-    initialMs: readPositiveIntEnv('CODER_TASK_RETRY_INITIAL_MS', 1_000),
-    maxMs: readPositiveIntEnv('CODER_TASK_RETRY_MAX_MS', 16_000),
+    maxRetries: 2,
+    initialMs: 1_000,
+    maxMs: 16_000,
     jitter: 0.25,
   };
 }

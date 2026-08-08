@@ -18,14 +18,11 @@ import type { SessionId } from '@mcp/session-storage';
 const MAX_WORKFLOWS_PER_SESSION = 12;
 
 function ttlMs(): number {
-  return Number(process.env.CODER_WORKFLOW_TTL_MS ?? 6 * 60 * 60_000) || 6 * 60 * 60_000;
+  return 6 * 60 * 60_000;
 }
 
 function leaseMs(): number {
-  const configured = Number(process.env.CODER_ORCHESTRATION_LEASE_MS ?? 120_000);
-  return Number.isFinite(configured) && configured >= 60_000
-    ? Math.floor(configured)
-    : 120_000;
+  return 120_000;
 }
 
 const bySession = new Map<SessionId, Map<string, WorkflowRecord>>();

@@ -17,7 +17,6 @@ import type { BridgeCallbacks, RunContext } from './types.js';
 import { AsyncOperationRegistry } from '../operations.js';
 import { NoProgressTracker } from '../guards/no-progress.js';
 import { emptyFailureStreakState } from '../guards/failure-streak.js';
-import { createDoomLoopState } from '../guards/doom-loop.js';
 import { createDominanceState } from '../guards/dominance.js';
 
 export interface CreateRunContextArgs {
@@ -117,9 +116,8 @@ export function createRunContext(args: CreateRunContextArgs): RunContext {
     // `executing-dispatch.ts` after every tool result; cleared per tool
     // on the first `isError=false`.
     failureStreaks: emptyFailureStreakState(),
-    // P0 — per-turn doom-loop + dominance rolling windows. Mutated by
+    // P0 — per-turn dominance rolling window. Mutated by
     // ExecutingNode after each turn's dispatch; reset only when a guard fires.
-    doomLoop: createDoomLoopState(),
     dominance: createDominanceState(),
     // A1 — no retained dedup signatures until a loop guard fires.
     // Fix B — loop-aware compaction signals start at zero; ExecutingNode

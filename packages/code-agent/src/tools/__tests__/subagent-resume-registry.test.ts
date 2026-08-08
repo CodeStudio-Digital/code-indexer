@@ -17,6 +17,7 @@ import {
   tryAcquireResume,
   releaseResume,
   stopResumeSweepForTests,
+  configureResumeRegistryForTests,
   type ResumableGroup,
   type ResumableAgentState,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
@@ -64,11 +65,11 @@ let SID: SessionId;
 // transcripts directly.
 beforeEach(() => {
   SID = newSessionId();
-  vi.stubEnv('CODER_RESUME_SPILL', '0');
+  configureResumeRegistryForTests({ spillTerminalTranscripts: false });
 });
 afterEach(async () => {
   await clearSession(SID);
-  vi.unstubAllEnvs();
+  configureResumeRegistryForTests(null);
   stopResumeSweepForTests();
   vi.useRealTimers();
 });
@@ -81,16 +82,15 @@ describe('subagent-resume-registry', () => {
     expect(g.agents[1].transcript).toBeDefined();
   });
 
-  it('drops completed transcripts when CODER_RESUME_RETAIN_COMPLETED=0 (old economy)', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '0');
-    try {
-      await retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
-      const g = (await getGroup(SID, 'g1'))!;
-      expect(g.agents[0].transcript).toBeDefined();
-      expect(g.agents[1].transcript).toBeUndefined();
-    } finally {
-      vi.unstubAllEnvs();
-    }
+  it('supports the explicit failed-only retention projection', async () => {
+    configureResumeRegistryForTests({
+      spillTerminalTranscripts: false,
+      retainCompletedTranscripts: false,
+    });
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error'), agent(1, 'completed')]));
+    const g = (await getGroup(SID, 'g1'))!;
+    expect(g.agents[0].transcript).toBeDefined();
+    expect(g.agents[1].transcript).toBeUndefined();
   });
 
   it('records a failureNote from the finalText/detail for failed agents', async () => {
@@ -120,14 +120,8 @@ describe('subagent-resume-registry', () => {
       long.push({ role: 'tool', content: [{ type: 'tool_result', tool_use_id: `t${i}`, content: big }] });
     }
     // ~150KB total; front-editable ≈ 20 results × 5KB ≈ 100KB → under 60KB.
-    const prev = process.env.CODER_RESUME_MAX_AGENT_BYTES;
-    process.env.CODER_RESUME_MAX_AGENT_BYTES = '60000';
-    try {
-      await retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: long })]));
-    } finally {
-      if (prev == null) delete process.env.CODER_RESUME_MAX_AGENT_BYTES;
-      else process.env.CODER_RESUME_MAX_AGENT_BYTES = prev;
-    }
+    configureResumeRegistryForTests({ spillTerminalTranscripts: false, maxAgentBytes: 60_000 });
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: long })]));
     const t = (await getGroup(SID, 'g1'))!.agents[0].transcript!;
     const findResult = (m: AgentMessage) => m.content.find((b) => b.type === 'tool_result') as { content: string } | undefined;
     // The very last tool_result (tail) is untouched.
@@ -145,13 +139,8 @@ describe('subagent-resume-registry', () => {
       { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'read_file', input: {} }] },
       { role: 'tool', content: [{ type: 'tool_result', tool_use_id: 't1', content: giant }] },
     ];
-    const prev = process.env.CODER_RESUME_MAX_AGENT_BYTES;
-    process.env.CODER_RESUME_MAX_AGENT_BYTES = '10000';
-    try {
-      await retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: short })]));
-    } finally {
-      if (prev == null) delete process.env.CODER_RESUME_MAX_AGENT_BYTES; else process.env.CODER_RESUME_MAX_AGENT_BYTES = prev;
-    }
+    configureResumeRegistryForTests({ spillTerminalTranscripts: false, maxAgentBytes: 10_000 });
+    await retainGroup(SID, group(SID, 'g1', [agent(0, 'error', { transcript: short })]));
     const t = (await getGroup(SID, 'g1'))!.agents[0].transcript!;
     const res = t.find((m) => m.role === 'tool')!.content.find((b) => b.type === 'tool_result') as { content: string };
     // The giant result was elided despite the transcript being only 3 messages.

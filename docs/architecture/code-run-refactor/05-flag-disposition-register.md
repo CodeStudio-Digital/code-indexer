@@ -1,6 +1,6 @@
 # 05 — Registro de disposição das flags
 
-> **Status:** classificação de planejamento  
+> **Status:** classificação aplicada; inventário AST é o oracle de cobertura
 > **Regra:** este registro governa destino; o inventory gerado em P0 governa
 > cobertura exata de consumers e valores
 
@@ -190,3 +190,17 @@ deletion gate
 
 Este arquivo decide a semântica; o artifact gerado prova exaustividade contra o
 código do commit executado.
+
+## 10. Snapshot executado em 2026-08-05
+
+O audit AST examinou 4.186 arquivos e 324 nomes distintos. No caminho de
+code-run restaram 15 leituras diretas, todas classificadas, e nenhuma leitura
+dinâmica de `process.env`:
+
+- 4 rollouts temporárias com owner, expiry, métrica e rollback receipt;
+- 4 entradas de bootstrap/segredo/diagnóstico;
+- 7 entradas que pertencem a Company, memory ou indexer e serão retiradas por
+  esses domínios.
+
+Qualquer nova leitura code-run não classificada, dinâmica, duplicada ou com
+rollout expirada falha `pnpm tsx scripts/audit-env-vars.ts --check`.

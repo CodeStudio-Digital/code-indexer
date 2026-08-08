@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-05T23:42:25.6637826Z",
+  "sourceRevision": "7e79171d4c9a98397d3f47d9437d890e9316dc1d",
+  "branch": "codex/oss-agent-bakeoff",
+  "runtimePackage": {
+    "target": "x86_64-pc-windows-msvc",
+    "buildId": "runtime-v1-22cc347deaf4f440a11f27f602be21c0ae75ce13709ac56de6910fba1fec3bab",
+    "manifestSha256": "bf9998a1d8301ac16d82f49d798dfd524345ea7d5f59cc8d212c9a514721aa79"
+  },
+  "peer": {
+    "kind": "deterministic_codex_app_server_protocol_fixture",
+    "version": "b2-fixture-v1",
+    "binarySha256": "d8f703c2e1d8cf6f21acdac7bde5bab13209e1785649d8fbabb6d37f6291c97f",
+    "packagedWithRuntime": false,
+    "scenarioAuthority": "sealed_working_directory"
+  },
+  "result": {
+    "status": "passed",
+    "testsPassed": 9,
+    "testsFailed": 0,
+    "durationMs": 20880,
+    "scenarios": [
+      {
+        "id": "unknown_tool",
+        "expected": "terminal_failed_provider_failed",
+        "capabilityPrepareCount": 0,
+        "treeReaped": true
+      },
+      {
+        "id": "builtin_bypass",
+        "expected": "terminal_failed_provider_failed",
+        "capabilityPrepareCount": 0,
+        "treeReaped": true
+      },
+      {
+        "id": "large_provider_output",
+        "expected": "terminal_interrupted_response_bytes_exceeded",
+        "acceptedDeltaCount": 9,
+        "treeReaped": true
+      },
+      {
+        "id": "tool_output_limit",
+        "expected": "capability_failed_read_limit_exceeded",
+        "capabilityPrepareCount": 1,
+        "unresolvedCapabilityDispatchCount": 0,
+        "treeReaped": true
+      },
+      {
+        "id": "cancel_during_initialize",
+        "expected": "reaped_within_cancel_bound",
+        "acceptanceMaximumCancelAndReapMs": 5000,
+        "treeReaped": true
+      },
+      {
+        "id": "immutable_deadline",
+        "expected": "automatic_reap_without_host_cancel",
+        "configuredSpecDeadlineMs": 12000,
+        "treeReaped": true
+      },
+      {
+        "id": "correlation_mismatch",
+        "expected": "logical_failure_with_physical_fact_pump_retained",
+        "terminalRecordCommitted": false,
+        "treeReaped": true
+      },
+      {
+        "id": "post_tool_result_transport_drop",
+        "expected": "single_dispatch_no_retry",
+        "capabilityDispatchStartedCount": 1,
+        "capabilityTerminalCount": 1,
+        "capabilityClassification": "succeeded",
+        "unresolvedCapabilityDispatchCount": 0,
+        "treeReaped": true
+      },
+      {
+        "id": "mutating_ack_loss",
+        "expected": "single_effect_terminal_outcome_unknown_no_retry",
+        "executionClass": "host_capability",
+        "markerWriteCount": 1,
+        "capabilityDispatchStartedCount": 1,
+        "capabilityTerminalCount": 1,
+        "capabilityClassification": "outcome_unknown",
+        "reasonCode": "host_executor_result_ambiguous",
+        "unresolvedCapabilityDispatchCount": 0,
+        "treeReaped": true
+      }
+    ]
+  },
+  "limitations": [
+    "the adversarial peer validates protocol and lifecycle boundaries, not model quality",
+    "dynamic tools remain an experimental Codex app-server API",
+    "the B3 comparative corpus remains pending"
+  ]
+}

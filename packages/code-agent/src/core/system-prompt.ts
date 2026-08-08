@@ -609,23 +609,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // resume — they keep behaving the way they were started.
   const agentLoopBlock = ctx.agentLoopV2 ? buildAgentLoopBlock() : '';
 
-  // Optional Agentless-style pipeline hint (B7). Off by default. When the
-  // CODER_AGENTLESS_MODE=1 env is set, we add a short procedural directive:
-  // localize → plan → patch → verify. Env-gated at process startup so it is
-  // effectively static for a deployment — kept above the boundary.
-  const agentlessHint = process.env.CODER_AGENTLESS_MODE === '1'
-    ? `
-
-# Pipeline mode (procedural)
-Follow this order for code-fix tasks; do NOT free-explore:
-1. **Localize** — use grep_code / get_symbol_body to identify the smallest set of files+symbols that need to change. Stop as soon as you have a hypothesis you can verify.
-2. **Plan** — call submit_plan with the exact files you intend to touch. Wait for approval.
-3. **Patch** — make the edits in one or two passes (multi_edit when feasible). Do not browse around.
-4. **Verify** — run the relevant test/lint/build and report the result.
-
-This pipeline is more token-efficient than free agents on isolated tasks. If the work decomposes into multiple independent changes, use \`task_list({gate:'approve'})\` instead and run the same loop per task.
-`
-    : '';
+  const agentlessHint = '';
 
   // Session-fixed directives (cache-stable, static prefix): response language,
   // output style, and autonomous (unsupervised) framing. Each collapses to ''

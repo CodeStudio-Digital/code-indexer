@@ -20,11 +20,6 @@
 const DEFAULT_MAX_BYTES = 2_000_000;
 
 export function stashMaxBytes(): number {
-  const v = process.env.CODER_CODE_EXEC_STASH_MAX_BYTES;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
   return DEFAULT_MAX_BYTES;
 }
 

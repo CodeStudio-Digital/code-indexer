@@ -8,6 +8,7 @@ import { FsSessionStore } from '../../sessions/fs-store/fs-session-store.js';
 import type { SessionId } from '@mcp/session-storage';
 import {
   clearSession,
+  configureResumeRegistryForTests,
   getGroup,
   listReadableGroups,
   listResumable,
@@ -78,6 +79,7 @@ function group(sessionId: SessionId, reasons: ResumableAgentState['reason'][]): 
 }
 
 beforeEach(async () => {
+  configureResumeRegistryForTests(null);
   temporaryRoot = mkdtempSync(join(tmpdir(), 'mcp-bundle-spill-'));
   projectRoot = join(temporaryRoot, 'project');
   dataDir = join(temporaryRoot, 'data');
@@ -106,7 +108,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await clearSession(sid);
   await store.close();
-  vi.unstubAllEnvs();
+  configureResumeRegistryForTests(null);
   stopResumeSweepForTests();
   vi.useRealTimers();
   rmSync(temporaryRoot, { recursive: true, force: true });
@@ -114,7 +116,6 @@ afterEach(async () => {
 
 describe('completed-transcript retention (P1)', () => {
   it('spills completed transcripts into the bundle by default and keeps them readable', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     expect(retainCompletedTranscripts()).toBe(true);
     await retainGroup(
       sid,
@@ -135,7 +136,7 @@ describe('completed-transcript retention (P1)', () => {
   });
 
   it('drops completed transcripts when the kill switch is 0 (old economy)', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '0');
+    configureResumeRegistryForTests({ retainCompletedTranscripts: false });
     await retainGroup(
       sid,
       group(sid, ['completed', 'error']),
@@ -147,7 +148,6 @@ describe('completed-transcript retention (P1)', () => {
   });
 
   it('never lists completed agents as RESUMABLE even with a transcript', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     await retainGroup(
       sid,
       group(sid, ['completed', 'tool_budget']),
@@ -161,7 +161,6 @@ describe('completed-transcript retention (P1)', () => {
   });
 
   it('retainSpawnGroup keeps ALL-COMPLETED groups now (observability)', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     const resumableCount = await retainSpawnGroup({
       sessionId: sid,
       spawnId: 'spawn-ok',
@@ -193,8 +192,7 @@ describe('completed-transcript retention (P1)', () => {
 
 describe('read_agent_transcript rendering', () => {
   it('renders header, tool calls with inputs, results and final text', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    vi.stubEnv('CODER_RESUME_SPILL', '0'); // pure in-RAM rendering (disk fallback covered below)
+    configureResumeRegistryForTests({ spillTerminalTranscripts: false });
     await retainGroup(sid, group(sid, ['completed']), store);
     const agent = await findRetainedAgent(
       sid,
@@ -213,8 +211,7 @@ describe('read_agent_transcript rendering', () => {
   });
 
   it('resolves agents by label and elides the middle under a tight budget', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    vi.stubEnv('CODER_RESUME_SPILL', '0');
+    configureResumeRegistryForTests({ spillTerminalTranscripts: false });
     const g = group(sid, ['completed']);
     // Inflate the transcript so the digest budget must elide.
     for (let i = 0; i < 200; i++) {
@@ -236,8 +233,7 @@ describe('read_agent_transcript rendering', () => {
   });
 
   it('accepts zero as an unambiguous alias for the first agent', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    vi.stubEnv('CODER_RESUME_SPILL', '0');
+    configureResumeRegistryForTests({ spillTerminalTranscripts: false });
     await retainGroup(
       sid,
       group(sid, ['completed', 'completed']),
@@ -268,7 +264,6 @@ describe('read_agent_transcript rendering', () => {
 
 describe('terminal-transcript spill to disk (part b)', () => {
   it('read_agent_transcript renders the full body back from the spill file', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     await retainGroup(sid, group(sid, ['completed']), store);
     const stored = await getGroup(sid, `grp-${sid}`, store);
     expect(stored?.agents[0].transcript).toBeUndefined(); // dropped from RAM
@@ -286,7 +281,6 @@ describe('terminal-transcript spill to disk (part b)', () => {
   });
 
   it('keeps FAILED/ABORTED transcripts in RAM so resume_agent stays intact', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     await retainGroup(
       sid,
       group(sid, ['error', 'aborted']),
@@ -300,9 +294,8 @@ describe('terminal-transcript spill to disk (part b)', () => {
     expect(listResumable(sid)).toHaveLength(2);
   });
 
-  it('kill switch CODER_RESUME_SPILL=0 keeps completed transcripts in RAM', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    vi.stubEnv('CODER_RESUME_SPILL', '0');
+  it('keeps completed transcripts in RAM in the explicit no-spill projection', async () => {
+    configureResumeRegistryForTests({ spillTerminalTranscripts: false });
     await retainGroup(sid, group(sid, ['completed']), store);
     const stored = await getGroup(sid, `grp-${sid}`, store);
     expect(stored?.agents[0].transcript?.length).toBeGreaterThan(0);
@@ -310,7 +303,6 @@ describe('terminal-transcript spill to disk (part b)', () => {
   });
 
   it('degrades to the final report when the spill file vanished', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     await retainGroup(sid, group(sid, ['completed']), store);
     const spillPath = (
       await getGroup(sid, `grp-${sid}`, store)
@@ -325,7 +317,6 @@ describe('terminal-transcript spill to disk (part b)', () => {
   });
 
   it('retains the bundle transcript when the in-memory group is cleared', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     await retainGroup(sid, group(sid, ['completed']), store);
     const spillPath = (
       await getGroup(sid, `grp-${sid}`, store)
@@ -336,7 +327,6 @@ describe('terminal-transcript spill to disk (part b)', () => {
   });
 
   it('re-hydrates a completed transcript entity after registry recreation', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
     await retainGroup(sid, group(sid, ['completed']), store);
     await clearSession(sid);
 
@@ -354,8 +344,7 @@ describe('terminal-transcript spill to disk (part b)', () => {
 
 describe('periodic worker-realm sweep (part a)', () => {
   it('reclaims an idle session on the timer without any registry access', async () => {
-    vi.stubEnv('CODER_RESUME_TTL_MS', '1000');
-    vi.stubEnv('CODER_RESUME_SWEEP_INTERVAL_MS', '10000');
+    configureResumeRegistryForTests({ ttlMs: 1000, sweepIntervalMs: 10_000 });
     vi.useFakeTimers();
     await retainGroup(sid, group(sid, ['error']), store);
     expect(peekSessionGroupCountForTests(sid)).toBe(1); // retain-time sweep kept it
@@ -365,9 +354,7 @@ describe('periodic worker-realm sweep (part a)', () => {
   });
 
   it('the timer retains bundle artifacts after evicting in-memory pointers', async () => {
-    vi.stubEnv('CODER_RESUME_RETAIN_COMPLETED', '');
-    vi.stubEnv('CODER_RESUME_TTL_MS', '1000');
-    vi.stubEnv('CODER_RESUME_SWEEP_INTERVAL_MS', '10000');
+    configureResumeRegistryForTests({ ttlMs: 1000, sweepIntervalMs: 10_000 });
     vi.useFakeTimers();
     await retainGroup(sid, group(sid, ['completed']), store);
     const spillPath = (

@@ -54,7 +54,7 @@ export const ALIAS_GROUPS: ReadonlyArray<readonly string[]> = [
  * model args through untouched (matches the repo's `_DISABLE … !== '1'` idiom).
  */
 export function aliasNormalizationEnabled(): boolean {
-  return process.env.CODER_TOOL_ARG_ALIASES_DISABLE !== '1';
+  return true;
 }
 
 function isBlank(v: unknown): boolean {

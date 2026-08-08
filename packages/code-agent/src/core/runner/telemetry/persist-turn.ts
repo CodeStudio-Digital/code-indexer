@@ -69,6 +69,9 @@ export interface PersistTurnTelemetryArgs {
   visibleToolsCount?: number;
   /** SHA-1 of the serialized tools array (mig 143) — cache-prefix segment 1. */
   toolsFingerprint?: string | null;
+  /** SHA-256 identities of authorization and its provider-facing view. */
+  capabilitySetDigest?: string | null;
+  projectionDigest?: string | null;
   /** SHA-1 sample of the assembled history head (mig 143). */
   prefixHeadHash?: string | null;
   /** Rolling-reducer counters for this turn's LLM view (mig 143). */
@@ -172,6 +175,8 @@ export function persistTurnTelemetry(
       eligible_tools_def_chars: args.eligibleToolsDefChars ?? null,
       visible_tools_count: args.visibleToolsCount ?? null,
       tools_fingerprint: args.toolsFingerprint ?? null,
+      capability_set_digest: args.capabilitySetDigest ?? null,
+      projection_digest: args.projectionDigest ?? null,
       prefix_head_hash: args.prefixHeadHash ?? null,
       reducer_retired_count: args.reducerStats?.retired ?? null,
       reducer_freed_chars: args.reducerStats?.freedChars ?? null,

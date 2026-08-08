@@ -11,6 +11,8 @@ dist/
 .gradle/
 
 data/
+!apps/dashboard/features/agents/zones/data/
+!apps/dashboard/features/agents/zones/data/DataZone.tsx
 !apps/dashboard/features/db-client/data/
 !apps/dashboard/features/db-client/data/**
 !apps/dashboard/features/app-studio/data/

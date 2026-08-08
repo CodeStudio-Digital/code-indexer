@@ -239,6 +239,7 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // auto-activates those tiers only when the matching runtime is present.
   'expand_toolset',
   'find_tools',
+  'capability_catalog',
   // spawn_agent is orchestration — same tier as expand_toolset/find_tools.
   // Lives in BOOTSTRAP (not NAVIGATE) so any session can delegate without
   // needing to unlock a tier first.
@@ -565,7 +566,6 @@ export function getToolTier(
         `silent bootstrap fallback.`,
     );
   }
-  if (process.env.CODER_STRICT_TIERS === '1') return 'navigate';
   return 'bootstrap';
 }
 
@@ -697,7 +697,7 @@ export function inferProfileFromHistory(
 
 /**
  * Detect an initial profile from the user's first message. Pure heuristic,
- * zero LLM cost. Runs only when `CODER_PROFILE_AUTO=1` OR when the caller
+ * zero LLM cost. Runs when the caller
  * passes `profile: 'auto'`.
  *
  * - "commit"/"push"/"branch" → full (git mutations needed)
@@ -739,6 +739,7 @@ const SHORT_DESCRIPTIONS: Record<string, string> = {
   archive_task_list: 'Clear the current task list',
   expand_toolset: 'Unlock higher-tier tools (navigate/admin)',
   find_tools: 'Search the tool catalog by name, description, and argument names',
+  capability_catalog: 'Search, inspect, and activate tools, MCP, plugins, and skills',
   request_review: 'Spawn a reviewer subagent to second-opinion the diff',
   read_plan: 'Re-read your submitted plan and its approval status',
   save_note: 'Jot a scratchpad note for THIS session (ephemeral — use remember for durable memory)',

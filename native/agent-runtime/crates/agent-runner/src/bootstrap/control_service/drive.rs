@@ -9,6 +9,7 @@ use crate::control::{
     PrepareOutcome,
 };
 use crate::engine_authority::EngineAuthority;
+use crate::external_engine::codex_app_server_config;
 
 use super::active_engine::{ActiveEngineResources, ActiveEngineTask};
 use super::data::PendingRunnerDataHydration;
@@ -149,6 +150,8 @@ fn activate(
     let execution_seed = driver
         .take_execution_seed()
         .ok_or(RunnerControlServiceError::MissingExecutionSeed)?;
+    let codex_app_server = codex_app_server_config(&execution_seed, &hydration)
+        .map_err(RunnerControlServiceError::ExternalEngineConfig)?;
     let engine_authority = driver
         .active_effect_gate()
         .map(EngineAuthority::new)
@@ -163,6 +166,7 @@ fn activate(
         authority: engine_authority,
         initial_provider_context,
         runtime_instance_id,
+        codex_app_server,
     });
     let resources = ActiveRunnerResources {
         handoff: pending.handoff,

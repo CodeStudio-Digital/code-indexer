@@ -135,21 +135,7 @@ import {
 } from './preflight-capability-catalog.js';
 import { createGitHubAppManagedGitClient } from './github-app-managed-git/client.js';
 import type { TelemetrySink } from '@mcp/candidate-pipeline/stats.js';
-import {
-  InMemoryToolEmbeddingStore,
-  type EmbeddingFn,
-} from '@mcp/code-agent/tool-selection/index.js';
-import {
-  InMemoryMessageEmbeddingStore,
-  createContextRelevancePipeline,
-} from '@mcp/code-agent/context-relevance/index.js';
-import type {
-  ContextRelevanceQuery,
-  MessageCandidate,
-} from '@mcp/code-agent/context-relevance/index.js';
-import type { CandidatePipeline } from '@mcp/candidate-pipeline';
 import { SubAgentResultCacheStore } from '@mcp/store/sub-agent-result-cache-store.js';
-import { SubAgentResultCache } from '@mcp/services/sub-agent-cache/index.js';
 import { DocStore } from '@mcp/store/doc-store.js';
 import {
   BrowserBackend,
@@ -166,23 +152,10 @@ import {
 import { InMemoryRoleEmbeddingStore } from '@mcp/company/role-pipeline/index.js';
 import { CounterfactualLogStore } from '@mcp/store/counterfactual-log-store.js';
 import {
-  ShadowTrafficRunner,
   FeedbackCollector,
-  ToolSelectionOutcomeMatcher,
   RolePipelineOutcomeMatcher,
   KanbanPriorityOutcomeMatcher,
 } from '@mcp/services/shadow-traffic/index.js';
-import {
-  buildToolSelectionShadowVariants,
-  DEFAULT_TOOL_SELECTION_VARIANTS,
-  applyToolSelectionThin,
-  type ThinTool,
-} from '@mcp/code-agent/tool-selection/index.js';
-import type {
-  ToolSelectionQuery,
-} from '@mcp/code-agent/tool-selection/index.js';
-import { decisionTelemetryForTask, toolPolicyForTask } from '@mcp/code-agent/agents/decision-engine.js';
-import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { LshIndexStore } from '@mcp/store/lsh-index-store.js';
 import { LSHIndex } from '@mcp/indexer/search/lsh-index.js';
 import {
@@ -215,6 +188,11 @@ import { randomUUID } from 'node:crypto';
 import { OperationalSessionFiles } from './operational-session-files.js';
 import { SpriteFileStore } from './sprite-files.js';
 import { CoderPreferencesFile } from './coder-preferences-file.js';
+
+interface EmbeddingFn {
+  (text: string): Promise<Float32Array>;
+  readonly fingerprint?: () => string;
+}
 
 /**
  * Late-bound ChromeService reference shared with the doc indexer's
@@ -488,36 +466,11 @@ export interface PipelineDeps {
    */
   pipelineTelemetrySink: TelemetrySink;
   /**
-   * Shared cache of tool-description embeddings used by the
-   * ToolSelectionPipeline. Tools change rarely so this stays small.
-   */
-  toolEmbeddingStore: InMemoryToolEmbeddingStore;
-  /**
    * Adapter that exposes the indexer's EmbeddingService as the simple
    * `EmbeddingFn` interface the candidate-pipeline framework expects.
    * Returns a Float32Array of the embedding for a single text input.
    */
   toolSelectionEmbed: EmbeddingFn;
-  /**
-   * Per-process store of message embeddings used by the ContextRelevance
-   * pipeline. Keyed by message-id; intentionally lives in-memory because
-   * messages are session-scoped and lose value the moment the session ends.
-   */
-  messageEmbeddingStore: InMemoryMessageEmbeddingStore;
-  /**
-   * Pre-built ContextRelevance pipeline. Installed as the global by the
-   * boot path (toggled via `MCP_PIPELINES_CONTEXT_RELEVANCE=1`). The
-   * runtime consults it before falling through to deterministic
-   * compaction.
-   */
-  contextRelevancePipeline: CandidatePipeline<ContextRelevanceQuery, MessageCandidate>;
-  /**
-   * SQLite-backed cache of sub-agent (Explore / Plan / general-purpose)
-   * outputs keyed by (prompt_hash, context_digest, agent_type). Lets the
-   * runtime skip an expensive sub-agent run when the exact same query has
-   * been answered within its TTL window.
-   */
-  subAgentResultCache: SubAgentResultCache;
   /**
    * Shared embeddings of role descriptions, used by the RolePipeline's
    * two-tower scorer. Roles change with template revisions, so this stays
@@ -529,21 +482,6 @@ export interface PipelineDeps {
    * shadow side-effects; outcome backfills come from feedback collectors.
    */
   counterfactualLogStore: CounterfactualLogStore;
-  /**
-   * Shadow-traffic runner for the ToolSelectionPipeline. Sample rate is
-   * driven by the MCP_SHADOW_TOOL_SELECTION_RATE env var (default 0 = off).
-   * When > 0, deterministically samples a fraction of requests and runs
-   * configured `k` variants in parallel, logging each variant's selection
-   * to `counterfactual_logs`.
-   */
-  toolSelectionShadowRunner: ShadowTrafficRunner<ToolSelectionQuery>;
-  /**
-   * Setter for the tool registry used by the shadow runner. The runner
-   * integration calls this once during boot; until then shadow variants
-   * see an empty registry and emit empty selections (visible in the
-   * counterfactual logs so the gap is obvious).
-   */
-  setToolSelectionRegistry: (fn: () => CoderTool[]) => void;
   /**
    * LSH index for codebase embeddings. Stores 32-bit SimHash signatures +
    * multi-hash buckets per (project, entity_type, entity_id). Indexer
@@ -567,32 +505,6 @@ export interface PipelineDeps {
    * collector.
    */
   feedbackCollector: FeedbackCollector;
-  /**
-   * Pre-bound `RunnerOptions.toolSelectionFilter` factory. Returns a
-   * filter function the runner calls per turn, only when
-   * `MCP_PIPELINES_TOOL_SELECTION === '1'`. Returns `undefined` when the
-   * flag is off — making `opts.toolSelectionFilter` undefined and skipping
-   * the hook entirely. Zero runtime overhead when disabled.
-   */
-  buildToolSelectionFilter: () => undefined | ((
-    tools: ThinTool[],
-    ctx: {
-      taskText: string;
-      recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
-      protectedToolNames?: ReadonlySet<string>;
-      sessionId?: import('@mcp/session-storage').SessionId;
-    },
-  ) => Promise<ThinTool[]>);
-  /**
-   * Companion to `buildToolSelectionFilter`. Session outcomes are appended to
-   * the owning bundle; an unscoped runtime observation is deliberately
-   * dropped instead of falling back to global SQLite.
-   */
-  observeToolSelectionOutcome: (
-    taskText: string,
-    toolsCalled: ReadonlyArray<string>,
-    sessionId?: import('@mcp/session-storage').SessionId,
-  ) => void;
   /** Default-off Agent Decision Engine runtime flags forwarded to runCoder. */
   buildAgentDecisionRuntimeOptions: () => {
     agentDecisionTelemetryEnabled?: boolean;
@@ -1444,11 +1356,9 @@ export function createDeps(): ServerDeps {
     },
   };
 
-  // Tool-selection plumbing. The embed adapter wraps the existing indexer
-  // EmbeddingService into a single-text `EmbeddingFn`. ToolEmbeddingStore is
-  // shared across all sessions in this process — tools don't vary per
-  // session so re-embedding would be wasteful.
-  const toolEmbeddingStore = new InMemoryToolEmbeddingStore();
+  // Shared embedding adapter used by Company role recommendation. The retired
+  // code-run tool-selection/context-relevance experiments no longer allocate
+  // their own process-wide embedding caches.
   const toolSelectionEmbed: EmbeddingFn = Object.assign(
     async (text: string) => {
       // Internal selectors belong to the Memory profile. Cache consumers
@@ -1461,24 +1371,6 @@ export function createDeps(): ServerDeps {
         memoryEmbeddingService.fingerprint?.() ?? 'semantic:memory:unfingerprinted',
     },
   );
-
-  // Context-relevance shares the same embedding adapter; message vectors
-  // live in their own store keyed by message-id. The pipeline reads
-  // messages via the `getMessages` closure provided per-request from the
-  // runner — here we build it with a placeholder that the runtime
-  // overrides at call time via the helper's `messages` argument.
-  const messageEmbeddingStore = new InMemoryMessageEmbeddingStore();
-  const contextRelevancePipeline = createContextRelevancePipeline({
-    getMessages: () => [], // overridden per-request by applyContextCompaction
-    embed: toolSelectionEmbed,
-    messageEmbeddingStore,
-    telemetry: pipelineTelemetrySink,
-  });
-
-  // Sub-agent result cache: dedupe repeated Explore/Plan/general-purpose
-  // calls within their TTL windows (Explore=30m, Plan=5m, general=15m).
-  const subAgentResultCacheStore = new SubAgentResultCacheStore(db.raw());
-  const subAgentResultCache = new SubAgentResultCache(subAgentResultCacheStore);
 
   // Documentação (RAG) — global corpus of external docs (PDF + URL crawl).
   // Reuses the embedding service / vector store that the indexer pipeline
@@ -1525,9 +1417,10 @@ export function createDeps(): ServerDeps {
   //
   // Both degrade gracefully (no binding configured → no-op) so they are
   // safe to construct unconditionally and pass to DocHybridSearch.
+  const docQueryCacheStore = new SubAgentResultCacheStore(db.raw());
   const docQueryRewriter = new QueryRewriter({
     resolver: pipelineProviderResolver,
-    cache: subAgentResultCacheStore,
+    cache: docQueryCacheStore,
     // telemetry disabled (pipeline_telemetry tab removed)
   });
   // The Docs semantic profile is the sole source of truth. Its strict
@@ -1561,37 +1454,6 @@ export function createDeps(): ServerDeps {
   const roleEmbeddingStore = new InMemoryRoleEmbeddingStore();
 
   const counterfactualLogStore = new CounterfactualLogStore(db.raw());
-
-  // Shadow-traffic for ToolSelectionPipeline. Sample rate is environment
-  // controlled — keep it off by default so test/dev runs don't burn
-  // embedding calls. Production opts in by setting the env var.
-  //
-  // The tool registry is supplied lazily via a mutable ref so the runtime
-  // integration can install it once the code-agent runner is wired up.
-  // Until then, `getAllToolsRef` returns an empty list and the variants
-  // emit empty selections — harmless for shadow and visible in the scoped
-  // bundle telemetry once a session UUID is present.
-  const shadowSampleRate = parseFloat(process.env.MCP_SHADOW_TOOL_SELECTION_RATE ?? '0') || 0;
-  let getAllToolsRef: () => CoderTool[] = () => [];
-  const toolSelectionShadowVariants = buildToolSelectionShadowVariants({
-    getAllTools: () => getAllToolsRef(),
-    embed: toolSelectionEmbed,
-    toolEmbeddingStore,
-    variantKs: DEFAULT_TOOL_SELECTION_VARIANTS,
-  });
-  const toolSelectionShadowRunner = new ShadowTrafficRunner<ToolSelectionQuery>({
-    pipelineName: 'tool_selection',
-    variants: toolSelectionShadowVariants,
-    store: counterfactualLogStore,
-    sampleRate: shadowSampleRate,
-    telemetry: pipelineTelemetrySink,
-  });
-  // Setter the future runtime integration calls once during boot. Until
-  // then, scoped shadow runs see an empty tool registry — harmless and visible
-  // in the session bundle telemetry so the gap is obvious.
-  const setToolSelectionRegistry = (fn: () => CoderTool[]): void => {
-    getAllToolsRef = fn;
-  };
 
   // LSH index for codebase embeddings. Default dim=768 matches bge-base/m3
   // and most OpenAI-compatible embedding endpoints used by the indexer.
@@ -1701,34 +1563,10 @@ export function createDeps(): ServerDeps {
   const feedbackCollector = new FeedbackCollector({
     store: counterfactualLogStore,
     matchers: [
-      new ToolSelectionOutcomeMatcher(),
       new RolePipelineOutcomeMatcher(),
       new KanbanPriorityOutcomeMatcher(),
     ],
   });
-
-  // Tool-selection runtime filter factory. The runner calls this once
-  // when constructing its RunnerOptions; we return either a filter
-  // function (env flag on) or undefined (flag off → runner skips the
-  // hook entirely).
-  //
-  // The filter is ALSO the producer side of the shadow-traffic +
-  // counterfactual loop: after production selection completes, the same
-  // query is handed to `toolSelectionShadowRunner` (deterministic
-  // sampling by task hash) which runs the k=8 / k=16 variants off-path
-  // and logs predictions. The feedback collector picks up these rows
-  // later via `observeToolSelectionOutcome` when the runtime sees what
-  // tools were actually called.
-  const toolSelectionFilterEnabled = process.env.MCP_PIPELINES_TOOL_SELECTION === '1';
-  const toolSelectionKRaw = Number.parseInt(process.env.MCP_PIPELINES_TOOL_SELECTION_K ?? '', 10);
-  const toolSelectionK = Number.isFinite(toolSelectionKRaw)
-    ? Math.min(128, Math.max(8, toolSelectionKRaw))
-    : 32;
-  // Agent Decision Engine → tool-selection bridge. Default OFF: when enabled,
-  // the classified task intent nudges preferred/discouraged tools in the thin
-  // selection path. Off (or low classifier confidence) → byte-identical to the
-  // pre-bridge behavior, so this is safe to ship dark and enable per-env.
-  const agentDecisionToolPolicyEnabled = process.env.MCP_AGENT_DECISION_TOOL_POLICY === '1';
   // Observability-only Agent Decision Engine metadata in tool-selection shadow
   // rows/outcomes. Default OFF and stored inside existing JSON columns (no DB
   // migration). This lets us compare recommendation vs. actual tool use before
@@ -1749,121 +1587,6 @@ export function createDeps(): ServerDeps {
     agentDecisionAskBeforeSwitch: agentDecisionAskBeforeSwitchEnabled,
   });
 
-  /**
-   * FNV-1a hash of the task text — deterministic shadow-sampling key
-   * AND the query_hash linking shadow predictions to later observed
-   * outcomes (tools actually called).
-   */
-  const toolSelectionQueryHash = (taskText: string): string => {
-    let h = 0x811c9dc5 >>> 0;
-    for (let i = 0; i < taskText.length; i++) {
-      h ^= taskText.charCodeAt(i);
-      h = Math.imul(h, 0x01000193) >>> 0;
-    }
-    return (h >>> 0).toString(16);
-  };
-
-  const buildToolSelectionFilter = (): undefined | ((
-    tools: ThinTool[],
-    ctx: {
-      taskText: string;
-      recentToolCalls: ReadonlyArray<{ name: string; timestampMs: number; ok: boolean }>;
-      protectedToolNames?: ReadonlySet<string>;
-      sessionId?: import('@mcp/session-storage').SessionId;
-    },
-  ) => Promise<ThinTool[]>) => {
-    if (!toolSelectionFilterEnabled) return undefined;
-    return async (tools, ctx) => {
-      const agentDecision = agentDecisionTelemetryEnabled
-        ? decisionTelemetryForTask(ctx.taskText)
-        : undefined;
-      const selected = await applyToolSelectionThin({
-        allTools: tools,
-        taskText: ctx.taskText,
-        recentToolCalls: ctx.recentToolCalls,
-        embed: toolSelectionEmbed,
-        embeddingStore: toolEmbeddingStore,
-        k: toolSelectionK,
-        protectedNames: ctx.protectedToolNames,
-        onError: (error) => {
-          console.warn(
-            `[coder] smart tool-selection failed open: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        },
-        toolPolicy: agentDecisionToolPolicyEnabled
-          ? toolPolicyForTask(ctx.taskText)
-          : undefined,
-        agentDecision,
-      });
-      // Shadow producer — fires only when MCP_SHADOW_TOOL_SELECTION_RATE > 0
-      // and the task hash falls inside the sample. Off-path via setImmediate.
-      try {
-        const queryHash = toolSelectionQueryHash(ctx.taskText);
-        // A real turn is never flattened into the global SQLite experiment
-        // table. With a UUID, ShadowTrafficRunner emits only bundle telemetry;
-        // without one, runtime shadowing is skipped.
-        if (ctx.sessionId != null) {
-          toolSelectionShadowRunner.recordAndShadow(
-            {
-              queryHash,
-              sessionId: ctx.sessionId,
-              payload: {
-                queryId: `tool-selection-${queryHash}`,
-                taskText: ctx.taskText,
-                recentToolEvents: ctx.recentToolCalls,
-                k: toolSelectionK,
-                agentDecision,
-              },
-            },
-            { toolNames: selected.map((t) => t.name), agentDecision },
-          );
-        }
-      } catch {
-        // Shadow traffic must never affect production.
-      }
-      return selected;
-    };
-  };
-
-  /**
-   * Outcome observer: append the actual tool choice to the owning bundle.
-   * Missing session scope is dropped; there is no SQLite fallback.
-   */
-  const observeToolSelectionOutcome = (
-    taskText: string,
-    toolsCalled: ReadonlyArray<string>,
-    sessionId?: import('@mcp/session-storage').SessionId,
-  ): void => {
-    if (
-      !toolSelectionFilterEnabled ||
-      toolsCalled.length === 0 ||
-      sessionId == null
-    ) {
-      return;
-    }
-    try {
-      const queryHash = toolSelectionQueryHash(taskText);
-      pipelineTelemetrySink.emit({
-        queryId: `tool-selection-${queryHash}`,
-        pipelineName: 'tool_selection',
-        stage: 'side_effect',
-        component: 'shadow/outcome',
-        durationMs: 0,
-        durationBucket: '0-10ms',
-        candidatesOut: toolsCalled.length,
-        sessionId,
-        diag: {
-          query_hash: queryHash,
-          tools_called: [...toolsCalled],
-          agent_decision: agentDecisionTelemetryEnabled
-            ? decisionTelemetryForTask(taskText)
-            : null,
-        },
-      });
-    } catch {
-      // Best-effort.
-    }
-  };
 
   const embeddingKind = deriveKindLabel(embeddingService, 'EmbeddingService');
   const vectorStoreKind = deriveKindLabel(vectorStore, 'VectorStore');
@@ -1873,14 +1596,6 @@ export function createDeps(): ServerDeps {
   // O(1) — counts and flags only, never deep walks.
   {
     const ledger = getMemoryLedger();
-    ledger.register('embeddings.tools', () => ({
-      count: toolEmbeddingStore.size(),
-      detail: 'vetores de descrição de tools (processo inteiro)',
-    }));
-    ledger.register('embeddings.messages', () => ({
-      count: messageEmbeddingStore.size(),
-      detail: 'vetores de mensagens (context-relevance)',
-    }));
     ledger.register('embeddings.roles', () => ({
       count: roleEmbeddingStore.size(),
       detail: 'vetores de roles (company)',
@@ -1983,21 +1698,13 @@ export function createDeps(): ServerDeps {
     pipelineProviderResolver,
     taskPreflight,
     pipelineTelemetrySink,
-    toolEmbeddingStore,
     toolSelectionEmbed,
-    messageEmbeddingStore,
-    contextRelevancePipeline,
-    subAgentResultCache,
     roleEmbeddingStore,
     counterfactualLogStore,
-    toolSelectionShadowRunner,
-    setToolSelectionRegistry,
     lshIndex,
     lshIndexStore,
     lshIndexingSink,
     feedbackCollector,
-    buildToolSelectionFilter,
-    observeToolSelectionOutcome,
     buildAgentDecisionRuntimeOptions,
     embeddingKind,
     vectorStoreKind,

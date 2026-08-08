@@ -25,7 +25,7 @@ import {
   type ResumableAgentState,
 } from '@mcp/code-agent/tools/subagent-resume-registry.js';
 
-const MAX_ATTEMPTS = Number(process.env.CODER_SPAWN_MAX_ATTEMPTS ?? 3) || 3;
+const MAX_ATTEMPTS = 3;
 const QUALITY_MAX_ATTEMPTS = 2;
 
 const RESUME_DESC =

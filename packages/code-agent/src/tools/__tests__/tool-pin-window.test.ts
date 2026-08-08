@@ -1,14 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   normalizeDynamicToolPins,
   promoteDynamicToolPin,
   resolveDynamicToolPinLimit,
   touchDynamicToolPin,
 } from '../tool-pin-window.js';
-
-afterEach(() => {
-  delete process.env.CODER_DYNAMIC_TOOL_PIN_LIMIT;
-});
 
 describe('dynamic tool pin window', () => {
   it('evicts the least-recently-used dynamic pin and preserves required pins', () => {
@@ -29,11 +25,12 @@ describe('dynamic tool pin window', () => {
     expect([...pins]).toEqual(['required', 'b', 'c']);
   });
 
-  it('parses and clamps the runtime limit', () => {
+  it('uses the fixed product limit despite retired env overrides', () => {
     process.env.CODER_DYNAMIC_TOOL_PIN_LIMIT = '999';
-    expect(resolveDynamicToolPinLimit()).toBe(64);
+    expect(resolveDynamicToolPinLimit()).toBe(16);
     process.env.CODER_DYNAMIC_TOOL_PIN_LIMIT = '0';
-    expect(resolveDynamicToolPinLimit()).toBe(1);
+    expect(resolveDynamicToolPinLimit()).toBe(16);
+    delete process.env.CODER_DYNAMIC_TOOL_PIN_LIMIT;
   });
 });
 

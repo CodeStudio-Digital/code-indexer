@@ -3,7 +3,7 @@
  * ask via runner.waitForUserInput. Unit tests for the tracker itself
  * live in `budget-tracker.test.ts`.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
@@ -66,7 +66,11 @@ function makeStubRunner(answer: string | null) {
   };
 }
 
-function setupCtx(tasks: CoderTask[], runner: ReturnType<typeof makeStubRunner>) {
+function setupCtx(
+  tasks: CoderTask[],
+  runner: ReturnType<typeof makeStubRunner>,
+  options: { tokenCap?: number | null; responseTimeoutMs?: number } = {},
+) {
   const state: TasksState = {
     summary: '', tasks, execution_mode: 'all-subagent',
     approved: true, current_task_id: null,
@@ -81,17 +85,15 @@ function setupCtx(tasks: CoderTask[], runner: ReturnType<typeof makeStubRunner>)
     provider: {} as never,
     parentTools: [],
     sessionStore: undefined,
+    executeTasksTokenCap: options.tokenCap,
+    executeTasksBudgetResponseTimeoutMs: options.responseTimeoutMs,
+    executeTasksRetryConfig: { maxRetries: 0, initialMs: 0, maxMs: 0, jitter: 0 },
   });
   return { tool, ctx };
 }
 
 beforeEach(() => {
   vi.mocked(runSubagent).mockReset();
-  vi.stubEnv('CODER_TASK_MAX_RETRIES', '0');
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
 });
 
 describe('execute_tasks budget integration', () => {
@@ -134,7 +136,6 @@ describe('execute_tasks budget integration', () => {
   });
 
   it('cap exceeded → budget_request emitted, "stop_after_current" skips remaining', async () => {
-    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '100');
     vi.mocked(runSubagent).mockResolvedValue({
       reason: 'completed', finalText: 'ok',
       usage: { input_tokens: 50, output_tokens: 50 }, sandboxViolations: [],
@@ -143,6 +144,7 @@ describe('execute_tasks budget integration', () => {
     const { tool, ctx } = setupCtx(
       [task({ id: 'tsk_1' }), task({ id: 'tsk_2' })],
       runner,
+      { tokenCap: 100 },
     );
     await tool.handler({}, ctx);
 
@@ -158,11 +160,11 @@ describe('execute_tasks budget integration', () => {
   });
 
   it('"cancel_pending" answer aborts every queued task as skipped', async () => {
-    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '50');
     const runner = makeStubRunner('cancel_pending');
     const { tool, ctx } = setupCtx(
       [task({ id: 'tsk_1' }), task({ id: 'tsk_2' }), task({ id: 'tsk_3' })],
       runner,
+      { tokenCap: 50 },
     );
     await tool.handler({}, ctx);
 
@@ -174,7 +176,6 @@ describe('execute_tasks budget integration', () => {
   });
 
   it('"continue+50%" raises the cap and lets the run finish', async () => {
-    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '4000');
     vi.mocked(runSubagent).mockResolvedValue({
       reason: 'completed', finalText: 'ok',
       usage: { input_tokens: 100, output_tokens: 100 }, sandboxViolations: [],
@@ -183,6 +184,7 @@ describe('execute_tasks budget integration', () => {
     const { tool, ctx } = setupCtx(
       [task({ id: 'tsk_1' })],
       runner,
+      { tokenCap: 4000 },
     );
     await tool.handler({}, ctx);
 
@@ -192,12 +194,11 @@ describe('execute_tasks budget integration', () => {
   });
 
   it('fails safe instead of waiting forever when no budget UI answers', async () => {
-    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '50');
-    vi.stubEnv('CODER_TASKS_BUDGET_RESPONSE_TIMEOUT_MS', '5');
     const runner = makeStubRunner(null);
     const { tool, ctx } = setupCtx(
       [task({ id: 'tsk_1' }), task({ id: 'tsk_2' })],
       runner,
+      { tokenCap: 50, responseTimeoutMs: 5 },
     );
 
     await tool.handler({}, ctx);

@@ -112,8 +112,7 @@ const RESUME_KEYS = [
 ] as const;
 
 function configuredInputBudget(): number {
-  const raw = Number(process.env.CODER_SUMMARIZER_BUDGET ?? DEFAULT_INPUT_BUDGET);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_INPUT_BUDGET;
+  return DEFAULT_INPUT_BUDGET;
 }
 
 function clipMiddle(value: string, cap: number): string {

@@ -23,8 +23,8 @@ describe('computeSelfReviewNudge', () => {
     await expect(computeSelfReviewNudge(context())).resolves.toBe(false);
   });
 
-  it('still supports an explicit opt-in', async () => {
+  it('does not revive the retired automatic nudge through env', async () => {
     vi.stubEnv('CODER_SELF_REVIEW', '1');
-    await expect(computeSelfReviewNudge(context())).resolves.toBe(true);
+    await expect(computeSelfReviewNudge(context())).resolves.toBe(false);
   });
 });

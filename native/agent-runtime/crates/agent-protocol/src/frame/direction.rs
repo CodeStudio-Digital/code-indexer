@@ -71,7 +71,8 @@ pub(super) const fn validate_payload_direction(
                 | Body::ProviderStart(_)
                 | Body::ProviderCancel(_)
                 | Body::EngineEventProposal(_)
-                | Body::CapabilityPrepare(_),
+                | Body::CapabilityPrepare(_)
+                | Body::CapabilityExecute(_),
         ) | (
             FrameDirection::HostToRunner,
             wire::TransportChannel::Data,
@@ -86,7 +87,8 @@ pub(super) const fn validate_payload_direction(
                 | Body::ProviderUsage(_)
                 | Body::ProviderTerminal(_)
                 | Body::EngineEventCommitted(_)
-                | Body::CapabilityUpdate(_),
+                | Body::CapabilityUpdate(_)
+                | Body::CapabilityExecutionResult(_),
         )
     );
     if allowed {

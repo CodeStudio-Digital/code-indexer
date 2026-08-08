@@ -29,7 +29,7 @@ describe('orchestration lease guard', () => {
     expect(guard.isLost()).toBe(true);
     expect(guard.isRunning()).toBe(false);
     expect(lost).toHaveBeenCalledOnce();
-    expect(() => guard.assertOwned()).toThrow(/fenced|expired/);
+    await expect(guard.assertOwned()).rejects.toThrow(/fenced|expired/);
     expect(renewals).toBe(2);
     stop();
     expect(vi.getTimerCount()).toBe(0);

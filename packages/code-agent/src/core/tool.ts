@@ -102,6 +102,21 @@ export interface CoderTool {
   parameters: JsonSchema;
   /** Tool source — used by the UI for rendering and by the registry for filtering. */
   source: 'native' | 'mcp' | 'mcp_external';
+  /**
+   * Canonical catalog provenance. `source` remains the legacy dispatch/UI
+   * discriminator; this metadata preserves the real contributor identity so
+   * plugin and remote-MCP capabilities do not collapse into one anonymous
+   * `mcp_external` namespace.
+   */
+  capabilityProvenance?: {
+    kind?: import('@mcp/agent-runtime-contracts').CapabilitySource['kind'];
+    providerId?: string;
+    serverId?: string;
+    provenanceRef?: string;
+    attestationRef?: string;
+  };
+  /** Human label used by the canonical catalog without changing wire name. */
+  capabilityDisplayName?: string;
   /** Optional opt-in tier declared by a dynamic tool contributor. */
   runtimeTier?: RuntimeToolTierMetadata;
   /**

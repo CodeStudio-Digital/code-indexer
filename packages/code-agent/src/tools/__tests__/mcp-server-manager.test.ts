@@ -72,9 +72,9 @@ describe('McpServerManager tool catalogue isolation', () => {
       ]);
       expect(manager.connectedCount).toBe(1);
       expect(first.tools.find((tool) => tool.name === 'ext_unity__read_scene')).toMatchObject({
-        mutates: false,
-        parallelSafe: true,
-        riskLevel: 'read',
+        mutates: true,
+        parallelSafe: false,
+        riskLevel: 'write',
       });
       expect(request).toHaveBeenCalledWith(
         { method: 'tools/list' },

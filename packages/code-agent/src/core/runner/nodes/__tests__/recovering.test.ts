@@ -12,19 +12,15 @@
  *      - 400 → provider-400-retry
  *      - 5xx/429 → provider-transient-retry
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { RecoveringNode } from '../recovering.js';
 import { isContextOverflowError } from '../../provider-retry.js';
 import { makeTestContext } from './test-helpers.js';
 
-beforeEach(() => {
-  // Zero out backoff so tests don't wait on real timers.
-  vi.stubEnv('CODER_TRANSIENT_RETRY_INITIAL_MS', '0');
-  vi.stubEnv('CODER_TRANSIENT_RETRY_MAX_MS', '0');
-});
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+vi.mock('../../provider-retry.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../provider-retry.js')>()),
+  backoffDelayMs: () => 0,
+}));
 
 describe('RecoveringNode', () => {
   it('aborts defensively when lastEvent is null', async () => {
@@ -70,9 +66,10 @@ describe('RecoveringNode', () => {
   });
 
   it('enforces the per-turn transient retry cap before the run-lifetime cap', async () => {
-    vi.stubEnv('CODER_TRANSIENT_RETRY_MAX_PER_TURN', '1');
-    vi.stubEnv('CODER_RECOVERY_TRANSIENT_MAX', '30');
     const { ctx, recordedEvents } = makeTestContext();
+    ctx.opts.runtimePolicy = {
+      provider: { transientRetriesPerTurn: 1, transientRetriesPerRun: 30 },
+    } as never;
     const error = {
       kind: 'ProviderError' as const,
       retryable: true,
@@ -113,8 +110,10 @@ describe('RecoveringNode', () => {
   });
 
   it('aborts and emits recovery_aborted when the per-kind cap is exceeded', async () => {
-    vi.stubEnv('CODER_RECOVERY_TRANSIENT_MAX', '1');
     const { ctx, recordedEvents } = makeTestContext();
+    ctx.opts.runtimePolicy = {
+      provider: { transientRetriesPerTurn: 3, transientRetriesPerRun: 1 },
+    } as never;
 
     // First call: under cap (1/1) → TurnSucceeded.
     const first = await new RecoveringNode().execute(ctx, {
@@ -171,8 +170,8 @@ describe('RecoveringNode', () => {
   });
 
   it('caps provider-unknown-retry low and includes the message when exceeded', async () => {
-    vi.stubEnv('CODER_RECOVERY_UNKNOWN_MAX', '1');
     const { ctx, recordedEvents } = makeTestContext();
+    ctx.recovery.set('provider-unknown-retry', 4);
     const err = {
       kind: 'ProviderError' as const,
       retryable: true,
@@ -180,9 +179,6 @@ describe('RecoveringNode', () => {
       message: 'unexpected end of stream',
     };
 
-    // 1/1 → ok.
-    expect((await new RecoveringNode().execute(ctx, err)).kind).toBe('TurnSucceeded');
-    // 2/1 → exceeded → Aborted.
     const second = await new RecoveringNode().execute(ctx, err);
     expect(second.kind).toBe('Aborted');
     expect(ctx.stopReason).toBe('recovery_capped');
@@ -211,8 +207,8 @@ describe('RecoveringNode', () => {
   });
 
   it('caps provider-thinking-timeout and attributes the transition on abort', async () => {
-    vi.stubEnv('CODER_RECOVERY_THINKING_MAX', '1');
     const { ctx, recordedEvents } = makeTestContext();
+    ctx.recovery.set('provider-thinking-timeout', 2);
     const err = {
       kind: 'ProviderError' as const,
       retryable: true,
@@ -221,9 +217,6 @@ describe('RecoveringNode', () => {
       message: 'provider thinking-only stream exceeded 240000ms',
     };
 
-    // 1/1 → retry.
-    expect((await new RecoveringNode().execute(ctx, err)).kind).toBe('TurnSucceeded');
-    // 2/1 → exceeded → Aborted, with the dedicated kind in message + transition.
     const second = await new RecoveringNode().execute(ctx, err);
     expect(second.kind).toBe('Aborted');
     expect(ctx.stopReason).toBe('recovery_capped');
@@ -231,7 +224,7 @@ describe('RecoveringNode', () => {
     expect(ctx.error?.message).toContain('kind=provider-thinking-timeout');
 
     const aborted = recordedEvents.find((r) => r.event === 'recovery_aborted');
-    expect(aborted!.args[0]).toMatchObject({ kind: 'provider-thinking-timeout', attempts: 2, cap: 1 });
+    expect(aborted!.args[0]).toMatchObject({ kind: 'provider-thinking-timeout', attempts: 3, cap: 2 });
   });
 
   it('routes an overflow 400 (retryable:false) to Compacting instead of aborting', async () => {
@@ -274,8 +267,8 @@ describe('RecoveringNode', () => {
   });
 
   it('aborts with compact_exhausted when overflow persists past the cap', async () => {
-    vi.stubEnv('CODER_RECOVERY_OVERFLOW_MAX', '1');
     const { ctx, recordedEvents } = makeTestContext();
+    ctx.recovery.set('context-overflow', 3);
     const err = {
       kind: 'ProviderError' as const,
       retryable: false,
@@ -283,16 +276,13 @@ describe('RecoveringNode', () => {
       message: 'input length and max_tokens exceed context limit',
     };
 
-    // 1/1 → Compacting round-trip.
-    expect((await new RecoveringNode().execute(ctx, err)).kind).toBe('TokenThresholdHit');
-    // 2/1 → context is irreducible → Aborted.
     const second = await new RecoveringNode().execute(ctx, err);
     expect(second.kind).toBe('Aborted');
     expect(ctx.stopReason).toBe('compact_exhausted');
     expect(ctx.error?.message).toContain('exceed context limit');
 
     const aborted = recordedEvents.find((r) => r.event === 'recovery_aborted');
-    expect(aborted!.args[0]).toMatchObject({ kind: 'context-overflow', attempts: 2, cap: 1 });
+    expect(aborted!.args[0]).toMatchObject({ kind: 'context-overflow', attempts: 4, cap: 3 });
   });
 
   it('still aborts a non-overflow 400 without touching the overflow counter', async () => {
@@ -309,10 +299,10 @@ describe('RecoveringNode', () => {
   });
 
   it('preserves per-kind isolation — 401 cap does not affect transient', async () => {
-    vi.stubEnv('CODER_RECOVERY_401_MAX', '0');
     const { ctx } = makeTestContext();
+    ctx.recovery.set('provider-401-refresh', 2);
 
-    // 401 over cap=0 → Aborted on the first attempt.
+    // 401 over its product cap → Aborted.
     const refresh = await new RecoveringNode().execute(ctx, {
       kind: 'ProviderError',
       retryable: true,

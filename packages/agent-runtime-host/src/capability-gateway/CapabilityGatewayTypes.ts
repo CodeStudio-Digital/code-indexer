@@ -32,13 +32,38 @@ export interface CapabilityDecisionResolver {
   resolve(request: ValidatedCapabilityPrepare): Promise<CapabilityResolution>;
 }
 
+export type HostCapabilityExecutionOutcome =
+  | {
+    readonly case: 'succeeded';
+    readonly schemaId: string;
+    readonly schemaVersion: number;
+    readonly encodedResult: Uint8Array;
+    readonly bytesRead: bigint;
+    readonly truncated: boolean;
+    readonly durationMs: bigint;
+  }
+  | {
+    readonly case: 'failed' | 'cancelled' | 'outcomeUnknown';
+    readonly reasonCode: string;
+    readonly durationMs: bigint;
+  };
+
+export interface HostCapabilityExecutor {
+  execute(
+    request: ValidatedCapabilityPrepare,
+    grant: agentV1Capability.SealedExecutionGrant,
+  ): Promise<HostCapabilityExecutionOutcome>;
+}
+
 export interface CapabilityGatewayLimits {
   readonly maximumPreparedOperations: number;
   readonly maximumInputBytes: number;
+  readonly maximumOutputBytes: number;
 }
 
 export const DEFAULT_CAPABILITY_GATEWAY_LIMITS: CapabilityGatewayLimits = Object.freeze({
   maximumPreparedOperations: 64,
   maximumInputBytes: 1024 * 1024,
+  maximumOutputBytes: 1024 * 1024,
 });
 

@@ -92,22 +92,40 @@ const PROTECTED_TAIL_MESSAGES = 20;
 const ELIDE_RESULT_OVER_BYTES = 2048;
 const ELIDED_MARKER = '[elided at resume-capture — re-read if needed]';
 
+interface ResumeRegistryConfiguration {
+  maxAgentBytes: number;
+  maxSessionBytes: number;
+  ttlMs: number;
+  leaseMs: number;
+  spillTerminalTranscripts: boolean;
+  retainCompletedTranscripts: boolean;
+  sweepIntervalMs: number;
+}
+
+const DEFAULT_CONFIGURATION: Readonly<ResumeRegistryConfiguration> = Object.freeze({
+  maxAgentBytes: 4 * 1024 * 1024,
+  maxSessionBytes: 48 * 1024 * 1024,
+  ttlMs: 45 * 60_000,
+  leaseMs: 120_000,
+  spillTerminalTranscripts: true,
+  retainCompletedTranscripts: true,
+  sweepIntervalMs: 5 * 60_000,
+});
+let configuration: Readonly<ResumeRegistryConfiguration> = DEFAULT_CONFIGURATION;
+
 // Caps read lazily so ops can tune them via env before the first spawn (a
 // module-const would freeze the value at import).
 function maxAgentBytes(): number {
-  return Number(process.env.CODER_RESUME_MAX_AGENT_BYTES ?? 4 * 1024 * 1024) || 4 * 1024 * 1024;
+  return configuration.maxAgentBytes;
 }
 function maxSessionBytes(): number {
-  return Number(process.env.CODER_RESUME_MAX_SESSION_BYTES ?? 48 * 1024 * 1024) || 48 * 1024 * 1024;
+  return configuration.maxSessionBytes;
 }
 function ttlMs(): number {
-  return Number(process.env.CODER_RESUME_TTL_MS ?? 45 * 60_000) || 45 * 60_000;
+  return configuration.ttlMs;
 }
 function leaseMs(): number {
-  const configured = Number(process.env.CODER_ORCHESTRATION_LEASE_MS ?? 120_000);
-  return Number.isFinite(configured) && configured >= 60_000
-    ? Math.floor(configured)
-    : 120_000;
+  return configuration.leaseMs;
 }
 /**
  * Spill COMPLETED transcripts to disk (default ON). `CODER_RESUME_SPILL=0`
@@ -115,14 +133,11 @@ function leaseMs(): number {
  * spilled — failed/aborted stay in RAM so resume_agent keeps working.
  */
 function spillTerminalTranscripts(): boolean {
-  return process.env.CODER_RESUME_SPILL !== '0';
+  return configuration.spillTerminalTranscripts;
 }
 /** How often the unref'd worker timer reclaims idle sessions (default 5min). */
 function sweepIntervalMs(): number {
-  const configured = Number(process.env.CODER_RESUME_SWEEP_INTERVAL_MS ?? 5 * 60_000);
-  return Number.isFinite(configured) && configured >= 10_000
-    ? Math.floor(configured)
-    : 5 * 60_000;
+  return configuration.sweepIntervalMs;
 }
 
 const bySession = new Map<SessionId, Map<string, ResumableGroup>>();
@@ -450,6 +465,16 @@ export function stopResumeSweepForTests(): void {
   sweepTimer = null;
 }
 
+/** Test-only explicit configuration; production always uses immutable defaults. */
+export function configureResumeRegistryForTests(
+  overrides: Partial<ResumeRegistryConfiguration> | null,
+): void {
+  stopResumeSweepForTests();
+  configuration = overrides
+    ? Object.freeze({ ...DEFAULT_CONFIGURATION, ...overrides })
+    : DEFAULT_CONFIGURATION;
+}
+
 /** Test hook: RAM group count for a session WITHOUT triggering a lazy sweep. */
 export function peekSessionGroupCountForTests(sessionId: SessionId): number {
   return bySession.get(sessionId)?.size ?? 0;
@@ -462,7 +487,7 @@ export function peekSessionGroupCountForTests(sessionId: SessionId): number {
  * Byte caps (per-agent/per-session) and TTL bound the extra memory.
  */
 export function retainCompletedTranscripts(): boolean {
-  return process.env.CODER_RESUME_RETAIN_COMPLETED !== '0';
+  return configuration.retainCompletedTranscripts;
 }
 
 /**

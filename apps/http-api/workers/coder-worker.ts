@@ -51,6 +51,8 @@ import {
   type CoderAttachment,
 } from '../../../packages/code-agent/src/index.js';
 import type { AgentId } from '../../../packages/code-agent/src/agents/index.js';
+import type { ResolvedRuntimePolicyV1 } from '../../../packages/agent-runtime-contracts/src/index.js';
+import { sealResolvedRuntimePolicyV1 } from '../../../packages/agent-runtime-host/src/runtime-policy/RuntimePolicySnapshot.js';
 import type { CoderRunner } from '../../../packages/code-agent/src/core/runner.js';
 import { attachmentsToBlocks } from '../../../packages/code-agent/src/core/messages.js';
 import { resolveAgentRuntimeEnv } from '../../../packages/api-handlers/src/runtime/runtime-resolve.js';
@@ -881,6 +883,8 @@ interface RunFreshPayload {
    * invariant holds.
    */
   resume?: boolean;
+  /** Main-resolved immutable configuration for this exact attempt. */
+  runtimePolicy?: ResolvedRuntimePolicyV1;
 }
 
 bridge.handle('runFresh', async (payload) => {
@@ -940,6 +944,9 @@ bridge.handle('runFresh', async (payload) => {
       selectedSkillIds: opts.selectedSkillIds,
       ideContext: opts.ideContext,
       preflight: opts.preflight,
+      runtimePolicy: opts.runtimePolicy
+        ? sealResolvedRuntimePolicyV1(opts.runtimePolicy)
+        : undefined,
       pluginTools,
       agentDecisionTelemetryEnabled: opts.agentDecisionTelemetryEnabled,
       agentDecisionGuidanceEnabled: opts.agentDecisionGuidanceEnabled,

@@ -416,7 +416,6 @@ export class CompactingNode implements BehaviorNode {
  * effectively tail-local) and preserves the shared backing array.
  */
 function flushRollingReductionDurable(ctx: RunContext): void {
-  if (process.env.CODER_ROLLING_REDUCER === '0') return;
   const rolled = applyRollingReduction(ctx.messages, { flushThresholdChars: 0 });
   if (rolled.reduced > 0) {
     ctx.messages.splice(0, ctx.messages.length, ...rolled.messages);

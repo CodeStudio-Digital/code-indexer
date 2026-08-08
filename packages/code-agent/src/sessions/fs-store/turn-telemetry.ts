@@ -44,6 +44,8 @@ export interface FsTurnTelemetryInput {
   eligible_tools_def_chars?: number | null;
   visible_tools_count?: number | null;
   tools_fingerprint?: string | null;
+  capability_set_digest?: string | null;
+  projection_digest?: string | null;
   prefix_head_hash?: string | null;
   reducer_retired_count?: number | null;
   reducer_freed_chars?: number | null;

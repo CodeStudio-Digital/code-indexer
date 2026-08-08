@@ -1,25 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import {
   checkDupCall,
   createInvocationGuardState,
-  dedupPolicyMode,
   normalizeGuardInput,
-  resetDupCalls,
 } from '../tuple-hash-dedup.js';
-import type { DupCallEntry } from '../../machine/types.js';
-
-let previousPolicy: string | undefined;
-
-beforeEach(() => {
-  previousPolicy = process.env.CODER_DEDUP_POLICY;
-  delete process.env.CODER_DEDUP_POLICY;
-});
-
-afterEach(() => {
-  if (previousPolicy === undefined) delete process.env.CODER_DEDUP_POLICY;
-  else process.env.CODER_DEDUP_POLICY = previousPolicy;
-});
 
 function call(
   state: ReturnType<typeof createInvocationGuardState>,
@@ -37,12 +22,6 @@ function call(
 }
 
 describe('hybrid invocation guard', () => {
-  it('defaults safely to hybrid for missing/invalid values', () => {
-    expect(dedupPolicyMode()).toBe('hybrid');
-    process.env.CODER_DEDUP_POLICY = 'invalid';
-    expect(dedupPolicyMode()).toBe('hybrid');
-  });
-
   it('never refuses stable calls based on earlier occurrences', () => {
     const state = createInvocationGuardState();
     const verdicts = Array.from({ length: 5 }, (_, i) => call(state, {
@@ -110,23 +89,9 @@ describe('hybrid invocation guard', () => {
     expect(state.entries.size).toBe(0);
   });
 
-  it('observe mode records would-block without stopping the third mutation', () => {
-    process.env.CODER_DEDUP_POLICY = 'observe';
-    const state = createInvocationGuardState();
-    const first = call(state);
-    state.noteStateChange(first.key);
-    const second = call(state, { useId: 'u2' });
-    state.noteStateChange(second.key);
-    expect(call(state, { useId: 'u3' })).toMatchObject({
-      action: 'shadow',
-      wouldBlock: true,
-      shouldReflect: false,
-      count: 3,
-    });
-  });
 });
 
-describe('normalization and rollback', () => {
+describe('normalization', () => {
   it('normalizes aliases and schema defaults before keying', () => {
     const tool = {
       parameters: {
@@ -141,22 +106,5 @@ describe('normalization and rollback', () => {
       path: 'a.ts',
       encoding: 'utf8',
     });
-  });
-
-  it('legacy mode preserves the old warning/refusal sequence', () => {
-    process.env.CODER_DEDUP_POLICY = 'legacy';
-    const dupCalls = new Map<string, DupCallEntry>();
-    const base = {
-      name: 'read_file',
-      input: { path: 'a.ts' },
-      repeatPolicy: 'stable' as const,
-      dupCalls,
-    };
-    expect(checkDupCall({ ...base, turn: 1, useId: 'u1' }).action).toBe('allow');
-    expect(checkDupCall({ ...base, turn: 2, useId: 'u2' }).action).toBe('warn');
-    expect(checkDupCall({ ...base, turn: 3, useId: 'u3' }).action).toBe('block');
-    expect(dupCalls.size).toBe(1);
-    resetDupCalls(dupCalls);
-    expect(dupCalls.size).toBe(0);
   });
 });

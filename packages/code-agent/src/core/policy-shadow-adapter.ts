@@ -1,22 +1,20 @@
 /**
  * Policy shadow composition adapter (Fase 2.5).
  *
- * Converts the five `CODER_*` flags into the `policyShadow` port consumed by
- * `dispatchTools` (executing-dispatch.ts). This is the ONLY place where the
+ * Composes the attempt-scoped `policyShadow` port consumed by `dispatchTools`
+ * (executing-dispatch.ts). This is the ONLY place where the
  * Fase 2 modules (capability catalog, policy engine, hook bus and the injected
  * host persistence port) are wired together for production runs.
  *
  * Contract:
- *   - With every flag off, `createPolicyShadowPort` returns `null` — the port
- *     is absent and the dispatch path stays byte-identical to legacy.
- *   - Flags are re-checked PER INVOCATION: flipping the shadow flag off
- *     mid-run stops new evaluations/persistence immediately (kill switch,
- *     same posture as the Fase 1 shadow helpers).
+ *   - Production defaults always observe and snapshot the catalog.
+ *   - The mode is captured once at attempt composition; process env can never
+ *     change authority halfway through an invocation sequence.
  *   - Evaluation + persistence are best-effort: any internal error is counted
  *     and the port returns `{ refuse: false }` — the shadow can NEVER take a
  *     run down.
- *   - Only `CODER_POLICY_ENGINE_ENFORCE=1` (dormant; a human gate) lets the
- *     port refuse a call, and only when the shadow decision is not `allow`.
+ *   - Enforcement remains dormant until the typed composition layer supplies
+ *     it after the P3 corpus gate.
  */
 import {
   asAgentRunId,
@@ -61,9 +59,19 @@ export interface PolicyShadowDeps {
   persistence: PolicyShadowPersistencePort;
   registry: ToolRegistry;
   sessionContext: PolicyShadowSessionContext;
-  /** Optional hook bus — consulted only when CODER_HOOK_BUS_V1=1. */
+  /** Optional hook bus used whenever the policy shadow itself is active. */
   hookBus?: HookBus | null;
+  catalogOnlyCapabilities?: readonly CoderTool[];
+  /** Internal attempt-scoped mode. Production callers use the safe defaults. */
+  mode?: Partial<PolicyShadowMode>;
   log?: (level: 'warn' | 'info', msg: string) => void;
+}
+
+export interface PolicyShadowMode {
+  shadow: boolean;
+  catalog: boolean;
+  enforce: boolean;
+  resourceGrants: boolean;
 }
 
 export interface PolicyShadowMetrics {
@@ -79,25 +87,28 @@ export interface PolicyShadowComposition {
   createScopedPort: (sessionContext: PolicyShadowSessionContext) => PolicyShadowPort;
 }
 
-const flag = (name: string): boolean => process.env[name] === '1';
-const shadowEnabled = (): boolean => flag('CODER_POLICY_ENGINE_SHADOW');
-const catalogEnabled = (): boolean => flag('CODER_CAPABILITY_CATALOG_SHADOW');
-const hookBusEnabled = (): boolean => flag('CODER_HOOK_BUS_V1');
-const enforceEnabled = (): boolean => flag('CODER_POLICY_ENGINE_ENFORCE');
-const resourceGrantsEnabled = (): boolean => flag('CODER_RESOURCE_GRANTS');
-const anyFlagOn = (): boolean =>
-  shadowEnabled() || catalogEnabled() || hookBusEnabled()
-  || resourceGrantsEnabled() || enforceEnabled();
+const DEFAULT_MODE: Readonly<PolicyShadowMode> = Object.freeze({
+  shadow: true,
+  catalog: true,
+  enforce: false,
+  resourceGrants: false,
+});
 
 /**
- * Builds the production `policyShadow` port, or `null` when every flag is off
- * at composition time. The returned port re-checks the flags on every call.
+ * Builds the production `policyShadow` port. Mode is immutable for the attempt.
  */
 export function createPolicyShadowPort(
   deps: PolicyShadowDeps,
 ): PolicyShadowComposition | null {
-  if (!anyFlagOn()) return null;
-
+  const mode: Readonly<PolicyShadowMode> = Object.freeze({
+    ...DEFAULT_MODE,
+    ...deps.mode,
+  });
+  if (!mode.shadow && !mode.enforce && !mode.resourceGrants) return null;
+  const shadowEnabled = (): boolean => mode.shadow;
+  const catalogEnabled = (): boolean => mode.catalog;
+  const enforceEnabled = (): boolean => mode.enforce;
+  const resourceGrantsEnabled = (): boolean => mode.resourceGrants;
   const metrics: PolicyShadowMetrics = { evaluations: 0, refusals: 0, errors: 0 };
   const warn = (msg: string): void => deps.log?.('warn', `[policy-shadow] ${msg}`);
 
@@ -123,7 +134,7 @@ export function createPolicyShadowPort(
             const registry =
               sessionContext.capabilityRegistry ?? deps.registry;
             const { set, descriptors } = resolveCapabilitySet(
-              registry.list(),
+              [...registry.list(), ...(deps.catalogOnlyCapabilities ?? [])],
               { agentRunId },
             );
             await deps.persistence.recordCapabilitySet({
@@ -145,8 +156,7 @@ export function createPolicyShadowPort(
     };
 
     return async (input) => {
-      // Kill switch: flags re-checked per invocation.
-      if (!shadowEnabled() && !enforceEnabled() && !hookBusEnabled() && !resourceGrantsEnabled()) {
+      if (!shadowEnabled() && !enforceEnabled() && !resourceGrantsEnabled()) {
         return { refuse: false };
       }
       try {
@@ -168,7 +178,7 @@ export function createPolicyShadowPort(
 
         const { descriptor } = deriveCapabilityDescriptor(tool);
         let extraVotes: PolicySourceVote[] | undefined;
-        if (hookBusEnabled() && deps.hookBus) {
+        if (deps.hookBus) {
           const hookContext = {
             toolName: input.toolName,
             toolUseId: input.toolUseId,

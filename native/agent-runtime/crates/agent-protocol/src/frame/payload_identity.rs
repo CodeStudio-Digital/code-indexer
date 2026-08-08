@@ -61,5 +61,9 @@ const fn identity_field(
         }
         Body::CapabilityPrepare(value) => Some(("CapabilityPrepare", value.identity.as_ref())),
         Body::CapabilityUpdate(value) => Some(("CapabilityUpdate", value.identity.as_ref())),
+        Body::CapabilityExecute(value) => Some(("CapabilityExecute", value.identity.as_ref())),
+        Body::CapabilityExecutionResult(value) => {
+            Some(("CapabilityExecutionResult", value.identity.as_ref()))
+        }
     }
 }

@@ -38,12 +38,6 @@ import {
 import { type ChromeService, setChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import { type VerdaccioService, setVerdaccioService } from '@mcp/services/verdaccio/verdaccio-service.js';
 import { setGlobalRecentFilesTouchSink } from '@mcp/code-agent/tools/global-recent-files.js';
-import {
-  setGlobalToolSelectionFilter,
-  setGlobalToolSelectionOutcomeObserver,
-} from '@mcp/code-agent/tool-selection/index.js';
-import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
-import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
 import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
 import { setDbSecretDecryptor, setDbToolsStores } from '@mcp/code-agent/tools/db/index.js';
@@ -182,10 +176,6 @@ export function shutdownAppRuntime(resources: RuntimeShutdownResources): Promise
     setGlobalRecentFilesTouchSink(null);
     setLspExecutor(null);
     setGlobalAgentLspBackend(null);
-    setGlobalToolSelectionFilter(undefined);
-    setGlobalToolSelectionOutcomeObserver(undefined);
-    setGlobalSubAgentCache(undefined, false);
-    setGlobalContextRelevancePipeline(undefined, false);
     setGlobalFeedbackCollector(undefined);
     setEnvToolStore(null);
     setDbToolsStores(null, null);

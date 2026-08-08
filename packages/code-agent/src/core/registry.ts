@@ -21,8 +21,14 @@ import {
  */
 export class ToolRegistry {
   private tools = new Map<string, CoderTool>();
+  private sealed = false;
 
   register(tool: CoderTool): void {
+    if (this.sealed) {
+      throw new Error(
+        `ToolRegistry attempt snapshot is sealed; '${tool.name}' is available only to a successor attempt`,
+      );
+    }
     if (this.tools.has(tool.name)) {
       throw new Error(`Tool '${tool.name}' already registered`);
     }
@@ -46,10 +52,26 @@ export class ToolRegistry {
   }
 
   /**
+   * Freeze membership for the current attempt. Tool handlers and runner-local
+   * projection state remain live, but a late MCP/plugin cannot silently grant
+   * a capability that was absent from the launch snapshot.
+   */
+  seal(): void {
+    this.sealed = true;
+  }
+
+  get isSealed(): boolean {
+    return this.sealed;
+  }
+
+  /**
    * Remove all tools that do not satisfy the predicate.
    * Used by the Master agent filter to strip code-level tools.
    */
   filterInPlace(predicate: (tool: CoderTool) => boolean): void {
+    if (this.sealed) {
+      throw new Error('ToolRegistry attempt snapshot is sealed; filtering must happen before launch');
+    }
     for (const [name, tool] of this.tools) {
       if (!predicate(tool)) {
         this.tools.delete(name);

@@ -27,6 +27,7 @@ export class RustHostAttemptCoordinator {
   #facts?: RustHostManagementFactPort;
   #lifecycle?: AuthenticatedAttemptLifecyclePort;
   #active?: RustHostActiveAttemptController;
+  #physicalReap?: Promise<void>;
   #controlOpening = false;
   #started = false;
   #closed = false;
@@ -57,7 +58,10 @@ export class RustHostAttemptCoordinator {
     const request = snapshotRustHostAttemptInput(input);
     this.#started = true;
     this.#signals.bindAbort(signal, (cause) => this.abort(cause));
-    this.#signals.bindData(this.#data, (cause) => this.#fail(cause));
+    this.#signals.bindData(this.#data, (cause) => {
+      if (this.#physicalReap) this.#failActive(cause);
+      else this.#fail(cause);
+    });
     try {
       this.#assertOpen();
       this.#durableBarrier.bindActivationAuthoritySeal(
@@ -106,6 +110,7 @@ export class RustHostAttemptCoordinator {
       this.#assertOpen();
       const authority = lifecycle.consumeActive(active);
       this.#active!.startFactPump(this.#facts!);
+      this.#physicalReap = this.#active!.waitForPhysicalReap();
       return { kind: 'active', hello, authority };
     } catch (cause) {
       this.#fail(cause);
@@ -114,34 +119,29 @@ export class RustHostAttemptCoordinator {
       scrubRustHostAttemptInput(request);
     }
   }
-
   inspectActive(handle: ActiveAttemptAuthorityHandle): ActiveAttemptAuthoritySnapshot {
     this.#assertOpen();
     return this.#requireActive().inspect(handle);
   }
-
   cancelActive(handle: ActiveAttemptAuthorityHandle, request: HostCancelAttemptRequest): Promise<void> {
     this.#assertOpen();
     this.#data.beginTermination?.();
     return this.#requireActive().cancel(handle, request);
   }
-
   fenceActive(handle: ActiveAttemptAuthorityHandle, request: HostFenceAttemptRequest): Promise<void> {
     this.#assertOpen();
     this.#data.beginTermination?.();
     return this.#requireActive().fence(handle, request);
   }
-
   waitForPhysicalReap(): Promise<void> {
+    if (this.#physicalReap) return this.#physicalReap;
     this.#assertOpen();
     return this.#requireActive().waitForPhysicalReap();
   }
-
   tick(): void {
     this.#assertOpen();
     this.#active?.tick();
   }
-
   abort(cause?: unknown): void {
     this.#fail(cause ?? rustHostAttemptAborted());
   }
@@ -149,11 +149,9 @@ export class RustHostAttemptCoordinator {
   get isFailed(): boolean {
     return this.#failed || this.#lifecycle?.isFailed === true;
   }
-
   get failureCause(): unknown {
     return this.#abortCause;
   }
-
   async #nextCommitted(
     expected: Parameters<typeof nextCommittedManagementFact>[1],
   ): ReturnType<typeof nextCommittedManagementFact> {
@@ -168,7 +166,6 @@ export class RustHostAttemptCoordinator {
     }
     this.#launch = capability;
   }
-
   #adoptFacts(facts: RustHostManagementFactPort): void {
     this.#launch = undefined;
     if (this.#closed) {
@@ -177,7 +174,6 @@ export class RustHostAttemptCoordinator {
     }
     this.#facts = facts;
   }
-
   #adoptLifecycle(lifecycle: AuthenticatedAttemptLifecyclePort): void {
     this.#controlOpening = false;
     if (this.#closed) {
@@ -187,11 +183,10 @@ export class RustHostAttemptCoordinator {
     this.#lifecycle = lifecycle;
     this.#active = new RustHostActiveAttemptController(
       lifecycle,
-      (cause) => this.#fail(cause),
+      (cause) => this.#failActive(cause),
     );
-    this.#signals.bindLifecycle(lifecycle, (cause) => this.#fail(cause));
+    this.#signals.bindLifecycle(lifecycle, (cause) => this.#failActive(cause));
   }
-
   #closeRejected(): void {
     if (this.#closed) return;
     this.#closed = true;
@@ -202,9 +197,9 @@ export class RustHostAttemptCoordinator {
       rustHostManagementSequenceFailure('launch was durably rejected'),
     ), () => this.#control.abort(), () => this.#data.abort()]);
   }
-
-  #fail(cause: unknown): void {
+  #fail(cause: unknown, preservePhysicalReap = false): void {
     if (this.#closed) return;
+    const preserveFacts = preservePhysicalReap && this.#physicalReap !== undefined;
     this.#closed = true;
     this.#failed = true;
     this.#abortCause = cause;
@@ -220,20 +215,23 @@ export class RustHostAttemptCoordinator {
     this.#lifecycle = undefined;
     this.#active = undefined;
     this.#controlOpening = false;
-    this.#durableBarrier.discard();
+    if (!preserveFacts) this.#durableBarrier.discard();
     this.#signals.clear();
     bestEffortAttemptCleanup([
       () => this.#signal.abort(cause),
       () => bootstrap?.abort(cause),
       () => launch?.abort(cause),
-      () => active?.abortFactPump(cause),
-      () => facts?.abort(cause),
+      () => { if (!preserveFacts) active?.abortFactPump(cause); },
+      () => { if (!preserveFacts) facts?.abort(cause); },
       () => { if (controlOpening) this.#control.abort(cause); },
       () => this.#data.abort(cause),
       () => lifecycle?.abort(),
     ]);
   }
-
+  // Active failure revokes Control/Data but preserves facts through reap.
+  #failActive(cause: unknown): void {
+    this.#fail(cause, true);
+  }
   #assertOpen(): void {
     if (this.#closed) throw rustHostAttemptAborted(this.#abortCause);
   }
@@ -245,5 +243,4 @@ export class RustHostAttemptCoordinator {
       'active lifecycle authority is unavailable',
     );
   }
-
 }

@@ -14,10 +14,12 @@ use tokio::task::JoinHandle;
 
 use crate::control::RunnerExecutionSeed;
 use crate::engine_authority::EngineAuthority;
+use crate::external_engine::CodexAppServerProcessConfig;
 use crate::provider_data::ProviderDataTiming;
 use crate::provider_gateway::ProviderDataGateway;
 
 mod capability_loop;
+mod codex;
 mod error;
 
 use capability_loop::CapabilityLoop;
@@ -43,7 +45,7 @@ impl ActiveEngineTask {
         let (started, started_wait) = oneshot::channel();
         Self {
             join: tokio::spawn(async move {
-                run(resources, started)
+                Box::pin(run(resources, started))
                     .await
                     .map_or(ActiveEngineExit::Failed, |()| ActiveEngineExit::Completed)
             }),
@@ -56,6 +58,10 @@ impl ActiveEngineTask {
             Some(started) => started.await.is_ok(),
             None => false,
         }
+    }
+
+    pub(super) fn is_finished(&self) -> bool {
+        self.join.is_finished()
     }
 
     pub(super) async fn cancel_and_join(self) -> ActiveEngineExit {
@@ -76,12 +82,16 @@ pub(super) struct ActiveEngineResources {
     pub authority: EngineAuthority,
     pub initial_provider_context: Vec<u8>,
     pub runtime_instance_id: String,
+    pub codex_app_server: Option<CodexAppServerProcessConfig>,
 }
 
 async fn run(
-    resources: ActiveEngineResources,
+    mut resources: ActiveEngineResources,
     started: oneshot::Sender<()>,
 ) -> Result<(), ActiveEngineError> {
+    if let Some(config) = resources.codex_app_server.take() {
+        return codex::run(resources, config, started).await;
+    }
     let spec = resources.execution_seed.as_wire();
     let identity = spec
         .identity

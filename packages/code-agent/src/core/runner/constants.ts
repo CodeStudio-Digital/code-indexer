@@ -1,53 +1,11 @@
 /**
- * Module-level tunable constants and small helpers for the runner's
- * loop-guard family. Resolved at module load from `process.env.CODER_*`
- * with documented defaults. Read once per session — for late-binding
- * test overrides (`vi.stubEnv`), prefer the lazy `envInt` helpers
- * exported from `dup-utils.ts` / `recovery-config.ts`.
+ * Module-level product constants and small helpers for the runner's
+ * loop-guard family. Attempt-scoped configuration lives in RuntimePolicy;
+ * these safety ceilings intentionally have no process-wide override.
  *
  * Owns: doom-loop / dominance / failure-streak / polling / summarizer /
  * push-time-cap / per-turn budget knobs.
  */
-
-/** Module-load env reader for non-lazy numeric tunables. */
-function readEnvInt(name: string, fallback: number): number {
-  const v = process.env[name];
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return fallback;
-}
-
-/**
- * Lazy env reader so tests can override these caps after module import
- * (`vi.stubEnv` works because we re-resolve every call rather than
- * capturing at module load).
- */
-export function envInt(name: string, fallback: number): number {
-  const v = process.env[name];
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return n;
-  }
-  return fallback;
-}
-
-/**
- * Doom-loop guard: if the model emits the exact same set of tool calls
- * this many turns in a row, abort the run. Prevents cost blowups when a
- * model latches onto a failing tool call and keeps retrying it verbatim.
- * Set to 0 (or any N<2) to disable. Default 3 matches opencode's
- * processor.ts.
- *
- * Default 3 (was 0/disabled): a real session that hit `get_goal`
- * repeatedly 30+ times burned through tokens with no guard. Strict-sig
- * threshold of 3 is conservative — only triggers on byte-identical
- * tool calls.
- */
-export function doomLoopThreshold(): number {
-  return envInt('CODER_DOOM_LOOP_THRESHOLD', 3);
-}
 
 /**
  * Unrestricted-mode push-time caps. When the per-session
@@ -57,106 +15,26 @@ export function doomLoopThreshold(): number {
  * outputs (Unity console dumps, MCP search hits) arrive intact in
  * the turn that produced them.
  */
-export const UNRESTRICTED_PUSH_TIME_CAP = readEnvInt('CODER_UNRESTRICTED_PUSH_TIME_CAP', 1_000_000);
-export const UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP = readEnvInt(
-  'CODER_UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP',
-  500_000,
-);
+export const UNRESTRICTED_PUSH_TIME_CAP = 1_000_000;
+export const UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP = 500_000;
 
 /** Per-turn safety budget — emits a warning when the about-to-send payload exceeds this. */
-export const TURN_BUDGET_CHARS = readEnvInt('CODER_TURN_BUDGET_CHARS', 30_000);
-
-/**
- * Fuzzy doom-loop threshold: catches "same tool names, slightly different args"
- * patterns that the strict signature misses. Higher than the strict threshold
- * because the false-positive risk is larger.
- *
- * Default 6 (was 0): more tolerant than strict, still catches the
- * "model paginates the same file 6+ turns" pattern.
- */
-export const DOOM_LOOP_FUZZY_THRESHOLD = readEnvInt('CODER_DOOM_LOOP_FUZZY_THRESHOLD', 6);
-
-/**
- * Tools the FUZZY doom-loop (name-only) is allowed to watch.
- *
- * Fuzzy fires on "same tool name N-of-M turns regardless of args/result" —
- * which is a LOOP for session-state churn (create_goal with rotating text,
- * status spam, re-submitting plans) but NORMAL for productive work: reading,
- * editing, or searching DIFFERENT files 6× in a row is exploration /
- * refactoring, not a loop. gpt-5.5 emits 1 tool/turn, so 6 reads = 6 turns —
- * fuzzy would false-fire constantly without this scope.
- *
- * So fuzzy is restricted to this small allowlist; everything else (reads,
- * edits, search, exec, file ops) is exempt from fuzzy. The PRECISE guards
- * still cover those: strict doom-loop (identical args), tuple-hash / pre-read
- * (identical call / same slice), failure-streak (consecutive errors), and the
- * dominance guard (one tool, 15+ turns, ZERO assistant text). A new tool
- * defaults to NOT being fuzzy-watched — the safe direction (no false
- * positives; a genuine new churn-loop still hits strict/dominance).
- */
-export const FUZZY_LOOP_TOOLS: ReadonlySet<string> = new Set<string>([
-  'create_goal',
-  'update_goal',
-  'get_goal',
-  'set_agent_status',
-  'submit_plan',
-  'submit_plan_to_master',
-  'task_list',
-  'submit_tasks',
-  'submit_tasks_to_master',
-  // Track-gate aliases of task_list: include so a varied-checklist loop
-  // (re-writing the list each refused turn with a tweak) still accumulates and
-  // escalates to a Planning turn instead of slipping past as "diverse usage".
-  'todo_write',
-  'update_todo',
-  'expand_toolset',
-  'find_tools',
-]);
-
-/**
- * PR 5 — fuzzy doom-loop tolerance window.
- *
- * The legacy fuzzy check fired only when ALL last `THRESHOLD` signatures
- * matched. Session 798's `write_stdin` loop had 5-8s of provider-chat
- * between failures (occasionally a no-tool turn). That intercalated
- * reasoning reset the buffer before the fuzzy window could close.
- *
- * The new check counts MATCHES in the trailing window and fires when
- * `matches >= THRESHOLD - TOLERANCE`. Default tolerance is
- * `floor(THRESHOLD / 3)` (2 for the default 6 ⇒ requires 4-of-6).
- *
- * Env override: `CODER_DOOM_LOOP_FUZZY_TOLERANCE` (integer, clamped
- * to `[0, THRESHOLD - 2]`).
- */
-export function doomLoopFuzzyTolerance(threshold: number): number {
-  const raw = process.env.CODER_DOOM_LOOP_FUZZY_TOLERANCE;
-  const defaultTol = Math.floor(threshold / 3);
-  if (raw == null || raw === '') return defaultTol;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return defaultTol;
-  // Need at least 2 matches to claim a loop.
-  return Math.min(Math.floor(n), Math.max(0, threshold - 2));
-}
+export const TURN_BUDGET_CHARS = 30_000;
 
 /**
  * Dominance guard (`guards/dominance.ts`). Catches one tool eating a long
  * window of turns with ZERO assistant text — the silent-grind runaway
  * (session 609: 50+ turns of `mcp__read_file`, no narration). Lazy readers so
- * tests can override via `vi.stubEnv`. Kill switch: `CODER_DOMINANCE=0`.
+ * Uses the telemetry-proven product posture; it is not deployment config.
  *
- *   - window: turns inspected (default 15).
- *   - ratio:  fraction of the window a single tool must own (default 0.8).
+ *   - window: 8 turns inspected.
+ *   - ratio:  one tool owns at least 75% of the window.
  */
 export function dominanceWindow(): number {
-  return envInt('CODER_DOMINANCE_WINDOW', 15);
+  return 8;
 }
 export function dominanceRatio(): number {
-  const v = process.env.CODER_DOMINANCE_RATIO;
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0 && n <= 1) return n;
-  }
-  return 0.8;
+  return 0.75;
 }
 
 /**
@@ -164,8 +42,8 @@ export function dominanceRatio(): number {
  * evolve. When the RESULT content is byte-identical for N polls in a
  * row, the polling is stuck and the agent is wasting tokens.
  */
-export const POLLING_STUCK_CAP = readEnvInt('CODER_POLLING_STUCK_CAP', 10);
-export const POLLING_STUCK_MIN_CHARS = readEnvInt('CODER_POLLING_STUCK_MIN_CHARS', 50);
+export const POLLING_STUCK_CAP = 10;
+export const POLLING_STUCK_MIN_CHARS = 50;
 
 /**
  * PR 5 (failure-streak guard) — per-tool consecutive-failure counters.
@@ -186,8 +64,8 @@ export const POLLING_STUCK_MIN_CHARS = readEnvInt('CODER_POLLING_STUCK_MIN_CHARS
  * primitives a string of empty results is the workflow, not a loop. Volatile
  * calls still use the ordinary failure-streak protection.
  */
-export const FAILURE_STREAK_REMINDER_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_REMINDER', 3);
-export const FAILURE_STREAK_REFUSE_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_REFUSE', 5);
+export const FAILURE_STREAK_REMINDER_THRESHOLD = 3;
+export const FAILURE_STREAK_REFUSE_THRESHOLD = 5;
 
 /**
  * Phase B — summarizer pass cap + cooldown. Up to `MAX_RUNS` LLM
@@ -195,8 +73,8 @@ export const FAILURE_STREAK_REFUSE_THRESHOLD = readEnvInt('CODER_FAILURE_STREAK_
  * consecutive passes. MAX_RUNS=1 restores legacy lock-once; MAX_RUNS=0
  * disables the summarizer entirely.
  */
-export const SUMMARIZER_MAX_RUNS = readEnvInt('CODER_SUMMARIZER_MAX_RUNS', 6);
-export const SUMMARIZER_COOLDOWN_TURNS = readEnvInt('CODER_SUMMARIZER_COOLDOWN_TURNS', 8);
+export const SUMMARIZER_MAX_RUNS = 6;
+export const SUMMARIZER_COOLDOWN_TURNS = 8;
 
 /**
  * Pure helper exported for testability. Returns true when the LLM
@@ -220,14 +98,4 @@ export function canRunSummarizer(args: {
   if (args.runCount >= args.maxRuns) return false;
   if (args.runCount === 0) return true;
   return args.currentTurn - args.lastTurn >= args.cooldownTurns;
-}
-
-/**
- * Fix A — stop PUSHING the `self_review` nudge after this many auto-reviews
- * this session. The `self_review` TOOL stays available; we just stop the
- * per-turn reminder that amplifies the review→fix→review doom-loop
- * (session 887). `<= 0` disables the cap. Lazy reader for `vi.stubEnv`.
- */
-export function selfReviewMaxNudges(): number {
-  return envInt('CODER_SELF_REVIEW_MAX', 3);
 }

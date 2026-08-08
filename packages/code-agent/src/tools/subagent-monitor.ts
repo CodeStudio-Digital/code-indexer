@@ -52,8 +52,8 @@ export interface SubagentMonitorSnapshot {
   anyIdleMs: number;
 }
 
-const SOFT_IDLE_MS = envMs('CODER_SUBAGENT_SOFT_IDLE_MS', 75_000);
-const PROVIDER_NO_DELTA_MS = envMs('CODER_SUBAGENT_PROVIDER_NO_DELTA_MS', 120_000);
+const SOFT_IDLE_MS = 75_000;
+const PROVIDER_NO_DELTA_MS = 120_000;
 
 export function createSubagentMonitor(args: MonitorArgs): SubagentMonitor {
   let settled = false;
@@ -196,12 +196,6 @@ export function createSubagentMonitor(args: MonitorArgs): SubagentMonitor {
   };
 }
 
-function envMs(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw == null || raw === '') return fallback;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
-}
 
 function formatMs(ms: number): string {
   if (ms >= 60_000) return `${Math.round(ms / 60_000)}m`;

@@ -8,6 +8,7 @@ import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { nestedToolCallUseId } from '@mcp/code-agent/core/tool.js';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
+import { tunablesFromRuntimePolicy } from '@mcp/code-agent/core/tunables.js';
 import { FsTurnTelemetryRepository } from '@mcp/code-agent/sessions/fs-store/turn-telemetry.js';
 import { createPolicyShadowPort } from '@mcp/code-agent/core/policy-shadow-adapter.js';
 import { hasStructuredToolTruncation } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
@@ -60,7 +61,6 @@ import {
 import { buildRepoMap, resolveRepoMapBudget } from '@mcp/code-agent/core/repo-map.js';
 import { detectVerifyCommands } from '@mcp/code-agent/core/verify-commands.js';
 import { buildVerifyEvidence } from '@mcp/code-agent/core/review-evidence.js';
-import { rolloutEnabled } from '@mcp/code-agent/core/rollout.js';
 import { workspaceFromProject, type WorkspaceContext } from '@mcp/code-agent/core/workspace.js';
 import { fsTools } from '@mcp/code-agent/tools/fs.js';
 import {
@@ -211,13 +211,13 @@ import type { ResolvedSkill, SkillTemplateContext } from '@mcp/code-agent/skills
 import { resolveActiveWorkspaceSkills } from '@mcp/code-agent/skills/workspace-skills.js';
 import { buildInvokeSkillTool, buildSkillDiscoveryTools } from '@mcp/code-agent/skills/skill-tool-builder.js';
 import { buildCreateSkillTool } from '@mcp/code-agent/tools/create-skill.js';
+import { buildCapabilityCatalogTool } from '@mcp/code-agent/tools/capability-catalog-tool.js';
 import { listInstalledNamespaces } from '@mcp/code-agent/skills/agent-skills-installer.js';
 import {
-  buildCompactSkillsSection,
   buildLazySkillsSection,
   buildMatchedSkillsPromptSection,
-  buildSkillsPromptSection,
 } from '@mcp/code-agent/skills/prompt-injector.js';
+import { skillAsCatalogCapability } from '@mcp/code-agent/core/capability-catalog.js';
 import { matchSkills, type SkillMatchContext } from '@mcp/code-agent/skills/skill-matcher.js';
 import {
   BundleToolOutputStore,
@@ -970,20 +970,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const exactAllowedToolNames = opts.allowedToolNames === undefined
     ? null
     : new Set(opts.allowedToolNames);
-  const allowsLateExternalTool = (tool: CoderTool): boolean =>
-    (exactAllowedToolNames === null || exactAllowedToolNames.has(tool.name))
-    && (effectiveAgentId !== 'research' || isResearchToolAllowed(tool));
-
-  const syncExternalToolCatalog = async (refresh: boolean, lateRegistration: boolean): Promise<number> => {
+  const loadExternalToolCatalogAtLaunch = async (): Promise<number> => {
     const mcpServerStore = new McpServerStore(config.dbPath);
     try {
       const enabledServers = mcpServerStore.listServers({ enabled: true });
-      if (refresh) await mcpServerManager.refreshAll(enabledServers);
-      else await mcpServerManager.connectAll(enabledServers);
+      await mcpServerManager.connectAll(enabledServers);
 
       const { tools: extTools, tierMap } = await mcpServerManager.listAllTools();
-      const newTools = extTools.filter((tool) =>
-        !registry.has(tool.name) && (!lateRegistration || allowsLateExternalTool(tool)));
+      const newTools = extTools.filter((tool) => !registry.has(tool.name));
       if (newTools.length > 0) registry.registerAll(newTools);
 
       if (isSubordinate) {
@@ -997,7 +991,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           for (const name of serverToolNames) runtimeToolTiers.set(name, server.id);
           summary.set(server.id, { displayName: server.name, toolCount: serverToolNames.length });
         }
-        if (!lateRegistration) subordinateTierSummary = summary;
+        subordinateTierSummary = summary;
       } else {
         for (const [name, tier] of tierMap) {
           if (registry.has(name)) runtimeToolTiers.set(name, tier);
@@ -1016,7 +1010,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       if (extTools.length > 0) {
         console.log(
           `[coder] ${extTools.length} external tool(s) from ${mcpServerManager.connectedCount} MCP server(s)` +
-            (lateRegistration && newTools.length > 0 ? `; ${newTools.length} added to live session` : ''),
+            '; attempt catalog snapshot pending seal',
         );
       }
       return newTools.length;
@@ -1026,7 +1020,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   };
 
   try {
-    await syncExternalToolCatalog(false, false);
+    await loadExternalToolCatalogAtLaunch();
     if (isSubordinate && subordinateTierSummary && subordinateTierSummary.size > 0) {
       console.log(
         `[coder] subordinate ${opts.companyContext!.agentRole}: external MCPs as opt-in tiers ` +
@@ -1036,15 +1030,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   } catch (e) {
     console.warn(`[coder] External MCP servers failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-
-  let externalCatalogRefresh: Promise<void> | null = null;
-  const refreshExternalToolCatalog = (): Promise<void> => {
-    if (externalCatalogRefresh) return externalCatalogRefresh;
-    externalCatalogRefresh = syncExternalToolCatalog(true, true)
-      .then(() => undefined)
-      .finally(() => { externalCatalogRefresh = null; });
-    return externalCatalogRefresh;
-  };
 
   // Plugin tools — contributed by installed plugins, with worker-backed
   // handlers synthesized by the http-api layer (@mcp/plugin-host
@@ -1070,7 +1055,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll(buildExpandTools(
     customTierSummary.size > 0 ? customTierSummary : undefined,
     {
-      beforeExpand: async () => refreshExternalToolCatalog(),
       isTierAvailable: (tier) => registry.list().some(
         (tool) => runtimeToolTiers.get(tool.name) === tier,
       ),
@@ -1083,7 +1067,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.registerAll([buildFindToolsTool(
     registry,
     runtimeToolTiers,
-    { beforeSearch: refreshExternalToolCatalog },
   )]);
 
   // request_review — Camada 4 reviewer subagent. Registered with a placeholder
@@ -1123,7 +1106,9 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     const ps = new ProviderStore(config.dbPath);
     const disabled = ps.listGlobalDisabledTools();
     ps.close();
-    if (disabled.length > 0) globalDisabledTools = new Set(disabled);
+    const policyDisabled = opts.runtimePolicy?.capabilities.disabledCapabilityNames ?? [];
+    const combinedDisabled = [...disabled, ...policyDisabled];
+    if (combinedDisabled.length > 0) globalDisabledTools = new Set(combinedDisabled);
   } catch {
     /* table may not exist yet — no-op */
   }
@@ -1138,7 +1123,10 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // company Master (it must use spawn_subordinate_agent instead — ephemeral
   // subagents don't fit the orchestration role).
   let subagentDeps: SubagentDeps | null = null;
-  if (shouldEnableEphemeralSubagents(opts.companyContext)) {
+  if (shouldEnableEphemeralSubagents(
+    opts.companyContext,
+    opts.runtimePolicy ? !opts.runtimePolicy.subagents.enabled : false,
+  )) {
     const allDisabled = new Set([...(globalDisabledTools ?? []), ...sessionDisabledTools]);
     const parentTools = allDisabled.size > 0
       ? registry.list().filter((t) => !allDisabled.has(t.name))
@@ -1205,6 +1193,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       resolveLimitsForProfile,
       toolSelectionFilter: opts.toolSelectionFilter ?? getGlobalToolSelectionFilter(),
       externalToolTiers: runtimeToolTiers,
+      maxParallel: opts.runtimePolicy?.subagents.maxParallel,
     };
   }
 
@@ -1479,7 +1468,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const autoCapture = buildAutoCapture({
     store,
     sessionId: session.id,
-    enabled: !opts.companyContext && process.env.CODER_AUTO_NOTES !== '0',
+    enabled: !opts.companyContext,
     isRepeatable: (name) => {
       try { return registry.get(name)?.repeatable === true; } catch { return false; }
     },
@@ -2004,7 +1993,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // made the visible tool array flip between runs (118 ↔ ~60 observed in
   // session 991) — and the tools array is the FIRST prompt-cache segment,
   // so every flip busted the whole prefix on the next round's turn 1.
-  const stickyToolset = process.env.CODER_STICKY_PROFILE !== '0';
+  const stickyToolset = true;
   const persistedToolset = stickyToolset
     ? parseToolsetState(session.tool_profile, session.tool_state_json)
     : null;
@@ -2012,21 +2001,25 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // real reduction even on large-catalog models. NEVER_TRIM + pins survive.
   // The cap is persisted (widen-only state) so resumes rebuild the SAME
   // visible membership instead of dropping the cut and re-flipping the array.
-  const preflightCapRaw = Number.parseInt(process.env.CODER_PREFLIGHT_VISIBLE_CAP ?? '', 10);
   const seededToolCap = preflightSeed
-    ? (Number.isFinite(preflightCapRaw) && preflightCapRaw > 0 ? preflightCapRaw : 28)
+    ? (opts.runtimePolicy?.capabilities.visibleToolCap ?? 28)
     : undefined;
   const managedToolCap = opts.initialVisibleToolCap != null && opts.initialVisibleToolCap > 0
     ? opts.initialVisibleToolCap
     : undefined;
-  const sessionToolCap = managedToolCap ?? seededToolCap ?? persistedToolset?.visibleCap ?? undefined;
+  const sessionToolCap = managedToolCap
+    ?? seededToolCap
+    ?? persistedToolset?.visibleCap
+    ?? opts.runtimePolicy?.capabilities.visibleToolCap;
   if (stickyToolset && sessionToolCap != null) {
     try { await store.mergeSessionToolsetState(session.id, { visibleCap: sessionToolCap }); } catch { /* best-effort */ }
   }
   const profileResolution = resolveSessionProfile({
     explicitProfile:
       opts.profile ??
-      (process.env.CODER_PROFILE as CoderProfile | 'auto' | undefined) ??
+      (opts.runtimePolicy?.capabilities.profile === 'auto'
+        ? undefined
+        : opts.runtimePolicy?.capabilities.profile) ??
       (agentDef?.profile),
     hasHistory: hasHistory0,
     historyToolNames,
@@ -2110,6 +2103,14 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   registry.register(
     buildCreateSkillTool({ dbPath: config.dbPath, registry, projectId: project.id }),
   );
+  const catalogOnlyCapabilities = resolvedSkills.map(skillAsCatalogCapability);
+  registry.register(buildCapabilityCatalogTool({
+    registry,
+    skills: resolvedSkills,
+    skillTemplateContext: skillTemplateCtx,
+    sessionStore: store,
+    sessionId: session.id,
+  }));
 
   // Detect indexing status — used for prompt conditioning and dashboard feedback.
   const projectStats = db.getStats(project.id);
@@ -2148,12 +2149,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // agent runs the project's REAL test/typecheck instead of guessing.
   const verifyCommands = detectVerifyCommands(project.root_path);
 
-  // Agent Loop v2 — ON by default for new sessions. Set CODER_AGENT_LOOP_V2=0
-  // to opt out (e.g. for cache-stability comparisons or to roll back without
-  // a deploy). Resolved here so the static "Agent loop" + "Active context"
-  // pointer in the system prompt and the runner's <active-context> injection
-  // stay in sync.
-  const agentLoopV2EnvFlag = process.env.CODER_AGENT_LOOP_V2 !== '0';
+  // The current agent loop is the only supported product behavior.
+  const agentLoopV2EnvFlag = true;
 
   // Effective tool-approval mode (mig 131), resolved once here so the system
   // prompt's `# Permissions & sandbox` block and the runner's PermissionGate
@@ -2372,24 +2369,13 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Sessions with 30+ skills used to spend ~3000 tokens of every turn just
   // describing skills the agent would never call. The lazy default trims
   // that to a single pointer while keeping discovery a tool call away.
-  let skillsModeUsed: 'lazy' | 'compact' | 'matched' | 'full' | 'none' = 'none';
+  let skillsModeUsed: 'lazy' | 'matched' | 'none' = 'none';
   if (resolvedSkills.length > 0) {
-    const envMode = (process.env.CODER_SKILLS_PROMPT_MODE ?? '').toLowerCase().trim();
     const inCompany = !!opts.companyContext;
-    const mode: 'lazy' | 'compact' | 'matched' | 'full' =
-      envMode === 'lazy' || envMode === 'compact' || envMode === 'matched' || envMode === 'full'
-        ? envMode
-        : inCompany
-          ? 'matched'
-          : 'lazy';
-
-    if (mode === 'lazy') {
+    if (!inCompany) {
       systemPrompt += buildLazySkillsSection(resolvedSkills);
       skillsModeUsed = 'lazy';
-    } else if (mode === 'compact') {
-      systemPrompt += buildCompactSkillsSection(resolvedSkills);
-      skillsModeUsed = 'compact';
-    } else if (mode === 'matched') {
+    } else {
       // Path triggers fire from `recentFiles`. Outside company context we
       // approximate that with file-shaped tokens in the user message
       // (relative paths and *.ext mentions). Misses some — that's fine,
@@ -2412,9 +2398,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         systemPrompt += buildLazySkillsSection(resolvedSkills);
         skillsModeUsed = 'lazy';
       }
-    } else {
-      systemPrompt += buildSkillsPromptSection(resolvedSkills, skillTemplateCtx);
-      skillsModeUsed = 'full';
     }
   }
 
@@ -2477,12 +2460,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   if (persistedToolset) {
     for (const t of persistedToolset.extraTiers) activeTiers.add(t as ToolTier);
   }
-  if (process.env.CODER_LOG_TOOLS_COUNT === '1') {
-    console.log(
-      `[coder] agent=${effectiveAgentId ?? 'none'} profile=${preResolvedProfile} planMode=${opts.planMode ?? false} active_tiers=${Array.from(activeTiers).sort().join(',')}`,
-    );
-  }
-
   // Pin re-derivation (resume): tools the conversation ALREADY used whose
   // tier is not active now — master/preview/custom-tier calls that
   // inferProfileFromHistory cannot cover (it only widens across the 3 core
@@ -2523,10 +2500,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       try { await store.mergeSessionToolsetState(session.id, { addPins: freshPins }); } catch { /* best-effort */ }
     }
   }
-  if (initialPinnedTools.length > 0 && process.env.CODER_LOG_TOOLS_COUNT === '1') {
-    console.log(`[coder] initial pins (persisted+history+preflight+role): ${initialPinnedTools.slice().sort().join(',')}`);
-  }
-
   // ─── Runtime hooks ─────────────────────────────────────────────
   const hookRegistry = new RuntimeHookRegistry();
   if (opts.companyContext && !opts.companyContext.isMaster && opts.companyContext.agentRunId != null) {
@@ -2656,7 +2629,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       const chain = buildFallbackChain(
         sessionFallback,
         providerChain,
-        process.env.CODER_FALLBACK_CHAIN,
+        undefined,
       );
       if (chain.entries.length > 0) {
         fallbackChain = chain;
@@ -2672,16 +2645,11 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // clean-context reviewer. Its verdict is session audit data only: it cannot
   // delay, refuse, or revoke completion. A detached ToolContext omits the
   // parent run's AbortSignal so a normal clean finish does not cancel review.
-  const verificationEvidenceEnabled =
-    !opts.companyContext && rolloutEnabled(
-      'CODER_FINISH_EVIDENCE_ROLLOUT_PERCENT',
-      `session:${session.id}`,
-      100,
-    );
+  const verificationEvidenceEnabled = !opts.companyContext;
 
   const verifyGoalCompletion =
     shouldEnableGoalCompletionVerifier(
-      process.env.CODER_GOAL_VERIFY,
+      undefined,
       opts.companyContext != null,
     )
       ? async (evidence?: VerificationReadiness): Promise<{ goalMet: boolean; gaps: ReadonlyArray<{ description: string; severity: string }> } | null> => {
@@ -2768,24 +2736,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // (provider, model) for their entire lifetime. The runner ignores any
   // deprecated phase-profile metadata imported into an old bundle.
 
-  // Agent Loop v2 — ON by default for new sessions. When enabled, the runner
+  // The mandatory agent loop injects a live context block per turn,
   // injects a live <active-context> block per turn, adds a static "Agent
   // loop" framing to the system prompt, applies a stop-guard for unfinished
   // todos, includes a recap on auto-continue, and refuses tool calls that
-  // produce identical content to a recent result. Set CODER_AGENT_LOOP_V2=0
-  // to disable.
+  // and refuses tool calls that produce identical content to a recent result.
   const agentLoopV2 = agentLoopV2EnvFlag;
-
-  // Fix A — self_review nudge signals. Reuses `snapshotStore` (active
-  // baselines) + a review store (auto-review runs) so the Executing node only
-  // nudges when there are UNREVIEWED changes — instead of every turn that has
-  // any pending snapshot (forever, since `self_review` never closes them).
-  const reviewStore = store;
-  const persistedTimeToMs = (s: string | null): number | null => {
-    if (!s) return null;
-    const ms = Date.parse(s);
-    return Number.isNaN(ms) ? null : ms;
-  };
 
   // Optional cheap provider for compaction/chapter generation. Resolution is
   // done once per run so the Compacting node stays provider-agnostic and the
@@ -2832,6 +2788,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     );
   }
 
+  // All registration, allowlisting and source readiness decisions are now
+  // complete. From this point through terminal cleanup the attempt owns an
+  // immutable catalog snapshot; a late MCP/plugin is visible only to the next
+  // attempt assembled by the host.
+  registry.seal();
+
   // Fase 2.5 — Policy Engine shadow composition. Returns null when every
   // CODER_* policy flag is off, so the port is absent and dispatch stays
   // byte-identical to legacy. The legacy context is read LIVE through
@@ -2842,9 +2804,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // here while preserving our worker transport: one bus per run, absent when
   // the kill switch is off, and optionally injectable by trusted in-process
   // callers/tests.
-  const runtimeHookBus = process.env.CODER_HOOK_BUS_V1 === '1'
-    ? (opts.hookBus ?? createRuntimeHookBus())
-    : null;
+  const runtimeHookBus = opts.hookBus ?? createRuntimeHookBus();
   const policyShadowComposition = createPolicyShadowPort({
     persistence: new FsPolicyShadowRepository(store),
     registry,
@@ -2871,6 +2831,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
       agentRunId: opts.controlPlaneParentAgentRunId,
     },
     hookBus: runtimeHookBus,
+    catalogOnlyCapabilities,
     log: (level, msg) => {
       if (level === 'warn') console.warn(msg);
       else console.log(msg);
@@ -2883,7 +2844,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     contextWindow: sessionContextWindow,
     compactionSummaryOptions,
     registry,
-    ...(runtimeHookBus ? { hookBus: runtimeHookBus } : {}),
+    catalogOnlyCapabilities,
+    hookBus: runtimeHookBus,
     // The Executing node emits `turn_start` before awaiting this callback.
     // Our listener below enqueues the previous turn into `flushChain`
     // synchronously, so this is a real write barrier: a goal transaction must
@@ -2910,40 +2872,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // writer or cross-session lock participates.
     turnTelemetryStore: new FsTurnTelemetryRepository(store),
     skillStore,
-    // self_review reminder signal — true when this session has active
-    // (un-kept/un-reverted) snapshots worth validating. Drives the
-    // CODER_SELF_REVIEW system-reminder nudge in the Executing node.
-    hasReviewableChanges: async () => {
-      try {
-        return (await snapshotStore.listActiveBaselineIds('coder', session.id)).length > 0;
-      } catch {
-        return false;
-      }
-    },
-    // Fix A — richer self_review signals (pending-change fingerprint + last
-    // auto-review marker) so the nudge fires only for UNREVIEWED changes and
-    // hard-stops after a cap. Best-effort: any read error → null (node falls
-    // back to `hasReviewableChanges`).
-    collectSelfReviewSignals: async () => {
-      try {
-        const actives = await snapshotStore.listBaselines('coder', session.id);
-        const editMs = actives
-          .map((b) => persistedTimeToMs(b.last_edited_at))
-          .filter((n): n is number => n != null);
-        const lastEditAt = editMs.length ? Math.max(...editMs) : null;
-        const pendingFingerprint = actives.length ? `${actives.length}:${lastEditAt ?? 0}` : '';
-        const autoCompleted = (await reviewStore
-          .listRuns('coder', session.id))
-          .filter((r) => r.source === 'auto' && r.status === 'completed');
-        const reviewMs = autoCompleted
-          .map((r) => persistedTimeToMs(r.completed_at))
-          .filter((n): n is number => n != null);
-        const lastReviewAt = reviewMs.length ? Math.max(...reviewMs) : null;
-        return { pendingFingerprint, lastEditAt, lastReviewAt, totalAutoReviews: autoCompleted.length };
-      } catch {
-        return null;
-      }
-    },
     // Mem C — proactive project-memory retrieval. Wired only when the host
     // provided a retriever AND some read project has memory enabled (migration
     // 115); the Executing node awaits it before assembly and injects relevant
@@ -3024,9 +2952,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         : undefined,
     // Session-scoped conversation chapter table of contents. Titles only;
     // full bodies/source messages stay behind recall_conversation.
-    getConversationChapterIndex:
-      process.env.CODER_CONVERSATION_CHAPTERS !== '0'
-        ? async () => {
+    getConversationChapterIndex: async () => {
             try {
               const [page, total] = await Promise.all([
                 store.listConversationChapters(session.id, { limit: 10 }),
@@ -3044,11 +2970,8 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             } catch {
               return null;
             }
-          }
-        : undefined,
-    getRelevantConversationChapters:
-      process.env.CODER_CONVERSATION_CHAPTERS !== '0'
-        ? async (taskText) => {
+          },
+    getRelevantConversationChapters: async (taskText) => {
             try {
               return (
                 await store.searchConversationChapters(
@@ -3066,8 +2989,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
             } catch {
               return [];
             }
-          }
-        : undefined,
+          },
     // Global user-preferences index — NOT gated by the project toggle; injected
     // into every (non-company) session. Company subordinates get it via spawn
     // injection (system prompt) instead.
@@ -3139,7 +3061,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         }
       : undefined,
     preflightHint: preflightHintSeed
-      ? renderPreflightHint(preflightHintSeed, { bugWorkflow: process.env.CODER_BUG_WORKFLOW !== '0' })
+      ? renderPreflightHint(preflightHintSeed, { bugWorkflow: false })
       : undefined,
     sessionToolCap,
     goalLifecycleIntent,
@@ -3184,9 +3106,12 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     // Tool permission mode (migration 131) — resolved once at the system-prompt
     // call site so the prompt's permissions block and this gate agree.
     toolPermissionMode: resolvedPermissionMode,
-    // A1 — per-session tunables (push caps, turn budget). Undefined →
-    // runner uses envTunables() = bit-identical to pre-A1 constants.
-    tunables: opts.tunables,
+    // The host snapshot is immutable for the attempt. Explicit test/in-process
+    // tunables remain the highest-precedence compatibility override.
+    tunables: opts.tunables ?? (opts.runtimePolicy
+      ? tunablesFromRuntimePolicy(opts.runtimePolicy)
+      : undefined),
+    runtimePolicy: opts.runtimePolicy,
     // Stateful Responses API resume — populated only for ChatGPT/Codex sessions
     // that completed at least one turn with `store: true`. Other providers
     // ignore these fields.
@@ -3713,8 +3638,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   // Nested code_exec invocations — one row per settled script call, linked
   // to the parent block via parent_tool_use_id (mig 133). Buffered into the
   // same per-turn flush so the audit lands atomically with the turn.
-  if (process.env.CODER_NESTED_TELEMETRY_DISABLE !== '1') {
-    runner.on('nested_tool_call', (e) => {
+  runner.on('nested_tool_call', (e) => {
       try {
         if (!pendingTurn) return;
         pendingTurn.nestedToolCalls.push({
@@ -3761,7 +3685,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
         });
       } catch { /* telemetry must never break the run */ }
     });
-  }
 
   runner.on('tool_call_result', (id, name, result, durationMs) => {
     // Error-streak tracker for auto-captured "Fixed: <tool>" notes. Cheap,
@@ -3890,7 +3813,7 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
           source: 'auto',
           chapterKind: checkpoint.trigger?.startsWith('milestone:') ? 'milestone' : 'context',
           trigger: checkpoint.trigger ?? 'context_threshold',
-          chaptersEnabled: process.env.CODER_CONVERSATION_CHAPTERS !== '0',
+          chaptersEnabled: true,
           autoContinues: checkpoint.autoContinues,
         });
         const accepted = committed.status === 'committed'
@@ -4140,3 +4063,18 @@ export type { CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
  * from the unified registry — all kinds that declare `createCoder`.
  */
 export { listCoderKinds as SUPPORTED_CODER_PROVIDERS } from '@mcp/services/providers/factory.js';
+export {
+  createToolRegistryCapabilityGatewayFactory,
+  decodeHostToolExecutionPayload,
+  hostToolExecutionPayloadSha256,
+  HOST_TOOL_RESULT_SCHEMA_ID,
+  HOST_TOOL_RESULT_SCHEMA_VERSION,
+  ToolRegistryHostCapabilityExecutor,
+} from '@mcp/code-agent/runtime/tool-registry-host-capability-executor.js';
+export type {
+  HostToolExecutionPayload,
+  ToolRegistryCapabilityDecisionResolverFactory,
+  ToolRegistryCapabilityGatewayFactory,
+  ToolRegistryCapabilityGatewayFactoryOptions,
+  ToolRegistryHostCapabilityExecutorOptions,
+} from '@mcp/code-agent/runtime/tool-registry-host-capability-executor.js';

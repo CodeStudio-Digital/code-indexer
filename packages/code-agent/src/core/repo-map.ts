@@ -122,14 +122,7 @@ export function resolveRepoMapBudget(
   isIndexed: boolean,
 ): number {
   if (!isIndexed) return 0;
-  const override = process.env.CODER_REPOMAP_TOKENS;
-  if (override !== undefined && override !== '') {
-    const parsed = Number(override);
-    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
-  }
-  const fileCount = db.listFiles(projectId).length;
-  if (fileCount < 50) return 0;
-  if (fileCount < 500) return 1500;
-  if (fileCount < 2000) return 3000;
-  return 4500;
+  void db;
+  void projectId;
+  return 1_024;
 }

@@ -1,9 +1,9 @@
 /**
  * PR-C: end-to-end retry flow through execute_tasks.
  * Asserts that transient subagent errors trigger retry with per-attempt
- * persistence, fatal errors don't retry, and the env cap is respected.
+ * persistence, fatal errors don't retry, and explicit run policy is respected.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
 import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
@@ -47,7 +47,7 @@ function makeMockStore() {
   };
 }
 
-function setup(tasks: CoderTask[]) {
+function setup(tasks: CoderTask[], maxRetries = 2) {
   const store = makeMockStore();
   const runner = {
     emit: vi.fn(),
@@ -68,19 +68,13 @@ function setup(tasks: CoderTask[]) {
     provider: {} as never,
     parentTools: [],
     sessionStore: store as unknown as FsSessionStore,
+    executeTasksRetryConfig: { maxRetries, initialMs: 0, maxMs: 0, jitter: 0 },
   });
   return { tool, ctx, runner, store };
 }
 
 beforeEach(() => {
   vi.mocked(runSubagent).mockReset();
-  vi.stubEnv('CODER_TASK_MAX_RETRIES', '2');
-  vi.stubEnv('CODER_TASK_RETRY_INITIAL_MS', '0');
-  vi.stubEnv('CODER_TASK_RETRY_MAX_MS', '0');
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
 });
 
 describe('execute_tasks retry integration', () => {
@@ -148,13 +142,12 @@ describe('execute_tasks retry integration', () => {
     expect(failedCalls.map((c) => c[0].attempt).sort()).toEqual([0, 1, 2]);
   });
 
-  it('respects CODER_TASK_MAX_RETRIES=0 (no retries even on transient)', async () => {
-    vi.stubEnv('CODER_TASK_MAX_RETRIES', '0');
+  it('respects an explicit zero-retry run policy', async () => {
     vi.mocked(runSubagent).mockResolvedValue({
       reason: 'error', finalText: 'ETIMEDOUT',
       usage: { input_tokens: 0, output_tokens: 0 }, sandboxViolations: [],
     });
-    const { tool, ctx } = setup([task({ id: 'tsk_one' })]);
+    const { tool, ctx } = setup([task({ id: 'tsk_one' })], 0);
     await tool.handler({}, ctx);
     expect(runSubagent).toHaveBeenCalledTimes(1);
   });

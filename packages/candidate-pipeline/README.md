@@ -128,19 +128,19 @@ regress.
 
 | Package | Pipeline | Purpose | Activation |
 |---|---|---|---|
-| `@mcp/code-agent/tool-selection` | ToolSelectionPipeline (+ `applyToolSelectionThin` thin path) | Pick top-K tools for the current task | `MCP_PIPELINES_TOOL_SELECTION=1` |
-| `@mcp/code-agent/context-relevance` | ContextRelevancePipeline | Decide which past messages to keep during compaction | `MCP_PIPELINES_CONTEXT_RELEVANCE=1` |
-| `@mcp/code-agent/todo-priority` | TodoPriorityPipeline | Reorder TodoWrite items by impact × urgency × dependencies | `MCP_PIPELINES_TODO_PRIORITY=1` |
+| `@mcp/code-agent/tool-selection` | ToolSelectionPipeline (+ `applyToolSelectionThin` thin path) | Offline/explicit evaluation only; not installed in code-run | Explicit caller |
+| `@mcp/code-agent/context-relevance` | ContextRelevancePipeline | Offline/explicit evaluation only; deterministic compaction owns code-run | Explicit caller |
+| `@mcp/code-agent/todo-priority` | TodoPriorityPipeline | Offline evaluation only | Explicit caller |
 | `@mcp/company/role-pipeline` | RolePipeline | Recommend which subordinate role to spawn | Wired in company orchestrator |
 | `@mcp/company/kanban-priority` | KanbanPriorityPipeline | Order kanban cards by computed priority score | Wired in kanban service |
 | `@mcp/indexer/search` | HybridSearch | FTS + vector + RRF + cross-encoder rerank | Always on (mode picked by planner or caller) |
-| `@mcp/indexer/search` | RecentFilesSource (I2 — Thunder-style hot cache) | Optional 3rd stream in `mode='hybrid'` for recently-touched files | `MCP_PIPELINES_RECENT_FILES_SOURCE=1` + `touch()` calls wired |
+| `@mcp/indexer/search` | RecentFilesSource (I2 — Thunder-style hot cache) | Indexer-owned search source | Indexer search policy |
 | `@mcp/services/services/docs/search` | DocSearch | Doc retrieval with QueryRewriter + Reranker | Wired in doc routes |
 
 **Cross-cutting infrastructure**:
 - **Decider** (`@mcp/services/pipelines/decider`) — `ConfigJsonDecider` / `EnvVarDecider` / `ConstantDecider` / `CompositeDecider` (read order: session config → env → constant). Mirrors `PipelineQuery.params()/decider()` from `candidate-pipeline/candidate_pipeline.rs`.
 - **SqliteTelemetrySink** (`@mcp/store/pipeline-telemetry-store`) — every pipeline writes per-stage traces to `pipeline_telemetry`. Histogram + cache-hit queries power the admin panel.
-- **Shadow traffic** (`@mcp/services/shadow-traffic`) — sample requests run against variants for A/B comparison. Used by `tool_selection` today.
+- **Shadow traffic** (`@mcp/services/shadow-traffic`) — explicit experiments run variants for A/B comparison; code-run does not install an ambient selector.
 - **Structural/semantic mutation sinks** — watcher deltas invalidate the hybrid-search LRU and enqueue only the affected semantic items; no LLM-per-file index agent or full scan is involved.
 - **`coder_turn_telemetry` table** — input/output tokens, history chars, tools called, compaction triggers per turn. Read by `src/benchmarks/runner-baseline.ts`.
 - **Baseline benches** — `bench/README.md` documents the workflow. Capture before any pipeline change, diff after, revert if metrics regress per the criteria in `plans/https-github-com-xai-org-x-algorithm-clo-shimmying-oasis.md`.

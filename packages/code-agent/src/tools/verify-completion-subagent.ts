@@ -251,7 +251,7 @@ export async function runVerifyCompletionSubagent(
     allowlist: REVIEW_ALLOWLIST,
     initialMessages,
     maxTurns: resolveVerifyMaxTurns(
-      process.env.CODER_GOAL_VERIFY_MAX_TURNS,
+      '12',
       options.defaultMaxTurns,
     ),
   });

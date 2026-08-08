@@ -130,9 +130,8 @@ export function makeTestContext(overrides: MakeCtxOverrides = {}): TestContext {
     // PR 5 — tests start with an empty failure-streak state. Tests that
     // need to exercise the guard seed entries directly via the helper.
     failureStreaks: { streaks: new Map() },
-    // P0 — empty doom-loop + dominance windows. Tests that exercise the
-    // per-turn backstops seed these directly.
-    doomLoop: { strict: [], fuzzy: [] },
+    // P0 — empty dominance window. Tests that exercise the per-turn
+    // backstop seed it directly.
     dominance: { window: [] },
     // Fix B — loop-aware compaction signals start at zero.
     consecutiveNoTextTurns: 0,

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-05T23:42:25.6637826Z",
+  "sourceRevision": "7e79171d4c9a98397d3f47d9437d890e9316dc1d",
+  "branch": "codex/oss-agent-bakeoff",
+  "runtimePackage": {
+    "target": "x86_64-pc-windows-msvc",
+    "buildId": "runtime-v1-22cc347deaf4f440a11f27f602be21c0ae75ce13709ac56de6910fba1fec3bab",
+    "manifestSha256": "bf9998a1d8301ac16d82f49d798dfd524345ea7d5f59cc8d212c9a514721aa79"
+  },
+  "fixture": {
+    "iterations": 100,
+    "passed": 100,
+    "elapsedMs": { "minimum": 529, "maximum": 1454 },
+    "peakResidentMemoryBytes": { "minimum": 7667712, "maximum": 7815168 },
+    "maximumProcessCountSampled": 0,
+    "journalRecordCount": { "minimum": 7, "maximum": 7 }
+  },
+  "realCodex": {
+    "version": "0.146.0-alpha.9.2",
+    "iterations": 5,
+    "passed": 5,
+    "elapsedMs": { "minimum": 8190, "maximum": 14167 },
+    "peakResidentMemoryBytes": { "minimum": 119496704, "maximum": 153395200 },
+    "maximumProcessCountSampled": 7,
+    "journalRecordCount": { "minimum": 36, "maximum": 51 }
+  },
+  "assertionsPerIteration": [
+    "terminal_completed_authoritative",
+    "no_unresolved_capability_dispatch",
+    "hard_aggregate_process_tree_containment",
+    "physical_tree_reaped",
+    "memory_below_512_mib_grant"
+  ],
+  "observations": [
+    "the deterministic child is shorter than the heartbeat interval, so its sampled process-count maximum can be zero while exact containment and reap facts still pass",
+    "the earlier 394223616-byte real-run outlier was not reproduced and remains historical evidence rather than an approved target",
+    "one pre-gate warm-up saw a transient management EOF; the final gate is the subsequent clean 100 plus 5 consecutive run"
+  ],
+  "limitations": [
+    "bounded sequential soak is not a long-duration concurrent production load test",
+    "dynamic tools remain an experimental Codex app-server API"
+  ]
+}

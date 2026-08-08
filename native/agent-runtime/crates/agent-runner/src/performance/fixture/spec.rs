@@ -74,6 +74,7 @@ pub(super) fn valid_spec(deadline_at_unix_ms: i64) -> wire::ResolvedAttemptSpec 
         resource_budget: Some(resource_budget()),
         deadline_at_unix_ms,
         agent_definition_snapshot: Some(snapshot("agent-definition")),
+        codex_app_server_process_snapshot: None,
     }
 }
 

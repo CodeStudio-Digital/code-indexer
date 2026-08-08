@@ -22,6 +22,7 @@
 import type { BehaviorEvent, BehaviorNode, RunContext } from '../machine/types.js';
 import type { ChatDelta, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { ProviderAttemptTelemetry } from '@mcp/code-agent/providers/adapter.js';
+import type { AgentRunId } from '@mcp/agent-runtime-contracts';
 import { promptTokensTotal } from '@mcp/code-agent/core/messages.js';
 import { deriveTokenLimits } from '@mcp/code-agent/core/compaction/limits.js';
 import { events } from '../machine/events.js';
@@ -37,6 +38,7 @@ import {
 } from '../assembly/tools.js';
 import { computePrefixHeadHash } from '../telemetry/prefix-head.js';
 import { resolveToolMetadata } from '@mcp/code-agent/core/policy.js';
+import { resolveProviderCapabilityProjection } from '@mcp/code-agent/core/capability-catalog.js';
 import { shouldCompact90 } from '../compaction/threshold.js';
 import { maybeKickSummaryPrecompute, shouldKickPrecompute } from '../compaction/precompute.js';
 // PR-F integration — Codex BodyAfterPrefix (post-response, prefix-cache-aware
@@ -75,7 +77,6 @@ import {
 import { consumeStream, thinkingOnlyBudgetMs } from './executing-stream.js';
 import { dispatchTools, buildToolMessage } from './executing-dispatch.js';
 import { buildNestedToolObserver, nestedGuardsEnabled } from '../guards/nested-observer.js';
-import { dedupPolicyMode } from '../guards/tuple-hash-dedup.js';
 import { evaluatePerTurnLoops } from './executing-loop-guards.js';
 import { applyVisionFallback } from '../vision-fallback.js';
 import { getGlobalVisionDescriber } from '@mcp/code-agent/core/vision-describer.js';
@@ -561,28 +562,22 @@ export class ExecutingNode implements BehaviorNode {
         terseDescriptionsLock: ctx.terseDescriptionsLock,
         toolContext: ctx.opts.toolContext,
         provider: ctx.opts.provider,
+        catalogOnlyCapabilities: ctx.opts.catalogOnlyCapabilities,
       });
       ctx.toolsMemo = { key: toolsMemoKey, built: toolsBuilt, variants: new Map() };
     }
-    // Recovery is a state-dependent capability: exposing get_tool_output
-    // before the session has any stored snapshot invites the model to invent
-    // an ID. Rebuild runs every provider turn, so the tool appears immediately
-    // after the first successful spill and remains available on resume.
-    const outputStore = ctx.opts.toolContext.toolOutputStore;
-    const hasRecoverableOutput = outputStore
-      ? typeof outputStore.hasOutputs === 'function'
-        ? outputStore.hasOutputs()
-        : true // compatibility for narrow test/host stubs
-      : false;
-    const toolsVariantKey = hasRecoverableOutput ? 'full' : 'no-recover';
+    // Recovery is a stable capability. Keeping get_tool_output in the
+    // projection before the first spill prevents state-dependent schema churn;
+    // an unknown output id is rejected by its handler like any invalid input.
+    const toolsVariantKey = 'projection';
     let toolsVariant = ctx.toolsMemo.variants.get(toolsVariantKey);
     if (!toolsVariant) {
       toolsVariant = {
-        tools: hasRecoverableOutput
-          ? toolsBuilt.tools
-          : toolsBuilt.tools.filter((tool) => tool.name !== 'get_tool_output'),
+        tools: toolsBuilt.tools,
         json: null,
         fingerprint: null,
+        capabilitySetDigest: null,
+        projectionDigest: null,
       };
       ctx.toolsMemo.variants.set(toolsVariantKey, toolsVariant);
     }
@@ -619,11 +614,7 @@ export class ExecutingNode implements BehaviorNode {
             ...ctx.pinnedTools,
           ]),
         });
-        // The primary feature gate already opted into selection. APPLY=0 is
-        // the explicit shadow-only escape hatch; requiring a second positive
-        // flag silently left production catalogs unfiltered (session 1263:
-        // 110 eligible and 110 visible despite the reducer being enabled).
-        if (process.env.MCP_PIPELINES_TOOL_SELECTION_APPLY !== '0' && selected.length > 0) {
+        if (selected.length > 0) {
           // Selection is relevance-ranked internally, but provider tool order
           // is not a recommendation channel. Keep a stable catalog order so
           // identical memberships retain the same prompt-cache prefix.
@@ -639,6 +630,34 @@ export class ExecutingNode implements BehaviorNode {
     // selector omitted either/both; roles/disabled sets lacking the pair stay
     // pairless and fail open.
     toolsForModel = enforceAtomicGoalToolPair(toolsForModel, availableTools);
+    let capabilitySetDigest: string | null = null;
+    let projectionDigest: string | null = null;
+    try {
+      if (toolsForModel === toolsVariant.tools
+        && toolsVariant.capabilitySetDigest
+        && toolsVariant.projectionDigest) {
+        capabilitySetDigest = toolsVariant.capabilitySetDigest;
+        projectionDigest = toolsVariant.projectionDigest;
+      } else {
+        const resolved = resolveProviderCapabilityProjection(
+          toolsBuilt.authorizedTools,
+          toolsForModel,
+          { agentRunId: ctx.runId as AgentRunId },
+        );
+        capabilitySetDigest = resolved.set.hash;
+        projectionDigest = resolved.projection.digest;
+        if (toolsForModel === toolsVariant.tools) {
+          toolsVariant.capabilitySetDigest = capabilitySetDigest;
+          toolsVariant.projectionDigest = projectionDigest;
+        }
+      }
+    } catch (error) {
+      // A provider projection outside the authorized attempt set is an
+      // execution-authority failure, not best-effort telemetry.
+      throw new Error(
+        `provider capability projection failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     const effectiveToolNames = new Set(toolsForModel.map((tool) => tool.name));
     const runnerToolState = ctx.opts.toolContext.runner as
       | {
@@ -686,8 +705,7 @@ export class ExecutingNode implements BehaviorNode {
     // effective window, send the request as-is instead of looping/aborting.
     const preEmitIrreducible =
       preEmit.shouldCompact &&
-      ctx.consecutiveNoopCompactions >=
-        (Number(process.env.CODER_POSTTURN_COMPACT_NOOP_MAX ?? '2') || 2) &&
+      ctx.consecutiveNoopCompactions >= 2 &&
       preEmit.projectedTokens <= preEmit.effective;
     if (preEmit.shouldCompact && !preEmitIrreducible) {
       // The decrement below means `maxTurns` can't backstop a pre-emit
@@ -697,7 +715,7 @@ export class ExecutingNode implements BehaviorNode {
       // explicitly: after `cap` passes in a row the context is
       // irreducible — abort cleanly rather than loop forever.
       ctx.preEmitCompactions += 1;
-      const cap = Number(process.env.CODER_PREEMIT_COMPACT_MAX ?? '3') || 3;
+      const cap = 3;
       if (ctx.preEmitCompactions > cap) {
         ctx.stopReason = 'compact_exhausted';
         ctx.error = new Error(
@@ -910,8 +928,7 @@ export class ExecutingNode implements BehaviorNode {
     // deltas (GLM-5 with large tools+system prompt routinely takes 30-90s
     // before the first text_delta). Cleared in finally regardless of how
     // consumeStream resolves. Default 10s; env-tunable.
-    const STREAM_HEARTBEAT_MS =
-      Number(process.env.CODER_STREAM_HEARTBEAT_MS ?? '10000') || 10_000;
+    const STREAM_HEARTBEAT_MS = ctx.opts.runtimePolicy?.provider.streamHeartbeatMs ?? 10_000;
     const streamStartedAt = Date.now();
     // How much THIS attempt streamed. Only meaningful if it dies mid-stream:
     // the partial output never reaches `assistantContent`, so consumers have to
@@ -1132,6 +1149,8 @@ export class ExecutingNode implements BehaviorNode {
           eligibleToolsDefChars: toolsBuilt.eligibleToolsDefChars,
           visibleToolsCount: toolsForModel.length,
           toolsFingerprint,
+          capabilitySetDigest,
+          projectionDigest,
           prefixHeadHash,
           reducerStats,
           responseMeta: result.responseMeta,
@@ -1556,9 +1575,8 @@ export class ExecutingNode implements BehaviorNode {
     // reads would re-count the whole cached prefix every turn.
     ctx.cumulativeInputTokens += result.usage?.input_tokens ?? estPromptTokens;
 
-    // Per-turn loop backstops (P0): legacy rollback may enforce signature
-    // doom-loops; hybrid/observe replace those with result-aware shadow
-    // candidates. Dominance remains active for long zero-text grinds. Only
+    // Per-turn loop backstop: dominance remains active for long zero-text
+    // grinds. Only
     // pollable tools are exempted inside the helper; volatile calls still get
     // ordinary failure/dominance protection. Evaluated
     // only when the per-call guards didn't already flag a
@@ -1576,8 +1594,6 @@ export class ExecutingNode implements BehaviorNode {
             })
             .map((t) => t.name),
         ),
-        signatureLoopsEnabled: dedupPolicyMode() === 'legacy',
-        doom: ctx.doomLoop,
         dominance: ctx.dominance,
       });
       if (perTurnLoop) {
@@ -1649,7 +1665,7 @@ export class ExecutingNode implements BehaviorNode {
       // de tamanho — sem abortar; o modelo segue progredindo. O clamp do recede
       // (Camada 1) + o pre-emit tornam isto raro e auto-curável (uma
       // compactação real reseta o contador, ou ele zera quando o gate silencia).
-      const noopCap = Number(process.env.CODER_POSTTURN_COMPACT_NOOP_MAX ?? '2') || 2;
+      const noopCap = 2;
       if (ctx.consecutiveNoopCompactions >= noopCap) {
         dbg(
           `compaction suppressed — context irreducible after ` +

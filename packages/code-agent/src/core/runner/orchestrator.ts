@@ -5,19 +5,8 @@
  * then returns a `RunResult` populated from `ctx.stopReason / transition /
  * totalUsage`.
  *
- * Wiring stage (Commit 1):
- *   - Lives behind `CODER_BT_ENABLED=1`. Default-off keeps the legacy
- *     `while (turn<maxTurns)` loop in runner.ts authoritative.
- *   - Every node is a stub; activating the flag throws loudly on the very
- *     first state transition. That's intentional — Commit 1 only proves the
- *     scaffolding compiles and the transition table is sound.
- *
- * Subsequent commits replace stubs progressively:
- *   - Commit 3 → Bootstrap, Executing, Recovering, Done bodies.
- *   - Commit 4 → Compacting, Reviewing bodies + LLM compactor.
- *   - Commit 5 → Planning body + tuple-hash guard.
- *   - Commit 6 → kill legacy fallbacks, flag becomes default-on.
- *   - Commit 7 → flag removed, runner.ts shrinks to facade.
+ * The behavior tree is mandatory; the legacy loop and its migration flags
+ * have no runtime path.
  */
 import type { ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { RunnerOptions, RunResult } from './types.js';
@@ -64,11 +53,7 @@ export interface OrchestratorArgs {
   bridge?: BridgeCallbacks;
 }
 
-// `isBehaviorTreeEnabled` was the flag-driven router during the BT
-// migration. After the post-Frente-E sweep, the legacy while-loop is
-// gone and the BT is the only path — nothing reads this anymore and the
-// `CODER_LEGACY_RUNNER` env var is a no-op (documented for the
-// historical record only).
+// The legacy flag-driven router was removed after the BT became authoritative.
 
 /**
  * Build the node table for this run. Exposed (not inlined) so tests can

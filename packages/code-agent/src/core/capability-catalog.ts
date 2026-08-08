@@ -24,12 +24,16 @@ import type {
   CapabilityRequirements,
   CapabilitySource,
   CapabilityVisibility,
+  ProviderCapabilityProjection,
   ResolvedCapabilitySet,
   SideEffectContract,
 } from '@mcp/agent-runtime-contracts';
 import type { AgentRunId, CapabilityId } from '@mcp/agent-runtime-contracts';
 import type { CoderTool } from './tool.js';
+import type { ResolvedSkill } from '../skills/types.js';
 import { resolveToolMetadata } from './policy.js';
+import { sanitizeUntrustedCapabilityMetadata } from '@mcp/shared';
+export { sanitizeUntrustedCapabilityMetadata } from '@mcp/shared';
 
 function asCapabilityId(value: string): CapabilityId {
   return value as CapabilityId;
@@ -63,6 +67,7 @@ const EXTERNAL_SOURCES: ReadonlySet<CapabilitySource['kind']> = new Set([
 
 function mapSourceKind(tool: CoderTool, provenance?: CapabilityProvenance): CapabilitySource['kind'] {
   if (provenance?.sourceKind) return provenance.sourceKind;
+  if (tool.capabilityProvenance?.kind) return tool.capabilityProvenance.kind;
   switch (tool.source) {
     case 'native': return 'native';
     case 'mcp': return 'mcp_internal';
@@ -95,15 +100,18 @@ function sortDeep(value: unknown): unknown {
 function deriveSideEffect(
   externalUntrusted: boolean,
   mutates: boolean,
+  mayHaveEffects: boolean,
 ): SideEffectContract {
   const kind: SideEffectContract['kind'] = externalUntrusted
     ? 'external'
-    : mutates ? 'local' : 'none';
+    : mayHaveEffects ? 'local' : 'none';
   return {
     kind,
     idempotency: 'none',
     safeRetryStages: mutates ? [] : ['before_dispatch'],
-    ambiguousOutcome: externalUntrusted && mutates ? 'require_reconciliation' : 'mark_outcome_unknown',
+    ambiguousOutcome: externalUntrusted && mayHaveEffects
+      ? 'require_reconciliation'
+      : 'mark_outcome_unknown',
   };
 }
 
@@ -118,11 +126,22 @@ export function deriveCapabilityDescriptor(
   if (!tool.name || !tool.source) {
     throw new Error(`capability-catalog: tool is indescribable (missing name/source): ${JSON.stringify({ name: tool.name, source: tool.source })}`);
   }
+  const effectiveProvenance: CapabilityProvenance = {
+    sourceKind: tool.capabilityProvenance?.kind,
+    providerId: tool.capabilityProvenance?.providerId,
+    serverId: tool.capabilityProvenance?.serverId,
+    provenanceRef: tool.capabilityProvenance?.provenanceRef,
+    attestationRef: tool.capabilityProvenance?.attestationRef,
+    ...provenance,
+  };
   const local = resolveToolMetadata(tool);
-  const sourceKind = mapSourceKind(tool, provenance);
+  const sourceKind = mapSourceKind(tool, effectiveProvenance);
   const externalSource = EXTERNAL_SOURCES.has(sourceKind);
-  const attested = !!provenance?.attestationRef;
+  const attested = !!effectiveProvenance.attestationRef;
   const externalUntrusted = externalSource && !attested;
+  const sanitized = externalSource
+    ? sanitizeUntrustedCapabilityMetadata(tool.description, tool.parameters)
+    : { description: tool.description ?? '', schema: (tool.parameters as object) ?? {} };
 
   // Conservative posture: an untrusted external tool that declares a LOWER
   // posture (mutates:false) is overridden to the safe stance. Attestation is
@@ -135,13 +154,16 @@ export function deriveCapabilityDescriptor(
 
   const source: CapabilitySource = {
     kind: sourceKind,
-    providerId: provenance?.providerId ?? (sourceKind === 'native' ? 'coder-native' : 'unknown'),
-    ...(provenance?.serverId ? { serverId: provenance.serverId } : {}),
-    ...(provenance?.provenanceRef ? { provenanceRef: provenance.provenanceRef } : {}),
+    providerId: effectiveProvenance.providerId ?? (sourceKind === 'native' ? 'coder-native' : 'unknown'),
+    ...(effectiveProvenance.serverId ? { serverId: effectiveProvenance.serverId } : {}),
+    ...(effectiveProvenance.provenanceRef ? { provenanceRef: effectiveProvenance.provenanceRef } : {}),
     metadataTrust: sourceKind === 'native' ? 'local' : attested ? 'attested' : 'untrusted',
   };
 
   const executionClass: CapabilityExecution['class'] = local.executionClass;
+  const mayHaveEffects = mutates
+    || executionClass !== 'read'
+    || tool.effectBoundary !== undefined;
   const repeatPolicy: CapabilityExecution['repeatPolicy'] = mutates && local.repeatPolicy === 'stable'
     ? 'mutating'
     : local.repeatPolicy;
@@ -151,7 +173,7 @@ export function deriveCapabilityDescriptor(
     mutates,
     parallelSafe,
     repeatPolicy,
-    sideEffect: deriveSideEffect(externalUntrusted, mutates),
+    sideEffect: deriveSideEffect(externalUntrusted, mutates, mayHaveEffects),
     timeoutPolicy: tool.timeoutMs === Infinity ? 'unbounded' : 'default',
     cancellation: 'cooperative',
   };
@@ -175,10 +197,10 @@ export function deriveCapabilityDescriptor(
     version: '1',
     name: tool.name,
     aliases: [],
-    displayName: tool.runtimeTier?.displayName ?? tool.name,
-    description: tool.description ?? '',
+    displayName: tool.capabilityDisplayName ?? tool.runtimeTier?.displayName ?? tool.name,
+    description: sanitized.description,
     source,
-    inputSchema: (tool.parameters as object) ?? {},
+    inputSchema: sanitized.schema,
     visibility,
     execution,
     requirements,
@@ -246,6 +268,41 @@ export interface ResolveCapabilitySetOptions {
   resolvedAt?: string;
 }
 
+/** Catalog-only skill entry; it is never registered in the execution map. */
+export function skillAsCatalogCapability(skill: ResolvedSkill): CoderTool {
+  const instructionDigest = sha256Hex(skill.promptBody);
+  return {
+    name: skill.id,
+    capabilityDisplayName: skill.name,
+    description: skill.description,
+    parameters: {
+      type: 'object',
+      properties: {
+        input: { type: 'string' },
+      },
+      additionalProperties: false,
+    },
+    source: 'native',
+    capabilityProvenance: {
+      kind: 'skill',
+      providerId: skill.author ?? skill.source,
+      provenanceRef: `skill-bundle:sha256:${instructionDigest}`,
+    },
+    mutates: false,
+    parallelSafe: true,
+    executionClass: 'control',
+    handler: async () => {
+      throw new Error('catalog-only skill capability cannot be dispatched as a tool');
+    },
+  };
+}
+
+export interface ProviderToolProjectionShape {
+  name: string;
+  description: string;
+  parameters: object;
+}
+
 /**
  * Resolves the capability set for one AgentRun. `registered`/`visible`/
  * `eligible`/`disabled` and the content hash all derive from the SAME ordered
@@ -286,4 +343,59 @@ export function resolveCapabilitySet(
     resolvedAt: options.resolvedAt ?? new Date().toISOString(),
   };
   return { set, descriptors };
+}
+
+/**
+ * Derive the exact provider projection from the same authorized descriptor
+ * set used by execution. Arrays preserve provider order; object keys are
+ * canonicalized for a stable SHA-256 identity.
+ */
+export function resolveProviderCapabilityProjection(
+  authorizedTools: readonly CoderTool[],
+  providerTools: readonly ProviderToolProjectionShape[],
+  options: ResolveCapabilitySetOptions,
+): {
+  set: ResolvedCapabilitySet;
+  projection: ProviderCapabilityProjection;
+} {
+  const { set, descriptors } = resolveCapabilitySet(authorizedTools, options);
+  const descriptorsByName = new Map(
+    descriptors
+      .filter((descriptor) => descriptor.source.kind !== 'skill')
+      .map((descriptor) => [descriptor.name, descriptor]),
+  );
+  const projected = providerTools.map((providerTool) => {
+    const descriptor = descriptorsByName.get(providerTool.name);
+    if (!descriptor) {
+      throw new Error(
+        `capability-catalog: provider projection contains unauthorized tool '${providerTool.name}'`,
+      );
+    }
+    return {
+      capabilityId: descriptor.capabilityId,
+      version: descriptor.version,
+      name: providerTool.name,
+      description: providerTool.description,
+      inputSchema: providerTool.parameters,
+    };
+  });
+  const schemaBytes = Buffer.byteLength(JSON.stringify(providerTools), 'utf8');
+  const digest = sha256Hex(canonicalJson({
+    capabilitySetHash: set.hash,
+    catalogVersion: set.catalogVersion,
+    projected,
+  }));
+  return {
+    set,
+    projection: {
+      ref: `projection:${digest}`,
+      digest,
+      capabilitySetHash: set.hash,
+      catalogVersion: set.catalogVersion,
+      capabilityIds: projected.map((item) => item.capabilityId),
+      providerDescriptorsRef: `provider-descriptors:${digest}`,
+      promptSummaryRef: `prompt-summary:${digest}`,
+      schemaBytes,
+    },
+  };
 }

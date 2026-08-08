@@ -40,7 +40,6 @@ export interface SummaryPrecomputeState {
 
 /** True when `ratio` is close enough to the trigger to warrant a precompute. */
 export function shouldKickPrecompute(ratio: number): boolean {
-  if (process.env.CODER_COMPACT_PRECOMPUTE === '0') return false;
   return ratio >= resolveTriggerRatio() - PRECOMPUTE_LEAD_RATIO;
 }
 

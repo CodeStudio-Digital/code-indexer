@@ -132,8 +132,7 @@ export function buildFindToolsTool(
 
       // Coverage knob: fraction of distinct query tokens that must hit for
       // the strict pass (default 0.5 — see passesStrict/passesRelaxed).
-      const covRaw = Number(process.env.CODER_FIND_TOOLS_MIN_COVERAGE ?? '0.5');
-      const coverage = Number.isFinite(covRaw) ? Math.min(1, Math.max(0.1, covRaw)) : 0.5;
+      const coverage = 0.5;
 
       type Scored = {
         name: string;

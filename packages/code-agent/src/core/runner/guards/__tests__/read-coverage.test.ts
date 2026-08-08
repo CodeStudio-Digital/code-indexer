@@ -125,10 +125,10 @@ describe('readCoverageEnabled', () => {
   afterEach(() => {
     delete process.env.CODER_READ_COVERAGE_DISABLE;
   });
-  it('kill switch works', () => {
+  it('cannot be disabled by the retired kill switch', () => {
     expect(readCoverageEnabled()).toBe(true);
     process.env.CODER_READ_COVERAGE_DISABLE = '1';
-    expect(readCoverageEnabled()).toBe(false);
+    expect(readCoverageEnabled()).toBe(true);
   });
 });
 

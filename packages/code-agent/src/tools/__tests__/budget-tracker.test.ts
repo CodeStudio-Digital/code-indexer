@@ -2,7 +2,7 @@
  * PR-E unit tests for `BudgetTracker` and `loadDefaultTokenCap`.
  * Integration with execute_tasks lives in `execute-tasks-budget.test.ts`.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   BudgetTracker,
   loadDefaultTokenCap,
@@ -73,28 +73,11 @@ describe('BudgetTracker — unit', () => {
   });
 });
 
-describe('loadDefaultTokenCap (env reader)', () => {
-  beforeEach(() => vi.unstubAllEnvs());
-  afterEach(() => vi.unstubAllEnvs());
-
-  it('returns null when env unset', () => {
+describe('loadDefaultTokenCap', () => {
+  it('is always unlimited; budgets belong to explicit run policy', () => {
     expect(loadDefaultTokenCap()).toBeNull();
-  });
-
-  it('returns floor-rounded integer when env is positive', () => {
-    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '500.7');
-    expect(loadDefaultTokenCap()).toBe(500);
-  });
-
-  it('returns null when env is 0 or negative', () => {
-    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '0');
+    process.env.CODER_TASKS_DEFAULT_TOKEN_CAP = '500.7';
     expect(loadDefaultTokenCap()).toBeNull();
-    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', '-100');
-    expect(loadDefaultTokenCap()).toBeNull();
-  });
-
-  it('returns null on non-numeric garbage', () => {
-    vi.stubEnv('CODER_TASKS_DEFAULT_TOKEN_CAP', 'abc');
-    expect(loadDefaultTokenCap()).toBeNull();
+    delete process.env.CODER_TASKS_DEFAULT_TOKEN_CAP;
   });
 });

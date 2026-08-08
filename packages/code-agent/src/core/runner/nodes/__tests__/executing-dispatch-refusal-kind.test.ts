@@ -85,28 +85,15 @@ describe('dispatchTools — refusalKind tagging per synthesis path', () => {
     expect(r.toolLoopDetected).toBe(false);
   });
 
-  it("hybrid ignores legacy pre-read hard refusal; legacy still tags it; pointer stays a reuse", async () => {
+  it("ignores obsolete pre-read hard refusals; a non-error pointer stays a reuse", async () => {
     const registry = new ToolRegistry();
     registry.register(makeTool('some_tool'));
 
-    const hybrid = await dispatchTools(baseArgs(registry, {
+    const allowed = await dispatchTools(baseArgs(registry, {
       enforcePreRead: () => 'Refused: `read_file` already read this slice.',
     }));
-    expect(hybrid.results[0].isError).toBe(false);
-    expect(hybrid.results[0].content).toBe('ok');
-
-    const previous = process.env.CODER_DEDUP_POLICY;
-    process.env.CODER_DEDUP_POLICY = 'legacy';
-    try {
-      const refused = await dispatchTools(baseArgs(registry, {
-        enforcePreRead: () => 'Refused: `read_file` already read this slice.',
-      }));
-      expect(refused.results[0].isError).toBe(true);
-      expect(refused.results[0].refusalKind).toBe('pre-read');
-    } finally {
-      if (previous === undefined) delete process.env.CODER_DEDUP_POLICY;
-      else process.env.CODER_DEDUP_POLICY = previous;
-    }
+    expect(allowed.results[0].isError).toBe(false);
+    expect(allowed.results[0].content).toBe('ok');
 
     const downgraded = await dispatchTools(baseArgs(registry, {
       enforcePreRead: () => ({ content: '[skeleton pointer to prior read]', isError: false }),

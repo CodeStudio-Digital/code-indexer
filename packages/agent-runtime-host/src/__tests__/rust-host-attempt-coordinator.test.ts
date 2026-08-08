@@ -275,6 +275,8 @@ describe('RustHostAttemptCoordinator', () => {
       acceptedFact(),
       spawnedFact(),
       containmentFact(),
+      exitedFact(),
+      reapedFact(),
     ], events);
     const runtime = lifecycleHarness(
       (facts) => grantForFacts(facts),
@@ -295,7 +297,8 @@ describe('RustHostAttemptCoordinator', () => {
     expect(() => runtime.driver.tick()).toThrow();
     expect(coordinator.isFailed).toBe(true);
     expect(runtime.driver.isFailed).toBe(true);
-    expect(management.facts.abort).toHaveBeenCalledOnce();
+    await expect(coordinator.waitForPhysicalReap()).resolves.toBeUndefined();
+    expect(management.facts.abort).not.toHaveBeenCalled();
     expect(() => coordinator.inspectActive(result.authority)).toThrow();
   });
 

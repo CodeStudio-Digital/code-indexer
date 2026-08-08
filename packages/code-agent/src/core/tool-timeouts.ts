@@ -25,12 +25,6 @@
  *     `submit_tasks`) and tools that explicitly declare `timeoutMs: Infinity`.
  *     Repeat policy never implies an unbounded invocation.
  *
- * Override the defaults at runtime via env:
- *   - MCP_TOOL_NORMAL_TIMEOUT_MS  (default 300_000 = 5 min)
- *   - MCP_TOOL_SLOW_TIMEOUT_MS    (default 1_800_000 = 30 min)
- *   - MCP_TOOL_HEARTBEAT_MS       (default 5_000; set 0 to disable
- *     heartbeats during tool execution)
- *
  * A valid per-invocation `tool.resolveTimeoutMs(args)` wins first, followed by
  * the static `tool.timeoutMs` value.
  */
@@ -73,31 +67,16 @@ const SLOW_NAME_RE = /^(rag_|docs_|search_)/;
 /** Conservative bucket for any MCP "research" namespace. */
 const SLOW_MCP_PREFIX = 'mcp__research';
 
-function readEnvMs(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw === '') return fallback;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) {
-    console.warn(
-      `[tool-timeouts] ignoring invalid ${name}="${raw}" — must be a non-negative number, falling back to ${fallback}`,
-    );
-    return fallback;
-  }
-  return n;
-}
-
-/** Resolved at module load — change only via env, then restart. */
-export const NORMAL_TIMEOUT_MS = readEnvMs('MCP_TOOL_NORMAL_TIMEOUT_MS', NORMAL_DEFAULT_MS);
-export const SLOW_TIMEOUT_MS = readEnvMs('MCP_TOOL_SLOW_TIMEOUT_MS', SLOW_DEFAULT_MS);
+export const NORMAL_TIMEOUT_MS = NORMAL_DEFAULT_MS;
+export const SLOW_TIMEOUT_MS = SLOW_DEFAULT_MS;
 
 /**
  * Heartbeat interval (ms) for `tool_progress` events emitted while a
- * tool is in flight. Set 0 (or `MCP_TOOL_HEARTBEAT_MS=0`) to disable.
- * Resolved fresh on every call so tests can mutate `process.env` between
- * runs without reimporting the module.
+ * tool is in flight. This is a product invariant; individual tools may still
+ * declare their own invocation timeout.
  */
 export function resolveHeartbeatIntervalMs(): number {
-  return readEnvMs('MCP_TOOL_HEARTBEAT_MS', HEARTBEAT_DEFAULT_MS);
+  return HEARTBEAT_DEFAULT_MS;
 }
 
 /**

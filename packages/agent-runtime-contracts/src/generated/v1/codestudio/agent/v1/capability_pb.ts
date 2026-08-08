@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file codestudio/agent/v1/capability.proto.
  */
 export const file_codestudio_agent_v1_capability: GenFile = /*@__PURE__*/
-  fileDesc("CiRjb2Rlc3R1ZGlvL2FnZW50L3YxL2NhcGFiaWxpdHkucHJvdG8SE2NvZGVzdHVkaW8uYWdlbnQudjEixQMKEUNhcGFiaWxpdHlQcmVwYXJlEjYKCGlkZW50aXR5GAEgASgLMiQuY29kZXN0dWRpby5hZ2VudC52MS5BdHRlbXB0SWRlbnRpdHkSGwoTcnVudGltZV9pbnN0YW5jZV9pZBgCIAEoCRIUCgxvcGVyYXRpb25faWQYAyABKAkSHQoVcHJvdmlkZXJfb3BlcmF0aW9uX2lkGAQgASgJEhMKC3Rvb2xfdXNlX2lkGAUgASgJEhUKDWNhcGFiaWxpdHlfaWQYBiABKAkSGgoSY2FwYWJpbGl0eV92ZXJzaW9uGAcgASgJEkYKD2V4ZWN1dGlvbl9jbGFzcxgIIAEoDjItLmNvZGVzdHVkaW8uYWdlbnQudjEuQ2FwYWJpbGl0eUV4ZWN1dGlvbkNsYXNzEg8KB211dGF0ZXMYCSABKAgSGgoSZW5jb2RlZF9qc29uX2lucHV0GAogASgMEhQKDGlucHV0X3NoYTI1NhgLIAEoDBIdChVjYXBhYmlsaXR5X3NldF9zaGEyNTYYDCABKAwSFwoPaWRlbXBvdGVuY3lfa2V5GA0gASgJEhsKE2RlYWRsaW5lX2F0X3VuaXhfbXMYDiABKAMicgoSQ2FwYWJpbGl0eVJlamVjdGVkEhMKC2RlY2lzaW9uX2lkGAEgASgJEhMKC3JlYXNvbl9jb2RlGAIgASgJEhYKDnBvbGljeV92ZXJzaW9uGAMgASgJEhoKEmRlY2lkZWRfYXRfdW5peF9tcxgEIAEoAyKSAQoaQ2FwYWJpbGl0eUFwcHJvdmFsUmVxdWlyZWQSEwoLZGVjaXNpb25faWQYASABKAkSFgoOaW50ZXJhY3Rpb25faWQYAiABKAkSEwoLcmVhc29uX2NvZGUYAyABKAkSFgoOcG9saWN5X3ZlcnNpb24YBCABKAkSGgoSZGVjaWRlZF9hdF91bml4X21zGAUgASgDIoIBChtOYXRpdmVGaWxlc3lzdGVtUmVhZEJpbmRpbmcSGwoTY2Fub25pY2FsX3Jvb3RfcGF0aBgBIAEoCRIWCg5tYXhfcmVhZF9ieXRlcxgCIAEoBBIYChBtYXhfb3V0cHV0X2J5dGVzGAMgASgEEhQKDHJlcXVpcmVfdXRmOBgEIAEoCCKOBgoUU2VhbGVkRXhlY3V0aW9uR3JhbnQSEAoIZ3JhbnRfaWQYASABKAkSEwoLZGVjaXNpb25faWQYAiABKAkSFQoNY2FwYWJpbGl0eV9pZBgDIAEoCRIaChJjYXBhYmlsaXR5X3ZlcnNpb24YBCABKAkSFAoMb3BlcmF0aW9uX2lkGAUgASgJEhMKC3Rvb2xfdXNlX2lkGAYgASgJEh4KFmVmZmVjdGl2ZV9pbnB1dF9zaGEyNTYYByABKAwSRgoPZXhlY3V0aW9uX2NsYXNzGAggASgOMi0uY29kZXN0dWRpby5hZ2VudC52MS5DYXBhYmlsaXR5RXhlY3V0aW9uQ2xhc3MSDwoHbXV0YXRlcxgJIAEoCBIWCg5lbnZpcm9ubWVudF9pZBgKIAEoCRIbChNlbnZpcm9ubWVudF92ZXJzaW9uGAsgASgEEh8KEndvcmtzcGFjZV9sZWFzZV9pZBgMIAEoCUgAiAEBEiQKF3dvcmtzcGFjZV9sZWFzZV92ZXJzaW9uGA0gASgESAGIAQESJAoXd29ya3NwYWNlX2ZlbmNpbmdfZXBvY2gYDiABKARIAogBARIbChNyZXNvdXJjZV9iaW5kaW5nX2lkGA8gASgJEhoKEmNvbnN0cmFpbnRzX3NoYTI1NhgQIAEoDBIWCg5wb2xpY3lfdmVyc2lvbhgRIAEoCRINCgVub25jZRgSIAEoDBIZChFpc3N1ZWRfYXRfdW5peF9tcxgTIAEoAxIaChJleHBpcmVzX2F0X3VuaXhfbXMYFCABKAMSVQoWbmF0aXZlX2ZpbGVzeXN0ZW1fcmVhZBgVIAEoCzIwLmNvZGVzdHVkaW8uYWdlbnQudjEuTmF0aXZlRmlsZXN5c3RlbVJlYWRCaW5kaW5nSAOIAQFCFQoTX3dvcmtzcGFjZV9sZWFzZV9pZEIaChhfd29ya3NwYWNlX2xlYXNlX3ZlcnNpb25CGgoYX3dvcmtzcGFjZV9mZW5jaW5nX2Vwb2NoQhkKF19uYXRpdmVfZmlsZXN5c3RlbV9yZWFkIugCChBDYXBhYmlsaXR5VXBkYXRlEjYKCGlkZW50aXR5GAEgASgLMiQuY29kZXN0dWRpby5hZ2VudC52MS5BdHRlbXB0SWRlbnRpdHkSGwoTcnVudGltZV9pbnN0YW5jZV9pZBgCIAEoCRIUCgxvcGVyYXRpb25faWQYAyABKAkSEwoLdG9vbF91c2VfaWQYBCABKAkSOwoIcmVqZWN0ZWQYCiABKAsyJy5jb2Rlc3R1ZGlvLmFnZW50LnYxLkNhcGFiaWxpdHlSZWplY3RlZEgAEkwKEWFwcHJvdmFsX3JlcXVpcmVkGAsgASgLMi8uY29kZXN0dWRpby5hZ2VudC52MS5DYXBhYmlsaXR5QXBwcm92YWxSZXF1aXJlZEgAEj0KCGFjY2VwdGVkGAwgASgLMikuY29kZXN0dWRpby5hZ2VudC52MS5TZWFsZWRFeGVjdXRpb25HcmFudEgAQgoKCGRlY2lzaW9uKpQDChhDYXBhYmlsaXR5RXhlY3V0aW9uQ2xhc3MSKgomQ0FQQUJJTElUWV9FWEVDVVRJT05fQ0xBU1NfVU5TUEVDSUZJRUQQABIqCiZDQVBBQklMSVRZX0VYRUNVVElPTl9DTEFTU19OQVRJVkVfUkVBRBABEi4KKkNBUEFCSUxJVFlfRVhFQ1VUSU9OX0NMQVNTX05BVElWRV9NVVRBVElPThACEi0KKUNBUEFCSUxJVFlfRVhFQ1VUSU9OX0NMQVNTX05BVElWRV9QUk9DRVNTEAMSLgoqQ0FQQUJJTElUWV9FWEVDVVRJT05fQ0xBU1NfSE9TVF9DQVBBQklMSVRZEAQSMgouQ0FQQUJJTElUWV9FWEVDVVRJT05fQ0xBU1NfQ09OVFJPTF9JTlRFUkFDVElWRRAFEioKJkNBUEFCSUxJVFlfRVhFQ1VUSU9OX0NMQVNTX05FU1RFRF9DT0RFEAYSMQotQ0FQQUJJTElUWV9FWEVDVVRJT05fQ0xBU1NfUkVNT1RFX0VOVklST05NRU5UEAdiBnByb3RvMw", [file_codestudio_agent_v1_common]);
+  fileDesc("CiRjb2Rlc3R1ZGlvL2FnZW50L3YxL2NhcGFiaWxpdHkucHJvdG8SE2NvZGVzdHVkaW8uYWdlbnQudjEixQMKEUNhcGFiaWxpdHlQcmVwYXJlEjYKCGlkZW50aXR5GAEgASgLMiQuY29kZXN0dWRpby5hZ2VudC52MS5BdHRlbXB0SWRlbnRpdHkSGwoTcnVudGltZV9pbnN0YW5jZV9pZBgCIAEoCRIUCgxvcGVyYXRpb25faWQYAyABKAkSHQoVcHJvdmlkZXJfb3BlcmF0aW9uX2lkGAQgASgJEhMKC3Rvb2xfdXNlX2lkGAUgASgJEhUKDWNhcGFiaWxpdHlfaWQYBiABKAkSGgoSY2FwYWJpbGl0eV92ZXJzaW9uGAcgASgJEkYKD2V4ZWN1dGlvbl9jbGFzcxgIIAEoDjItLmNvZGVzdHVkaW8uYWdlbnQudjEuQ2FwYWJpbGl0eUV4ZWN1dGlvbkNsYXNzEg8KB211dGF0ZXMYCSABKAgSGgoSZW5jb2RlZF9qc29uX2lucHV0GAogASgMEhQKDGlucHV0X3NoYTI1NhgLIAEoDBIdChVjYXBhYmlsaXR5X3NldF9zaGEyNTYYDCABKAwSFwoPaWRlbXBvdGVuY3lfa2V5GA0gASgJEhsKE2RlYWRsaW5lX2F0X3VuaXhfbXMYDiABKAMicgoSQ2FwYWJpbGl0eVJlamVjdGVkEhMKC2RlY2lzaW9uX2lkGAEgASgJEhMKC3JlYXNvbl9jb2RlGAIgASgJEhYKDnBvbGljeV92ZXJzaW9uGAMgASgJEhoKEmRlY2lkZWRfYXRfdW5peF9tcxgEIAEoAyKSAQoaQ2FwYWJpbGl0eUFwcHJvdmFsUmVxdWlyZWQSEwoLZGVjaXNpb25faWQYASABKAkSFgoOaW50ZXJhY3Rpb25faWQYAiABKAkSEwoLcmVhc29uX2NvZGUYAyABKAkSFgoOcG9saWN5X3ZlcnNpb24YBCABKAkSGgoSZGVjaWRlZF9hdF91bml4X21zGAUgASgDIoIBChtOYXRpdmVGaWxlc3lzdGVtUmVhZEJpbmRpbmcSGwoTY2Fub25pY2FsX3Jvb3RfcGF0aBgBIAEoCRIWCg5tYXhfcmVhZF9ieXRlcxgCIAEoBBIYChBtYXhfb3V0cHV0X2J5dGVzGAMgASgEEhQKDHJlcXVpcmVfdXRmOBgEIAEoCCKOBgoUU2VhbGVkRXhlY3V0aW9uR3JhbnQSEAoIZ3JhbnRfaWQYASABKAkSEwoLZGVjaXNpb25faWQYAiABKAkSFQoNY2FwYWJpbGl0eV9pZBgDIAEoCRIaChJjYXBhYmlsaXR5X3ZlcnNpb24YBCABKAkSFAoMb3BlcmF0aW9uX2lkGAUgASgJEhMKC3Rvb2xfdXNlX2lkGAYgASgJEh4KFmVmZmVjdGl2ZV9pbnB1dF9zaGEyNTYYByABKAwSRgoPZXhlY3V0aW9uX2NsYXNzGAggASgOMi0uY29kZXN0dWRpby5hZ2VudC52MS5DYXBhYmlsaXR5RXhlY3V0aW9uQ2xhc3MSDwoHbXV0YXRlcxgJIAEoCBIWCg5lbnZpcm9ubWVudF9pZBgKIAEoCRIbChNlbnZpcm9ubWVudF92ZXJzaW9uGAsgASgEEh8KEndvcmtzcGFjZV9sZWFzZV9pZBgMIAEoCUgAiAEBEiQKF3dvcmtzcGFjZV9sZWFzZV92ZXJzaW9uGA0gASgESAGIAQESJAoXd29ya3NwYWNlX2ZlbmNpbmdfZXBvY2gYDiABKARIAogBARIbChNyZXNvdXJjZV9iaW5kaW5nX2lkGA8gASgJEhoKEmNvbnN0cmFpbnRzX3NoYTI1NhgQIAEoDBIWCg5wb2xpY3lfdmVyc2lvbhgRIAEoCRINCgVub25jZRgSIAEoDBIZChFpc3N1ZWRfYXRfdW5peF9tcxgTIAEoAxIaChJleHBpcmVzX2F0X3VuaXhfbXMYFCABKAMSVQoWbmF0aXZlX2ZpbGVzeXN0ZW1fcmVhZBgVIAEoCzIwLmNvZGVzdHVkaW8uYWdlbnQudjEuTmF0aXZlRmlsZXN5c3RlbVJlYWRCaW5kaW5nSAOIAQFCFQoTX3dvcmtzcGFjZV9sZWFzZV9pZEIaChhfd29ya3NwYWNlX2xlYXNlX3ZlcnNpb25CGgoYX3dvcmtzcGFjZV9mZW5jaW5nX2Vwb2NoQhkKF19uYXRpdmVfZmlsZXN5c3RlbV9yZWFkIugCChBDYXBhYmlsaXR5VXBkYXRlEjYKCGlkZW50aXR5GAEgASgLMiQuY29kZXN0dWRpby5hZ2VudC52MS5BdHRlbXB0SWRlbnRpdHkSGwoTcnVudGltZV9pbnN0YW5jZV9pZBgCIAEoCRIUCgxvcGVyYXRpb25faWQYAyABKAkSEwoLdG9vbF91c2VfaWQYBCABKAkSOwoIcmVqZWN0ZWQYCiABKAsyJy5jb2Rlc3R1ZGlvLmFnZW50LnYxLkNhcGFiaWxpdHlSZWplY3RlZEgAEkwKEWFwcHJvdmFsX3JlcXVpcmVkGAsgASgLMi8uY29kZXN0dWRpby5hZ2VudC52MS5DYXBhYmlsaXR5QXBwcm92YWxSZXF1aXJlZEgAEj0KCGFjY2VwdGVkGAwgASgLMikuY29kZXN0dWRpby5hZ2VudC52MS5TZWFsZWRFeGVjdXRpb25HcmFudEgAQgoKCGRlY2lzaW9uIuIBChFDYXBhYmlsaXR5RXhlY3V0ZRI2CghpZGVudGl0eRgBIAEoCzIkLmNvZGVzdHVkaW8uYWdlbnQudjEuQXR0ZW1wdElkZW50aXR5EhsKE3J1bnRpbWVfaW5zdGFuY2VfaWQYAiABKAkSFAoMb3BlcmF0aW9uX2lkGAMgASgJEhMKC3Rvb2xfdXNlX2lkGAQgASgJEhAKCGdyYW50X2lkGAUgASgJEh4KFmVmZmVjdGl2ZV9pbnB1dF9zaGEyNTYYBiABKAwSGwoTZGVhZGxpbmVfYXRfdW5peF9tcxgHIAEoAyLLAQocQ2FwYWJpbGl0eUV4ZWN1dGlvblN1Y2NlZWRlZBIRCglzY2hlbWFfaWQYASABKAkSFgoOc2NoZW1hX3ZlcnNpb24YAiABKA0SFgoOZW5jb2RlZF9yZXN1bHQYAyABKAwSFQoNcmVzdWx0X3NoYTI1NhgEIAEoDBISCgpieXRlc19yZWFkGAUgASgEEhUKDWJ5dGVzX2VtaXR0ZWQYBiABKAQSEQoJdHJ1bmNhdGVkGAcgASgIEhMKC2R1cmF0aW9uX21zGAggASgEIkYKGkNhcGFiaWxpdHlFeGVjdXRpb25GYWlsdXJlEhMKC3JlYXNvbl9jb2RlGAEgASgJEhMKC2R1cmF0aW9uX21zGAIgASgEItUDChlDYXBhYmlsaXR5RXhlY3V0aW9uUmVzdWx0EjYKCGlkZW50aXR5GAEgASgLMiQuY29kZXN0dWRpby5hZ2VudC52MS5BdHRlbXB0SWRlbnRpdHkSGwoTcnVudGltZV9pbnN0YW5jZV9pZBgCIAEoCRIUCgxvcGVyYXRpb25faWQYAyABKAkSEwoLdG9vbF91c2VfaWQYBCABKAkSEAoIZ3JhbnRfaWQYBSABKAkSRgoJc3VjY2VlZGVkGAogASgLMjEuY29kZXN0dWRpby5hZ2VudC52MS5DYXBhYmlsaXR5RXhlY3V0aW9uU3VjY2VlZGVkSAASQQoGZmFpbGVkGAsgASgLMi8uY29kZXN0dWRpby5hZ2VudC52MS5DYXBhYmlsaXR5RXhlY3V0aW9uRmFpbHVyZUgAEkQKCWNhbmNlbGxlZBgMIAEoCzIvLmNvZGVzdHVkaW8uYWdlbnQudjEuQ2FwYWJpbGl0eUV4ZWN1dGlvbkZhaWx1cmVIABJKCg9vdXRjb21lX3Vua25vd24YDSABKAsyLy5jb2Rlc3R1ZGlvLmFnZW50LnYxLkNhcGFiaWxpdHlFeGVjdXRpb25GYWlsdXJlSABCCQoHb3V0Y29tZSqUAwoYQ2FwYWJpbGl0eUV4ZWN1dGlvbkNsYXNzEioKJkNBUEFCSUxJVFlfRVhFQ1VUSU9OX0NMQVNTX1VOU1BFQ0lGSUVEEAASKgomQ0FQQUJJTElUWV9FWEVDVVRJT05fQ0xBU1NfTkFUSVZFX1JFQUQQARIuCipDQVBBQklMSVRZX0VYRUNVVElPTl9DTEFTU19OQVRJVkVfTVVUQVRJT04QAhItCilDQVBBQklMSVRZX0VYRUNVVElPTl9DTEFTU19OQVRJVkVfUFJPQ0VTUxADEi4KKkNBUEFCSUxJVFlfRVhFQ1VUSU9OX0NMQVNTX0hPU1RfQ0FQQUJJTElUWRAEEjIKLkNBUEFCSUxJVFlfRVhFQ1VUSU9OX0NMQVNTX0NPTlRST0xfSU5URVJBQ1RJVkUQBRIqCiZDQVBBQklMSVRZX0VYRUNVVElPTl9DTEFTU19ORVNURURfQ09ERRAGEjEKLUNBUEFCSUxJVFlfRVhFQ1VUSU9OX0NMQVNTX1JFTU9URV9FTlZJUk9OTUVOVBAHYgZwcm90bzM", [file_codestudio_agent_v1_common]);
 
 /**
  * Runner -> Host. This is a policy/resource-binding request, never authority
@@ -382,6 +382,202 @@ export type CapabilityUpdate = Message<"codestudio.agent.v1.CapabilityUpdate"> &
  */
 export const CapabilityUpdateSchema: GenMessage<CapabilityUpdate> = /*@__PURE__*/
   messageDesc(file_codestudio_agent_v1_capability, 5);
+
+/**
+ * Runner -> Host after the authoritative CapabilityDispatchStarted record is
+ * durable. The Host resolves this reference against its exact prepared grant;
+ * provider input is never trusted a second time and an operation is executed
+ * at most once per physical Host session.
+ *
+ * @generated from message codestudio.agent.v1.CapabilityExecute
+ */
+export type CapabilityExecute = Message<"codestudio.agent.v1.CapabilityExecute"> & {
+  /**
+   * @generated from field: codestudio.agent.v1.AttemptIdentity identity = 1;
+   */
+  identity?: AttemptIdentity | undefined;
+
+  /**
+   * @generated from field: string runtime_instance_id = 2;
+   */
+  runtimeInstanceId: string;
+
+  /**
+   * @generated from field: string operation_id = 3;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string tool_use_id = 4;
+   */
+  toolUseId: string;
+
+  /**
+   * @generated from field: string grant_id = 5;
+   */
+  grantId: string;
+
+  /**
+   * @generated from field: bytes effective_input_sha256 = 6;
+   */
+  effectiveInputSha256: Uint8Array;
+
+  /**
+   * @generated from field: int64 deadline_at_unix_ms = 7;
+   */
+  deadlineAtUnixMs: bigint;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.CapabilityExecute.
+ * Use `create(CapabilityExecuteSchema)` to create a new message.
+ */
+export const CapabilityExecuteSchema: GenMessage<CapabilityExecute> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_capability, 6);
+
+/**
+ * @generated from message codestudio.agent.v1.CapabilityExecutionSucceeded
+ */
+export type CapabilityExecutionSucceeded = Message<"codestudio.agent.v1.CapabilityExecutionSucceeded"> & {
+  /**
+   * @generated from field: string schema_id = 1;
+   */
+  schemaId: string;
+
+  /**
+   * @generated from field: uint32 schema_version = 2;
+   */
+  schemaVersion: number;
+
+  /**
+   * @generated from field: bytes encoded_result = 3;
+   */
+  encodedResult: Uint8Array;
+
+  /**
+   * @generated from field: bytes result_sha256 = 4;
+   */
+  resultSha256: Uint8Array;
+
+  /**
+   * @generated from field: uint64 bytes_read = 5;
+   */
+  bytesRead: bigint;
+
+  /**
+   * @generated from field: uint64 bytes_emitted = 6;
+   */
+  bytesEmitted: bigint;
+
+  /**
+   * @generated from field: bool truncated = 7;
+   */
+  truncated: boolean;
+
+  /**
+   * @generated from field: uint64 duration_ms = 8;
+   */
+  durationMs: bigint;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.CapabilityExecutionSucceeded.
+ * Use `create(CapabilityExecutionSucceededSchema)` to create a new message.
+ */
+export const CapabilityExecutionSucceededSchema: GenMessage<CapabilityExecutionSucceeded> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_capability, 7);
+
+/**
+ * @generated from message codestudio.agent.v1.CapabilityExecutionFailure
+ */
+export type CapabilityExecutionFailure = Message<"codestudio.agent.v1.CapabilityExecutionFailure"> & {
+  /**
+   * @generated from field: string reason_code = 1;
+   */
+  reasonCode: string;
+
+  /**
+   * @generated from field: uint64 duration_ms = 2;
+   */
+  durationMs: bigint;
+};
+
+/**
+ * Describes the message codestudio.agent.v1.CapabilityExecutionFailure.
+ * Use `create(CapabilityExecutionFailureSchema)` to create a new message.
+ */
+export const CapabilityExecutionFailureSchema: GenMessage<CapabilityExecutionFailure> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_capability, 8);
+
+/**
+ * Host -> Runner. A Host executor exception after dispatch started is encoded
+ * as outcome_unknown. The runner commits that terminal classification and does
+ * not retry the physical effect.
+ *
+ * @generated from message codestudio.agent.v1.CapabilityExecutionResult
+ */
+export type CapabilityExecutionResult = Message<"codestudio.agent.v1.CapabilityExecutionResult"> & {
+  /**
+   * @generated from field: codestudio.agent.v1.AttemptIdentity identity = 1;
+   */
+  identity?: AttemptIdentity | undefined;
+
+  /**
+   * @generated from field: string runtime_instance_id = 2;
+   */
+  runtimeInstanceId: string;
+
+  /**
+   * @generated from field: string operation_id = 3;
+   */
+  operationId: string;
+
+  /**
+   * @generated from field: string tool_use_id = 4;
+   */
+  toolUseId: string;
+
+  /**
+   * @generated from field: string grant_id = 5;
+   */
+  grantId: string;
+
+  /**
+   * @generated from oneof codestudio.agent.v1.CapabilityExecutionResult.outcome
+   */
+  outcome: {
+    /**
+     * @generated from field: codestudio.agent.v1.CapabilityExecutionSucceeded succeeded = 10;
+     */
+    value: CapabilityExecutionSucceeded;
+    case: "succeeded";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.CapabilityExecutionFailure failed = 11;
+     */
+    value: CapabilityExecutionFailure;
+    case: "failed";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.CapabilityExecutionFailure cancelled = 12;
+     */
+    value: CapabilityExecutionFailure;
+    case: "cancelled";
+  } | {
+    /**
+     * @generated from field: codestudio.agent.v1.CapabilityExecutionFailure outcome_unknown = 13;
+     */
+    value: CapabilityExecutionFailure;
+    case: "outcomeUnknown";
+  } | { case: undefined; value?: undefined };
+};
+
+/**
+ * Describes the message codestudio.agent.v1.CapabilityExecutionResult.
+ * Use `create(CapabilityExecutionResultSchema)` to create a new message.
+ */
+export const CapabilityExecutionResultSchema: GenMessage<CapabilityExecutionResult> = /*@__PURE__*/
+  messageDesc(file_codestudio_agent_v1_capability, 9);
 
 /**
  * Immutable execution route resolved before an attempt becomes active.

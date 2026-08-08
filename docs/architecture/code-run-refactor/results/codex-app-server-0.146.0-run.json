@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-04T20:13:04.808Z",
+  "result": {
+    "candidate": "codex_app_server",
+    "candidateVersion": "0.146.0",
+    "protocolVersion": "app-server-v2-experimental-tools",
+    "protocolSchemaDigest": "5a5b7e73f7f8f564ca829c2469de02aebf6b0027fe26e15d0a75669c3af43874",
+    "attemptId": "14ab3239-7036-4dd5-8a5a-6434b6e3b9b0",
+    "threadId": "019fce68-61f5-7e83-9648-ec4eec72d784",
+    "turnId": "019fce68-6340-7492-8a1f-f6b2c17862ac",
+    "status": "completed",
+    "metrics": {
+      "startedAt": "2026-08-04T20:12:55.033Z",
+      "completedAt": "2026-08-04T20:13:04.808Z",
+      "initializeMs": 114,
+      "threadStartMs": 338,
+      "turnStartMs": 1,
+      "firstDeltaMs": 8564,
+      "dynamicToolCount": 1,
+      "toolCallCount": 1,
+      "deniedBuiltInRequestCount": 0,
+      "observedBypassToolCount": 0,
+      "temporaryStateDeleted": true
+    }
+  },
+  "certification": {
+    "status": "rejected",
+    "blockers": [
+      "durable_supervisor_ownership_not_proven",
+      "process_tree_not_reaped",
+      "resource_limits_not_enforced"
+    ],
+    "observations": [
+      "dynamic_tool_api_is_experimental"
+    ]
+  },
+  "evidence": {
+    "launchReceipt": {
+      "candidate": "codex_app_server",
+      "candidateVersion": "0.146.0",
+      "protocolVersion": "app-server-v2-experimental-tools",
+      "protocolSchemaDigest": "5a5b7e73f7f8f564ca829c2469de02aebf6b0027fe26e15d0a75669c3af43874",
+      "attemptId": "14ab3239-7036-4dd5-8a5a-6434b6e3b9b0",
+      "source": "direct_process",
+      "resourceGroupId": "direct:77632",
+      "processId": 77632,
+      "containmentLevel": "unavailable",
+      "processTreeOwned": false,
+      "enforcedLimits": [],
+      "spawnedAt": "2026-08-04T20:12:55.032Z"
+    },
+    "finalization": {
+      "status": "ownership_retained",
+      "disposition": "completed",
+      "reason": "direct_process_tree_unproven:root_exit=0"
+    }
+  }
+}

@@ -710,7 +710,6 @@ export function mountCoderStreamRoutes(
     body: SendMessageBody,
   ): Promise<PreflightSeed | undefined> {
     try {
-      if (process.env.CODER_PREFLIGHT === '0') return undefined;
       // Only resume runs are never fresh tasks. An explicit agent/profile no
       // longer blocks preflight: it still runs on a fresh session to seed
       // tools + relevant memories, and its profile seed loses to the explicit
@@ -826,7 +825,7 @@ export function mountCoderStreamRoutes(
           kind: 'preflight',
           source_label: 'turn-start',
           content: result.status === 'ok' && result.seed
-            ? renderPreflightHint(result.seed, { bugWorkflow: process.env.CODER_BUG_WORKFLOW !== '0' })
+            ? renderPreflightHint(result.seed, { bugWorkflow: false })
             : (result.error ?? result.status),
           meta: {
             status: result.status,

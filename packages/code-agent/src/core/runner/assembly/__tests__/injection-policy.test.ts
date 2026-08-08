@@ -1,15 +1,10 @@
 /**
- * Window-scaled injection policy — thresholds, env knobs, kill switch.
+ * Window-scaled injection policy.
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { resolveInjectionPolicy } from '../injection-policy.js';
 
 const BIG_MODEL = 'claude-haiku-4-5-20251001'; // registered window ≫ 64k
-
-afterEach(() => {
-  delete process.env.CODER_SESSION_STATE;
-  delete process.env.CODER_SHORT_WINDOW_TOKENS;
-});
 
 describe('resolveInjectionPolicy', () => {
   it('big windows → standard mode, milestone injection', () => {
@@ -26,17 +21,12 @@ describe('resolveInjectionPolicy', () => {
     expect(p.mode).toBe('standard');
   });
 
-  it('short threshold is env-tunable — raising it flips a big model to short', () => {
+  it('ignores the retired short-window env threshold', () => {
     process.env.CODER_SHORT_WINDOW_TOKENS = '99999999';
     const short = resolveInjectionPolicy(BIG_MODEL);
     delete process.env.CODER_SHORT_WINDOW_TOKENS;
     const standard = resolveInjectionPolicy(BIG_MODEL);
-    expect(short.mode).toBe('short');
-    expect(short.stateEveryTurn).toBe(true);
-    // Short budget is materially leaner than standard across the board.
-    expect(short.budget.planChars).toBeLessThan(standard.budget.planChars);
-    expect(short.budget.noteSlots).toBeLessThan(standard.budget.noteSlots);
-    expect(short.memoryIndexChars).toBeLessThan(standard.memoryIndexChars);
+    expect(short).toEqual(standard);
   });
 
   it('liveStateCovered (agentLoopV2 active-context) omits goal/todos from the block', () => {
@@ -44,9 +34,4 @@ describe('resolveInjectionPolicy', () => {
     expect(p.budget.includeLiveState).toBe(false);
   });
 
-  it('CODER_SESSION_STATE=0 kills the block', () => {
-    process.env.CODER_SESSION_STATE = '0';
-    const p = resolveInjectionPolicy(BIG_MODEL);
-    expect(p.enabled).toBe(false);
-  });
 });

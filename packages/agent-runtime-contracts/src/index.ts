@@ -6,6 +6,7 @@ export * from './environment.js';
 export * from './runs.js';
 export * from './capabilities.js';
 export * from './policy.js';
+export * from './runtime-configuration.js';
 export * from './ultra.js';
 export * from './artifacts.js';
 export * from './events.js';

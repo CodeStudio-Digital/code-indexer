@@ -17,7 +17,7 @@
  * call while a prior inline scope is still open returns a refusal with
  * the active task id so the agent knows exactly what to close.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { newSessionId } from '@mcp/session-storage';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 import type { CoderTask, TasksState } from '@mcp/code-agent/sessions/types.js';
@@ -71,17 +71,13 @@ function setup(tasks: CoderTask[], opts: { execution_mode?: TasksState['executio
     provider: {} as never,
     parentTools: [],
     sessionStore: undefined,
+    executeTasksRetryConfig: { maxRetries: 0, initialMs: 0, maxMs: 0, jitter: 0 },
   });
   return { tool, ctx, runner };
 }
 
 beforeEach(() => {
   vi.mocked(runSubagent).mockReset();
-  vi.stubEnv('CODER_TASK_MAX_RETRIES', '0');
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
 });
 
 describe('execute_tasks — inline scope (PR-G)', () => {

@@ -41,20 +41,10 @@ describe('contextSpillCeilingChars (P3)', () => {
     expect(estimateBlockTokens(block)).toBeLessThanOrEqual(protectTokens);
   });
 
-  it('is OFF (Infinity) when the knob is 0 — restores legacy cap-only behaviour', () => {
+  it('cannot be disabled through process env', () => {
+    const expected = contextSpillCeilingChars(MODEL);
     process.env.CODER_CONTEXT_SPILL_RATIO = '0';
-    expect(contextSpillCeilingChars(MODEL)).toBe(Number.POSITIVE_INFINITY);
-  });
-
-  it('scales linearly with the ratio knob', () => {
-    const base = contextSpillCeilingChars(MODEL);
-    process.env.CODER_CONTEXT_SPILL_RATIO = '2';
-    expect(contextSpillCeilingChars(MODEL)).toBe(base * 2);
-  });
-
-  it('treats a non-finite knob as off', () => {
-    process.env.CODER_CONTEXT_SPILL_RATIO = 'nope';
-    expect(contextSpillCeilingChars(MODEL)).toBe(Number.POSITIVE_INFINITY);
+    expect(contextSpillCeilingChars(MODEL)).toBe(expected);
   });
 });
 
@@ -69,9 +59,10 @@ describe('resolveFinalizeCap (P3 clamp wiring)', () => {
     expect(resolveFinalizeCap(1000, MODEL)).toBe(1000);
   });
 
-  it('is a no-op (user cap wins) when the knob is off', () => {
+  it('keeps the safety ceiling when a retired env knob is set', () => {
+    const ceiling = contextSpillCeilingChars(MODEL);
     process.env.CODER_CONTEXT_SPILL_RATIO = '0';
-    expect(resolveFinalizeCap(10_000_000, MODEL)).toBe(10_000_000);
+    expect(resolveFinalizeCap(10_000_000, MODEL)).toBe(ceiling);
   });
 });
 
@@ -130,21 +121,12 @@ describe('resolveTriggerRatio', () => {
     expect(resolveTriggerRatio()).toBe(0.9);
   });
 
-  it('honours CODER_COMPACT_TRIGGER_RATIO and drives shouldCompact90', () => {
+  it('ignores the retired process-env trigger knob', () => {
     process.env.CODER_COMPACT_TRIGGER_RATIO = '0.7';
-    expect(resolveTriggerRatio()).toBe(0.7);
+    expect(resolveTriggerRatio()).toBe(0.9);
     const base = shouldCompact90({ promptTokens: 1, model: MODEL });
     const at75 = Math.ceil(base.effective * 0.75);
-    expect(shouldCompact90({ promptTokens: at75, model: MODEL }).shouldCompact).toBe(true);
-  });
-
-  it('clamps typos into [0.5, 0.95] and ignores garbage', () => {
-    process.env.CODER_COMPACT_TRIGGER_RATIO = '0.1';
-    expect(resolveTriggerRatio()).toBe(0.5);
-    process.env.CODER_COMPACT_TRIGGER_RATIO = '5';
-    expect(resolveTriggerRatio()).toBe(0.95);
-    process.env.CODER_COMPACT_TRIGGER_RATIO = 'banana';
-    expect(resolveTriggerRatio()).toBe(0.9);
+    expect(shouldCompact90({ promptTokens: at75, model: MODEL }).shouldCompact).toBe(false);
   });
 });
 

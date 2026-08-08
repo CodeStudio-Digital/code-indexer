@@ -71,6 +71,10 @@ export interface SubagentSpec {
   spawnId?: string;
   pushTimeCap?: number;
   limits?: SubagentLimits;
+  /** Explicit convergence cutoff for this run; defaults to the product invariant. */
+  sameOperationMax?: number;
+  /** Explicit salvage-summary timeout; primarily useful for bounded hosts/tests. */
+  salvageTimeoutMs?: number;
   signal?: AbortSignal;
   /** Caller wait behaviour; execution semantics stay identical. */
   waitMode?: 'foreground' | 'background';
@@ -170,18 +174,10 @@ function isAllowed(allowlist: SubagentAllowlist, tool: CoderTool): boolean {
   return allowlist.has(tool.name);
 }
 
-function subagentLimit(name: string, fallback: number, allowZero = false): number {
-  const parsed = Number(process.env[name] ?? fallback);
-  if (!Number.isFinite(parsed)) return fallback;
-  const value = Math.floor(parsed);
-  if (allowZero ? value < 0 : value <= 0) return fallback;
-  return value;
-}
-
 const DEFAULT_SUBAGENT_LIMITS: Required<SubagentLimits> = {
-  maxToolCalls: subagentLimit('CODER_SUBAGENT_MAX_TOOLS', 0, true),
-  timeoutMs: subagentLimit('CODER_SUBAGENT_TIMEOUT_MS', 0, true),
-  stallMs: subagentLimit('CODER_SUBAGENT_STALL_MS', 120_000),
+  maxToolCalls: 0,
+  timeoutMs: 0,
+  stallMs: 120_000,
 };
 
 function withDefaultLimits(limits?: SubagentLimits): SubagentLimits {
@@ -339,6 +335,7 @@ export interface SubagentParent {
   /** Optional explicit overrides; normal child runs inherit these from ctx.runner. */
   toolSelectionFilter?: import('@mcp/code-agent/core/runner.js').RunnerOptions['toolSelectionFilter'];
   externalToolTiers?: import('@mcp/code-agent/core/runner.js').RunnerOptions['externalToolTiers'];
+  maxParallel?: number;
 }
 
 /**
@@ -371,7 +368,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   // Stop only a tight loop over the exact same stable logical operation; a
   // productive result, a different operation, or a pollable/mutating tool
   // resets/exempts the streak. Zero keeps an explicit operator escape hatch.
-  const sameOperationMax = subagentLimit('CODER_SUBAGENT_SAME_OPERATION_MAX', 8, true);
+  const sameOperationMax = spec.sameOperationMax ?? 8;
   let repeatedNoProgressOperation: string | null = null;
   let repeatedNoProgressCount = 0;
   const logicalOperations = new Set<string>();
@@ -394,8 +391,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
     }
     await parent.sessionStore.assertSubagentRunFence(childRunFence);
   };
-  const streamProgressThrottleMs =
-    Number(process.env.CODER_SUBAGENT_STREAM_PROGRESS_THROTTLE_MS ?? '5000') || 5_000;
+  const streamProgressThrottleMs = 5_000;
 
   const subAbort = new AbortController();
   let abortFailure: ((message: string) => void) | undefined;
@@ -826,12 +822,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   // PR-C quality watchdog — hoisted so both tool_call_result and
   // message_complete handlers can mutate it. See block below where the
   // listener is wired for full context.
-  const QUALITY_NO_TOOL_MAX = (() => {
-    const raw = process.env.CODER_SUBAGENT_QUALITY_NO_TOOL_MAX;
-    if (raw == null || raw === '') return 3;
-    const n = Number(raw);
-    return Number.isFinite(n) && n >= 0 ? n : 3;
-  })();
+  const QUALITY_NO_TOOL_MAX = 3;
   let consecutiveNoToolCount = 0;
 
   subRunner.on('tool_call_result', (_id, name, toolResult, durationMs) => {
@@ -1132,6 +1123,7 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
         collected,
         sandboxViolations,
         parentSignal: parent.ctx.signal,
+        timeoutMs: spec.salvageTimeoutMs,
       });
       return await finishTelemetry({
         reason,
@@ -1436,7 +1428,7 @@ export async function runImplementSubagent(parent: SubagentParent, task: CoderTa
     initialMessages,
     // Progressing implementers run to natural completion by default. Operators
     // can still provide an exact positive ceiling via CODER_IMPLEMENT_MAX_TURNS.
-    maxTurns: Number(process.env.CODER_IMPLEMENT_MAX_TURNS ?? 0),
+    maxTurns: 0,
     limits: resolveTaskLimit(task),
     pathScope: task.files,
     pathScopeMode: 'enforce-writes',
@@ -1622,7 +1614,7 @@ function wrapToolForPathScope(
 
 // ─── parallel agents ──────────────────────────────────────────
 
-const PARALLEL_AGENT_MAX = Number(process.env.CODER_PARALLEL_AGENT_MAX ?? 5);
+const DEFAULT_PARALLEL_AGENT_MAX = 4;
 
 export interface ParallelAgentSpec {
   task: string;
@@ -1645,6 +1637,8 @@ export interface ParallelAgentSpec {
   pathScope?: string[];
   pathScopeMode?: PathScopeMode;
   limits?: SubagentLimits;
+  sameOperationMax?: number;
+  salvageTimeoutMs?: number;
   signal?: AbortSignal;
   waitMode?: 'foreground' | 'background';
   /**
@@ -1743,7 +1737,10 @@ export async function runParallelAgents(
   onProgress: (p: ParallelAgentProgress) => void,
   concurrency?: number,
 ): Promise<{ results: ParallelAgentResult[]; totalUsage: ChatUsage }> {
-  const limit = Math.min(agents.length, concurrency ?? PARALLEL_AGENT_MAX);
+  const limit = Math.min(
+    agents.length,
+    concurrency ?? parent.maxParallel ?? DEFAULT_PARALLEL_AGENT_MAX,
+  );
   const results: ParallelAgentResult[] = new Array(agents.length);
 
   const tasks = agents.map((spec, agentIndex) => async () => {
@@ -1775,6 +1772,8 @@ export async function runParallelAgents(
         pathScope: spec.pathScope,
         pathScopeMode: spec.pathScopeMode,
         limits: spec.limits,
+        sameOperationMax: spec.sameOperationMax,
+        salvageTimeoutMs: spec.salvageTimeoutMs,
         signal: spec.signal,
         waitMode: spec.waitMode,
         onProgress: (progress) => {
@@ -1848,7 +1847,7 @@ export async function runParallelAgents(
   // where every sub is awaiting its provider response (no tool_call_result
   // bubbles up → no agent_progress → no SSE event → StuckBanner trips
   // around 30s). Period chosen well below the 30s threshold.
-  const HEARTBEAT_MS = Number(process.env.CODER_PARALLEL_HEARTBEAT_MS ?? '15000') || 15_000;
+  const HEARTBEAT_MS = 15_000;
   const heartbeatTimer = setInterval(() => {
     // `reportProgress` is bound by the dispatcher to the real tool_use id.
     // Emitting a second event with the literal id `spawn_agent` creates an

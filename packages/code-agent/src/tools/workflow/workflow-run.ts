@@ -232,6 +232,7 @@ export async function executeWorkflow(
             agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
             toolSelectionFilter: deps.toolSelectionFilter,
             externalToolTiers: deps.externalToolTiers,
+            maxParallel: deps.maxParallel,
           },
           specs,
           MICRO_AGENT_PROFILES.explore.systemPrompt,

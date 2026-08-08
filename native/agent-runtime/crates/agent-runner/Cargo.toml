@@ -19,7 +19,7 @@ agent-tools = { path = "../agent-tools" }
 prost = { version = "=0.14.1", default-features = false, features = ["derive", "std"] }
 sha2 = { version = "=0.11.0", default-features = false }
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
-tokio = { workspace = true, features = ["io-util", "macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 zeroize = { workspace = true }
 
 [dev-dependencies]
@@ -39,6 +39,11 @@ test = false
 [[example]]
 name = "agent-runner-host-hello-probe"
 path = "examples/agent_runner_host_hello_probe.rs"
+test = false
+
+[[example]]
+name = "codex-app-server-b2-fixture"
+path = "examples/codex_app_server_b2_fixture.rs"
 test = false
 
 [[example]]

@@ -450,6 +450,7 @@ async function runSingleEphemeral(
         agentLoopV2: ctx.runner?.agentLoopV2 ?? false,
         toolSelectionFilter: deps.toolSelectionFilter,
         externalToolTiers: deps.externalToolTiers,
+        maxParallel: deps.maxParallel,
       },
       {
         label: agent.label,

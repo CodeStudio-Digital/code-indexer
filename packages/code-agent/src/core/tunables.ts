@@ -6,7 +6,7 @@
  *   1. `RunnerOptions.pushTimeCap` (per-call override, set by subagent factories etc.)
  *   2. `RunnerOptions.tunables`    (per-session override; admin/host builds this
  *                                   from Decider — `config_json.pipelines.runner_tunables.*`)
- *   3. `process.env.CODER_*`       (process-wide override via env vars)
+ *   3. product defaults            (stable fallback)
  *   4. `DEFAULT_TUNABLES`          (hardcoded fallbacks — match the legacy constants)
  *
  * The runner instance resolves the effective tunables ONCE in its constructor:
@@ -24,6 +24,8 @@
  * `SUBAGENT_TOOL_RESULT_CAP`). Those don't have a runner instance to read
  * `this.tunables` from. They keep their env-driven defaults.
  */
+
+import type { ResolvedRuntimePolicyV1 } from '@mcp/agent-runtime-contracts';
 
 export interface CoderTunables {
   /** Per-tool-result block cap when written into the message history. Main runner default. */
@@ -54,14 +56,6 @@ export const DEFAULT_TUNABLES: Readonly<CoderTunables> = Object.freeze({
   interventionCooldownTurns: 5,
 });
 
-function envNumber(key: string, fallback: number): number {
-  const raw = process.env[key];
-  if (raw === undefined || raw === '') return fallback;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
-  return parsed;
-}
-
 /**
  * Build a `CoderTunables` snapshot from `process.env` using the legacy
  * `CODER_*` keys. Each missing/invalid env var falls back to `DEFAULT_TUNABLES`.
@@ -70,23 +64,7 @@ function envNumber(key: string, fallback: number): number {
  * this is what preserves bit-identical behavior with the legacy constants.
  */
 export function envTunables(): CoderTunables {
-  return {
-    pushTimeCap: envNumber('CODER_PUSH_TIME_CAP', DEFAULT_TUNABLES.pushTimeCap),
-    subagentPushTimeCap: envNumber('CODER_SUBAGENT_PUSH_TIME_CAP', DEFAULT_TUNABLES.subagentPushTimeCap),
-    unrestrictedPushTimeCap: envNumber(
-      'CODER_UNRESTRICTED_PUSH_TIME_CAP',
-      DEFAULT_TUNABLES.unrestrictedPushTimeCap,
-    ),
-    unrestrictedSubagentPushTimeCap: envNumber(
-      'CODER_UNRESTRICTED_SUBAGENT_PUSH_TIME_CAP',
-      DEFAULT_TUNABLES.unrestrictedSubagentPushTimeCap,
-    ),
-    turnBudgetChars: envNumber('CODER_TURN_BUDGET_CHARS', DEFAULT_TUNABLES.turnBudgetChars),
-    interventionCooldownTurns: envNumber(
-      'CODER_TOOL_MISUSE_INTERVENTION_COOLDOWN',
-      DEFAULT_TUNABLES.interventionCooldownTurns,
-    ),
-  };
+  return { ...DEFAULT_TUNABLES };
 }
 
 /**
@@ -117,4 +95,16 @@ export function mergeTunables(
     }
   }
   return out;
+}
+
+/** Project the canonical attempt policy into the legacy runner's narrow shape. */
+export function tunablesFromRuntimePolicy(policy: ResolvedRuntimePolicyV1): CoderTunables {
+  return {
+    pushTimeCap: policy.context.toolResultChars,
+    subagentPushTimeCap: policy.context.subagentToolResultChars,
+    unrestrictedPushTimeCap: policy.context.unrestrictedToolResultChars,
+    unrestrictedSubagentPushTimeCap: policy.context.unrestrictedSubagentToolResultChars,
+    turnBudgetChars: policy.context.turnBudgetChars,
+    interventionCooldownTurns: policy.context.interventionCooldownTurns,
+  };
 }

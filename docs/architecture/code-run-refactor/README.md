@@ -1,9 +1,9 @@
 # Code Run — simplificação de configuração e capabilities
 
-> **Status:** planejamento para revisão; implementação ainda não autorizada  
-> **Baseline de código:** `c817f13ec0fd4073db7a70e3c07f3714a3a54e4e`  
-> **Snapshot operacional:** 2026-08-04  
-> **Escopo:** configuração do code-run, tools, skills, plugins e MCP  
+> **Status:** P0-P2 e bridge P3 local implementados; B2 físico completo; P3 físico/P4 pendentes
+> **Baseline de código:** `7e79171d4c9a98397d3f47d9437d890e9316dc1d`
+> **Snapshot operacional:** 2026-08-05
+> **Escopo:** configuração do code-run, tools, skills, plugins e MCP
 > **Arquitetura superior:** [`../rust-agent-runtime/README.md`](../rust-agent-runtime/README.md)
 
 ## 1. Resultado pretendido
@@ -33,11 +33,17 @@ deveriam existir.
 | [`03-capability-system-spec.md`](./03-capability-system-spec.md) | Catálogo/projeção para tools, skills, plugins e MCP |
 | [`04-migration-validation-plan.md`](./04-migration-validation-plan.md) | Fases, gates, benchmarks, rollback e retirada |
 | [`05-flag-disposition-register.md`](./05-flag-disposition-register.md) | Registro de disposição por família e exceções confirmadas |
+| [`06-oss-engine-bakeoff-spec.md`](./06-oss-engine-bakeoff-spec.md) | Spike isolado para motores OSS e critérios de adoção/rejeição |
+| [`07-oss-engine-bakeoff-results.md`](./07-oss-engine-bakeoff-results.md) | Evidências executáveis e decisão provisória do bake-off |
+| [`08-codex-supervised-b2.md`](./08-codex-supervised-b2.md) | Port físico Codex no runner, prova B2 e limites da certificação |
+| [`09-oss-engine-decision.md`](./09-oss-engine-decision.md) | ADR de adapter substituível; sem fork e sem cutover antes do P3 |
+| [`10-implementation-report.md`](./10-implementation-report.md) | Estado executado, métricas, testes e gates restantes para produção |
+| [`11-p3-local-host-capability.md`](./11-p3-local-host-capability.md) | Bridge real `ToolRegistry` -> `HostCapability`, corpus local e limites do gate |
 
-## 3. Decisões vinculantes desta proposta
+## 3. Decisões vinculantes
 
-Enquanto estes documentos estiverem em revisão, “vinculante” significa
-“necessário para aprovar a execução”, não autorização para alterar o runtime.
+Estas decisões governam a implementação iniciada após aprovação explícita. O
+estado executado e as exceções ainda temporárias estão no documento 10.
 
 ### CRR-001 — Uma autoridade por attempt
 
@@ -104,24 +110,21 @@ Não basta ignorar flags antigas. A conclusão exige remover consumers, catálog
 da UI, aliases, rows obsoletas, documentação, telemetria e branches mortos,
 mantendo apenas migrations históricas necessárias a upgrades.
 
-## 4. Fora de escopo antes da aprovação
+## 4. Guardrails de promoção
 
-- alterar comportamento do runtime atual;
-- mudar defaults em produção;
-- remover settings ou rows SQLite;
-- reescrever `ToolRegistry` no legado;
-- reiniciar Electron/http-api ou interromper sessões;
-- iniciar rollout Rust;
-- prometer melhoria de qualidade sem benchmark executável.
+A implementação permanece isolada em worktree e não altera o runtime ativo. O
+B2 físico prova a composição do Codex, e a bridge P3 local liga o catálogo
+selado aos executores reais de filesystem, shell e HTTP, além dos handlers
+atuais de MCP/plugin/indexer/skill/subagente/Company. Isso ainda não substitui
+o corpus P3 físico no build instalado.
 
-## 5. Critério de aprovação das specs
+Antes do cutover ainda é obrigatório:
 
-Antes da primeira mudança de execução, a revisão precisa confirmar:
-
-- qual snapshot representa a configuração atual;
-- quais overrides são realmente política de produto;
-- quais comportamentos ficam permanentemente ligados ou desligados;
-- o contrato do catálogo/projeção e sua compatibilidade com providers;
-- gates de equivalência, segurança, desempenho e rollback;
-- ownership e prazo de remoção de cada compatibilidade temporária.
+- executar o corpus P3 físico restante com MCP/plugins externos e fluxos
+  completos de subagentes/Company; filesystem, shell e HTTP locais já foram
+  exercitados pela bridge;
+- provar restart/recovery sem efeito duplicado;
+- executar canário e rollback no build instalado;
+- reiniciar o runtime somente em janela que preserve as sessões ativas;
+- registrar os receipts de promoção/rollback das quatro rollouts temporárias.
 

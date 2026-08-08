@@ -11,6 +11,7 @@ import type {
   ToolSourceTruncation,
 } from '@mcp/code-agent/core/tool.js';
 import type { PluginToolDecl } from '@mcp/plugin-sdk';
+import { sanitizeUntrustedCapabilityMetadata } from '@mcp/shared';
 
 export interface EnabledPlugin {
   namespace: string;
@@ -64,20 +65,31 @@ export function buildPluginTools(
   const out: CoderTool[] = [];
   for (const plugin of plugins) {
     for (const decl of plugin.tools) {
-      const mutates = decl.mutates ?? true;
+      const sanitized = sanitizeUntrustedCapabilityMetadata(
+        decl.description,
+        toJsonSchema(decl.parameters),
+      );
       out.push({
         name: `plugin__${plugin.namespace}__${decl.name}`,
-        description: decl.description,
-        parameters: toJsonSchema(decl.parameters),
+        description: sanitized.description,
+        parameters: sanitized.schema as JsonSchema,
         source: 'mcp_external',
+        capabilityProvenance: {
+          kind: 'plugin',
+          providerId: plugin.namespace,
+          provenanceRef: `plugin:${plugin.namespace}`,
+        },
         runtimeTier: {
           id: pluginToolTierId(plugin.namespace),
           displayName: `plugin ${plugin.namespace}`,
         },
         ...(decl.outputPolicy ? { outputPolicy: decl.outputPolicy } : {}),
-        mutates,
-        parallelSafe: !mutates,
-        riskLevel: decl.riskLevel ?? (mutates ? 'write' : 'read'),
+        // Unattested plugin metadata cannot lower the local safety posture.
+        mutates: true,
+        parallelSafe: false,
+        riskLevel: decl.riskLevel === 'execute' || decl.riskLevel === 'admin'
+          ? decl.riskLevel
+          : 'write',
         handler: async (args, ctx): Promise<ToolResult> => {
           const r = await invoke(plugin.namespace, decl.name, args, {
             projectName: ctx.projectName,

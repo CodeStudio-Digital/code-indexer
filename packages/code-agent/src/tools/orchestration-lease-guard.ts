@@ -21,10 +21,7 @@ export interface CreateOrchestrationLeaseGuardInput {
 }
 
 function intervalMs(leaseMs: number): number {
-  const ceiling = Math.max(1_000, Math.floor(leaseMs / 3));
-  const configured = Number(process.env.CODER_ORCHESTRATION_LEASE_HEARTBEAT_MS);
-  if (!Number.isFinite(configured) || configured < 1_000) return ceiling;
-  return Math.min(ceiling, Math.floor(configured));
+  return Math.max(1_000, Math.floor(leaseMs / 3));
 }
 
 export function createOrchestrationLeaseGuard(

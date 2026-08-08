@@ -29,9 +29,9 @@ import { ok, err } from '@mcp/code-agent/core/tool.js';
  *   re-check the same page within a session without paying twice.
  */
 
-const FETCH_TIMEOUT_MS = Number(process.env.CODER_WEB_TIMEOUT_MS ?? 20_000);
-const CACHE_TTL_MS = Number(process.env.CODER_WEB_CACHE_TTL_MS ?? 15 * 60 * 1000);
-const MAX_CACHE_ENTRY_CHARS = Number(process.env.CODER_WEB_CACHE_ENTRY_MAX ?? 1_000_000);
+const FETCH_TIMEOUT_MS = 20_000;
+const CACHE_TTL_MS = 15 * 60 * 1000;
+const MAX_CACHE_ENTRY_CHARS = 1_000_000;
 const DEFAULT_WEB_READ_BYTES = 2 * 1024 * 1024;
 const MAX_WEB_READ_BYTES = 10 * 1024 * 1024;
 

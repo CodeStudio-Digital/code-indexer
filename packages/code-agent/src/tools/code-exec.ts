@@ -54,17 +54,11 @@ import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
-const WALL_TIMEOUT_MS = Number(process.env.CODER_CODE_EXEC_WALL_TIMEOUT_MS ?? 35 * 60_000) || 35 * 60_000;
-const DRAIN_TIMEOUT_MS = Number(process.env.CODER_CODE_EXEC_DRAIN_TIMEOUT_MS ?? 5_000) || 5_000;
+const WALL_TIMEOUT_MS = 35 * 60_000;
+const DRAIN_TIMEOUT_MS = 5_000;
 const ABORT_DRAIN_GRACE_MS = 250;
 const MAX_TOOL_CALLS = 50;
-const MAX_PARALLEL_TOOL_CALLS = Math.min(
-  MAX_TOOL_CALLS,
-  Math.max(
-    1,
-    Math.trunc(Number(process.env.CODER_CODE_EXEC_MAX_PARALLEL_TOOLS ?? 8) || 8),
-  ),
-);
+const MAX_PARALLEL_TOOL_CALLS = 8;
 const MAX_OUTPUT_BYTES = 50_000;
 const PRIORITY_ERROR_LOG_RATIO = 0.2;
 const MIN_PRIORITY_ERROR_LOG_BYTES = 1_024;
@@ -164,9 +158,7 @@ function observeCodeExecPromise<T>(promise: Promise<T>): Promise<T> {
  * Unity/MCP batches arrive intact in the turn that produced them. Override
  * with `CODER_UNRESTRICTED_CODE_EXEC_BYTES`.
  */
-const UNRESTRICTED_MAX_OUTPUT_BYTES = Number(
-  process.env.CODER_UNRESTRICTED_CODE_EXEC_BYTES ?? 1_000_000,
-);
+const UNRESTRICTED_MAX_OUTPUT_BYTES = 1_000_000;
 
 const CODE_EXEC_DESC =
   'Execute a JS snippet that batches tool calls in one turn. Saves round-trips when you need to chain reads/searches/edits with logic, loops, or filtering.\n' +

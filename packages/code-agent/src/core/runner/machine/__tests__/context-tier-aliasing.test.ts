@@ -11,6 +11,7 @@ import type { ToolTier } from '../../../../tools/tiers.js';
 import type { RunnerOptions } from '../../types.js';
 
 const noopEmit = (() => {}) as never;
+const opts = (): RunnerOptions => ({ initialMessages: [], toolContext: {} } as unknown as RunnerOptions);
 
 describe('ensureBootstrap', () => {
   it('mutates and returns the GIVEN Set (by-reference contract)', () => {
@@ -29,7 +30,7 @@ describe('createRunContext — shared mutable tool-surface state', () => {
   it('mid-run tier promotion on the host Set is visible to the context', () => {
     const hostTiers = new Set<ToolTier>(['bootstrap']);
     const ctx = createRunContext({
-      opts: { initialMessages: [] } as unknown as RunnerOptions,
+      opts: opts(),
       emit: noopEmit,
       initialTiers: hostTiers,
     });
@@ -41,7 +42,7 @@ describe('createRunContext — shared mutable tool-surface state', () => {
   it('mid-run pins on the host Set are visible to the context (and vice versa)', () => {
     const hostPins = new Set<string>();
     const ctx = createRunContext({
-      opts: { initialMessages: [] } as unknown as RunnerOptions,
+      opts: opts(),
       emit: noopEmit,
       initialTiers: new Set<ToolTier>(['bootstrap']),
       initialPins: hostPins,
@@ -52,7 +53,7 @@ describe('createRunContext — shared mutable tool-surface state', () => {
 
   it('defaults to an empty pin set when none is provided', () => {
     const ctx = createRunContext({
-      opts: { initialMessages: [] } as unknown as RunnerOptions,
+      opts: opts(),
       emit: noopEmit,
       initialTiers: null,
     });

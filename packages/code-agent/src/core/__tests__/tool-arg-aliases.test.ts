@@ -192,14 +192,14 @@ describe('normalizeToolArgs — identity / edge cases', () => {
   });
 });
 
-describe('aliasNormalizationEnabled — kill switch (default ON)', () => {
-  it('is ON by default and OFF only when the env flag is exactly "1"', () => {
+describe('aliasNormalizationEnabled — mandatory compatibility window', () => {
+  it('cannot be disabled by the retired env flag', () => {
     const prev = process.env.CODER_TOOL_ARG_ALIASES_DISABLE;
     try {
       delete process.env.CODER_TOOL_ARG_ALIASES_DISABLE;
       expect(aliasNormalizationEnabled()).toBe(true);
       process.env.CODER_TOOL_ARG_ALIASES_DISABLE = '1';
-      expect(aliasNormalizationEnabled()).toBe(false);
+      expect(aliasNormalizationEnabled()).toBe(true);
       process.env.CODER_TOOL_ARG_ALIASES_DISABLE = '0';
       expect(aliasNormalizationEnabled()).toBe(true);
     } finally {
@@ -242,14 +242,14 @@ describe('ToolRegistry.invoke — repairs args at the real dispatch chokepoint',
     expect(res.content).toBe('z');
   });
 
-  it('honors the kill switch — disabled means the handler sees the raw (failing) args', async () => {
+  it('repairs arguments even when the retired kill switch is present', async () => {
     const prev = process.env.CODER_TOOL_ARG_ALIASES_DISABLE;
     try {
       process.env.CODER_TOOL_ARG_ALIASES_DISABLE = '1';
       const reg = new ToolRegistry();
       reg.register(echoPath);
       const res = await reg.invoke('read_file', { file_path: 'z' }, ctx);
-      expect(res.content).toBe(''); // path never populated → handler reads empty
+      expect(res.content).toBe('z');
     } finally {
       if (prev === undefined) delete process.env.CODER_TOOL_ARG_ALIASES_DISABLE;
       else process.env.CODER_TOOL_ARG_ALIASES_DISABLE = prev;

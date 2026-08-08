@@ -6,6 +6,7 @@ import {
 } from '@mcp/agent-runtime-contracts';
 import { describe, expect, it, vi } from 'vitest';
 import { CapabilityGateway } from '../capability-gateway/CapabilityGateway.js';
+import type { HostCapabilityExecutor } from '../capability-gateway/CapabilityGatewayTypes.js';
 import type { HostDataBoundContext } from '../ipc/HostDataAttemptChannelValidation.js';
 import { identity } from './attempt-channel-support.js';
 
@@ -93,6 +94,8 @@ describe('CapabilityGateway', () => {
 
     expect(update.decision.case).toBe('accepted');
     expect(update.operationId).toBe(request.operationId);
+    await expect(gateway.execute(execute(request, 'grant/1')))
+      .rejects.toThrow(/authority is invalid/);
   });
 
   it('rejects corrupt, expired, or non-JSON prepare input before policy', () => {
@@ -104,7 +107,117 @@ describe('CapabilityGateway', () => {
     expect(() => gateway.prepare(prepare({ deadlineAtUnixMs: NOW }))).toThrow(/authority/);
     expect(resolve).not.toHaveBeenCalled();
   });
+
+  it('executes an accepted Host capability exactly once across request replay', async () => {
+    const executeHost = vi.fn(async () => ({
+      case: 'succeeded' as const,
+      schemaId: 'test.host-result.v1',
+      schemaVersion: 1,
+      encodedResult: new TextEncoder().encode('{"ok":true}'),
+      bytesRead: 11n,
+      truncated: false,
+      durationMs: 2n,
+    }));
+    const { gateway, request, grantId } = hostGateway(executeHost);
+    await gateway.prepare(request);
+    const execution = execute(request, grantId);
+
+    const first = await gateway.execute(execution);
+    const replay = await gateway.execute(execution);
+
+    expect(first.outcome.case).toBe('succeeded');
+    expect(replay).toBe(first);
+    expect(executeHost).toHaveBeenCalledOnce();
+    expect(gateway.executedOperationCount).toBe(1);
+  });
+
+  it('terminalizes a post-start Host executor exception as outcome unknown', async () => {
+    const { gateway, request, grantId } = hostGateway(async () => {
+      throw new Error('result transport lost after effect');
+    });
+    await gateway.prepare(request);
+
+    const result = await gateway.execute(execute(request, grantId));
+
+    expect(result.outcome.case).toBe('outcomeUnknown');
+    if (result.outcome.case === 'outcomeUnknown') {
+      expect(result.outcome.value.reasonCode).toBe('host_executor_result_ambiguous');
+    }
+  });
+
+  it('rejects execution after the sealed Host grant expires', async () => {
+    let observedAt = NOW;
+    const executeHost = vi.fn(async () => ({
+      case: 'failed' as const,
+      reasonCode: 'must_not_execute',
+      durationMs: 0n,
+    }));
+    const { gateway, request, grantId } = hostGateway(
+      executeHost,
+      () => observedAt,
+    );
+    await gateway.prepare(request);
+    observedAt = NOW + 500n;
+
+    await expect(gateway.execute(execute(request, grantId)))
+      .rejects.toThrow(/authority is invalid/);
+    expect(executeHost).not.toHaveBeenCalled();
+  });
 });
+
+function hostGateway(
+  executeHost: HostCapabilityExecutor['execute'],
+  nowUnixMs: () => bigint = () => NOW,
+) {
+  const request = prepare({
+    capabilityId: 'host.test_tool',
+    executionClass: agentV1Capability.CapabilityExecutionClass.HOST_CAPABILITY,
+    mutates: true,
+  });
+  const grantId = 'grant/host/1';
+  const gateway = new CapabilityGateway(context(), {
+    async resolve(value) {
+      return {
+        case: 'accepted',
+        value: create(agentV1Capability.SealedExecutionGrantSchema, {
+          grantId,
+          decisionId: 'decision/host/1',
+          capabilityId: value.capabilityId,
+          capabilityVersion: value.capabilityVersion,
+          operationId: value.operationId,
+          toolUseId: value.toolUseId,
+          effectiveInputSha256: value.inputSha256,
+          executionClass: value.executionClass,
+          mutates: value.mutates,
+          environmentId: 'environment/local',
+          environmentVersion: 1n,
+          resourceBindingId: 'binding/host/1',
+          constraintsSha256: new Uint8Array(32).fill(8),
+          policyVersion: 'policy/v1',
+          nonce: new Uint8Array(32).fill(5),
+          issuedAtUnixMs: NOW,
+          expiresAtUnixMs: NOW + 500n,
+        }),
+      };
+    },
+  }, nowUnixMs, undefined, { execute: executeHost });
+  return { gateway, request, grantId };
+}
+
+function execute(
+  request: agentV1Capability.CapabilityPrepare,
+  grantId: string,
+): agentV1Capability.CapabilityExecute {
+  return create(agentV1Capability.CapabilityExecuteSchema, {
+    identity: request.identity,
+    runtimeInstanceId: request.runtimeInstanceId,
+    operationId: request.operationId,
+    toolUseId: request.toolUseId,
+    grantId,
+    effectiveInputSha256: request.inputSha256,
+    deadlineAtUnixMs: request.deadlineAtUnixMs,
+  });
+}
 
 function rejectingGateway(): CapabilityGateway {
   return new CapabilityGateway(context(), {

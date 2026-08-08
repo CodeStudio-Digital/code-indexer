@@ -43,7 +43,9 @@ pub(super) const fn validate_payload_channel(
             | Body::EngineEventProposal(_)
             | Body::EngineEventCommitted(_)
             | Body::CapabilityPrepare(_)
-            | Body::CapabilityUpdate(_),
+            | Body::CapabilityUpdate(_)
+            | Body::CapabilityExecute(_)
+            | Body::CapabilityExecutionResult(_),
         ) => Ok(()),
         (
             wire::TransportChannel::Control,
@@ -65,7 +67,9 @@ pub(super) const fn validate_payload_channel(
             | Body::EngineEventProposal(_)
             | Body::EngineEventCommitted(_)
             | Body::CapabilityPrepare(_)
-            | Body::CapabilityUpdate(_),
+            | Body::CapabilityUpdate(_)
+            | Body::CapabilityExecute(_)
+            | Body::CapabilityExecutionResult(_),
         )
         | (
             wire::TransportChannel::Data,
@@ -125,5 +129,7 @@ pub(super) const fn payload_name(body: &wire::frame_payload::Body) -> &'static s
         Body::EngineEventCommitted(_) => "EngineEventCommitted",
         Body::CapabilityPrepare(_) => "CapabilityPrepare",
         Body::CapabilityUpdate(_) => "CapabilityUpdate",
+        Body::CapabilityExecute(_) => "CapabilityExecute",
+        Body::CapabilityExecutionResult(_) => "CapabilityExecutionResult",
     }
 }

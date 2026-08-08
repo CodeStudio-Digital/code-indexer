@@ -85,15 +85,6 @@ export interface ConsumeStreamArgs {
  * same contract as `recoveryCap` in recovery-config.ts. Tests that stub the
  * env post-import depend on this.
  */
-function resolvePositiveEnvMs(envKey: string, fallback: number): number {
-  const v = process.env[envKey];
-  if (v != null && v !== '') {
-    const n = Number(v);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return fallback;
-}
-
 /**
  * Base thinking-only budget. Bumped 120s→240s to match the first-byte budget:
  * reasoning models (GLM-5/glm-5.2) on heavy plan-mode prompts legitimately
@@ -103,7 +94,7 @@ function resolvePositiveEnvMs(envKey: string, fallback: number): number {
  * Effort/attempt scaling lives in `thinkingOnlyBudgetMs`.
  */
 function resolveThinkingOnlyTimeoutMs(): number {
-  return resolvePositiveEnvMs('CODER_STREAM_THINKING_ONLY_TIMEOUT_MS', 240_000);
+  return 240_000;
 }
 
 /**
@@ -141,9 +132,9 @@ export async function consumeStream(args: ConsumeStreamArgs): Promise<StreamResu
   let responseMeta: ChatProviderResponseMeta | null = null;
   const messagePhases = new Set<AssistantMessagePhase>();
 
-  const idleMs = args.idleTimeoutMs ?? resolvePositiveEnvMs('CODER_STREAM_IDLE_TIMEOUT_MS', 90_000);
+  const idleMs = args.idleTimeoutMs ?? 90_000;
   const firstByteMs =
-    args.firstByteTimeoutMs ?? resolvePositiveEnvMs('CODER_STREAM_FIRST_BYTE_TIMEOUT_MS', 240_000);
+    args.firstByteTimeoutMs ?? 240_000;
   const thinkingOnlyMs = args.thinkingOnlyTimeoutMs ?? resolveThinkingOnlyTimeoutMs();
   const iterator = args.stream[Symbol.asyncIterator]();
   let lastNonThinkingAt = Date.now();

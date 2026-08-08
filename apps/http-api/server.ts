@@ -47,12 +47,6 @@ import { setCompanyLocalProjectStore } from '@mcp/services/sandbox/local-process
 import { setEnvToolStore } from '@mcp/company/tools/env-tools.js';
 import { setDbToolsStores, setDbSecretDecryptor } from '@mcp/code-agent/tools/db/index.js';
 import { getMainSecretDecryptor } from './server/secret-decrypt-port.js';
-import {
-  setGlobalToolSelectionFilter,
-  setGlobalToolSelectionOutcomeObserver,
-} from '@mcp/code-agent/tool-selection/index.js';
-import { setGlobalSubAgentCache } from '@mcp/services/sub-agent-cache/index.js';
-import { setGlobalContextRelevancePipeline } from '@mcp/code-agent/context-relevance/index.js';
 import { setGlobalFeedbackCollector } from '@mcp/services/shadow-traffic/index.js';
 import {
   createFileInboxWatchdogSource,
@@ -346,11 +340,6 @@ export function createApp() {
     },
   );
   setDbSecretDecryptor((blob) => getMainSecretDecryptor()(blob));
-  // Install the global ToolSelectionPipeline filter. When
-  // MCP_PIPELINES_TOOL_SELECTION is unset, buildToolSelectionFilter()
-  // returns undefined and the global stays disabled — zero overhead.
-  setGlobalToolSelectionFilter(deps.buildToolSelectionFilter());
-  setGlobalToolSelectionOutcomeObserver(deps.observeToolSelectionOutcome);
   // C8 — Inbox message watchdog (Sprint 3.5). Detects messages stuck
   // pending/delivered past the threshold and publishes
   // `inbox_message_stuck` events BEFORE the timeout fires EXPIRED.
@@ -379,17 +368,6 @@ export function createApp() {
   // `apps/http-api/workers/company-worker.ts`). The main process holds
   // no supervisor instance — incidents flow from workers to main via
   // MessageBridge → SupervisorIncidentBus → SSE.
-  // SubAgent result cache — installed unconditionally so even when the
-  // flag is off, future toggles take effect immediately. Enable bit is
-  // separate so the spawn handler can short-circuit before the lookup.
-  setGlobalSubAgentCache(
-    deps.subAgentResultCache,
-    process.env.MCP_PIPELINES_SUB_AGENT_CACHE === '1',
-  );
-  setGlobalContextRelevancePipeline(
-    deps.contextRelevancePipeline,
-    process.env.MCP_PIPELINES_CONTEXT_RELEVANCE === '1',
-  );
   setGlobalFeedbackCollector(deps.feedbackCollector);
   // HotStateCache remains removed. Company board state is now file-backed
   // inside each session bundle, so the retired SQLite board benchmark is no

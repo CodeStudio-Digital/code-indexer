@@ -1,8 +1,6 @@
 /**
  * Per-turn loop backstops evaluated by the Executing node AFTER dispatch:
  *
- *   - doom-loop  — legacy rollback for cross-turn signature repetition.
- *     Hybrid/observe use the post-result NoProgressTracker in shadow mode.
  *   - dominance  — one tool eats a long window of turns with ZERO assistant
  *     text. Catches the silent-grind runaway (the 200–700-turn sessions in
  *     telemetry) when other tools intersperse enough to keep doom-loop quiet.
@@ -15,21 +13,14 @@
  * of identical polls can be the legitimate workflow, so result-aware
  * polling-stuck owns them. Volatile calls remain under these backstops.
  */
-import { checkDoomLoop, resetDoomLoopState, type DoomLoopState } from '../guards/doom-loop.js';
 import { checkDominance, resetDominanceState, type DominanceState } from '../guards/dominance.js';
-import {
-  doomLoopThreshold,
-  DOOM_LOOP_FUZZY_THRESHOLD,
-  FUZZY_LOOP_TOOLS,
-  dominanceWindow,
-  dominanceRatio,
-} from '../constants.js';
+import { dominanceWindow, dominanceRatio } from '../constants.js';
 
 export interface PerTurnLoopVerdict {
   /** Guard kind for the `ToolLoopDetected` BehaviorEvent. */
-  guard: 'doom-loop' | 'dominance';
+  guard: 'dominance';
   /** Finer kind for the dashboard `tool_loop_intervention` banner. */
-  interventionKind: 'doom-loop-strict' | 'doom-loop-fuzzy' | 'dominance';
+  interventionKind: 'dominance';
   toolName: string;
   count: number;
   threshold: number;
@@ -48,102 +39,48 @@ export interface PerTurnLoopArgs {
   hadText: boolean;
   /** Names resolved to repeatPolicy=pollable in the registry. */
   repeatableNames: ReadonlySet<string>;
-  /** Temporary rollback only: enable the old cross-turn signature guards. */
-  signatureLoopsEnabled: boolean;
-  doom: DoomLoopState;
   dominance: DominanceState;
 }
 
 /**
  * Feed this turn into both rolling windows and return the first guard that
- * fired (doom-loop has priority), or null. Both checks run every turn so each
- * window stays honest; on a fire BOTH windows reset so the next accumulation
- * starts clean (no Executing↔Planning oscillation, still re-fires if the model
- * keeps looping). Honors `CODER_DOOM_LOOP=0` / `CODER_DOMINANCE=0`.
+ * fired, or null. The product guard is always enabled and uses one fixed,
+ * telemetry-proven posture.
  */
 export function evaluatePerTurnLoops(args: PerTurnLoopArgs): PerTurnLoopVerdict | null {
   const blocks = args.toolUses.filter(
     (t) => !args.repeatableNames.has(t.name),
   );
 
-  let verdict: Omit<PerTurnLoopVerdict, 'snapshot'> | null = null;
-
-  // ── Doom-loop (per-turn signature repeat) ──
-  if (args.signatureLoopsEnabled && process.env.CODER_DOOM_LOOP !== '0') {
-    // The window must HOLD at least `threshold` signatures or the guard can
-    // never fire — a silent footgun when env cranks the thresholds above the
-    // default 10-entry window. Size it to the larger configured threshold so a
-    // misconfigured cap degrades to "fires late", not "never fires".
-    const maxWindow = Math.max(10, doomLoopThreshold(), DOOM_LOOP_FUZZY_THRESHOLD);
-    // Fuzzy (name-only) only watches state-churn tools; reads/edits/search/exec
-    // are exempt so legitimate high-frequency work isn't flagged. Strict (below,
-    // inside checkDoomLoop) stays on for ALL tools — it's precise (identical args).
-    const d = checkDoomLoop({
-      blocks,
-      state: args.doom,
-      maxWindow,
-      fuzzyEligible: (name) => FUZZY_LOOP_TOOLS.has(name),
-    });
-    if (d.fired) {
-      verdict = {
-        guard: 'doom-loop',
-        interventionKind: d.guard,
-        toolName: blocks.map((b) => b.name).join(','),
-        count: d.count,
-        threshold: d.threshold,
-        window: maxWindow,
-        reason:
-          `Same tool signature repeated ${d.count}× across turns (${d.guard}) ` +
-          `— forcing a planning turn to break the loop.`,
-      };
-    }
-  } else {
-    // Hybrid/observe use result-aware NoProgressTracker shadow candidates;
-    // retaining old signatures here could unexpectedly fire if policy flips.
-    resetDoomLoopState(args.doom);
-  }
-
-  // ── Dominance (long-horizon single-tool grind, zero text) ──
-  // Accumulate every turn even when doom already fired so the window stays
-  // honest; only ACT when doom didn't fire (doom is the more immediate signal).
-  if (process.env.CODER_DOMINANCE !== '0') {
-    const window = dominanceWindow();
-    const ratio = dominanceRatio();
-    const dom = checkDominance({
-      toolName: blocks[0]?.name ?? '',
-      hadText: args.hadText,
-      state: args.dominance,
-      window,
-      ratio,
-    });
-    if (!verdict && dom.fired) {
-      verdict = {
-        guard: 'dominance',
-        interventionKind: 'dominance',
-        toolName: dom.toolName,
-        count: dom.count,
-        threshold: Math.ceil(ratio * window),
-        window,
-        reason:
-          `Tool '${dom.toolName}' dominated ${dom.count}/${window} turns with ` +
-          `zero assistant text — forcing a planning turn to break the grind.`,
-      };
-    }
-  }
-
-  if (!verdict) return null;
+  const window = dominanceWindow();
+  const ratio = dominanceRatio();
+  const dom = checkDominance({
+    toolName: blocks[0]?.name ?? '',
+    hadText: args.hadText,
+    state: args.dominance,
+    window,
+    ratio,
+  });
+  if (!dom.fired) return null;
 
   // Snapshot AFTER both checks have pushed this turn (so the dashboard sees the
   // windows that triggered), THEN reset both.
   const full: PerTurnLoopVerdict = {
-    ...verdict,
+    guard: 'dominance',
+    interventionKind: 'dominance',
+    toolName: dom.toolName,
+    count: dom.count,
+    threshold: Math.ceil(ratio * window),
+    window,
+    reason:
+      `Tool '${dom.toolName}' dominated ${dom.count}/${window} turns with ` +
+      `zero assistant text — forcing a planning turn to break the grind.`,
     snapshot: {
-      strict: args.doom.strict.slice(),
-      fuzzy: args.doom.fuzzy.slice(),
+      strict: [],
+      fuzzy: [],
       dominance: args.dominance.window.slice(),
     },
   };
-  resetDoomLoopState(args.doom);
   resetDominanceState(args.dominance);
   return full;
 }

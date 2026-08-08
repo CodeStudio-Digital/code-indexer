@@ -3,7 +3,9 @@ use std::sync::Arc;
 use agent_engine::operation::OperationId;
 use agent_engine::ports::{AuthorityPort, ClockPort, EventSinkPort, ProviderGatewayPort};
 use agent_engine::turn::{TurnEngine, TurnInput, TurnOutcome};
-use agent_tools::capability::{CapabilityDecision, CapabilityGatewayPort};
+use agent_tools::capability::{
+    CapabilityDecision, CapabilityExecutorPort, CapabilityGatewayPort, ExecutionClass,
+};
 
 use super::error::ActiveEngineError;
 use crate::native_tools::NativeToolExecutor;
@@ -28,7 +30,7 @@ pub(super) struct CapabilityLoop<'a, P, G, E, A, C> {
 impl<P, G, E, A, C> CapabilityLoop<'_, P, G, E, A, C>
 where
     P: ProviderGatewayPort,
-    G: CapabilityGatewayPort,
+    G: CapabilityGatewayPort + CapabilityExecutorPort,
     E: EventSinkPort,
     A: AuthorityPort,
     C: ClockPort,
@@ -61,21 +63,34 @@ where
             let CapabilityDecision::Accepted(grant) = decision else {
                 break;
             };
-            let mut executor = NativeToolExecutor;
-            let capability_outcome = self
-                .engine
-                .execute_capability(
-                    &call,
-                    self.capability_set_sha256,
-                    self.deadline_at_unix_ms,
-                    &grant,
-                    &mut executor,
-                    self.authority,
-                    self.events,
-                    self.clock,
-                )
-                .await
-                .map_err(|_| ActiveEngineError::CapabilityExecutionFailed)?;
+            let capability_outcome = if call.execution_class == ExecutionClass::HostCapability {
+                self.engine
+                    .execute_capability(
+                        &call,
+                        self.capability_set_sha256,
+                        self.deadline_at_unix_ms,
+                        &grant,
+                        self.capabilities,
+                        self.authority,
+                        self.events,
+                        self.clock,
+                    )
+                    .await
+            } else {
+                self.engine
+                    .execute_capability(
+                        &call,
+                        self.capability_set_sha256,
+                        self.deadline_at_unix_ms,
+                        &grant,
+                        &mut NativeToolExecutor,
+                        self.authority,
+                        self.events,
+                        self.clock,
+                    )
+                    .await
+            }
+            .map_err(|_| ActiveEngineError::CapabilityExecutionFailed)?;
             *self.provider_context = compose_capability_result_context(
                 self.provider_context.as_ref(),
                 &call,

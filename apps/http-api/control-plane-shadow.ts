@@ -74,10 +74,7 @@ let shadowWriteScheduled = false;
 let shadowWriteRunning = false;
 
 function shadowWriteQueueCap(): number {
-  const parsed = Number(process.env.CODER_RUNTIME_JOURNAL_QUEUE_CAP);
-  return Number.isFinite(parsed) && parsed > 0
-    ? Math.max(32, Math.floor(parsed))
-    : DEFAULT_SHADOW_WRITE_QUEUE_CAP;
+  return DEFAULT_SHADOW_WRITE_QUEUE_CAP;
 }
 
 function resolveShadowDrainWaiters(): void {

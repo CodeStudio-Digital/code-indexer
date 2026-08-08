@@ -22,7 +22,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
-  vi.unstubAllEnvs();
 });
 
 function mk(jobId: string) {
@@ -31,30 +30,20 @@ function mk(jobId: string) {
 
 describe('SubagentJobManager', () => {
   it('creates jobs and enforces the concurrency cap', () => {
-    const prev = process.env.CODER_BACKGROUND_JOBS_MAX;
-    process.env.CODER_BACKGROUND_JOBS_MAX = '2';
-    try {
-      expect('error' in mk('j1')).toBe(false);
-      expect('error' in mk('j2')).toBe(false);
-      const third = mk('j3');
-      expect('error' in third).toBe(true);
-    } finally {
-      if (prev == null) delete process.env.CODER_BACKGROUND_JOBS_MAX; else process.env.CODER_BACKGROUND_JOBS_MAX = prev;
-    }
+    mgr = new SubagentJobManager({ maxJobs: 2 });
+    expect('error' in mk('j1')).toBe(false);
+    expect('error' in mk('j2')).toBe(false);
+    const third = mk('j3');
+    expect('error' in third).toBe(true);
   });
 
   it('frees a slot once a job settles', () => {
-    const prev = process.env.CODER_BACKGROUND_JOBS_MAX;
-    process.env.CODER_BACKGROUND_JOBS_MAX = '1';
-    try {
-      const j1 = mk('j1');
-      if ('error' in j1) throw new Error('unexpected');
-      expect('error' in mk('j2')).toBe(true);
-      mgr.settle(j1, 'done', usage, 'done');
-      expect('error' in mk('j2b')).toBe(false);
-    } finally {
-      if (prev == null) delete process.env.CODER_BACKGROUND_JOBS_MAX; else process.env.CODER_BACKGROUND_JOBS_MAX = prev;
-    }
+    mgr = new SubagentJobManager({ maxJobs: 1 });
+    const j1 = mk('j1');
+    if ('error' in j1) throw new Error('unexpected');
+    expect('error' in mk('j2')).toBe(true);
+    mgr.settle(j1, 'done', usage, 'done');
+    expect('error' in mk('j2b')).toBe(false);
   });
 
   it('settle is idempotent', () => {
@@ -81,7 +70,7 @@ describe('SubagentJobManager', () => {
   it('expires only collected terminals, never notified-but-uncollected results', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    vi.stubEnv('CODER_BACKGROUND_JOB_TTL_MS', '1000');
+    mgr = new SubagentJobManager({ collectedTtlMs: 1000 });
     const notified = mk('notified');
     const collected = mk('collected');
     if ('error' in notified || 'error' in collected) throw new Error('unexpected');

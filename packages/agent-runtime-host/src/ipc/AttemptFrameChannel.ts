@@ -41,6 +41,8 @@ const DATA_CASES: ReadonlySet<FramePayloadCase> = new Set([
   'engineEventCommitted',
   'capabilityPrepare',
   'capabilityUpdate',
+  'capabilityExecute',
+  'capabilityExecutionResult',
 ]);
 
 export function assertPayloadAllowed(

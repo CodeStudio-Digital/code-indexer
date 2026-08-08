@@ -7,6 +7,7 @@ use agent_protocol::pulse_channel::RunnerPulseError;
 use agent_protocol::runner_bootstrap::RunnerBootstrapError;
 
 use crate::control::{AsyncControlDriverError, AsyncRunnerBootstrapError};
+use crate::external_engine::ExternalEngineConfigError;
 use crate::provider_context::ProviderContextError;
 
 #[derive(Debug)]
@@ -31,6 +32,7 @@ pub enum RunnerControlServiceError {
     MissingEffectAuthority,
     MissingProviderContext,
     ProviderContext(ProviderContextError),
+    ExternalEngineConfig(ExternalEngineConfigError),
     UnexpectedPreActiveTermination,
 }
 
@@ -81,6 +83,7 @@ impl Display for RunnerControlServiceError {
                 formatter.write_str("runner activated without a composed provider context")
             }
             Self::ProviderContext(error) => Display::fmt(error, formatter),
+            Self::ExternalEngineConfig(error) => Display::fmt(error, formatter),
             Self::UnexpectedPreActiveTermination => {
                 formatter.write_str("runner accepted termination before activation")
             }
@@ -100,6 +103,7 @@ impl Error for RunnerControlServiceError {
             Self::Driver(error) => Some(error),
             Self::Hydration(error) => Some(error.as_ref()),
             Self::ProviderContext(error) => Some(error),
+            Self::ExternalEngineConfig(error) => Some(error),
             Self::Cancelled
             | Self::PulsePumpStopped
             | Self::DeadlineElapsed

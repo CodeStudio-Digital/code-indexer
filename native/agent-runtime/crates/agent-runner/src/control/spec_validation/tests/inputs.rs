@@ -2,7 +2,7 @@ use agent_protocol::generated::v1 as wire;
 
 use super::super::SpecValidationError;
 
-use super::support::{artifact, valid_spec, validate};
+use super::support::{artifact, snapshot, valid_spec, validate};
 
 #[test]
 fn role_definition_task_and_provider_are_mandatory() {
@@ -143,7 +143,7 @@ fn artifacts_are_owned_hashed_bounded_and_exposed_by_borrow() {
 }
 
 #[test]
-fn exactly_seven_valid_unique_snapshots_are_required() {
+fn seven_core_valid_unique_snapshots_are_required() {
     let mut spec = valid_spec();
     spec.policy_snapshot = None;
     assert_eq!(
@@ -173,4 +173,37 @@ fn exactly_seven_valid_unique_snapshots_are_required() {
             field: "preset_snapshot"
         }
     );
+}
+
+#[test]
+fn codex_provider_requires_valid_eighth_snapshot() {
+    let mut spec = valid_spec();
+    let binding = spec.provider_binding.as_mut().expect("binding");
+    binding.requested_provider = Some("codex_app_server".to_owned());
+    binding.effective_provider = "codex_app_server".to_owned();
+    assert_eq!(
+        validate(spec.clone()).unwrap_err(),
+        SpecValidationError::MissingRequiredSnapshot("codex_app_server_process_snapshot")
+    );
+
+    spec.codex_app_server_process_snapshot = Some(snapshot("codex-app-server"));
+    assert_eq!(
+        validate(spec.clone())
+            .expect("valid Codex spec")
+            .required_snapshots()
+            .len(),
+        8
+    );
+
+    spec.codex_app_server_process_snapshot
+        .as_mut()
+        .expect("Codex snapshot")
+        .content_sha256 = vec![1; 31];
+    assert!(matches!(
+        validate(spec),
+        Err(SpecValidationError::InvalidSnapshot {
+            field: "codex_app_server_process_snapshot",
+            ..
+        })
+    ));
 }

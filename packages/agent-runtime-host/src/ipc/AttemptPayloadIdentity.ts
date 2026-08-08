@@ -71,6 +71,8 @@ function payloadIdentity(
     case 'engineEventCommitted':
     case 'capabilityPrepare':
     case 'capabilityUpdate':
+    case 'capabilityExecute':
+    case 'capabilityExecutionResult':
       return {
         name: payload.body.case,
         identity: payload.body.value.identity,

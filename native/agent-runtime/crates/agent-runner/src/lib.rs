@@ -5,6 +5,8 @@ pub mod bootstrap;
 mod capability_gateway;
 pub mod control;
 mod engine_authority;
+#[cfg(windows)]
+mod external_engine;
 pub mod lifecycle;
 mod native_tools;
 #[cfg(feature = "performance-harness")]

@@ -232,9 +232,9 @@ describe('public progress contract', () => {
     'requires concise progress updates for the %s family',
     (providerFamily) => {
       const prompt = buildSystemPrompt({ ...BASE_CTX, providerFamily });
-      expect(prompt).toContain('Before substantial tool work, send a brief user-facing update');
-      expect(prompt).toContain('do not leave the user without an update for more than 60 seconds');
-      expect(prompt).toContain('Public progress, provider reasoning summaries, and the final answer are distinct channels');
+      expect(prompt).toContain('Before substantial tools, state the immediate objective');
+      expect(prompt).toContain('at least every 60 seconds');
+      expect(prompt).toContain('do not narrate trivial reads or hidden reasoning');
       expect(prompt).not.toMatch(/prefer tool calls over narration/i);
     },
   );

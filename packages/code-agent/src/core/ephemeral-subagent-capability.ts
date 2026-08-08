@@ -23,7 +23,7 @@ export interface EphemeralSubagentCompanyContext {
  */
 export function shouldEnableEphemeralSubagents(
   companyContext: EphemeralSubagentCompanyContext | null | undefined,
-  globallyDisabled = process.env.CODER_DISABLE_SUBAGENTS === '1',
+  globallyDisabled = false,
 ): boolean {
   if (globallyDisabled) return false;
   if (!companyContext) return true;

@@ -112,7 +112,7 @@ export interface SubagentDeps {
   resolveEffortForProfile?: (profileId?: string) => string | undefined;
   /**
    * When set, resolves the admin per-profile hard-cap override (max tool
-   * calls / wall-clock timeout). `undefined` means no override — env vars and
+   * calls / wall-clock timeout). `undefined` means no override and
    * depth-derived defaults decide. Prefer the `limitsOverrideForProfile()`
    * helper over reading this directly.
    */
@@ -123,6 +123,14 @@ export interface SubagentDeps {
   toolSelectionFilter?: import('@mcp/code-agent/core/runner.js').RunnerOptions['toolSelectionFilter'];
   /** Runtime/plugin tier placement inherited by ephemeral child runners. */
   externalToolTiers?: import('@mcp/code-agent/core/runner.js').RunnerOptions['externalToolTiers'];
+  /** Host-resolved concurrency ceiling for this attempt. */
+  maxParallel?: number;
+  /** Explicit execute_tasks run token cap; null/undefined means unlimited. */
+  executeTasksTokenCap?: number | null;
+  /** Explicit retry policy for execute_tasks; product defaults apply when omitted. */
+  executeTasksRetryConfig?: import('@mcp/code-agent/tools/execute-tasks/task-retry.js').TaskRetryConfig;
+  /** Explicit UI response timeout for a budget gate. */
+  executeTasksBudgetResponseTimeoutMs?: number;
 }
 
 export function describeProvider(provider: ChatProvider): { provider: string; model: string; label: string } {

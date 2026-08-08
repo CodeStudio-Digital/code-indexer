@@ -150,7 +150,7 @@ describe('execute_tasks skip-stale integration', () => {
     expect(runSubagent).toHaveBeenCalledTimes(1);
   });
 
-  it('respects CODER_TASKS_DISABLE_SKIP_STALE=1 (forced run)', async () => {
+  it('ignores the retired global bypass and preserves stale skipping', async () => {
     vi.stubEnv('CODER_TASKS_DISABLE_SKIP_STALE', '1');
     vi.mocked(runSubagent).mockResolvedValue({
       reason: 'completed', finalText: 'forced',
@@ -162,7 +162,7 @@ describe('execute_tasks skip-stale integration', () => {
     const { tool, ctx } = setupCtx(t, store);
 
     await tool.handler({}, ctx);
-    expect(runSubagent).toHaveBeenCalledTimes(1);
+    expect(runSubagent).not.toHaveBeenCalled();
   });
 
   it('respects per-task force_run flag', async () => {

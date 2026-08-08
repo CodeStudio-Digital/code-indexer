@@ -100,3 +100,50 @@ message CapabilityUpdate {
     SealedExecutionGrant accepted = 12;
   }
 }
+
+// Runner -> Host after the authoritative CapabilityDispatchStarted record is
+// durable. The Host resolves this reference against its exact prepared grant;
+// provider input is never trusted a second time and an operation is executed
+// at most once per physical Host session.
+message CapabilityExecute {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string operation_id = 3;
+  string tool_use_id = 4;
+  string grant_id = 5;
+  bytes effective_input_sha256 = 6;
+  int64 deadline_at_unix_ms = 7;
+}
+
+message CapabilityExecutionSucceeded {
+  string schema_id = 1;
+  uint32 schema_version = 2;
+  bytes encoded_result = 3;
+  bytes result_sha256 = 4;
+  uint64 bytes_read = 5;
+  uint64 bytes_emitted = 6;
+  bool truncated = 7;
+  uint64 duration_ms = 8;
+}
+
+message CapabilityExecutionFailure {
+  string reason_code = 1;
+  uint64 duration_ms = 2;
+}
+
+// Host -> Runner. A Host executor exception after dispatch started is encoded
+// as outcome_unknown. The runner commits that terminal classification and does
+// not retry the physical effect.
+message CapabilityExecutionResult {
+  AttemptIdentity identity = 1;
+  string runtime_instance_id = 2;
+  string operation_id = 3;
+  string tool_use_id = 4;
+  string grant_id = 5;
+  oneof outcome {
+    CapabilityExecutionSucceeded succeeded = 10;
+    CapabilityExecutionFailure failed = 11;
+    CapabilityExecutionFailure cancelled = 12;
+    CapabilityExecutionFailure outcome_unknown = 13;
+  }
+}

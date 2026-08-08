@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-08-05T23:42:25.6637826Z",
+  "sourceRevision": "7e79171d4c9a98397d3f47d9437d890e9316dc1d",
+  "branch": "codex/oss-agent-bakeoff",
+  "candidate": {
+    "id": "codex_app_server",
+    "reportedVersion": "0.146.0-alpha.9.2",
+    "binaryPath": "C:\\Users\\maico\\.codex\\plugins\\.plugin-appserver\\codex.exe",
+    "binarySha256": "ecd7a3eaff5e42723dbba03b5c91514b3986b5db5cbca8f34619620b5356f31f",
+    "protocolVersion": "app-server-v2-experimental-tools",
+    "protocolSchemaSha256": "5a5b7e73f7f8f564ca829c2469de02aebf6b0027fe26e15d0a75669c3af43874"
+  },
+  "runtimePackage": {
+    "target": "x86_64-pc-windows-msvc",
+    "buildId": "runtime-v1-22cc347deaf4f440a11f27f602be21c0ae75ce13709ac56de6910fba1fec3bab",
+    "manifestSha256": "bf9998a1d8301ac16d82f49d798dfd524345ea7d5f59cc8d212c9a514721aa79",
+    "verifiedByHost": true,
+    "readOnlySmokePassed": true
+  },
+  "attempt": {
+    "resourceGroupId": "attempt-group:59c7efdf828aed691b9c07b82b0252c4",
+    "containmentLevel": "hard_aggregate",
+    "processTreeOwned": true,
+    "containedProcessCountObserved": 5,
+    "peakResidentMemoryBytes": 152829952,
+    "hardMemoryLimitBytes": 536870912,
+    "maxProcesses": 16,
+    "capabilityPrepareCount": 1,
+    "unresolvedCapabilityDispatchCount": 0,
+    "journalRecordCount": 36,
+    "treeEmptyAfterReap": true,
+    "committedFacts": [
+      "launchAccepted",
+      "attemptProcessSpawned",
+      "attemptContainmentReport",
+      "attemptProcessExited",
+      "attemptProcessReaped"
+    ]
+  },
+  "certification": {
+    "status": "b2_physical_matrix_and_bounded_soak_passed",
+    "passedGates": [
+      "candidate_version_verified_from_protocol",
+      "sealed_process_snapshot",
+      "hard_aggregate_containment",
+      "process_tree_owned",
+      "memory_limit_enforced",
+      "single_authorized_capability_call",
+      "durable_terminal_journal",
+      "host_capability_execution_bridge",
+      "mutating_ack_loss_terminalized_unknown_without_retry",
+      "process_tree_reaped",
+      "physical_negative_matrix_passed",
+      "bounded_soak_passed"
+    ],
+    "cutoverBlockers": [
+      "dynamic_tool_api_is_experimental",
+      "b3_comparative_corpus_pending",
+      "p3_restart_and_product_capability_matrix_pending"
+    ]
+  },
+  "validation": {
+    "physicalWindowsTestsPassed": 6,
+    "physicalWindowsTestsFailed": 0,
+    "physicalNegativeMatrixTestsPassed": 9,
+    "physicalNegativeMatrixTestsFailed": 0,
+    "fixtureSoakAttemptsPassed": 100,
+    "realCodexSoakAttemptsPassed": 5,
+    "rustWorkspaceTestsPassed": 614,
+    "rustWorkspaceTestsIgnored": 14,
+    "typescriptTestsPassed": 432,
+    "typescriptTestsSkipped": 17,
+    "cargoFmt": "passed",
+    "cargoClippyDenyWarnings": "passed",
+    "hostTypecheck": "passed",
+    "moduleLocBudget": "passed",
+    "crateBoundaryCheck": "passed",
+    "packageVerify": "passed",
+    "packageSmoke": "passed"
+  }
+}
