@@ -62,11 +62,10 @@ export class FsEntityConflictError extends Error {
   }
 }
 
-function parseEnvelope<T extends JsonValue>(
+function validateEnvelope<T extends JsonValue>(
   path: string,
-  raw: string,
+  value: FsEntityEnvelope<T>,
 ): FsEntityEnvelope<T> {
-  const value = JSON.parse(raw) as FsEntityEnvelope<T>;
   if (
     value.schema_version !== 1 ||
     !isUuid(value.id) ||
@@ -105,6 +104,30 @@ function parseEnvelope<T extends JsonValue>(
   return { ...value, operation_history: operationHistory };
 }
 
+function parseEnvelope<T extends JsonValue>(
+  path: string,
+  raw: string,
+): FsEntityEnvelope<T> {
+  return validateEnvelope(path, JSON.parse(raw) as FsEntityEnvelope<T>);
+}
+
+/**
+ * Builds produced before control-plane checkpoints received their own
+ * namespace wrote camelCase `control-plane.checkpoint` envelopes directly in
+ * `checkpoints/`. They are valid records owned by another repository, not
+ * corrupt filesystem-session entities. Leave those immutable legacy files
+ * untouched and ignore them while listing compaction/orchestration records.
+ */
+function isLegacyControlPlaneEnvelope(value: unknown): boolean {
+  const candidate = value as {
+    schemaVersion?: unknown;
+    kind?: unknown;
+  };
+  return candidate?.schemaVersion === 1 &&
+    typeof candidate.kind === 'string' &&
+    candidate.kind.startsWith('control-plane.');
+}
+
 export class FsSessionEntityFiles {
   constructor(private readonly directory: FsSessionDirectory) {}
 
@@ -119,6 +142,23 @@ export class FsSessionEntityFiles {
       throw new Error(`Filesystem entity is not a regular file: ${path}`);
     }
     return parseEnvelope<T>(path, await readFile(path, 'utf8'));
+  }
+
+  private async readListedEnvelope<T extends JsonValue>(
+    root: string,
+    name: string,
+  ): Promise<FsEntityEnvelope<T> | null> {
+    const path = join(root, name);
+    assertContainedPath(root, path);
+    const stat = await lstat(path);
+    if (!stat.isFile() || stat.isSymbolicLink()) {
+      throw new Error(`Filesystem entity is not a regular file: ${path}`);
+    }
+    const raw = await readFile(path, 'utf8');
+    const value = JSON.parse(raw) as FsEntityEnvelope<T>;
+    return isLegacyControlPlaneEnvelope(value)
+      ? null
+      : validateEnvelope<T>(path, value);
   }
 
   async list<T extends JsonValue>(
@@ -139,9 +179,12 @@ export class FsSessionEntityFiles {
     // Bound I/O so one large session cannot flood libuv, while keeping every
     // filesystem syscall off Electron's main event loop.
     for (let offset = 0; offset < names.length; offset += 16) {
-      records.push(...await Promise.all(
+      const batch = await Promise.all(
         names.slice(offset, offset + 16).map((name) =>
-          this.readEnvelope<T>(root, name)),
+          this.readListedEnvelope<T>(root, name)),
+      );
+      records.push(...batch.filter(
+        (record): record is FsEntityEnvelope<T> => record != null,
       ));
     }
     return records

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,8 @@ import type { ServerDeps } from '../../deps.js';
 import { mountTelemetryRoutes } from '../telemetry.js';
 
 const RUN_ID = '11111111-1111-4111-8111-111111111111';
+const LEGACY_CONTROL_PLANE_CHECKPOINT_ID =
+  '22222222-2222-4222-8222-222222222222';
 
 let root: string;
 let dataDir: string;
@@ -62,6 +64,30 @@ describe('filesystem telemetry routes', () => {
       summarizer_ran: false,
       paginate_count: 0,
     });
+    const location = await store.getSessionLocation(session.id);
+    if (!location) throw new Error('session location missing');
+    await writeFile(
+      join(
+        location.bundle_path,
+        'checkpoints',
+        `${LEGACY_CONTROL_PLANE_CHECKPOINT_ID}.json`,
+      ),
+      JSON.stringify({
+        schemaVersion: 1,
+        id: LEGACY_CONTROL_PLANE_CHECKPOINT_ID,
+        seq: 1,
+        kind: 'control-plane.checkpoint',
+        operationId: LEGACY_CONTROL_PLANE_CHECKPOINT_ID,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        relations: { session: session.id },
+        data: {
+          checkpointType: 'resolved_capability_set',
+          sessionId: session.id,
+        },
+      }),
+      'utf8',
+    );
 
     const app = new Hono();
     mountTelemetryRoutes(app, {
@@ -87,6 +113,7 @@ describe('filesystem telemetry routes', () => {
         tools_called_json: '["read_file"]',
       }),
     ]);
+    await expect(store.listCompactionAttempts(session.id)).resolves.toEqual([]);
   });
 
   it('rejects legacy numeric session ids', async () => {

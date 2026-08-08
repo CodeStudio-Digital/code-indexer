@@ -86,7 +86,11 @@ const CONTROL_PLANE_DIRECTORIES: Record<ControlPlaneEntityKind, string> = {
   event: 'events/runtime',
   grant: 'events/grants',
   policyDecision: 'events/policy-decisions',
-  checkpoint: 'checkpoints',
+  // `checkpoints/` is owned by the filesystem session store and contains
+  // compaction/orchestration envelopes. Control-plane checkpoints use a
+  // different envelope schema, so sharing that directory makes either
+  // reader reject the other one's records.
+  checkpoint: 'checkpoints/control-plane',
   approval: 'events/approvals',
 };
 

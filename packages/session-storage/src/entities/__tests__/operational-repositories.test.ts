@@ -53,12 +53,22 @@ describe('ControlPlaneFileRepository', () => {
         payload: { provider: 'test' },
       },
     });
+    const checkpoint = await repository.createCheckpoint({
+      relations: { run: run.id },
+      data: { checkpointType: 'resolved_capability_set' },
+    });
 
     await Promise.all([
       stat(join(sessionRoot, 'events', 'commands', `${command.id}.json`)),
       stat(join(sessionRoot, 'events', 'runs', `${run.id}.json`)),
       stat(join(sessionRoot, 'events', 'attempts', `${attempt.id}.json`)),
       stat(join(sessionRoot, 'events', 'runtime', `${event.id}.json`)),
+      stat(join(
+        sessionRoot,
+        'checkpoints',
+        'control-plane',
+        `${checkpoint.id}.json`,
+      )),
     ]);
     const eventsForRun = await repository.listByRelation(
       'event',
