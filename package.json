@@ -19,8 +19,6 @@
   "scripts": {
     "build": "tsc && tsc-alias && node scripts/copy-prompts.mjs",
     "build:dashboard": "vite build apps/dashboard",
-    "build:portal": "vite build apps/account-portal",
-    "dev:portal": "vite dev apps/account-portal",
     "build:all": "tsc && tsc-alias && node scripts/copy-prompts.mjs && vite build apps/dashboard",
     "build:bundled-plugins": "node scripts/build-bundled-plugins.mjs",
     "smoke:js-debug": "tsx scripts/smoke-js-debug-adapter.ts",
@@ -44,6 +42,7 @@
     "check:loc": "tsx scripts/check-loc-cap.ts",
     "check:agent-loc": "tsx scripts/check-rust-agent-loc.ts",
     "check:cycles": "tsx scripts/check-circular-imports.ts",
+    "check:boundaries": "tsx scripts/check-repository-boundaries.ts",
     "check:agent-boundary": "tsx scripts/check-rust-agent-legacy-boundary.ts",
     "check:agent-crates": "tsx scripts/check-rust-agent-crate-boundaries.ts",
     "check:deadcode": "knip",

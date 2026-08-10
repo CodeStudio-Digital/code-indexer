@@ -1,3 +1,0 @@
-# Cloudflare Pages SPA fallback — every path serves index.html so client-side
-# routing (incl. /auth/done#handoff=...) works on hard refresh / deep link.
-/*    /index.html   200

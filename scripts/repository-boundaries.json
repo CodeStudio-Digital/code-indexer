@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "domains": [
+    {
+      "name": "core",
+      "roots": [
+        "apps/cli",
+        "apps/http-api",
+        "apps/mcp-server",
+        "benchmarks",
+        "docker",
+        "evals",
+        "packages/api-bus",
+        "packages/api-handlers",
+        "packages/app-studio",
+        "packages/candidate-pipeline",
+        "packages/code-agent",
+        "packages/company",
+        "packages/company-contracts",
+        "packages/db-drivers",
+        "packages/design-system",
+        "packages/docs-agent",
+        "packages/indexer",
+        "packages/orchestrator-host",
+        "packages/plugin-host",
+        "packages/provider-engine",
+        "packages/provider-runtime",
+        "packages/services",
+        "packages/session-storage",
+        "packages/shared",
+        "packages/sprite-studio",
+        "packages/store",
+        "packages/worker-pool",
+        "src",
+        "scripts"
+      ]
+    },
+    {
+      "name": "desktop",
+      "roots": [
+        "apps/dashboard",
+        "apps/electron",
+        "packages/secret-box",
+        "packages/vault-crypto",
+        "scripts/build-electron.mjs",
+        "scripts/release.mjs",
+        "scripts/release"
+      ]
+    },
+    {
+      "name": "cloud",
+      "roots": [
+        "apps/account-portal",
+        "docs/cloud-api",
+        "packages/cloud-billing",
+        "packages/cloud-feedback",
+        "packages/cloud-identity",
+        "packages/cloud-kernel",
+        "packages/cloud-sharing",
+        "services/cloud-api"
+      ]
+    },
+    {
+      "name": "market",
+      "roots": [
+        "packages/plugin-market-client",
+        "scripts/market-smoke.ts",
+        "worker-market"
+      ]
+    },
+    {
+      "name": "plugin-platform",
+      "roots": [
+        "extensions",
+        "packages/plugin-sdk",
+        "packages/podman-core",
+        "packages/provider-sdk",
+        "scripts/build-bundled-plugins.mjs"
+      ]
+    },
+    {
+      "name": "agent-runtime",
+      "roots": [
+        "docs/architecture/rust-agent-runtime",
+        "native/agent-runtime",
+        "packages/agent-runtime-contracts",
+        "packages/agent-runtime-host",
+        "scripts/benchmark-rust-agent-startup.mjs",
+        "scripts/check-rust-agent-crate-boundaries.ts",
+        "scripts/check-rust-agent-legacy-boundary.ts",
+        "scripts/check-rust-agent-loc.ts",
+        "scripts/lib/rust-agent-package-contract.mjs",
+        "scripts/package-rust-agent-runtime.mjs",
+        "scripts/rust-agent-installed-smoke",
+        "scripts/smoke-rust-agent-host-bridge-electron.mjs",
+        "scripts/smoke-rust-agent-runtime-package.ts",
+        "scripts/verify-rust-agent-runtime-package.ts"
+      ]
+    }
+  ],
+  "allowedCrossDomainPackages": {
+    "core": [
+      "@codestudio/agent-runtime-contracts",
+      "@codestudio/agent-runtime-host",
+      "@codestudio/market-client",
+      "@codestudio/provider-contracts"
+    ],
+    "desktop": [
+      "@codestudio/cloud-client",
+      "@codestudio/core-host",
+      "@codestudio/local-api-contracts"
+    ],
+    "cloud": [],
+    "market": [],
+    "plugin-platform": [
+      "@codestudio/market-client"
+    ],
+    "agent-runtime": [
+      "@codestudio/provider-contracts"
+    ]
+  },
+  "publicationPackages": [
+    "@mcp/agent-runtime-contracts",
+    "@mcp/agent-runtime-host",
+    "@mcp/plugin-market-client",
+    "@mcp/plugin-sdk",
+    "@mcp/provider-sdk",
+    "@codestudio/agent-runtime-contracts",
+    "@codestudio/agent-runtime-host",
+    "@codestudio/cloud-client",
+    "@codestudio/core-host",
+    "@codestudio/local-api-contracts",
+    "@codestudio/market-client",
+    "@codestudio/plugin-sdk",
+    "@codestudio/provider-contracts"
+  ],
+  "forbiddenTrackedPatterns": [
+    "**/*.tsbuildinfo",
+    ".claude/settings.local.json",
+    ".idea/**",
+    "package-lock.json",
+    "packages/provider-sdk/dist-contract/**",
+    "packages/provider-sdk/src/**/*.d.ts",
+    "packages/provider-sdk/src/**/*.d.ts.map",
+    "packages/provider-sdk/src/**/*.js",
+    "packages/provider-sdk/src/**/*.js.map",
+    "services/cloud-api/.wrangler*.log",
+    "worker-market/package-lock.json",
+    "worker-market/yarn.lock"
+  ]
+}

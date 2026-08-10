@@ -1,6 +1,18 @@
-# CodeStudio
+# CodeStudio (Desktop)
 
 An AI-native IDE for builders. Bring your own keys, work in a fast desktop app, let agents reason over your codebase.
+
+> This is the **desktop** repository (Electron IDE + agent runtime + indexer). The
+> former monorepo has been decomposed into three independent repositories — see
+> [docs/REPO_SPLIT.md](docs/REPO_SPLIT.md) for the full topology and runbook.
+
+## Related repositories
+
+| Repository | What it holds | Location |
+| --- | --- | --- |
+| **codestudio-desktop** (this one) | Electron shell, React dashboard, agent runtime, indexer, Rust supervisor, bundled providers/plugins | `D:\MCP` |
+| **codestudio-cloud** | Cloudflare Workers (cloud-api + worker-market), cloud bounded contexts (`@cloudstudio/cloud-*`), account-portal SPA | `D:\repos\codestudio-cloud` |
+| **codestudio-unity** | Unity Editor plugin (`com.maicon.scene-analyzer`) — Scene Analyzer / Asset Modeler | `D:\repos\codestudio-unity` |
 
 > Status: **alpha**. Active development on the `feature/ide-mvp` branch (this branch). The Electron shell, file tree, Monaco editor, terminal, agent chat, snapshots, and git tool windows are wired end-to-end. Billing/auth, packaging, and the marketing surface are the next milestones.
 

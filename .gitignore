@@ -1,5 +1,15 @@
 node_modules/
 dist/
+/package-lock.json
+*.tsbuildinfo
+/packages/provider-sdk/dist-contract/
+/packages/provider-sdk/src/**/*.js
+/packages/provider-sdk/src/**/*.js.map
+/packages/provider-sdk/src/**/*.d.ts
+/packages/provider-sdk/src/**/*.d.ts.map
+/.claude/settings.local.json
+/.idea/
+/.probe-worker.mts
 .env
 .env.local
 .env.*.local
@@ -42,3 +52,65 @@ debug.log
 
 # Rust agent runtime build output
 native/agent-runtime/target/
+
+# Unity throwaway validation/test harness projects (disposable; the real plugin
+# lives in extensions/unity-scene-analyzer).
+UnityValidationAssetModeler/
+UnityValidationAssetModeler2/
+UnityValidationAssetModeler3/
+ValidationUnitySceneAnalyzer*/
+
+# Unity per-project generated artifacts (Library/Temp/Logs/UserSettings/etc.)
+# Keep this even if a Unity project is ever tracked inside this repo.
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.tmp
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.mdb
+*.opendb
+*.VC.db
+sysinfo.txt
+crashlytics-build.properties
+__pycache__/
+*.pyc
+
+# Scratch / local-only experiment output
+scratch/
+scratchpad.md
+bench/results/
+
+# Orphan local telemetry helpers
+telemetry_query.js
+telemetry_query.mjs
+
+# Orphan empty worker scaffold (only node_modules present)
+worker/
+
+# Cloud trees are owned by codestudio-cloud and archived outside this repository.
+apps/account-portal/
+docs/cloud-api/
+packages/cloud-*/
+services/cloud-api/
+worker-market/
+
+# Embedded Unity source remains locally preserved by explicit user request.
+extensions/unity-scene-analyzer/
+
+# Split-validation reports and disposable harnesses
+/temp-split-*
+
+# Cloud CI is owned by codestudio-cloud; prevent accidental Desktop copies
+/.github/workflows/cloud-api-ci.yml

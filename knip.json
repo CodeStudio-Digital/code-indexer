@@ -12,8 +12,6 @@
         "apps/electron/dev.ts",
         "apps/dashboard/main.tsx",
         "apps/dashboard/vite.config.ts",
-        "apps/account-portal/main.tsx",
-        "apps/account-portal/vite.config.ts",
         "scripts/**/*.{ts,mjs}",
         "src/benchmarks/**/*.ts"
       ],
@@ -22,18 +20,13 @@
     "packages/*": {
       "entry": ["src/index.ts", "bench/**/*.ts"],
       "project": ["src/**/*.ts"]
-    },
-    "services/*": {
-      "entry": ["src/index.ts"],
-      "project": ["src/**/*.ts"]
     }
   },
-  "ignore": ["**/dist/**", "**/*.d.ts", "worker/**", "worker-market/**", "extensions/**", "sidecars/**"],
+  "ignore": ["**/dist/**", "**/*.d.ts", "worker/**", "extensions/**", "sidecars/**"],
   "ignoreDependencies": [
     "better-sqlite3",
     "node-pty",
     "@mcp/.+",
-    "@cloudstudio/.+",
     "tw-animate-css",
     "@tailwindcss/typography",
     "autoprefixer",
@@ -46,5 +39,5 @@
     "unpdf",
     "tree-sitter-wasms"
   ],
-  "ignoreWorkspaces": ["worker", "worker-market"]
+  "ignoreWorkspaces": ["worker"]
 }

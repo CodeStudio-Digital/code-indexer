@@ -1,7 +1,0 @@
-.dev.vars
-.wrangler/
-node_modules/
-dist/
-# Generated production secrets — NEVER commit.
-SECRETS.prod.local.txt
-*.secret.local
