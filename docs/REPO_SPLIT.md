@@ -23,7 +23,7 @@
 - Desktop/Cloud residual trees, the former Cloud workflow copy, scratch data, temporary extraction tools and competing lockfiles are preserved in `D:\repos\_archive\split-2026-08-09`; its manifest covers 24 entries, 9,929 files and 582,845,842 bytes with deterministic tree SHA-256 hashes.
 - Cloud local-only configuration is centralized under `D:\repos\_local-config\codestudio-cloud`; the Market PKCS#8 key, production secrets file and imported root `.env` are outside Git, and the active Cloud `.dev.vars` retains a hash-identical backup there.
 - The embedded Unity source, its backups, validation harnesses, reports and validation environment remain in their original locations by explicit user request; no Unity path or remote was changed during final cleanup.
-- Desktop retains its GitHub `origin`; Cloud has no remote configured yet; Unity's `origin` remains the local embedded source repository. Remote URLs must be assigned before either standalone repository can be pushed.
+- Desktop retains its GitHub `origin`; Cloud is published privately at `https://github.com/CodeStudio-Digital/codestudio-cloud` with `feature/ide-mvp` as its default branch; Unity's `origin` remains the local embedded source repository.
 
 ## Secret audit
 
