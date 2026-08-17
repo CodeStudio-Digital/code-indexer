@@ -144,8 +144,19 @@
     "packages/provider-sdk/src/**/*.d.ts.map",
     "packages/provider-sdk/src/**/*.js",
     "packages/provider-sdk/src/**/*.js.map",
-    "services/cloud-api/.wrangler*.log",
-    "worker-market/package-lock.json",
-    "worker-market/yarn.lock"
+    "services/cloud-api/**",
+    "services/plugin-market/**",
+    "worker-market/**",
+    "apps/account-portal/**",
+    "packages/cloud-billing/**",
+    "packages/cloud-contract/**",
+    "packages/cloud-feedback/**",
+    "packages/cloud-identity/**",
+    "packages/cloud-kernel/**",
+    "packages/cloud-sharing/**",
+    "extensions/unity-scene-analyzer/**",
+    "apps/landingpage/**",
+    "apps/website/**",
+    "codestudio-web/**"
   ]
 }

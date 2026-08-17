@@ -13,6 +13,7 @@ An AI-native IDE for builders. Bring your own keys, work in a fast desktop app, 
 | **codestudio-desktop** (this one) | Electron shell, React dashboard, agent runtime, indexer, Rust supervisor, bundled providers/plugins | `D:\MCP` |
 | **codestudio-cloud** | Cloudflare Workers (cloud-api + worker-market), cloud bounded contexts (`@cloudstudio/cloud-*`), account-portal SPA | `D:\repos\codestudio-cloud` |
 | **codestudio-unity** | Unity Editor plugin (`com.maicon.scene-analyzer`) — Scene Analyzer / Asset Modeler | `D:\repos\codestudio-unity` |
+| **codestudio-web** | Public React/Vite institutional and product website | `D:\repos\codestudio-web` |
 
 > Status: **alpha**. Active development on the `feature/ide-mvp` branch (this branch). The Electron shell, file tree, Monaco editor, terminal, agent chat, snapshots, and git tool windows are wired end-to-end. Billing/auth, packaging, and the marketing surface are the next milestones.
 

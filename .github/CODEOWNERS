@@ -1,0 +1,19 @@
+* @Dellacurtais
+
+/apps/dashboard/ @Dellacurtais
+/apps/electron/ @Dellacurtais
+/apps/mcp-server/ @Dellacurtais
+/apps/http-api/ @Dellacurtais
+/packages/agent-runtime-contracts/ @Dellacurtais
+/packages/agent-runtime-host/ @Dellacurtais
+/packages/code-agent/ @Dellacurtais
+/packages/indexer/ @Dellacurtais
+/packages/plugin-host/ @Dellacurtais
+/packages/plugin-market-client/ @Dellacurtais
+/packages/plugin-sdk/ @Dellacurtais
+/packages/provider-engine/ @Dellacurtais
+/packages/provider-runtime/ @Dellacurtais
+/packages/provider-sdk/ @Dellacurtais
+/native/agent-runtime/ @Dellacurtais
+/scripts/repository-boundaries.json @Dellacurtais
+/docs/decisions/ @Dellacurtais
