@@ -18,6 +18,7 @@ import { FileEditBlock } from './FileEditBlock.js';
 import { isEditTool } from './edit-tools.js';
 import { ActivityLineBlock } from '../../../components/stream/ActivityLineBlock.js';
 import { NoticeBlock } from './NoticeBlock.js';
+import { liveBlockPersistedSignature } from '../utils.js';
 
 export function renderStreamBlock(block: StreamBlock, key: number, handlers: PromptHandlers) {
   if (block.type === 'thinking') {
@@ -76,7 +77,15 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
     return <ToolCallBlock key={`tc-${block.call.id}`} call={block.call} onToolApproval={handlers.onToolApproval} />;
   }
   if (block.type === 'plan') {
-    return <PlanPromptView key={`pl-${block.plan.id}`} plan={block.plan} onResponse={handlers.onPlanResponse} />;
+    return (
+      <PlanPromptView
+        key={`pl-${block.plan.id}`}
+        plan={block.plan}
+        onResponse={handlers.onPlanResponse}
+        signature={liveBlockPersistedSignature(block)}
+        sessionId={String(handlers.sessionId)}
+      />
+    );
   }
   if (block.type === 'spec') {
     return (
@@ -89,6 +98,8 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
             /* no-op when the host did not wire onSpecResponse — keeps UI tolerant */
           })
         }
+        signature={liveBlockPersistedSignature(block)}
+        sessionId={String(handlers.sessionId)}
       />
     );
   }
@@ -98,6 +109,8 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
         key={`tl-${block.tasks.tool_use_id}`}
         prompt={block.tasks}
         onResponse={handlers.onTasksResponse}
+        signature={liveBlockPersistedSignature(block)}
+        sessionId={String(handlers.sessionId)}
       />
     );
   }
@@ -122,6 +135,8 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
         key={`dg-${block.decision.id}`}
         decision={block.decision}
         onConfirm={handlers.onDecide ?? (async () => { /* no-op when unwired */ })}
+        signature={liveBlockPersistedSignature(block)}
+        sessionId={String(handlers.sessionId)}
       />
     );
   }
@@ -130,7 +145,13 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
   }
   if (block.type === 'question') {
     return (
-      <QuestionPromptView key={`qq-${block.question.id}`} question={block.question} onAnswer={handlers.onAnswer} />
+      <QuestionPromptView
+        key={`qq-${block.question.id}`}
+        question={block.question}
+        onAnswer={handlers.onAnswer}
+        signature={liveBlockPersistedSignature(block)}
+        sessionId={String(handlers.sessionId)}
+      />
     );
   }
   // Explicit: a new block type renders as nothing visible rather than being

@@ -1,4 +1,8 @@
 import type { FsSessionStore } from '@mcp/code-agent/sessions/fs-store/index.js';
+import {
+  isResumableInteractiveTool,
+  type ResumableInteractiveTool,
+} from '@mcp/code-agent/sessions/interactive-tools.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { CoderRunBus } from '../../../coder-bus.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
@@ -16,7 +20,7 @@ export interface CoderRuntime {
     sessionId: SessionId,
   ): Promise<{
     toolUseId: string;
-    name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'task_list' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
+    name: ResumableInteractiveTool;
     /** Original tool_use input — the decision_gate resume path needs the questions. */
     input?: Record<string, unknown>;
   } | null>;
@@ -77,7 +81,7 @@ export function createCoderRuntime(sessionStore: FsSessionStore): CoderRuntime {
     sessionId: SessionId,
   ): Promise<{
     toolUseId: string;
-    name: 'submit_plan' | 'ask_user' | 'submit_tasks' | 'task_list' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate';
+    name: ResumableInteractiveTool;
     input?: Record<string, unknown>;
   } | null> {
     const data = await sessionStore.loadSessionWithMessages(sessionId);
@@ -97,19 +101,12 @@ export function createCoderRuntime(sessionStore: FsSessionStore): CoderRuntime {
       if (m.role !== 'assistant') continue;
       for (const b of m.content) {
         if (b.type !== 'tool_use') continue;
-        if (
-          b.name !== 'submit_plan'
-          && b.name !== 'ask_user'
-          && b.name !== 'submit_tasks'
-          && b.name !== 'task_list'
-          && b.name !== 'submit_spec'
-          && b.name !== 'submit_specification_to_master'
-          && b.name !== 'decision_gate'
-        ) continue;
+        // Same set the writer checkpoints with — they must not drift apart.
+        if (!isResumableInteractiveTool(b.name)) continue;
         if (seenResults.has(b.id)) continue;
         return {
           toolUseId: b.id,
-          name: b.name as 'submit_plan' | 'ask_user' | 'submit_tasks' | 'task_list' | 'submit_spec' | 'submit_specification_to_master' | 'decision_gate',
+          name: b.name,
           // decision_gate's resume path needs the original questions (carried
           // in the tool_use input) to map chosen values back to labels.
           input: b.input as Record<string, unknown> | undefined,

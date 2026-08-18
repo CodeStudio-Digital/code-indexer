@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, CircleAlert, Check, ClipboardList, Copy, Pencil, X } from 'lucide-react';
 import type { PlanResolution } from '../../../hooks/useAgentStream.js';
@@ -7,6 +7,13 @@ import { Textarea } from '../../../components/ui/textarea.js';
 import { copyText } from '../../../lib/clipboard.js';
 import { cn } from '../../../lib/utils.js';
 import { Markdown } from '../messages/Markdown.js';
+import {
+  clearPromptResolution,
+  getPromptDraft,
+  markPromptResolved,
+  setPromptDraft,
+} from '../../../hooks/agent-stream/prompt-resolution-store.js';
+import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
 
 interface PlanPromptViewProps {
   plan: { id: string; plan: string; resolved?: PlanResolution; kind?: 'informational' | 'mutating' };
@@ -15,13 +22,21 @@ interface PlanPromptViewProps {
    * planning with feedback), Reject (`aborted:true` — end the planning run).
    */
   onResponse: (verdict: { approved: boolean; aborted?: boolean; feedback?: string }) => Promise<void>;
+  /** Bridges this card to its persisted twin, which carries a different id. */
+  signature?: string;
+  sessionId?: string;
 }
 
-export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
+export function PlanPromptView({ plan, onResponse, signature, sessionId }: PlanPromptViewProps) {
   const { t } = useTranslation(['chat', 'common']);
-  const [feedback, setFeedback] = useState('');
-  const [resolved, setResolved] = useState<PlanResolution | undefined>(plan.resolved);
+  const [feedback, setFeedback] = useState(() => getPromptDraft<string>(plan.id) ?? '');
+  const storedResolution = usePromptResolution<PlanResolution>(plan.id, signature, sessionId);
+  const resolved = plan.resolved ?? storedResolution;
   const [expanded, setExpanded] = useState(() => !plan.resolved);
+
+  useEffect(() => {
+    setPromptDraft(plan.id, feedback);
+  }, [feedback, plan.id]);
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
     if (await copyText(plan.plan)) {
@@ -36,14 +51,14 @@ export function PlanPromptView({ plan, onResponse }: PlanPromptViewProps) {
     // The restart-resume path keeps this promise open while the new agent run
     // streams. Reflect the accepted click immediately; otherwise the old card
     // keeps looking pending (and remains clickable) until that run finishes.
-    setResolved(resolution);
+    markPromptResolved({ id: plan.id, signature, sessionId, resolution });
     try {
       await onResponse(verdict);
       setExpanded(false);
     } catch (error) {
       // A transport failure means the verdict was not acknowledged. Restore
       // the controls so the user can retry instead of showing a false outcome.
-      setResolved(undefined);
+      clearPromptResolution(plan.id, signature, sessionId);
       throw error;
     }
   };

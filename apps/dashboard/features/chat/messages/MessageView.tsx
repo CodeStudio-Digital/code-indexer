@@ -16,6 +16,7 @@ import type {
   PromptHandlers,
   ToolResultView,
 } from '../types.js';
+import { persistedInteractivePromptSignature } from '../utils.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
 import { Markdown } from './Markdown.js';
@@ -73,6 +74,7 @@ interface MessageViewProps {
   onPlanResponse: PromptHandlers['onPlanResponse'];
   onTasksResponse: PromptHandlers['onTasksResponse'];
   onDecide?: PromptHandlers['onDecide'];
+  onSpecResponse?: PromptHandlers['onSpecResponse'];
   onFork?: PromptHandlers['onFork'];
   onRollback?: PromptHandlers['onRollback'];
   rollbackPendingSeq?: number | null;
@@ -99,6 +101,10 @@ export const MessageView = React.memo(MessageViewInner, (prev, next) => {
     prev.onAnswer === next.onAnswer &&
     prev.onPlanResponse === next.onPlanResponse &&
     prev.onTasksResponse === next.onTasksResponse &&
+    // Omitting these made a changed handler identity invisible to the card that
+    // uses it — a pending decision/spec card kept calling the previous closure.
+    prev.onDecide === next.onDecide &&
+    prev.onSpecResponse === next.onSpecResponse &&
     prev.onFork === next.onFork &&
     prev.onRollback === next.onRollback &&
     prev.rollbackPendingSeq === next.rollbackPendingSeq
@@ -115,6 +121,7 @@ function MessageViewInner({
   onPlanResponse,
   onTasksResponse,
   onDecide,
+  onSpecResponse,
   onFork,
   onRollback,
   rollbackPendingSeq,
@@ -168,7 +175,7 @@ function MessageViewInner({
             renderAssistantBlock(
               b,
               i,
-              { onAnswer, onPlanResponse, onTasksResponse, onDecide },
+              { onAnswer, onPlanResponse, onTasksResponse, onDecide, onSpecResponse },
               toolResultsById,
               tasksState,
               activeTasksToolUseId,
@@ -567,6 +574,8 @@ export function renderAssistantBlock(
           key={`pl-${b.id}-${i}`}
           plan={{ id: b.id ?? `pl-${i}`, plan: planText }}
           onResponse={handlers.onPlanResponse}
+          signature={persistedInteractivePromptSignature(b.name, b.input)}
+          sessionId={sessionId}
         />
       );
     }
@@ -637,6 +646,8 @@ export function renderAssistantBlock(
           resolved: resolvedStatus,
         }}
         onResponse={handlers.onTasksResponse}
+        signature={persistedInteractivePromptSignature(b.name, b.input)}
+        sessionId={sessionId}
       />
     );
   }
@@ -662,6 +673,10 @@ export function renderAssistantBlock(
             multiSelect: Boolean(inp.multi_select),
           }}
           onAnswer={handlers.onAnswer}
+          // The answer may already exist in the store while the tool_result is
+          // not visible to a refetch yet; the signature bridges the two ids.
+          signature={persistedInteractivePromptSignature(b.name, b.input)}
+          sessionId={sessionId}
         />
       );
     }
@@ -723,6 +738,8 @@ export function renderAssistantBlock(
           key={`dg-${b.id}-${i}`}
           decision={base}
           onConfirm={handlers.onDecide ?? noopDecide}
+          signature={persistedInteractivePromptSignature(b.name, b.input)}
+          sessionId={sessionId}
         />
       );
     }
@@ -753,6 +770,8 @@ export function renderAssistantBlock(
           key={`sp-${b.id}-${i}`}
           spec={{ id: b.id ?? `sp-${i}`, name, body, spec_path: '' }}
           onResponse={handlers.onSpecResponse ?? noopSpecResponse}
+          signature={persistedInteractivePromptSignature(b.name, b.input)}
+          sessionId={sessionId}
         />
       );
     }

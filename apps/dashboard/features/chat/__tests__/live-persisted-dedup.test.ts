@@ -489,6 +489,25 @@ describe('visibleLiveBlocks', () => {
     }
   });
 
+  it('matches a filesystem_access question against its raw persisted form', () => {
+    // The runtime streams an AUGMENTED question; history keeps the raw one.
+    // Template copied from packages/code-agent/src/tools/interaction.ts.
+    const rawQuestion = 'May I read that folder?';
+    const augmented = `${rawQuestion}\n\nRequested external directory (read-only):\n\n    D:\\shared\\docs`;
+    const live = ({
+      type: 'question',
+      question: { id: 'q_live', header: 'Access', question: augmented, allowFreeform: false },
+    }) as StreamBlock;
+    const persisted = assistantTextAndInteractiveTool('Need access', 'toolu_fs', 'ask_user', {
+      header: 'Access',
+      question: rawQuestion,
+      allow_freeform: false,
+    });
+
+    const signatures = collectLatestPersistedInteractivePromptSignatures([persisted]);
+    expect(visibleLiveBlocks([live], new Set(), signatures)).toEqual([]);
+  });
+
   it('keeps a new byte-identical plan when the matching persisted plan is already resolved', () => {
     const live = roadmapPlanBlock('plan_new_pending');
     const resolvedMessages = [

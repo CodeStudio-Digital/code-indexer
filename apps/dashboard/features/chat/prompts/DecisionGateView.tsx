@@ -1,14 +1,29 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronLeft, ChevronRight, GitFork } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Textarea } from '../../../components/ui/textarea.js';
 import { Markdown } from '../messages/Markdown.js';
 import type { DecisionPrompt, DecisionAnswers, DecisionQuestion } from '../../../hooks/agent-stream/types.js';
+import {
+  getPromptDraft,
+  markPromptResolved,
+  setPromptDraft,
+} from '../../../hooks/agent-stream/prompt-resolution-store.js';
+import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
 
 interface DecisionGateViewProps {
   decision: DecisionPrompt;
   onConfirm: (answers: DecisionAnswers) => Promise<void>;
+  /** Bridges this card to its persisted twin, which carries a different id. */
+  signature?: string;
+  sessionId?: string;
+}
+
+interface DecisionDraft {
+  selections: Record<string, string[]>;
+  notes: Record<string, string>;
+  currentIndex: number;
 }
 
 type SelectionState = Record<string, string[]>;
@@ -43,21 +58,38 @@ export function buildDecisionAnswers(
  * Pending cards show one fork at a time with Back/Next controls and optional
  * custom answers; resolved cards collapse to a readable decision summary.
  */
-export function DecisionGateView({ decision, onConfirm }: DecisionGateViewProps) {
+export function DecisionGateView({
+  decision,
+  onConfirm,
+  signature,
+  sessionId,
+}: DecisionGateViewProps) {
   const { t } = useTranslation(['chat', 'common']);
+  // Scrolling this card out of view unmounts it, so a wizard half-way through
+  // its forks would lose every selection. The draft store outlives the mount.
+  const draft = getPromptDraft<DecisionDraft>(decision.id);
   const [selections, setSelections] = useState<Record<string, string[]>>(() => {
     const init: Record<string, string[]> = {};
-    for (const q of decision.questions) init[q.id] = decision.resolved?.[q.id]?.selected ?? [];
+    for (const q of decision.questions) {
+      init[q.id] = draft?.selections?.[q.id] ?? decision.resolved?.[q.id]?.selected ?? [];
+    }
     return init;
   });
   const [notes, setNotes] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    for (const q of decision.questions) init[q.id] = decision.resolved?.[q.id]?.freeform ?? '';
+    for (const q of decision.questions) {
+      init[q.id] = draft?.notes?.[q.id] ?? decision.resolved?.[q.id]?.freeform ?? '';
+    }
     return init;
   });
-  const [resolved, setResolved] = useState<DecisionAnswers | undefined>(decision.resolved);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const storedResolution = usePromptResolution<DecisionAnswers>(decision.id, signature, sessionId);
+  const resolved = decision.resolved ?? storedResolution;
+  const [currentIndex, setCurrentIndex] = useState(draft?.currentIndex ?? 0);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setPromptDraft(decision.id, { selections, notes, currentIndex });
+  }, [currentIndex, decision.id, notes, selections]);
 
   const questions = decision.questions;
   const total = Math.max(questions.length, 1);
@@ -86,7 +118,7 @@ export function DecisionGateView({ decision, onConfirm }: DecisionGateViewProps)
     setSubmitting(true);
     try {
       await onConfirm(answers);
-      setResolved(answers);
+      markPromptResolved({ id: decision.id, signature, sessionId, resolution: answers });
     } finally {
       setSubmitting(false);
     }

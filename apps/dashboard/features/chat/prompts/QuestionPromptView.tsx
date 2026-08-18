@@ -1,9 +1,15 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, HelpCircle } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
 import { Input } from '../../../components/ui/input.js';
 import { Markdown } from '../messages/Markdown.js';
+import {
+  getPromptDraft,
+  markPromptResolved,
+  setPromptDraft,
+} from '../../../hooks/agent-stream/prompt-resolution-store.js';
+import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
 
 interface QuestionPromptViewProps {
   question: {
@@ -17,16 +23,38 @@ interface QuestionPromptViewProps {
     resolved?: string;
   };
   onAnswer: (answer: string) => Promise<void>;
+  /** Bridges this card to its persisted twin, which carries a different id. */
+  signature?: string;
+  sessionId?: string;
 }
 
-export function QuestionPromptView({ question, onAnswer }: QuestionPromptViewProps) {
+interface QuestionDraft {
+  text: string;
+  selected: string[];
+}
+
+export function QuestionPromptView({
+  question,
+  onAnswer,
+  signature,
+  sessionId,
+}: QuestionPromptViewProps) {
   const { t } = useTranslation(['chat', 'common']);
-  const [text, setText] = useState('');
-  const [selected, setSelected] = useState<string[]>([]);
-  const [resolved, setResolved] = useState<string | undefined>(question.resolved);
+  // Virtualization unmounts this card when it scrolls out of view, so the draft
+  // and the answer both live in a store that outlives the component.
+  const draft = getPromptDraft<QuestionDraft>(question.id);
+  const [text, setText] = useState(draft?.text ?? '');
+  const [selected, setSelected] = useState<string[]>(draft?.selected ?? []);
+  const storedResolution = usePromptResolution<string>(question.id, signature, sessionId);
+  const resolved = question.resolved ?? storedResolution;
+
+  useEffect(() => {
+    setPromptDraft(question.id, { text, selected });
+  }, [question.id, selected, text]);
+
   const submit = async (val: string) => {
     await onAnswer(val);
-    setResolved(val);
+    markPromptResolved({ id: question.id, signature, sessionId, resolution: val });
   };
   const hasOptions = !!question.options && question.options.length > 0;
   const multi = !!question.multiSelect && hasOptions;

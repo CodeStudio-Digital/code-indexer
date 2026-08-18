@@ -193,6 +193,7 @@ import { buildSessionDriveTools } from '@mcp/code-agent/tools/session-drive-tool
 import { buildConversationChapterTools } from '@mcp/code-agent/tools/conversation-chapters.js';
 import { buildProjectMemoryTools } from '@mcp/code-agent/tools/project-memory-tools.js';
 import { buildAutoCapture } from '@mcp/code-agent/sessions/auto-capture.js';
+import { hasResumableInteractiveToolUse } from '@mcp/code-agent/sessions/interactive-tools.js';
 import { getInvestigationSemanticIndex } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { buildCodeExecTool } from '@mcp/code-agent/tools/code-exec.js';
 import {
@@ -3551,24 +3552,6 @@ export async function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
     flushChain = scheduled.catch(() => undefined);
     return scheduled;
   };
-
-  // Interactive tool_use names the RESUME path can restore as a live card on
-  // reopen (must match `findPendingInteraction` in coder/state.ts). Only these
-  // are worth checkpointing: a PermissionGate pause (write_file/run_command) or
-  // an execute_tasks budget ask would persist a dangling NON-interactive
-  // tool_use that the dashboard renders as a stuck "running" spinner with no
-  // approve affordance — worse than the pre-fix behavior (turn cleanly gone).
-  const RESUMABLE_INTERACTIVE_TOOLS = new Set([
-    // task_list(gate:'approve') is the canonical (bootstrap) route to the gated
-    // pause — it dispatches to submitTasks' waitForUserInput and renders a real
-    // TaskListReview approve card, so it MUST be checkpointed or the in-flight
-    // approval is lost on reopen/restart. (findPendingInteraction already
-    // matches task_list; this keeps the writer in sync with that reader.)
-    'submit_plan', 'submit_tasks', 'task_list', 'ask_user', 'submit_spec', 'submit_specification_to_master',
-  ]);
-  const hasResumableInteractiveToolUse = (msg: AgentMessage): boolean =>
-    Array.isArray(msg.content) &&
-    msg.content.some((b) => b.type === 'tool_use' && RESUMABLE_INTERACTIVE_TOOLS.has(b.name));
 
   // Durably persist JUST the assistant message of the turn that is about to
   // block on user input. Non-destructive: `pendingTurn` stays live so the

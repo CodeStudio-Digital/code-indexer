@@ -337,9 +337,22 @@ function submitPlanSignature(input: unknown): string | undefined {
   return promptSignature('submit_plan', { plan, kind: cleanText(raw.kind) || 'mutating' });
 }
 
+/**
+ * `ask_user` with `filesystem_access` streams an AUGMENTED question (the raw
+ * text plus the requested directory) while history persists the raw one. Hashing
+ * the augmented form made the two sides disagree and render the card twice, so
+ * both are reduced to the raw question first.
+ *
+ * Kept in sync with the template in
+ * `packages/code-agent/src/tools/interaction.ts` (`displayedQuestion`).
+ */
+const FILESYSTEM_ACCESS_SUFFIX = '\n\nRequested external directory (';
+
 function askUserSignature(input: unknown): string | undefined {
   const raw = asDict(input);
-  const question = cleanText(raw.question);
+  const displayed = cleanText(raw.question);
+  const suffixAt = displayed.indexOf(FILESYSTEM_ACCESS_SUFFIX);
+  const question = suffixAt >= 0 ? displayed.slice(0, suffixAt).trim() : displayed;
   if (!question) return undefined;
   return promptSignature('ask_user', {
     header: cleanText(raw.header),
@@ -426,7 +439,12 @@ function taskListInputIsApprove(input: unknown): boolean {
   });
 }
 
-function persistedInteractivePromptSignature(name: string | undefined, input: unknown): string | undefined {
+/**
+ * Content signature of a PERSISTED interactive prompt. Pair it with
+ * `liveBlockPersistedSignature` to bridge a live card (runtime id) to its
+ * persisted twin (provider id) — the two never share an id.
+ */
+export function persistedInteractivePromptSignature(name: string | undefined, input: unknown): string | undefined {
   switch (name) {
     case 'submit_plan':
       return submitPlanSignature(input);
@@ -445,7 +463,7 @@ function persistedInteractivePromptSignature(name: string | undefined, input: un
   }
 }
 
-function liveBlockPersistedSignature(block: StreamBlock): string | undefined {
+export function liveBlockPersistedSignature(block: StreamBlock): string | undefined {
   switch (block.type) {
     case 'tasks':
       return tasksPromptSignature({ summary: block.tasks.summary, tasks: block.tasks.tasks });

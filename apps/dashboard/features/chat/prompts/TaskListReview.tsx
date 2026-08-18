@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ClipboardList, X } from 'lucide-react';
 import type { StreamTask, StreamTaskExecutionMode, TasksPrompt } from '../../../hooks/useAgentStream.js';
@@ -7,6 +7,12 @@ import { Textarea } from '../../../components/ui/textarea.js';
 import { cn } from '../../../lib/utils.js';
 import { Markdown } from '../messages/Markdown.js';
 import { TaskRow } from './TaskRow.js';
+import {
+  getPromptDraft,
+  markPromptResolved,
+  setPromptDraft,
+} from '../../../hooks/agent-stream/prompt-resolution-store.js';
+import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
 
 interface TaskListReviewProps {
   prompt: TasksPrompt;
@@ -16,6 +22,15 @@ interface TaskListReviewProps {
     tasks?: StreamTask[];
     execution_mode?: StreamTaskExecutionMode;
   }) => Promise<void>;
+  /** Bridges this card to its persisted twin, which carries a different id. */
+  signature?: string;
+  sessionId?: string;
+}
+
+interface TasksDraft {
+  feedback: string;
+  executionMode: StreamTaskExecutionMode;
+  perTaskMode: Record<string, 'inline' | 'subagent'>;
 }
 
 const EXECUTION_MODES: readonly StreamTaskExecutionMode[] = [
@@ -34,18 +49,32 @@ const EXECUTION_MODES: readonly StreamTaskExecutionMode[] = [
  * can mainly approve/reject and pick the execution mode. Editing comes in
  * Phase 3.
  */
-export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
+export function TaskListReview({ prompt, onResponse, signature, sessionId }: TaskListReviewProps) {
   const { t } = useTranslation(['chat', 'common']);
-  const [feedback, setFeedback] = useState('');
-  const [executionMode, setExecutionMode] = useState<StreamTaskExecutionMode>('inline');
-  const [resolved, setResolved] = useState<'approved' | 'rejected' | undefined>(prompt.resolved);
+  // Virtualization unmounts this card off-screen; the draft and the verdict both
+  // live in a store so scrolling away does not reset the review.
+  const draft = getPromptDraft<TasksDraft>(prompt.tool_use_id);
+  const [feedback, setFeedback] = useState(draft?.feedback ?? '');
+  const [executionMode, setExecutionMode] = useState<StreamTaskExecutionMode>(
+    draft?.executionMode ?? 'inline',
+  );
+  const storedResolution = usePromptResolution<'approved' | 'rejected'>(
+    prompt.tool_use_id, signature, sessionId,
+  );
+  const resolved = prompt.resolved ?? storedResolution;
   const [open, setOpen] = useState(() => !prompt.resolved);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   /**
    * Per-task mode overrides — only meaningful when global executionMode is
    * 'per-task'. Keyed by task id; falls back to suggested_mode when missing.
    */
-  const [perTaskMode, setPerTaskMode] = useState<Record<string, 'inline' | 'subagent'>>({});
+  const [perTaskMode, setPerTaskMode] = useState<Record<string, 'inline' | 'subagent'>>(
+    draft?.perTaskMode ?? {},
+  );
+
+  useEffect(() => {
+    setPromptDraft(prompt.tool_use_id, { feedback, executionMode, perTaskMode });
+  }, [executionMode, feedback, perTaskMode, prompt.tool_use_id]);
 
   const toggleExpand = (id: string) => {
     setExpanded((s) => {
@@ -70,7 +99,9 @@ export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
           }))
         : undefined;
     await onResponse({ approved: true, feedback, execution_mode: executionMode, tasks: tasksOut });
-    setResolved('approved');
+    markPromptResolved({
+      id: prompt.tool_use_id, signature, sessionId, resolution: 'approved',
+    });
     setOpen(false);
   };
 
@@ -149,7 +180,9 @@ export function TaskListReview({ prompt, onResponse }: TaskListReviewProps) {
                   variant="destructive"
                   onClick={async () => {
                     await onResponse({ approved: false, feedback });
-                    setResolved('rejected');
+                    markPromptResolved({
+                      id: prompt.tool_use_id, signature, sessionId, resolution: 'rejected',
+                    });
                     setOpen(false);
                   }}
                 >

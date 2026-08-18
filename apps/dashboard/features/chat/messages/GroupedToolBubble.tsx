@@ -83,7 +83,15 @@ export const GroupedToolBubble = React.memo(function GroupedToolBubble({
               renderAssistantBlock(
                 b,
                 mi * 1000 + bi,
-                { onAnswer: handlers.onAnswer, onPlanResponse: handlers.onPlanResponse, onTasksResponse: handlers.onTasksResponse, onDecide: handlers.onDecide },
+                {
+                  onAnswer: handlers.onAnswer,
+                  onPlanResponse: handlers.onPlanResponse,
+                  onTasksResponse: handlers.onTasksResponse,
+                  onDecide: handlers.onDecide,
+                  // Without this a pending spec card fell back to a no-op and
+                  // its approve/reject buttons did nothing.
+                  onSpecResponse: handlers.onSpecResponse,
+                },
                 toolResultsById,
                 tasksState,
                 activeTasksToolUseId,

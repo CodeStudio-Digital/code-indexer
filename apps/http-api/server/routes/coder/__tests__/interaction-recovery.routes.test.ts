@@ -109,4 +109,62 @@ describe('coder interaction route filesystem recovery', () => {
       }],
     });
   });
+
+  it('answers a pending decision_gate from a reopened bundle', async () => {
+    // decision_gate was reader-only for a while: nothing checkpointed it, so a
+    // reload found no pending interaction and /decide answered 404.
+    const session = await store.createSession({
+      project_id: 7,
+      title: 'Pending decision',
+      provider: 'test',
+      model: 'test',
+    });
+    await store.appendMessage({
+      session_id: session.id,
+      operation_id: 'pending-decision',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use',
+          id: 'decision-1',
+          name: 'decision_gate',
+          input: {
+            questions: [{
+              id: 'strategy',
+              question: 'Which approach?',
+              options: [
+                { label: 'Incremental', value: 'incremental' },
+                { label: 'Rewrite', value: 'rewrite' },
+              ],
+            }],
+          },
+        }],
+      },
+    });
+    await store.close();
+    store = openStore();
+
+    const app = new Hono();
+    mountCoderInteractionRoutes(
+      app,
+      { sessionStore: store } as unknown as ServerDeps,
+      createCoderRuntime(store),
+    );
+
+    const response = await app.request(
+      `/api/coder/sessions/${session.id}/decide`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ answers: { strategy: { selected: ['incremental'] } } }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const recovered = await store.loadSessionWithMessages(session.id);
+    expect(recovered?.messages[1]).toMatchObject({
+      role: 'tool',
+      content: [{ type: 'tool_result', tool_use_id: 'decision-1' }],
+    });
+  });
 });

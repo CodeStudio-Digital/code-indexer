@@ -54,6 +54,7 @@ import {
 } from './activity-blocks.js';
 import { rollbackStreamedChars } from './stream-rollback.js';
 import { finalizeLiveVisualizations, outcomeForDoneReason } from './live-block-finalize.js';
+import { isPromptResolved } from './prompt-resolution-store.js';
 
 interface HandlerContext {
   sid: SessionId;
@@ -129,11 +130,14 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
   const sweepResolvedInteractiveCards = (): void => {
     let swept = false;
     for (let i = blocks.length - 1; i >= 0; i--) {
-      const type = blocks[i].type;
-      if (type === 'plan' || type === 'question' || type === 'decision' || type === 'tasks' || type === 'spec') {
-        blocks.splice(i, 1);
-        swept = true;
-      }
+      const id = promptBlockId(blocks[i]);
+      // Only cards the user actually answered. Sweeping unconditionally deleted
+      // prompts that were still waiting: the persisted checkpoint meant to
+      // replace them is written asynchronously, so a refetch landing first left
+      // the card gone from both sides with nothing to schedule another refetch.
+      if (!id || !isPromptResolved(id)) continue;
+      blocks.splice(i, 1);
+      swept = true;
     }
     if (!swept) return;
     rebuildToolIndex(blocks, toolIndex);
@@ -514,7 +518,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
 
     plan: (data) => {
       const d = data as { id: string; plan: string; kind?: 'informational' | 'mutating' };
-      blocks.push({ type: 'plan', plan: { id: d.id, plan: d.plan, kind: d.kind } });
+      upsertPromptBlock(blocks, { type: 'plan', plan: { id: d.id, plan: d.plan, kind: d.kind } });
       flush();
     },
 
@@ -527,7 +531,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         parent_id?: string;
         drive_path?: string;
       };
-      blocks.push({
+      upsertPromptBlock(blocks, {
         type: 'spec',
         spec: {
           id: d.id,
@@ -548,10 +552,20 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         header?: string;
         options?: Array<{ label: string; value: string }>;
         allowFreeform?: boolean;
+        multiSelect?: boolean;
       };
-      blocks.push({
+      upsertPromptBlock(blocks, {
         type: 'question',
-        question: { id: d.id, question: d.question, header: d.header, options: d.options, allowFreeform: d.allowFreeform },
+        question: {
+          id: d.id,
+          question: d.question,
+          header: d.header,
+          options: d.options,
+          allowFreeform: d.allowFreeform,
+          // Dropping this made a multi-select ask behave as single-select: the
+          // first option click submitted instead of toggling.
+          multiSelect: d.multiSelect,
+        },
       });
       flush();
     },
@@ -569,7 +583,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
         }>;
         allowFreeform?: boolean;
       };
-      blocks.push({
+      upsertPromptBlock(blocks, {
         type: 'decision',
         decision: { id: d.id, header: d.header, questions: d.questions, allowFreeform: d.allowFreeform },
       });
@@ -578,7 +592,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
 
     tasks_posted: (data) => {
       const d = data as { tool_use_id: string; summary: string; tasks: StreamTask[]; version: number };
-      blocks.push({
+      upsertPromptBlock(blocks, {
         type: 'tasks',
         tasks: { tool_use_id: d.tool_use_id, summary: d.summary, tasks: d.tasks, version: d.version },
       });
@@ -1287,6 +1301,39 @@ function removeLiveToolBlockByName(
     const block = blocks[i];
     if (block.type === 'tool') toolIndex.set(block.call.id, i);
   }
+}
+
+/** Stable identity of an interactive prompt card, or undefined for other blocks. */
+export function promptBlockId(block: StreamBlock): string | undefined {
+  switch (block.type) {
+    case 'plan': return block.plan.id;
+    case 'spec': return block.spec.id;
+    case 'question': return block.question.id;
+    case 'decision': return block.decision.id;
+    case 'tasks': return block.tasks.tool_use_id;
+    default: return undefined;
+  }
+}
+
+/**
+ * Replace a prompt card in place instead of appending a second copy.
+ *
+ * Prompt events are in the attach replay set but not in the seq dedup guard, so
+ * a cursorless reattach re-delivers them and a plain push rendered the same
+ * question twice.
+ */
+function upsertPromptBlock(blocks: StreamBlock[], block: StreamBlock): void {
+  const id = promptBlockId(block);
+  if (id) {
+    const existing = blocks.findIndex(
+      (candidate) => candidate.type === block.type && promptBlockId(candidate) === id,
+    );
+    if (existing >= 0) {
+      blocks[existing] = block;
+      return;
+    }
+  }
+  blocks.push(block);
 }
 
 function patchTask(

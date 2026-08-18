@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, FileText, ScrollText, X } from 'lucide-react';
 import { Button } from '../../../components/ui/button.js';
@@ -6,10 +6,19 @@ import { Textarea } from '../../../components/ui/textarea.js';
 import { cn } from '../../../lib/utils.js';
 import { Markdown } from '../messages/Markdown.js';
 import type { SpecPrompt } from '../../../hooks/agent-stream/types.js';
+import {
+  getPromptDraft,
+  markPromptResolved,
+  setPromptDraft,
+} from '../../../hooks/agent-stream/prompt-resolution-store.js';
+import { usePromptResolution } from '../../../hooks/agent-stream/usePromptResolution.js';
 
 interface SpecPromptViewProps {
   spec: SpecPrompt;
   onResponse: (approved: boolean, spec_path: string, requested_changes?: string) => Promise<void>;
+  /** Bridges this card to its persisted twin, which carries a different id. */
+  signature?: string;
+  sessionId?: string;
 }
 
 /**
@@ -17,10 +26,15 @@ interface SpecPromptViewProps {
  * verdict buttons (approve / request changes / abort). Mirrors PlanPromptView
  * in layout; tinted amber to match the spec agent's MODE_TINT.
  */
-export function SpecPromptView({ spec, onResponse }: SpecPromptViewProps) {
+export function SpecPromptView({ spec, onResponse, signature, sessionId }: SpecPromptViewProps) {
   const { t } = useTranslation(['chat', 'common']);
-  const [requested, setRequested] = useState('');
-  const [resolved, setResolved] = useState<string | undefined>(spec.resolved);
+  const [requested, setRequested] = useState(() => getPromptDraft<string>(spec.id) ?? '');
+  const storedResolution = usePromptResolution<string>(spec.id, signature, sessionId);
+  const resolved = spec.resolved ?? storedResolution;
+
+  useEffect(() => {
+    setPromptDraft(spec.id, requested);
+  }, [requested, spec.id]);
 
   return (
     <div className="my-3 rounded-xl border border-amber-500/40 bg-amber-500/5 p-4">
@@ -61,7 +75,7 @@ export function SpecPromptView({ spec, onResponse }: SpecPromptViewProps) {
               variant="success"
               onClick={async () => {
                 await onResponse(true, spec.spec_path, requested || undefined);
-                setResolved('approved');
+                markPromptResolved({ id: spec.id, signature, sessionId, resolution: 'approved' });
               }}
             >
               <Check className="h-3.5 w-3.5" /> {t('common:actions.approve')}
@@ -71,7 +85,7 @@ export function SpecPromptView({ spec, onResponse }: SpecPromptViewProps) {
               variant="destructive"
               onClick={async () => {
                 await onResponse(false, spec.spec_path, requested || undefined);
-                setResolved('rejected');
+                markPromptResolved({ id: spec.id, signature, sessionId, resolution: 'rejected' });
               }}
             >
               <X className="h-3.5 w-3.5" />{' '}
