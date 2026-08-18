@@ -55,6 +55,12 @@ export interface CoverageContext {
   persistedSignatures: Set<string>;
   blockId: (block: StreamBlock) => string | undefined;
   blockSignature: (block: StreamBlock) => string | undefined;
+  /**
+   * The live buffer is a suffix of the persisted run, so its first text/thinking
+   * chunk starts somewhere inside history rather than at offset zero. Only the
+   * anchor moves — the walk stays contiguous from there.
+   */
+  anchorAnywhere?: boolean;
 }
 
 /**
@@ -62,7 +68,7 @@ export interface CoverageContext {
  * confirm nor break the alignment — the walk passes straight through them
  * instead of treating them as a mismatch.
  */
-const TRANSPARENT_BLOCKS = new Set(['activity', 'agents', 'task_run']);
+const TRANSPARENT_BLOCKS = new Set(['activity', 'agents', 'task_run', 'workflow', 'notice']);
 
 /**
  * Index of the last live block already rendered by the persisted run, or -1.
@@ -77,6 +83,8 @@ export function persistedCoveragePrefixEnd(blocks: StreamBlock[], ctx: CoverageC
   let prefixEnd = -1;
   let textCursor = 0;
   let thinkingCursor = 0;
+  let textAnchored = false;
+  let thinkingAnchored = false;
 
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index];
@@ -87,10 +95,24 @@ export function persistedCoveragePrefixEnd(blocks: StreamBlock[], ctx: CoverageC
       if (!chunk) continue;
       const isText = block.type === 'text';
       const durable = isText ? ctx.persistedTextNormalized : ctx.persistedThinkingNormalized;
-      const cursor = isText ? textCursor : thinkingCursor;
-      if (!durable.startsWith(chunk, cursor)) break;
-      if (isText) textCursor = cursor + chunk.length;
-      else thinkingCursor = cursor + chunk.length;
+      const anchored = isText ? textAnchored : thinkingAnchored;
+      let cursor = isText ? textCursor : thinkingCursor;
+      if (!durable.startsWith(chunk, cursor)) {
+        // A suffix buffer only gets ONE chance to find where it resumes; after
+        // that the walk is ordered again, so a repeated phrase still cannot
+        // swallow genuinely new content.
+        if (!ctx.anchorAnywhere || anchored) break;
+        const anchor = durable.lastIndexOf(chunk);
+        if (anchor < cursor) break;
+        cursor = anchor;
+      }
+      if (isText) {
+        textCursor = cursor + chunk.length;
+        textAnchored = true;
+      } else {
+        thinkingCursor = cursor + chunk.length;
+        thinkingAnchored = true;
+      }
       prefixEnd = index;
       continue;
     }

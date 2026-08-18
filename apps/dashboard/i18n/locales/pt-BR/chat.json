@@ -504,6 +504,8 @@
   "messages.chapterSourceLoadError": "Não foi possível expandir a conversa original. Tente novamente.",
   "messages.chapterQuickNav": "Navegação rápida por capítulos",
   "messages.jumpToLatest": "Ir para o fim",
+  "notice.ultraTurnTitle": "Ultra ativado para este turno",
+  "notice.ultraTurnBody": "palavra-chave `ultracode` detectada: effort máximo, delegação proativa e a tool `workflow` disponíveis só nesta execução.",
   "messages.chapterEmptyMessage": "Sem conteúdo de texto",
   "messages.chapterRole.user": "Você",
   "messages.chapterRole.assistant": "Assistente",

@@ -262,7 +262,11 @@ export function liveTurnReconciliationRevision(
     : last.type === 'thinking' && tailThinkingLength > 0
       ? (last.text.length >= tailThinkingLength ? 'thinking-ready' : 'thinking-streaming')
       : '';
-  return `${blocks.length}:${last.type}:${identity}:${status}:${tailReady}`;
+  // The digest only inspects the LAST block, so a status flip on an earlier one
+  // (a task_run finishing above newer text) would not rebuild the projection.
+  // `rev` is bumped by the projector for any structural event, which covers that
+  // without scanning a multi-KB buffer on every frame.
+  return `${blocks.length}:${last.type}:${identity}:${status}:${tailReady}:${turn?.rev ?? ''}`;
 }
 
 /** All assistant tool_use ids already persisted to history. */
@@ -696,6 +700,8 @@ export function visibleLiveBlocks(
   persistedResultIds: Set<string> = new Set(),
   preferCompleteLiveRun = false,
   reconciliation?: PersistedLiveReconciliation,
+  /** The live buffer holds only a suffix of the run (cursorless reattach). */
+  liveStartsMidTurn = false,
 ): StreamBlock[] {
   const effectiveBlocks = reconciliation
     ? (scopeLiveTurnToLatestUser({ blocks }, reconciliation)?.blocks ?? blocks)
@@ -734,16 +740,18 @@ export function visibleLiveBlocks(
       persistedSignatures: persistedInteractivePromptSignatures,
       blockId: liveBlockPersistedId,
       blockSignature: liveBlockPersistedSignature,
+      anchorAnywhere: reconciliation.startsMidTurn || liveStartsMidTurn,
     });
   }
   return effectiveBlocks.filter((b, index) => {
-    // `agents`/`task_run` are rich live cards that stay canonical while they
-    // run (see below), so a covered prefix must not sweep them out by position
-    // just because their spawn tool_use already checkpointed.
+    // `agents`/`task_run`/`workflow` are rich live cards that stay canonical
+    // while they run (see below), so a covered prefix must not sweep them out by
+    // position just because their spawn tool_use already checkpointed.
     if (
       index <= persistedOverlapPrefixEnd
       && b.type !== 'agents'
       && b.type !== 'task_run'
+      && b.type !== 'workflow'
     ) return false;
     if (b.type === 'agents') {
       if (b.group.groupId.startsWith('tasks-wave-')) return false;
@@ -784,6 +792,34 @@ export function visibleLiveBlocks(
   });
 }
 
+/**
+ * Whether the live run may match the persisted one at any offset instead of from
+ * its start. Two independent sources say the buffer holds only a suffix: history
+ * paginated past the user message that opened the run, or the transport rebuilt
+ * the buffer from a truncated replay (cursorless reattach).
+ */
+function liveRunMatchesAnywhere(
+  turn: AssistantTurn,
+  reconciliation: PersistedLiveReconciliation,
+): boolean {
+  return reconciliation.startsMidTurn || turn.startsMidTurn === true;
+}
+
+/**
+ * True for a live-only visualization that has stopped moving. Terminal cards are
+ * fully reconstructable from persisted history (or were never durable to begin
+ * with), so they neither confirm nor refute that the live turn is a duplicate.
+ */
+function isTerminalPresentationBlock(block: StreamBlock): boolean {
+  // A notice is renderer-only and never durable, so it is always transparent.
+  if (block.type === 'notice') return true;
+  if (block.type === 'activity') return block.status !== 'running';
+  if (block.type === 'task_run' || block.type === 'workflow') {
+    return block.run.status !== 'running';
+  }
+  return false;
+}
+
 export function isLiveTurnDuplicatedInHistory(
   turn: AssistantTurn | null,
   history: PersistedMessage[] | PersistedLiveReconciliation,
@@ -804,6 +840,7 @@ export function isLiveTurnDuplicatedInHistory(
   const persistedText = reconciliation.persistedTextNormalized;
   const liveThinking = normalizeRunText(getCurrentTurnThinkingText(scopedTurn));
   const persistedThinking = reconciliation.persistedThinkingNormalized;
+  const anywhere = liveRunMatchesAnywhere(turn, reconciliation);
   let checkedText = false;
   let checkedThinking = false;
 
@@ -823,7 +860,7 @@ export function isLiveTurnDuplicatedInHistory(
     }
     if (block.type === 'text') {
       if (!checkedText) {
-        if (!normalizedDuplicated(persistedText, liveText, reconciliation.startsMidTurn)) {
+        if (!normalizedDuplicated(persistedText, liveText, anywhere)) {
           return false;
         }
         checkedText = true;
@@ -832,7 +869,7 @@ export function isLiveTurnDuplicatedInHistory(
     }
     if (block.type === 'thinking') {
       if (!checkedThinking) {
-        if (!normalizedDuplicated(persistedThinking, liveThinking, reconciliation.startsMidTurn)) {
+        if (!normalizedDuplicated(persistedThinking, liveThinking, anywhere)) {
           return false;
         }
         checkedThinking = true;
@@ -851,8 +888,13 @@ export function isLiveTurnDuplicatedInHistory(
       return false;
     }
 
-    // activity/task_run are live-only visualizations; keep them visible unless
-    // a future persisted identity can prove they are duplicates too.
+    // activity/task_run/workflow are live-only visualizations with no durable
+    // identity. While one is RUNNING the live card is canonical and the turn is
+    // not a duplicate. Once terminal it proves nothing either way, so it must not
+    // veto the comparison: a leftover `running` card used to make this return
+    // false forever, which kept the live buffer on screen with the persisted run
+    // suppressed behind it — the transcript then showed the live copy only.
+    if (isTerminalPresentationBlock(block)) continue;
     return false;
   }
 
@@ -886,7 +928,7 @@ export function liveTurnCoversPersistedAssistantRun(
     && liveBlocksCoverPersistedAssistantRun(
       scopedTurn.blocks,
       reconciliation,
-      reconciliation.startsMidTurn,
+      liveRunMatchesAnywhere(turn, reconciliation),
     )
   );
 }

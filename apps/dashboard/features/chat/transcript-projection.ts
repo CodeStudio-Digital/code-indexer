@@ -61,6 +61,7 @@ export function buildTranscriptProjection(
         reconciliation.persistedToolResultIds,
         replacesPersistedTail,
         reconciliation,
+        currentTurn?.startsMidTurn === true,
       );
 
   return {

@@ -353,6 +353,16 @@ export interface StreamActivityBlock {
   parentOpId?: string;
 }
 
+/**
+ * Renderer-side annotation about the run itself. It is never persisted, so it
+ * must not live in a `text` block: the live⇄persisted comparison would then see
+ * text history can never contain and would keep both copies on screen.
+ */
+export interface StreamNotice {
+  id: string;
+  kind: 'ultra_turn';
+}
+
 export type StreamBlock =
   | { type: 'text'; text: string; id?: string }
   | { type: 'thinking'; text: string; id?: string }
@@ -365,11 +375,22 @@ export type StreamBlock =
   | { type: 'tasks'; tasks: TasksPrompt }
   | { type: 'task_run'; run: TaskRunState }
   | { type: 'workflow'; run: WorkflowRunState }
-  | { type: 'agents'; group: AgentsGroup };
+  | { type: 'agents'; group: AgentsGroup }
+  | { type: 'notice'; notice: StreamNotice };
 
 export interface AssistantTurn {
   /** Blocks in arrival order — text and tool_use intercalados como o modelo emitiu. */
   blocks: StreamBlock[];
+  /**
+   * Bumped whenever the block structure changed (anything but pure text/thinking
+   * growth), so consumers can memoize per frame without digesting the buffer.
+   */
+  rev?: number;
+  /**
+   * The buffer starts in the middle of an assistant run (cursorless reattach),
+   * so it is a suffix of the persisted run rather than a copy from its start.
+   */
+  startsMidTurn?: boolean;
 }
 
 export type Usage = {

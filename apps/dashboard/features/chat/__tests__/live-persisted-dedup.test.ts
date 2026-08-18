@@ -96,8 +96,21 @@ const toolBlock = (id: string): StreamBlock =>
   ({ type: 'tool', call: { id, name: 'read_file', input: {}, status: 'running' } }) as StreamBlock;
 const textBlock = (text: string): StreamBlock => ({ type: 'text', text });
 const thinkingBlock = (text: string): StreamBlock => ({ type: 'thinking', text });
-const taskRunBlock = (runId: string): StreamBlock =>
-  ({ type: 'task_run', run: { runId } }) as unknown as StreamBlock;
+const taskRunBlock = (
+  runId: string,
+  status: 'running' | 'completed' | 'aborted' = 'running',
+): StreamBlock =>
+  ({ type: 'task_run', run: { runId, status } }) as unknown as StreamBlock;
+const workflowBlock = (
+  workflowId: string,
+  status: 'running' | 'completed' = 'running',
+): StreamBlock =>
+  ({ type: 'workflow', run: { workflowId, status } }) as unknown as StreamBlock;
+const activityBlock = (
+  id: string,
+  status: 'running' | 'completed' | 'failed' = 'running',
+): StreamBlock =>
+  ({ type: 'activity', id, kind: 'provider', label: id, status }) as unknown as StreamBlock;
 const agentsBlock = (
   groupId: string,
   toolUseId?: string,
@@ -677,13 +690,39 @@ describe('isLiveTurnDuplicatedInHistory', () => {
     }
   });
 
-  it('keeps live-only visualizations visible because they have no persisted identity', () => {
+  it('keeps a running live-only visualization canonical', () => {
     expect(
       isLiveTurnDuplicatedInHistory(
-        { blocks: [textBlock('done'), taskRunBlock('r1')] },
+        { blocks: [textBlock('done'), taskRunBlock('r1', 'running')] },
         [assistantText('done')],
       ),
     ).toBe(false);
+    expect(
+      isLiveTurnDuplicatedInHistory(
+        { blocks: [textBlock('done'), workflowBlock('w1', 'running')] },
+        [assistantText('done')],
+      ),
+    ).toBe(false);
+  });
+
+  it('lets terminal live-only visualizations release the finished turn', () => {
+    // They carry no durable identity, so once stopped they can neither confirm
+    // nor refute the duplication. Vetoing here used to pin the live copy on
+    // screen forever with the persisted run suppressed behind it.
+    for (const leftover of [
+      taskRunBlock('r1', 'completed'),
+      taskRunBlock('r1', 'aborted'),
+      workflowBlock('w1', 'completed'),
+      activityBlock('provider-1', 'completed'),
+      activityBlock('provider-1', 'failed'),
+    ]) {
+      expect(
+        isLiveTurnDuplicatedInHistory(
+          { blocks: [textBlock('done'), leftover] },
+          [assistantText('done')],
+        ),
+      ).toBe(true);
+    }
   });
 
   it('keeps a rich live agents turn canonical after its spawn tool_use checkpoints', () => {

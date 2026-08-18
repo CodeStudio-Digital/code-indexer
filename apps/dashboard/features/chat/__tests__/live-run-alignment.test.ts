@@ -112,4 +112,48 @@ describe('persistedCoveragePrefixEnd', () => {
     }));
     expect(prefixEnd).toBe(0);
   });
+
+  it('passes through workflow and notice blocks like other live-only visuals', () => {
+    const blocks = [
+      textBlock('first'),
+      { type: 'workflow', run: { workflowId: 'w1', status: 'running' } } as unknown as StreamBlock,
+      { type: 'notice', notice: { id: 'ultra:s1', kind: 'ultra_turn' } } as StreamBlock,
+      textBlock('second'),
+    ];
+    const prefixEnd = persistedCoveragePrefixEnd(blocks, ctx({
+      persistedTextNormalized: normalizeRunText('first\nsecond'),
+    }));
+    expect(prefixEnd).toBe(3);
+  });
+
+  describe('anchorAnywhere (cursorless reattach rebuilt only a suffix)', () => {
+    it('finds where the replayed suffix resumes inside the durable run', () => {
+      const blocks = [textBlock('tail of the answer')];
+      const durable = ctx({
+        persistedTextNormalized: normalizeRunText('head of the answer tail of the answer'),
+      });
+
+      expect(persistedCoveragePrefixEnd(blocks, durable)).toBe(-1);
+      expect(persistedCoveragePrefixEnd(blocks, { ...durable, anchorAnywhere: true })).toBe(0);
+    });
+
+    it('anchors once, then stays ordered so a repeated phrase cannot be swallowed', () => {
+      // "Pronto." already exists earlier; the second one is genuinely new and
+      // must not be treated as covered.
+      const blocks = [textBlock('middle'), textBlock('Pronto.')];
+      const prefixEnd = persistedCoveragePrefixEnd(blocks, ctx({
+        persistedTextNormalized: normalizeRunText('Pronto. head middle'),
+        anchorAnywhere: true,
+      }));
+      expect(prefixEnd).toBe(0);
+    });
+
+    it('still refuses content the durable run never contained', () => {
+      const prefixEnd = persistedCoveragePrefixEnd([textBlock('never persisted')], ctx({
+        persistedTextNormalized: normalizeRunText('something else entirely'),
+        anchorAnywhere: true,
+      }));
+      expect(prefixEnd).toBe(-1);
+    });
+  });
 });

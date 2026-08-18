@@ -504,6 +504,8 @@
   "messages.chapterSourceLoadError": "Could not expand the original conversation. Try again.",
   "messages.chapterQuickNav": "Chapter quick navigation",
   "messages.jumpToLatest": "Jump to latest",
+  "notice.ultraTurnTitle": "Ultra enabled for this turn",
+  "notice.ultraTurnBody": "the `ultracode` keyword was detected: maximum effort, proactive delegation and the `workflow` tool are available for this run only.",
   "messages.chapterEmptyMessage": "No text content",
   "messages.chapterRole.user": "You",
   "messages.chapterRole.assistant": "Assistant",

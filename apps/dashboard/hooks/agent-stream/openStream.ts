@@ -118,11 +118,19 @@ export async function openStream(
   // is now producing output.
   let preflightCleared = false;
 
+  // Reattaching with no usable cursor replays the server ring buffer, which
+  // truncates text at the last `message_complete` while replaying every tool.
+  // The buffer this rebuilds is therefore a SUFFIX of the persisted run, and
+  // comparing it from offset zero fails on both coverage and duplication —
+  // leaving a text-only ghost of the same turn on screen.
+  const startsMidTurn = !!opts.reattach && lastSeenSeq < 0;
+
   const projector = new TurnProjector({
     sessionId: sid,
     initialBlocks: opts.initialBlocks,
     updateSession,
     onMessageComplete,
+    startsMidTurn,
   });
 
   // In Electron the relative `/api/...` URL would route through the Vite

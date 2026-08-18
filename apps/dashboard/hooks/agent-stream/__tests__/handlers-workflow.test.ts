@@ -147,7 +147,10 @@ describe('workflow handlers', () => {
   it('renders the per-turn Ultra chip on run_started', () => {
     const { handlers, blocks } = setup();
     handlers.run_started({ runId: 'r1', ultra: 'turn' }, 'run_started');
-    expect(blocks.some((b) => b.type === 'text' && b.text.includes('Ultra ativado para este turno'))).toBe(true);
+    // A `notice`, never a `text` block: history does not persist this, and text
+    // the durable run cannot contain breaks the live⇄persisted comparison.
+    expect(blocks.some((b) => b.type === 'notice' && b.notice.kind === 'ultra_turn')).toBe(true);
+    expect(blocks.some((b) => b.type === 'text')).toBe(false);
     // Session-scope ultra renders no chip (it would spam every run).
     const second = setup();
     second.handlers.run_started({ runId: 'r2', ultra: 'session' }, 'run_started');

@@ -53,6 +53,7 @@ import {
   type ProviderCallPayload,
 } from './activity-blocks.js';
 import { rollbackStreamedChars } from './stream-rollback.js';
+import { finalizeLiveVisualizations, outcomeForDoneReason } from './live-block-finalize.js';
 
 interface HandlerContext {
   sid: SessionId;
@@ -64,12 +65,16 @@ interface HandlerContext {
   flushNow: () => void;
   updateSession: UpdateSession;
   onMessageComplete?: () => void;
+  /** Buffer realigned with a turn boundary — drop the mid-turn suffix marker. */
+  clearStartsMidTurn?: () => void;
 }
 
 export type EventHandler = (data: Record<string, unknown>, eventName: string) => void;
 
 export function createEventHandlers(ctx: HandlerContext): Record<string, EventHandler> {
-  const { sid, blocks, toolIndex, flush, flushNow, updateSession, onMessageComplete } = ctx;
+  const {
+    sid, blocks, toolIndex, flush, flushNow, updateSession, onMessageComplete, clearStartsMidTurn,
+  } = ctx;
   const providerProcessIds = new Set<string>();
   // The callback refetches the persisted transcript. The first provider turn
   // is enough to publish the just-written user message (and generate a title).
@@ -786,10 +791,10 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     run_started: (data) => {
       const d = data as { ultra?: 'session' | 'turn' };
       if (d.ultra === 'turn') {
-        blocks.push({
-          type: 'text',
-          text: '⚡ **Ultra ativado para este turno** — palavra-chave `ultracode` detectada: effort máximo, delegação proativa e a tool `workflow` disponíveis só nesta execução.\n\n',
-        });
+        // A `notice` block, not text: history never persists this, and a text
+        // block the durable run cannot contain breaks the live⇄persisted
+        // comparison for the whole turn.
+        blocks.push({ type: 'notice', notice: { id: `ultra:${sid}`, kind: 'ultra_turn' } });
         flush();
       }
     },
@@ -975,6 +980,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       ));
       blocks.splice(0, blocks.length, ...crossTurnBlocks);
       rebuildToolIndex(blocks, toolIndex);
+      // Whatever suffix a cursorless reattach rebuilt belongs to the turn that
+      // just ended; from here the buffer tracks a run from its start again.
+      clearStartsMidTurn?.();
       // Commit the cleared live buffer before publishing the already-persisted
       // user row. POST /inject intentionally does not refetch history itself:
       // that would expose the new row beside the preceding turn's live buffer
@@ -1144,12 +1152,17 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       // inside `done`. New workers emit `error`, but keep reading both fields
       // here so a mixed-version stream never hides the failure.
       const d = data as { reason?: string; error?: string };
+      const doneReason = String(d.reason ?? 'completed');
+      // Leftover live-only visualizations must reach a terminal state here or the
+      // reconciliation can never call this turn duplicated, and the live copy
+      // stays on screen with the persisted one suppressed behind it.
+      finalizeLiveVisualizations(blocks, outcomeForDoneReason(doneReason));
       if (blocks.length > 0) flushNow();
       // Run ended → the pool closes the agent's preview window, so restore the
       // in-project iframe.
       dispatchAgentPreview(sid, false);
       updateSession(sid, {
-        doneReason: String(d.reason ?? 'completed'),
+        doneReason,
         ...(d.error ? { error: d.error } : {}),
         // No run → no resolvable approvals (abort/interrupt denied them).
         pendingApprovals: [],
@@ -1162,6 +1175,9 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
       const d = data as { reason?: string; error?: string; message?: string };
       const message = String(d.message ?? d.error ?? d.reason ?? 'unknown');
       markInFlightBlocksFailed(blocks, message);
+      // Covers what markInFlightBlocksFailed does not: activity heartbeats and
+      // workflow runs. Same reconciliation contract as the `done` path.
+      finalizeLiveVisualizations(blocks, 'failed');
       flushNow();
       dispatchAgentPreview(sid, false);
       updateSession(sid, {

@@ -17,6 +17,7 @@ import { GoalCallBlock, isGoalTool } from './GoalCallBlock.js';
 import { FileEditBlock } from './FileEditBlock.js';
 import { isEditTool } from './edit-tools.js';
 import { ActivityLineBlock } from '../../../components/stream/ActivityLineBlock.js';
+import { NoticeBlock } from './NoticeBlock.js';
 
 export function renderStreamBlock(block: StreamBlock, key: number, handlers: PromptHandlers) {
   if (block.type === 'thinking') {
@@ -124,7 +125,15 @@ export function renderStreamBlock(block: StreamBlock, key: number, handlers: Pro
       />
     );
   }
-  return (
-    <QuestionPromptView key={`qq-${block.question.id}`} question={block.question} onAnswer={handlers.onAnswer} />
-  );
+  if (block.type === 'notice') {
+    return <NoticeBlock key={`nt-${block.notice.id}`} notice={block.notice} />;
+  }
+  if (block.type === 'question') {
+    return (
+      <QuestionPromptView key={`qq-${block.question.id}`} question={block.question} onAnswer={handlers.onAnswer} />
+    );
+  }
+  // Explicit: a new block type renders as nothing visible rather than being
+  // silently misrendered as a question card.
+  return null;
 }
