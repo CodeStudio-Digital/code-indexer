@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ChevronUp, History, Loader2, RotateCw } from 'lucide-react';
+import { AlertCircle, ArrowDown, ChevronUp, History, Loader2, RotateCw } from 'lucide-react';
 import type { AssistantTurn } from '../../../hooks/useAgentStream.js';
 import { Alert, AlertDescription } from '../../../components/ui/alert.js';
 import { LOAD_MORE_SIZE } from '../constants.js';
@@ -47,6 +47,7 @@ import {
   visualGroupKey,
 } from './chapter-transcript.js';
 import { activeChapterIdAtScrollOffset } from './chapter-markers.js';
+import { useFollowOutput } from './useFollowOutput.js';
 
 const EMPTY_FILES: Map<string, SnapshotFileSummary> = new Map();
 const LOAD_EARLIER_SCROLL_THRESHOLD = 200;
@@ -654,7 +655,6 @@ export const MessageList = React.memo(function MessageList({
   ]);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
-  const atEndRef = useRef(true);
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -666,13 +666,14 @@ export const MessageList = React.memo(function MessageList({
       if (row?.kind === 'tail') return 160;
       return 180;
     },
+    // `followOnAppend` is intentionally absent: its guard requires the last item
+    // key to change, and the last row here is always the `tail:` sentinel, so it
+    // could never fire. Sticking to the bottom is `useFollowOutput`'s job.
     anchorTo: 'end',
-    followOnAppend: true,
     scrollEndThreshold: 80,
     overscan: 6,
     useAnimationFrameWithResizeObserver: true,
     onChange: (instance) => {
-      atEndRef.current = instance.isAtEnd(80);
       const visibleChapter = activeChapterIdAtScrollOffset(
         rowsRef.current,
         instance.getVirtualItems(),
@@ -685,6 +686,9 @@ export const MessageList = React.memo(function MessageList({
     },
   });
 
+  // Declared after the virtualizer so its pin runs on the committed spacer height.
+  const { following, jumpToEnd, disengage } = useFollowOutput({ scrollRef, resetKey: sessionId });
+
   const chapterRowIndexes = useMemo(() => {
     const indexes = new Map<string, number>();
     rows.forEach((row, index) => {
@@ -696,8 +700,10 @@ export const MessageList = React.memo(function MessageList({
     const index = chapterRowIndexes.get(chapterId);
     if (index == null) return;
     setActiveChapterId(chapterId);
+    // A pin racing this smooth scroll would drag the view back to the bottom.
+    disengage();
     virtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
-  }, [chapterRowIndexes, virtualizer]);
+  }, [chapterRowIndexes, disengage, virtualizer]);
 
   useEffect(() => {
     const navigate = (event: Event) => {
@@ -729,18 +735,6 @@ export const MessageList = React.memo(function MessageList({
     root.addEventListener('scroll', onScroll, { passive: true });
     return () => root.removeEventListener('scroll', onScroll);
   }, [loadEarlier, onLoadEarlier]);
-
-  useEffect(() => {
-    if (!sessionId) return;
-    const frame = requestAnimationFrame(() => virtualizer.scrollToEnd({ behavior: 'auto' }));
-    return () => cancelAnimationFrame(frame);
-  }, [sessionId, virtualizer]);
-
-  useEffect(() => {
-    if (!streaming || !atEndRef.current) return;
-    const frame = requestAnimationFrame(() => virtualizer.scrollToEnd({ behavior: 'auto' }));
-    return () => cancelAnimationFrame(frame);
-  }, [currentTurn, streaming, virtualizer]);
 
   const liveEditRefs = useMemo<EditFileRef[]>(() => {
     if (!currentTurn) return [];
@@ -837,6 +831,17 @@ export const MessageList = React.memo(function MessageList({
             />
           ))}
         </nav>
+      )}
+      {!following && (
+        <button
+          type="button"
+          onClick={jumpToEnd}
+          className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border/55 bg-background/80 px-3 py-1.5 text-xs font-medium shadow-lg backdrop-blur transition-colors hover:bg-accent"
+        >
+          <ArrowDown className="h-3.5 w-3.5" />
+          {t('messages.jumpToLatest')}
+          {streaming && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />}
+        </button>
       )}
       <div
         ref={scrollRef}

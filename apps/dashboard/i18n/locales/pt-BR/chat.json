@@ -503,6 +503,7 @@
   "messages.chapterLoadError": "Não foi possível carregar os capítulos da conversa.",
   "messages.chapterSourceLoadError": "Não foi possível expandir a conversa original. Tente novamente.",
   "messages.chapterQuickNav": "Navegação rápida por capítulos",
+  "messages.jumpToLatest": "Ir para o fim",
   "messages.chapterEmptyMessage": "Sem conteúdo de texto",
   "messages.chapterRole.user": "Você",
   "messages.chapterRole.assistant": "Assistente",

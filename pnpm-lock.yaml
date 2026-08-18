@@ -6,6 +6,7 @@ settings:
 
 overrides:
   electron-builder-squirrel-windows: 26.15.3
+  '@tanstack/react-virtual>@tanstack/virtual-core': 3.17.0
 
 importers:
 
@@ -87,7 +88,7 @@ importers:
         specifier: ^4.2.2
         version: 4.2.2(vite@8.1.0(@types/node@22.19.17)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
       '@tanstack/react-virtual':
-        specifier: ^3.14.2
+        specifier: 3.14.2
         version: 3.14.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@xterm/addon-fit':
         specifier: ^0.10.0

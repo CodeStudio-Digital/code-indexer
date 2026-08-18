@@ -99,7 +99,7 @@
     "@radix-ui/react-tooltip": "^1.2.12",
     "@scalar/api-reference-react": "^0.4.0",
     "@tailwindcss/vite": "^4.2.2",
-    "@tanstack/react-virtual": "^3.14.2",
+    "@tanstack/react-virtual": "3.14.2",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "@xyflow/react": "^12.10.2",
@@ -210,7 +210,8 @@
       "node-pty"
     ],
     "overrides": {
-      "electron-builder-squirrel-windows": "26.15.3"
+      "electron-builder-squirrel-windows": "26.15.3",
+      "@tanstack/react-virtual>@tanstack/virtual-core": "3.17.0"
     }
   }
 }

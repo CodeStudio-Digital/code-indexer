@@ -503,6 +503,7 @@
   "messages.chapterLoadError": "Could not load conversation chapters.",
   "messages.chapterSourceLoadError": "Could not expand the original conversation. Try again.",
   "messages.chapterQuickNav": "Chapter quick navigation",
+  "messages.jumpToLatest": "Jump to latest",
   "messages.chapterEmptyMessage": "No text content",
   "messages.chapterRole.user": "You",
   "messages.chapterRole.assistant": "Assistant",
