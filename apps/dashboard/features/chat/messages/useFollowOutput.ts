@@ -1,23 +1,21 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-/** Mirrors the virtualizer's `scrollEndThreshold` so both agree on "at the end". */
-export const FOLLOW_THRESHOLD_PX = 80;
 /** Re-engaging demands the real bottom, not merely being near it. */
 export const FOLLOW_RESUME_PX = 8;
 
-/**
- * Follow state is driven by scroll events alone. Content growth does not move
- * `scrollTop`, so it never fires a scroll event and can never disengage the
- * follow by itself — only a real user gesture (wheel, drag, keys, touch) can.
- *
- * The thresholds are asymmetric on purpose: without hysteresis a 40px nudge
- * upward stays "at the end" and the next streamed frame yanks the view back
- * down, which is the fight this hook exists to end. Negative distances happen
- * on elastic overscroll and count as the bottom.
- */
-export function computeFollowTransition(distanceFromEnd: number, following: boolean): boolean {
-  if (following) return distanceFromEnd <= FOLLOW_THRESHOLD_PX;
+/** Whether the view came back to the newest content and may follow again. */
+export function shouldResumeFollow(distanceFromEnd: number): boolean {
+  // Negative distances happen on elastic overscroll and count as the bottom.
   return distanceFromEnd <= FOLLOW_RESUME_PX;
+}
+
+/**
+ * Whether a pointer went down on the vertical scrollbar rather than on content.
+ * `contentRight` is the right edge of the content box, so anything past it is
+ * the scrollbar gutter.
+ */
+export function isScrollbarPointer(clientX: number, contentRight: number): boolean {
+  return clientX > contentRight;
 }
 
 function distanceFromEnd(el: HTMLElement): number {
@@ -48,6 +46,13 @@ export interface FollowOutput {
  * in the same frame. Writing `scrollTop` from a layout effect instead pins after
  * React committed the new spacer height, so the browser cannot clamp the write
  * against a stale scroll range.
+ *
+ * Disengaging is driven by INTENT (wheel, touch, scrollbar grab, keys), never by
+ * how far the view has travelled. A distance threshold cannot work here: the pin
+ * runs on every commit and returns the view to the bottom between wheel ticks, so
+ * the distance is erased before it can ever cross the threshold and the user is
+ * trapped at the end of the transcript. Position is consulted only to decide when
+ * following may RESUME.
  */
 export function useFollowOutput({ scrollRef, resetKey }: FollowOutputOptions): FollowOutput {
   const [following, setFollowing] = useState(true);
@@ -61,17 +66,50 @@ export function useFollowOutput({ scrollRef, resetKey }: FollowOutputOptions): F
   const pin = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (distanceFromEnd(el) > 0) el.scrollTop = el.scrollHeight;
+    const target = el.scrollHeight - el.clientHeight;
+    if (target <= el.scrollTop) return;
+    el.scrollTop = target;
   }, [scrollRef]);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onScroll = () => {
-      setFollow(computeFollowTransition(distanceFromEnd(el), followingRef.current));
+    const release = () => setFollow(false);
+
+    // A wheel event fires BEFORE the scroll it causes, so the pin never gets a
+    // chance to undo the gesture.
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) release();
     };
+    // Any touch drag: a downward fling lands at the bottom and re-engages below.
+    const onTouchMove = () => release();
+    // Dragging the scrollbar produces no wheel or touch event at all.
+    const onPointerDown = (event: PointerEvent) => {
+      const rect = el.getBoundingClientRect();
+      if (isScrollbarPointer(event.clientX, rect.left + el.clientWidth)) release();
+    };
+    // Capture: the transcript itself never holds focus, so these arrive from
+    // whatever descendant the user is on.
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') release();
+    };
+    const onScroll = () => {
+      if (followingRef.current) return;
+      if (shouldResumeFollow(distanceFromEnd(el))) setFollow(true);
+    };
+
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: true });
+    el.addEventListener('pointerdown', onPointerDown, { passive: true });
+    el.addEventListener('keydown', onKeyDown, true);
     el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('pointerdown', onPointerDown);
+      el.removeEventListener('keydown', onKeyDown, true);
+      el.removeEventListener('scroll', onScroll);
+    };
   }, [scrollRef, setFollow]);
 
   // No dependency array: every commit that changed the transcript height gets a
