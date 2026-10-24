@@ -7,7 +7,7 @@ import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const readFileTool = fsTools.find((t) => t.name === 'read_file')!;
 
-describe('read_file native — symbol/around_line modes', () => {
+describe('read_file native — symbol/range modes', () => {
   let cwd: string;
 
   beforeEach(() => {
@@ -39,6 +39,7 @@ describe('read_file native — symbol/around_line modes', () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+
   function ctx(): ToolContext {
     return { cwd, projectName: 'test' };
   }
@@ -52,15 +53,6 @@ describe('read_file native — symbol/around_line modes', () => {
     // alpha and charlie must NOT leak
     expect(result.content).not.toContain('export function alpha');
     expect(result.content).not.toContain('charlie = 42');
-  });
-
-  it('returns the enclosing symbol body for around_line', async () => {
-    // Line 9 is inside bravo's body
-    const result = await readFileTool.handler({ path: 'src/foo.ts', around_line: 9 }, ctx());
-    expect(result.isError).toBeFalsy();
-    expect(result.content).toContain('export function bravo');
-    expect(result.content).toContain('return name.toUpperCase()');
-    expect(result.content).not.toContain('export function alpha');
   });
 
   it('errors clearly when symbol is missing', async () => {

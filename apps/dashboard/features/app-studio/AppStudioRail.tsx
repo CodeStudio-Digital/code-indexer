@@ -7,7 +7,7 @@ import { DataPanel } from './data/DataPanel.js';
 import { PublishPanel } from './publish/PublishPanel.js';
 
 export type AppStudioTab = 'plan' | 'app' | 'data' | 'publish';
-export const APP_STUDIO_RAIL_TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string }> = [
+const APP_STUDIO_RAIL_TABS: Array<{ id: AppStudioTab; icon: LucideIcon; labelKey: string }> = [
   { id: 'plan', icon: ListChecks, labelKey: 'v6.tabs.plan' },
   { id: 'app', icon: Monitor, labelKey: 'v6.tabs.app' },
   { id: 'data', icon: Database, labelKey: 'v6.tabs.data' },

@@ -1,4 +1,4 @@
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 export const semanticJobLookup268: Migration = {
   version: 268,

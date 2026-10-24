@@ -28,7 +28,7 @@ function yieldToEventLoop(): Promise<void> {
   return sched?.yield ? sched.yield() : new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-export interface OpenStreamOpts {
+interface OpenStreamOpts {
   url: string;
   method: 'POST' | 'GET';
   body?: Record<string, unknown>;

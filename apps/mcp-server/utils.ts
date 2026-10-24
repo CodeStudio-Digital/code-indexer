@@ -10,7 +10,7 @@ export function truncateToTokens(text: string, maxTokens?: number): string {
   return truncateToTokensDetailed(text, maxTokens).text;
 }
 
-export interface TokenTruncationResult {
+interface TokenTruncationResult {
   text: string;
   truncated: boolean;
   inputChars: number;

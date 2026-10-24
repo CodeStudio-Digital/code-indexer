@@ -7,7 +7,7 @@ const VALIDATION_DELAY_MS = 250;
 const MAX_VALIDATION_CHARS = 5_000_000;
 const MAX_VALIDATION_LINES = 50_000;
 
-export interface JsonlProblem {
+interface JsonlProblem {
   lineNumber: number;
   startColumn: number;
   endColumn: number;
@@ -93,7 +93,11 @@ export function registerJsonlSupport(monaco: Monaco): void {
     if (model.isDisposed()) return;
     const markers: MonacoNs.editor.IMarkerData[] = model.getLanguageId() === 'jsonl'
       ? validateJsonLinesText(model.getValue()).map((problem) => ({
-        ...problem,
+        startLineNumber: problem.lineNumber,
+        endLineNumber: problem.lineNumber,
+        startColumn: problem.startColumn,
+        endColumn: problem.endColumn,
+        message: problem.message,
         severity: monaco.MarkerSeverity.Error,
         source: 'JSON Lines',
       }))

@@ -16,7 +16,7 @@
  * shaping recorded, assume no savings" by COALESCEing to `output_chars`.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

@@ -80,7 +80,7 @@ function railTabFor(
   return new URLSearchParams(search).get('tab') || null;
 }
 
-export interface DescribeInput {
+interface DescribeInput {
   view: ActiveView;
   pathname: string;
   search: string;

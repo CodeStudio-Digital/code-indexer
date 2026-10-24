@@ -27,7 +27,7 @@ function devtoolsPresent(): boolean {
   );
 }
 
-export function boundUserTimingBuffer(highWater = HIGH_WATER): void {
+function boundUserTimingBuffer(highWater = HIGH_WATER): void {
   if (typeof performance === 'undefined' || typeof performance.getEntriesByType !== 'function') {
     return;
   }
@@ -57,7 +57,7 @@ export function startUserTimingBufferGuard(intervalMs = 60_000): void {
   guardTimer = setInterval(() => boundUserTimingBuffer(), intervalMs);
 }
 
-export function stopUserTimingBufferGuard(): void {
+function stopUserTimingBufferGuard(): void {
   if (guardTimer !== undefined) {
     clearInterval(guardTimer);
     guardTimer = undefined;

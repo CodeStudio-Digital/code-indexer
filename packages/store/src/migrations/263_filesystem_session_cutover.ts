@@ -12,7 +12,7 @@ import {
   markSessionStorageLayoutReady,
   SESSION_STORAGE_LAYOUT_VERSION,
 } from '../session-layout-guard.js';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

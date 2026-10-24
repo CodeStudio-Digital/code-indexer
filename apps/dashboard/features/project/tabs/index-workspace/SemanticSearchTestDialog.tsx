@@ -262,7 +262,7 @@ export function SemanticSearchTestDialog({
                     {lexicalResponse ? (
                       <div className="mb-3 grid gap-3 lg:grid-cols-2">
                         <SearchTopFive
-                          title="Baseline lexical (FTS)"
+                          title={t('index.semanticTest.lexicalBaseline')}
                           response={lexicalResponse}
                         />
                         <SearchTopFive
@@ -414,6 +414,7 @@ function SearchTopFive({
   response: ProjectSemanticSearchTestResult;
   compareAgainst?: ProjectSemanticSearchTestResult;
 }) {
+  const { t } = useTranslation('projects');
   const lexicalKeys = new Set((compareAgainst?.results ?? [])
     .slice(0, 5)
     .map((result) => `${result.type}:${semanticResultPath(result)}`));
@@ -437,7 +438,7 @@ function SearchTopFive({
                 {index + 1}.
               </span>
               <span className="min-w-0 flex-1 truncate font-mono">{path}</span>
-              {semanticOnly ? <Badge variant="success">só semântico</Badge> : null}
+              {semanticOnly ? <Badge variant="success">{t('index.semanticTest.semanticOnly')}</Badge> : null}
             </li>
           );
         })}

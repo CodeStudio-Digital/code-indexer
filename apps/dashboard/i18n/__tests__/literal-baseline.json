@@ -249,11 +249,6 @@
     "apps/dashboard/features/agents/tests/TestsTab.tsx|jsxText|Live": 1,
     "apps/dashboard/features/agents/tests/TestsTab.tsx|jsxText|Plano": 1,
     "apps/dashboard/features/agents/zones/build/BuildZone.tsx|jsxText|Loading projects…": 1,
-    "apps/dashboard/features/api-client/ApiClientTab.tsx|jsxText|API": 1,
-    "apps/dashboard/features/api-client/ApiClientTab.tsx|jsxText|cURL / bash": 1,
-    "apps/dashboard/features/api-client/ApiClientTab.tsx|jsxText|OpenAPI / Swagger": 1,
-    "apps/dashboard/features/api-client/ApiClientTab.tsx|jsxText|OpenAPI 3.1": 1,
-    "apps/dashboard/features/api-client/ApiClientTab.tsx|jsxText|Postman v2.1": 1,
     "apps/dashboard/features/api-client/body/BodyPanel.tsx|attr:placeholder|/absolute/path/to/file": 1,
     "apps/dashboard/features/api-client/EnvEditor.tsx|attr:placeholder|http://localhost:3000": 1,
     "apps/dashboard/features/api-client/ImportCurlDialog.tsx|jsxText|curl": 1,
@@ -680,7 +675,12 @@
     "apps/dashboard/features/workspace/local-history/LocalHistoryView.tsx|jsxText|Selected version ↔ current": 1,
     "apps/dashboard/features/workspace/local-history/RevisionRow.tsx|jsxText|no preview": 1,
     "apps/dashboard/features/workspace/WorkspaceTerminal.tsx|jsxText|New terminal": 1,
-    "apps/dashboard/features/workspace/WorkspaceTerminal.tsx|jsxText|Terminal requires the Electron app — browser dev fallback not wired.": 1
+    "apps/dashboard/features/workspace/WorkspaceTerminal.tsx|jsxText|Terminal requires the Electron app — browser dev fallback not wired.": 1,
+    "apps/dashboard/features/api-client/api-client-tab-view.tsx|jsxText|API": 1,
+    "apps/dashboard/features/api-client/api-client-tab-view.tsx|jsxText|cURL / bash": 1,
+    "apps/dashboard/features/api-client/api-client-tab-view.tsx|jsxText|OpenAPI / Swagger": 1,
+    "apps/dashboard/features/api-client/api-client-tab-view.tsx|jsxText|OpenAPI 3.1": 1,
+    "apps/dashboard/features/api-client/api-client-tab-view.tsx|jsxText|Postman v2.1": 1
   },
   "dialogCalls": {
     "apps/dashboard/features/agents/services-sidebar/ServiceListItem.tsx|confirm|Retry the primary container? The current sandbox will be torn down and rebuilt from the same stack and bind-mount — your files on disk are preserved.": 1,

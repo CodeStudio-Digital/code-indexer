@@ -52,7 +52,7 @@ export default function ProjectCreateDialog({
 
   async function pickDirectory() {
     if (!isElectron) {
-      toast.message(t('common:onboarding.project.pickToast.title'), {
+      toast.info(t('common:onboarding.project.pickToast.title'), {
         description: t('common:onboarding.project.pickToast.description'),
       });
       return;

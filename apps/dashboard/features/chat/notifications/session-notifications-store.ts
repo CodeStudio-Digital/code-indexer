@@ -52,7 +52,7 @@ export interface SessionNotification {
   payload: SessionNotificationPayload;
 }
 
-export interface PushNotificationOptions {
+interface PushNotificationOptions {
   sourceKey?: string;
   receivedAt?: number;
 }
@@ -206,7 +206,7 @@ export function getUnreadCount(sessionId: string): number {
   return n;
 }
 
-export function subscribeNotifications(
+function subscribeNotifications(
   sessionId: string,
   cb: () => void,
 ): () => void {

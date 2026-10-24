@@ -21,7 +21,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-export const ICON_BY_NAME: Record<string, LucideIcon> = {
+const ICON_BY_NAME: Record<string, LucideIcon> = {
   FolderGit2,
   MessageSquareCode,
   Users,

@@ -8,7 +8,7 @@ export interface TurnProjectorScheduler {
   clearFallback(handle: ReturnType<typeof setTimeout>): void;
 }
 
-export interface TurnProjectorOptions {
+interface TurnProjectorOptions {
   sessionId: SessionId;
   initialBlocks?: StreamBlock[];
   updateSession: UpdateSession;

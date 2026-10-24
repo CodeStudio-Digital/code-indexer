@@ -26,7 +26,7 @@ export function RunHistoryTable({ sessionId, serviceId }: Props) {
     pollWhenActive: true,
     serviceId,
   });
-  const [openRunId, setOpenRunId] = useState<number | null>(null);
+  const [openRunId, setOpenRunId] = useState<string | null>(null);
 
   if (loading && runs.length === 0) {
     return (

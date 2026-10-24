@@ -4,7 +4,7 @@ import { Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 
 export const Select = SelectPrimitive.Root;
-export const SelectGroup = SelectPrimitive.Group;
+const SelectGroup = SelectPrimitive.Group;
 export const SelectValue = SelectPrimitive.Value;
 
 export const SelectTrigger = React.forwardRef<
@@ -72,7 +72,7 @@ export const SelectItem = React.forwardRef<
 ));
 SelectItem.displayName = SelectPrimitive.Item.displayName;
 
-export const SelectSeparator = React.forwardRef<
+const SelectSeparator = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Separator>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Separator>
 >(({ className, ...props }, ref) => (

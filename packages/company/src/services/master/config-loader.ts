@@ -14,7 +14,7 @@
  * inline code had (a corrupted `config_json` must not kill the master).
  */
 import type { AllowedModel } from '@mcp/company/types.js';
-import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
+import type { RoleConfig } from './role-config.js';
 
 export interface ParsedMasterConfig {
   allowedModels: AllowedModel[];

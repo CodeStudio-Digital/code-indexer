@@ -27,11 +27,3 @@ export type BuiltinRightPanelId =
  * session's SidebarRail, resolved against the contribution registry.
  */
 export type RightPanelId = BuiltinRightPanelId | `plugin:${string}`;
-
-export interface RightPanelDef {
-  id: RightPanelId;
-  /** Lucide icon component name (passed as React element type). */
-  iconName: string;
-  /** Translation key under `chat:rightRail.<id>`. */
-  labelKey: string;
-}

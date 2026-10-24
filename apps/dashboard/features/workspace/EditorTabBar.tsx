@@ -368,7 +368,7 @@ function TabChip({
   const dirty = !isVirtual && file.dirty;
   // Disk changed under unsaved edits (or the file was deleted) — fs-events
   // stream sets this; saving or reloading clears it.
-  const conflicted = !isVirtual && file.externallyChanged === true;
+  const conflicted = isLocalFile && file.externallyChanged === true;
 
   const items: ContextMenuItem[] = [
     { id: 'close', label: t('editorTabs.close'), onSelect: onClose },

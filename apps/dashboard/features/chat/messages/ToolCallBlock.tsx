@@ -283,7 +283,7 @@ function ToolCallBlockInner({ call, sessionId, onToolApproval, children }: ToolC
   );
 }
 
-export function toolActivityLabelKey(
+function toolActivityLabelKey(
   toolName: string,
   status: ToolCallEvent['status'],
 ): string {

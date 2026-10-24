@@ -19,7 +19,7 @@ const callRuleCases = (PHP_EXTRA_RULES[PHP_EXTRA_RULES.length - 1] as [RegExp, {
 
 describe('enriched PHP grammar', () => {
   it('replaces the lazy tokenizer factory exactly once per Monaco instance', () => {
-    const registerTokensProviderFactory = vi.fn(() => ({ dispose() {} }));
+    const registerTokensProviderFactory = vi.fn((_language: string, _factory: { create(): unknown }) => ({ dispose() {} }));
     const monaco = { languages: { registerTokensProviderFactory } } as never;
 
     enrichPhpHighlighting(monaco);

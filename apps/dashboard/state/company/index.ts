@@ -1,3 +1,5 @@
+import type { CompanyStore } from './store-types.js';
+
 /**
  * Composition root for the company store. Slices are kept in separate
  * files so each domain can evolve (and be tested) in isolation.
@@ -19,13 +21,6 @@ import { createDriveSlice, type DriveSlice } from './driveSlice.js';
 import { createInboxSlice, type InboxSlice } from './inboxSlice.js';
 import { createAutonomySlice, type AutonomySlice } from './autonomySlice.js';
 
-export type CompanyStore = SessionSlice &
-  StreamSlice &
-  KanbanSlice &
-  SandboxSlice &
-  DriveSlice &
-  InboxSlice &
-  AutonomySlice;
 
 export const useCompanyStore = create<CompanyStore>()((...a) => ({
   ...createSessionSlice(...a),
@@ -39,16 +34,10 @@ export const useCompanyStore = create<CompanyStore>()((...a) => ({
 
 export * from './types.js';
 export * from './selectors.js';
-export type { SessionSlice } from './sessionSlice.js';
-export type { StreamSlice, InitialFetchSnapshot } from './streamSlice.js';
-export type { KanbanSlice } from './kanbanSlice.js';
-export type { SandboxSlice, SandboxState, SandboxFileChange } from './sandboxSlice.js';
-export type { DriveSlice, DriveState, DriveFileMeta } from './driveSlice.js';
-export type { InboxSlice, InboxState } from './inboxSlice.js';
-export type {
-  AutonomySlice,
-  AutonomyState,
-  AutonomyEvent,
-  AutonomyEventType,
-  AutonomyConfigLike,
-} from './autonomySlice.js';
+
+
+
+
+
+
+export type { AutonomyEvent, AutonomyEventType, AutonomyConfigLike } from './autonomySlice.js';

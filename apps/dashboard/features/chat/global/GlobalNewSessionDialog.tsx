@@ -1,14 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Star, Search, Boxes, FolderOpen } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../../../components/ui/dialog.js';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../../../components/ui/tabs.js';
 import { Input } from '../../../components/ui/input.js';
 import { Button } from '../../../components/ui/button.js';
@@ -28,7 +21,7 @@ interface WorkspaceRow {
   sessionCount: number;
 }
 
-export interface GlobalNewSessionDialogProps {
+interface GlobalNewSessionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreate: (opts: {

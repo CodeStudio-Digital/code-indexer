@@ -77,7 +77,7 @@ interface PendingEntry<Bus extends object> {
 type Entry<Bus extends object> = ReadyEntry<Bus> | PendingEntry<Bus>;
 type RecentSessionKey = string;
 
-export type RecentMessageClaim<Bus extends object> =
+type RecentMessageClaim<Bus extends object> =
   | { kind: 'owner'; token: symbol }
   | { kind: 'payload_conflict' }
   | { kind: 'capacity_exhausted'; retryAfterMs: number }

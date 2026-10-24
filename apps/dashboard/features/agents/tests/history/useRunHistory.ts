@@ -12,7 +12,7 @@ import type { QaRun } from '../shared/types.js';
 
 const POLL_INTERVAL_MS = 4_000;
 
-export interface UseRunHistoryResult {
+interface UseRunHistoryResult {
   runs: QaRun[];
   loading: boolean;
   error: string | null;

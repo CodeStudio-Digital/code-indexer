@@ -87,13 +87,14 @@ describe('PR-4 StopReason — recovery_capped + transition', () => {
     delete process.env.CODER_RECOVERY_TRANSIENT_MAX;
   }, 5000);
 
-  it('reports reason="recovery_capped" with transition="provider-400-retry" when 400 cap blown', async () => {
+  it('reports a non-retryable 400 immediately with its transition', async () => {
     process.env.CODER_RECOVERY_400_MAX = '0';
     const provider = new FlakyProvider(20, 400);
     const runner = makeRunner(provider);
     const result = await runner.run();
-    expect(result.reason).toBe('recovery_capped');
+    expect(result.reason).toBe('error');
     expect(result.transition).toBe('provider-400-retry');
+    expect(provider.attempts).toBe(1);
     delete process.env.CODER_RECOVERY_400_MAX;
   }, 5000);
 });

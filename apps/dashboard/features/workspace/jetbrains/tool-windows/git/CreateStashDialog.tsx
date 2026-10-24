@@ -33,7 +33,7 @@ interface GitRunResult {
   stderr: string;
 }
 
-export interface CreateStashDialogProps {
+interface CreateStashDialogProps {
   projectId: number;
   /** Selected git root (submodule / nested repo); undefined = main repo. */
   repoPath?: string;
@@ -62,7 +62,7 @@ export function CreateStashDialog({ projectId, repoPath, onClose, onCreated }: C
       });
       if (r.ok) {
         if (/no local changes to save/i.test(r.stdout)) {
-          toast.message(t('git.stash.nothing'), { description: t('git.cleanTree') });
+          toast.info(t('git.stash.nothing'), { description: t('git.cleanTree') });
         } else {
           toast.success(t('git.stash.saved'), {
             description: r.stdout.trim().slice(0, 200) || t('git.stash.savedBody'),

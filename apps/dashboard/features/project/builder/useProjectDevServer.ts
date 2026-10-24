@@ -21,7 +21,7 @@ import {
   restartTask,
 } from '../../../state/running-tasks.js';
 
-export type DevServerStatus = 'stopped' | 'running' | 'exited';
+type DevServerStatus = 'stopped' | 'running' | 'exited';
 
 function manualKey(projectId: number): string {
   return `mcp.preview.url.${projectId}`;

@@ -1,3 +1,5 @@
+import type { DiscoveryResult } from './types.js';
+export type { DiscoveryResult } from './types.js';
 import type { ProviderSpec } from '@mcp/provider-sdk';
 import type { ProviderConfig, ProviderStore, UpsertModelInput } from '@mcp/store/provider-store.js';
 import { discoverOpenAIModels } from './openai-models.js';
@@ -12,13 +14,6 @@ import { discoverClaudeCodeModels } from './claude-code-models.js';
 import { discoverGoogleOAuthModels } from './google-oauth-models.js';
 import { discoverBedrockModels } from './bedrock-models.js';
 
-export interface DiscoveryResult {
-  models: UpsertModelInput[];
-  /** Catalog ETag (chatgpt/codex only), or null. */
-  etag: string | null;
-  /** True on HTTP 304 — `models` is empty and existing rows are kept. */
-  notModified: boolean;
-}
 
 /**
  * Live model discovery, driven by `spec.discovery.from`. Each format builder

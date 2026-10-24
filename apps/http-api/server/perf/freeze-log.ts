@@ -39,7 +39,7 @@ import {
   stopOffloopWatchdog,
 } from './offloop-watchdog.js';
 
-export type FreezeSource =
+type FreezeSource =
   | 'handler'
   | 'background'
   | 'event-loop'
@@ -57,7 +57,7 @@ export type FreezeSource =
    */
   | 'unattributed';
 
-export interface FreezeEvent {
+interface FreezeEvent {
   at: number;
   source: FreezeSource;
   /** IPC channel (handler), sync-section label, or script URL (renderer). */

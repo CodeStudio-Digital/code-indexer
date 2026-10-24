@@ -17,12 +17,12 @@ export type WorkTab = 'board' | 'kanban' | 'memory';
 export type BuildTab = 'docs' | 'tests' | 'files' | 'git' | 'api';
 export type DataTab = 'drive' | 'snapshots' | 'archived';
 
-export type ZoneTab =
+type ZoneTab =
   | { zone: 'work'; tab: WorkTab }
   | { zone: 'build'; tab: BuildTab }
   | { zone: 'data'; tab: DataTab };
 
-export const ZONE_TABS: { [Z in Zone]: readonly Extract<ZoneTab, { zone: Z }>['tab'][] } = {
+const ZONE_TABS: { [Z in Zone]: readonly Extract<ZoneTab, { zone: Z }>['tab'][] } = {
   work: ['board', 'kanban', 'memory'] as const,
   build: ['docs', 'tests', 'files', 'git', 'api'] as const,
   data: ['drive', 'snapshots', 'archived'] as const,

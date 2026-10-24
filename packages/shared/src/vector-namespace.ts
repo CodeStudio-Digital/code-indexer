@@ -35,27 +35,3 @@ export function projectMemoryNamespace(projectId: number): string {
 export function userMemoryNamespace(): 'memory:user' {
   return 'memory:user';
 }
-
-export function isCodeNamespace(ns: string): boolean {
-  return ns.startsWith('code:');
-}
-
-export function isDocNamespace(ns: string): boolean {
-  return ns.startsWith('docs:');
-}
-
-export function isSnapshotNamespace(ns: string): boolean {
-  return ns.startsWith('snapshot:');
-}
-
-export function isMemoryNamespace(ns: string): boolean {
-  return ns.startsWith('memory:');
-}
-
-/**
- * Sanitize a namespace into a token safe for backends that name a physical
- * object after it (for example a local sqlite-vec table): only [A-Za-z0-9_].
- */
-export function namespaceToken(ns: string): string {
-  return ns.replace(/[^A-Za-z0-9]+/g, '_');
-}

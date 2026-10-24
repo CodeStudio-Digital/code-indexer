@@ -11,7 +11,7 @@ export function WorkbenchSurface({ children, className }: { children: ReactNode;
   return <section className={cn('workbench-surface min-h-0 overflow-hidden', className)}>{children}</section>;
 }
 
-export interface WorkbenchPageHeaderProps {
+interface WorkbenchPageHeaderProps {
   title: string;
   description?: ReactNode;
   icon?: LucideIcon;
@@ -85,7 +85,7 @@ export function WorkbenchResizeHandle({
   );
 }
 
-export interface WorkbenchPanelHeaderProps {
+interface WorkbenchPanelHeaderProps {
   title: string;
   icon?: LucideIcon;
   actions?: ReactNode;

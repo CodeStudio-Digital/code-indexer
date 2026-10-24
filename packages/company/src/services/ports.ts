@@ -7,7 +7,7 @@
  *   - Obvious in intent (you can read the ports list to see the surface)
  */
 
-import type { RunCoderHandle } from '@mcp/code-agent/index.js';
+import type { RunCoderHandle } from '@mcp/code-agent/index/types.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
 import type { AgentRunStatus, KanbanCardFull, KanbanColumn, BoardEntry } from '@mcp/company/types.js';
 

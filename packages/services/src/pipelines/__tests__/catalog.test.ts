@@ -65,7 +65,7 @@ describe('semantic profile catalog ownership', () => {
       PIPELINE_CATALOG.map((entry) => `${entry.pipelineName}::${entry.bindingRole}`),
     );
 
-    expect(PIPELINE_CATALOG).toHaveLength(21);
+    expect(PIPELINE_CATALOG).toHaveLength(18);
     for (const pair of retiredPairs) expect(catalogPairs.has(pair)).toBe(false);
   });
 });

@@ -13,7 +13,7 @@
  * When `runCoder()` receives an explicit `opts.toolSelectionFilter`, that
  * wins — the global is only the FALLBACK.
  */
-import type { RunnerOptions } from '../core/runner.js';
+import type { RunnerOptions } from '../core/runner/types.js';
 import type { SessionId } from '@mcp/session-storage';
 
 type Filter = NonNullable<RunnerOptions['toolSelectionFilter']>;

@@ -1,4 +1,4 @@
-export interface WaitForDevServerOptions {
+interface WaitForDevServerOptions {
   timeoutMs?: number;
   retryDelayMs?: number;
   requestTimeoutMs?: number;

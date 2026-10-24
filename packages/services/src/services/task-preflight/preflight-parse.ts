@@ -9,7 +9,7 @@ import type {
   PreflightMemoryEntry,
   PreflightSeed,
   PreflightSkillEvidence,
-} from './preflight-prompt.js';
+} from './preflight-types.js';
 
 const TASK_KINDS = new Set(['bugfix', 'feature', 'refactor', 'explore', 'docs', 'config', 'test', 'other']);
 const PROFILES = new Set(['bootstrap', 'navigate', 'full']);

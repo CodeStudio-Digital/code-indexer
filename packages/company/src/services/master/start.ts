@@ -29,7 +29,7 @@ import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { AllowedModel, RoleSkills } from '@mcp/company/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IBoardPoster } from '@mcp/company/services/ports.js';
-import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
+import type { RoleConfig } from './role-config.js';
 import { buildMasterPromptInputs } from '@mcp/company/services/master/prompt-builder.js';
 import { configureMasterSkills } from '@mcp/company/services/master/configure-skills.js';
 import { runWithExplicitMasterFallback } from '@mcp/company/services/master/fallback.js';

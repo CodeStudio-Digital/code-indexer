@@ -220,7 +220,7 @@ export async function deleteAppStudioSession(id: string): Promise<void> {
   await unwrap(await fetch(`/api/app-studio/apps/${id}`, { method: 'DELETE' }));
 }
 
-export type AppStudioAction = 'approve_plan_and_build' | 'dispatch_ready_work' | 'run_checks' | 'pause' | 'resume' | 'cancel';
+type AppStudioAction = 'approve_plan_and_build' | 'dispatch_ready_work' | 'run_checks' | 'pause' | 'resume' | 'cancel';
 
 export function runAppAction(id: string, action: AppStudioAction): Promise<AppStudioSessionDetail | { ok: true }> {
   return unwrap(fetch(`/api/app-studio/apps/${id}/actions`, {
@@ -234,14 +234,14 @@ export function answerAppDecision(id: string, decisionId: string, answer: string
   }));
 }
 
-export function updateAppPlan(id: string, plan: AppPlanV1, expectedRevisionNumber?: number): Promise<{ revision: AppPlanRevisionView }> {
+function updateAppPlan(id: string, plan: AppPlanV1, expectedRevisionNumber?: number): Promise<{ revision: AppPlanRevisionView }> {
   return unwrap(fetch(`/api/app-studio/apps/${id}/plan`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ plan, expected_revision_number: expectedRevisionNumber, created_by: 'user' }),
   }));
 }
 
-export interface AppStudioCreated {
+interface AppStudioCreated {
   project: { id: number; name: string; root_path: string };
   app_session: AppStudioSession;
   master_session_id: string;
@@ -249,9 +249,9 @@ export interface AppStudioCreated {
   team: AppTeamSessionView;
 }
 
-export type AppStudioExecutionMode = 'standard' | 'ultra';
+type AppStudioExecutionMode = 'standard' | 'ultra';
 
-export interface AppStudioCreateRequest {
+interface AppStudioCreateRequest {
   name: string;
   provider: string;
   model: string;

@@ -1,4 +1,5 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
+import type { LiteralMemoryEntry } from '@mcp/shared/memory-write.js';
 import { dirname } from 'node:path';
 import { setSqlCallSink, sqlLabel } from '@mcp/store/db/sql-timing.js';
 import { noteSyncLeaf } from './perf/stall-evidence.js';
@@ -280,7 +281,7 @@ export interface SearchDeps {
     save(
       projectId: number,
       projectName: string,
-      entry: import('@mcp/shared/memory-write.js').LiteralMemoryEntry,
+      entry: LiteralMemoryEntry,
       control?: import('@mcp/services/memory/mutation-control.js').MemoryMutationControl,
     ): Promise<{ created: number; merged: number; skipped: number } | null>;
     recall(

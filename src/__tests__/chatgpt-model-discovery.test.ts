@@ -4,7 +4,7 @@
  * Covers:
  *   1. 200 OK → models persisted with rich metadata; ETag stored.
  *   2. 200 OK with `visibility='hidden'` → row stored with enabled=0.
- *   3. 200 OK with `supported_in_api=false` → row stored with enabled=0.
+ *   3. Listed Codex models remain enabled when `supported_in_api=false`.
  *   4. 304 Not Modified → store untouched, ETag preserved.
  *   5. Network failure / 5xx → fallback to CHATGPT_SEED_MODELS.
  *   6. Admin toggle of `enabled` survives a subsequent refresh.
@@ -164,7 +164,7 @@ describe('ChatGPT model discovery', () => {
     expect(row.visibility).toBe('hidden');
   });
 
-  it('supported_in_api=false → enabled=0 by default', async () => {
+  it('keeps listed Codex models enabled independently of public API support', async () => {
     fetchSpy.mockResolvedValueOnce(
       mockResponse({
         status: 200,
@@ -174,7 +174,7 @@ describe('ChatGPT model discovery', () => {
     const result = await discoverChatgptModels(chatgptSpec, store.getProvider(PROVIDER_ID)!, null);
     store.replaceModelsFromSource(PROVIDER_ID, 'live', result.models);
     const row = store.listModels(PROVIDER_ID)[0];
-    expect(row.enabled).toBe(false);
+    expect(row.enabled).toBe(true);
     expect(row.supported_in_api).toBe(false);
   });
 

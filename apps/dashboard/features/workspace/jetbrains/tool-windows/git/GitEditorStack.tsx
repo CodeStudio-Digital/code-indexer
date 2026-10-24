@@ -3,7 +3,7 @@ import type { OpenGitLog, OpenGitStash } from '../../../../../state/workspace.js
 import { GitLogView } from './GitLogView.js';
 import { StashDetailView } from './StashDetailView.js';
 
-export type RetainedGitEditorTab = OpenGitLog | OpenGitStash;
+type RetainedGitEditorTab = OpenGitLog | OpenGitStash;
 
 /**
  * Retains navigation-heavy Git editor surfaces while sibling diffs are open.

@@ -11,14 +11,14 @@ import AdmZip from 'adm-zip';
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { dirname, isAbsolute, join, normalize, resolve as resolvePath, sep } from 'node:path';
 
-export interface ExtractZipOptions {
+interface ExtractZipOptions {
   /** Cap total uncompressed bytes (default 500 MB). */
   maxBytes?: number;
   /** When true, wipes the destination folder before extracting. */
   clean?: boolean;
 }
 
-export interface ExtractZipResult {
+interface ExtractZipResult {
   filesWritten: number;
   bytesWritten: number;
   destDir: string;
@@ -98,7 +98,7 @@ export function extractZipToDir(
  * Accept everything else; the caller still re-checks via `target.startsWith(destAbs)`
  * as defence in depth.
  */
-export function isUnsafePath(name: string): boolean {
+function isUnsafePath(name: string): boolean {
   if (name === '' || name === '.' || name === '..') return true;
   if (isAbsolute(name)) return true;
   // Unify separators so the check is uniform on both POSIX and Windows.

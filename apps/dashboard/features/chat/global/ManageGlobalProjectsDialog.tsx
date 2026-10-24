@@ -1,18 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Star, Search, X, Loader2, AlertTriangle } from 'lucide-react';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '../../../components/ui/dialog.js';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../../components/ui/dialog.js';
 import { Input } from '../../../components/ui/input.js';
 import { Button } from '../../../components/ui/button.js';
 import { useApi, apiPost, apiDelete } from '../../../hooks/useApi.js';
-import { cn } from '../../../lib/utils.js';
+
 import type { LinkedProject } from '../types.js';
 
 interface ProjectRow {
@@ -21,7 +14,7 @@ interface ProjectRow {
   root_path: string;
 }
 
-export interface ManageGlobalProjectsDialogProps {
+interface ManageGlobalProjectsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sessionId: string;

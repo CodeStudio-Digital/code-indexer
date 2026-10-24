@@ -20,9 +20,9 @@ import {
   type Zone,
 } from './zones/types.js';
 
-export const AGENTS_ROOT = '/agents';
+const AGENTS_ROOT = '/agents';
 
-export interface AgentsRoute {
+interface AgentsRoute {
   rootId: string;
   frontId: string;
   zone: Zone;
@@ -108,7 +108,7 @@ export function parseAgentsParams(params: RawParams, rootIdFallback?: string): A
  * raw input — i.e. one or more segments were normalized away and the
  * router should redirect to the canonical form.
  */
-export function shouldRedirectAgentsUrl(params: RawParams, parsed: AgentsRoute): boolean {
+function shouldRedirectAgentsUrl(params: RawParams, parsed: AgentsRoute): boolean {
   const canonical = buildAgentsUrl(parsed.rootId, parsed.frontId, parsed.zone, parsed.tab);
   const raw = `/company/sessions/${params.rootId}/${params.frontId ?? FRONT_MAIN_ALIAS}/${params.zone ?? ''}/${params.tab ?? ''}`;
   return canonical !== raw;

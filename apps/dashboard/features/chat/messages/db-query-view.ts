@@ -1,13 +1,13 @@
 export type DbQueryRisk = 'read' | 'write' | 'destructive' | 'review';
 
-export interface DbQueryInputView {
+interface DbQueryInputView {
   connection: string;
   sql: string;
   params: unknown[];
   maxRows: number | null;
 }
 
-export interface DbQueryAnalysis {
+interface DbQueryAnalysis {
   operation: string;
   risk: DbQueryRisk;
   statementCount: number;
@@ -16,9 +16,9 @@ export interface DbQueryAnalysis {
   preview: string;
 }
 
-export type DbQueryResultKind = 'markdown' | 'json' | 'text';
+type DbQueryResultKind = 'markdown' | 'json' | 'text';
 
-export interface DbQueryResultView {
+interface DbQueryResultView {
   kind: DbQueryResultKind;
   /** Content without the renderer metadata trailer, suitable for display. */
   body: string;

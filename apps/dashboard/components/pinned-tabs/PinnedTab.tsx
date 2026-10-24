@@ -11,7 +11,7 @@ import { cn } from '../../lib/utils.js';
 import { iconFor } from './icons.js';
 import { hasPinPayload, readPinPayload, setPinPayload } from './pin-dnd.js';
 
-export interface PinnedTabProps {
+interface PinnedTabProps {
   pin: Pin;
   active: boolean;
   onActivate: () => void;

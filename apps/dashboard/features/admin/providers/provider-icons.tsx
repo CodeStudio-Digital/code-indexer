@@ -97,6 +97,3 @@ export function providerVisual(
   if (!data) return FALLBACK;
   return { icon: ICON_BY_NAME[data.icon] ?? Box, fg: data.fg, bg: data.bg };
 }
-
-/** Convenience re-export so consumers don't need a second Lucide import. */
-export { Cpu, KeyRound };

@@ -22,7 +22,7 @@ import type {
 } from '@mcp/api-bus';
 import type { SshHost, SshIdentity, SshSnippet, SshSecret, SshAuthMethod, SshHostStorageScope } from './types.js';
 
-export function openShell(spec: SshConnectSpec, cols: number, rows: number): Promise<SshOpenShellResult> {
+function openShell(spec: SshConnectSpec, cols: number, rows: number): Promise<SshOpenShellResult> {
   return apiCall<SshOpenShellResult>('ssh.openShell', { spec, cols, rows });
 }
 
@@ -32,7 +32,7 @@ export function testConnection(
   return apiCall('ssh.testConnection', { spec });
 }
 
-export function trustHostKey(info: SshHostKeyInfo): Promise<void> {
+function trustHostKey(info: SshHostKeyInfo): Promise<void> {
   return apiCall<void>('ssh.trustHostKey', info);
 }
 
@@ -89,8 +89,8 @@ function nativeDialogs(): { openFiles(): Promise<string[]>; saveFile(name?: stri
   const e = (globalThis as { electronAPI?: { openFiles?: () => Promise<string[]>; saveFile?: (n?: string) => Promise<string | null> } }).electronAPI;
   return e?.openFiles && e?.saveFile ? { openFiles: e.openFiles, saveFile: e.saveFile } : null;
 }
-export const pickLocalFiles = (): Promise<string[]> => nativeDialogs()?.openFiles() ?? Promise.resolve([]);
-export const pickSavePath = (name?: string): Promise<string | null> => nativeDialogs()?.saveFile(name) ?? Promise.resolve(null);
+const pickLocalFiles = (): Promise<string[]> => nativeDialogs()?.openFiles() ?? Promise.resolve([]);
+const pickSavePath = (name?: string): Promise<string | null> => nativeDialogs()?.saveFile(name) ?? Promise.resolve(null);
 
 /** A pending host-key trust decision surfaced to the UI. */
 export type HostKeyDecision = 'unknown' | 'changed';
@@ -155,7 +155,7 @@ const j = (method: string, body: unknown): RequestInit => ({ method, body: JSON.
 
 type SshHostRouteRef = number | Pick<SshHost, 'id' | 'is_shared' | 'storage_scope'>;
 
-export function sshHostScope(host: Pick<SshHost, 'is_shared' | 'storage_scope'>): SshHostStorageScope {
+function sshHostScope(host: Pick<SshHost, 'is_shared' | 'storage_scope'>): SshHostStorageScope {
   return host.storage_scope ?? (host.is_shared ? 'shared' : 'project');
 }
 
@@ -206,13 +206,13 @@ export const patchSnippet = (p: number, sid: number, patch: { name?: string; com
 export const deleteSnippet = (p: number, sid: number) =>
   req<{ ok: true }>(`${root(p)}/snippets/${sid}`, { method: 'DELETE' });
 
-export const runSnippet = (spec: SshConnectSpec, command: string) =>
+const runSnippet = (spec: SshConnectSpec, command: string) =>
   apiCall<SshOpenShellResult>('ssh.runSnippet', { spec, command, cols: 80, rows: 24 });
 
 // ─── Named secrets referenced from snippets as ${secret:NAME} (migration 197) ─
 
 /** Matches `${secret:NAME}` — namespaced so it never collides with shell `${HOME}`. */
-export const SECRET_REF = /\$\{secret:([A-Za-z0-9_.-]+)\}/g;
+const SECRET_REF = /\$\{secret:([A-Za-z0-9_.-]+)\}/g;
 
 export const listSecrets = (p: number) =>
   req<{ secrets: SshSecret[] }>(`${root(p)}/secrets`).then((r) => r.secrets);
@@ -268,7 +268,7 @@ export async function resolveSnippetCommand(projectId: number, command: string):
 // private keys into `ssh_hosts.enc_password`, a column whose whole contract is
 // "ciphertext". secret-box reads both bridges and now refuses to store an
 // unencrypted credential. Re-exported here so callers keep one import site.
-export { encryptSecret, decryptSecret, isDevPlainSecret } from '@mcp/secret-box';
+export { encryptSecret, decryptSecret } from '@mcp/secret-box';
 
 // ─── Build a live connect spec from a saved host ─────────────────────────
 

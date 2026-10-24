@@ -34,7 +34,7 @@ export interface ProcessInventoryEntry {
   ownerKind?: 'pty' | 'local-process' | 'mcp';
 }
 
-export interface ProcessInventory {
+interface ProcessInventory {
   labels: Map<number, ProcessInventoryEntry>;
   /** Pids the app owns, including those with no label of their own. */
   ownedPids: number[];

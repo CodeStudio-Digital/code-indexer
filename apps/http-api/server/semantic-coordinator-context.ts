@@ -1,0 +1,143 @@
+import type { EmbeddingRetryResult } from '@mcp/indexer/indexer/indexer/embed-retry.js';
+import type { EmbeddingService } from '@mcp/indexer/search/embeddings.js';
+import type { DirtyEvent } from '@mcp/services/services/project-index/index.js';
+import type { AgentMemoryRow } from '@mcp/shared/types.js';
+import {
+type SemanticGenerationRow,
+type SemanticJobRow,
+type SemanticPurpose,
+type SemanticStore
+} from '@mcp/store';
+import { randomUUID } from 'node:crypto';
+import { type CoordinatorDeps,type ProjectRemovalKind,type ProjectRemovalOptions,type ReindexResult,type SemanticUnusedVectorCleanupResult } from './semantic-coordinator-shared.js';
+
+export class SemanticCoordinatorContext {
+readonly locks = new Map<string, Promise<void>>();
+readonly codeCatchupRuns = new Map<string, Promise<void>>();
+readonly projectReindexRuns = new Map<number, Promise<ReindexResult>>();
+readonly projectReindexDispatches = new Map<number, Promise<void>>();
+readonly codeProjectLeases = new Map<number, Set<string>>();
+readonly codePauseRequested = new Set<number>();
+codeBuildTail: Promise<void> = Promise.resolve();
+readonly purposeRuns = new Map<SemanticPurpose, Promise<ReindexResult>>();
+readonly generationRuns = new Map<SemanticPurpose, Promise<SemanticGenerationRow>>();
+readonly cleanupRuns = new Map<string, Promise<void>>();
+readonly unusedVectorCleanupRuns = new Map<string, Promise<SemanticUnusedVectorCleanupResult>>();
+readonly projectRemovalRuns = new Map<number, {
+    kind: ProjectRemovalKind;
+    promise: Promise<void>;
+  }>();
+readonly projectTombstones = new Set<number>();
+readonly docsMutationOwner = randomUUID();
+readonly memoryMutationOwner: string;
+mutationFenceRecovery: Promise<void> | null = null;
+docsBackfillTimer: ReturnType<typeof setTimeout> | null = null;
+docsBackfillRun: Promise<number> | null = null;
+projectRemovalRetryTimer: ReturnType<typeof setTimeout> | null = null;
+projectRemovalRecoveryRun: Promise<number> | null = null;
+readonly pendingCodeDeltas = new Map<number, Map<string, DirtyEvent>>();
+readonly pendingCodeDeltaPreviousKeys = new Map<number, Set<string>>();
+readonly codeDeltaRetryTimers = new Map<number, ReturnType<typeof setTimeout>>();
+readonly codeDeltaRetryAttempts = new Map<number, number>();
+disposed = false;
+disposal: Promise<void> | undefined;
+constructor(readonly deps: CoordinatorDeps) { this.memoryMutationOwner = deps.mutationFenceOwner ?? randomUUID(); }
+}
+
+export interface SemanticCoordinatorContext {
+listJobsOffThread(filter: Parameters<SemanticStore['listJobs']>[0]): Promise<SemanticJobRow[]>;
+recoverMutationFencesLocallyFailFast(): void;
+startMutationFenceRecovery(): Promise<void>;
+ensureMutationFenceRecovery(): Promise<void>;
+allowsNamespaceMutation(namespace: string): boolean;
+reindex(purpose: SemanticPurpose, force?: boolean): Promise<ReindexResult>;
+activateCodeProject(projectId: number, leaseId?: string): SemanticJobRow | null;
+deactivateCodeProject(projectId: number, leaseId?: string): boolean;
+acquireCodeProjectLease(projectId: number, leaseId: string): () => void;
+pauseJob(jobId: number): SemanticJobRow;
+resumeJob(jobId: number): SemanticJobRow;
+cleanupUnusedVectors(projectId?: number): Promise<SemanticUnusedVectorCleanupResult>;
+performUnusedVectorCleanup(projectId?: number): Promise<SemanticUnusedVectorCleanupResult>;
+ensureCodeProject(projectId: number): Promise<void>;
+catchUpCodeProject(projectId: number): Promise<void>;
+reindexCodeProject(projectId: number, force?: boolean): Promise<ReindexResult>;
+enqueueCodeProjectReindex(projectId: number, force?: boolean, reason?: string): SemanticJobRow;
+dispatchCodeProjectReindex(projectId: number, jobId: number): void;
+coalesceCodeCatchup(projectId: number, operation: () => Promise<void>): Promise<void>;
+runCodeProjectBuild(projectId: number, generation: SemanticGenerationRow, force: boolean): Promise<void>;
+shouldPauseCodeProject(projectId: number): boolean;
+codeProjectIdForJob(job: SemanticJobRow): number | null;
+semanticProjectIdForJob(job: SemanticJobRow): number | null;
+ensureMemoryNamespace(namespace: string): Promise<void>;
+catchUpMemoryNamespace(namespace: string): Promise<void>;
+beginDocsCollectionMutation(collectionId: number, operation: 'upsert' | 'delete'): Promise<{ job_id: number; token: string } | null>;
+endDocsCollectionMutation(fence: { job_id: number; token: string } | null, mutationError?: unknown): void;
+runDocsCollectionExclusive<T>(collectionId: number, operation: () => Promise<T>): Promise<T>;
+prepareDocsCollection(collectionId: number): Promise<void>;
+ensureDocsCollection(collectionId: number): Promise<void>;
+retryPendingDocsBackfills(): Promise<number>;
+noteCodeDelta(projectId: number, events?: readonly DirtyEvent[], previousItemKeys?: readonly string[]): void;
+persistCodeDelta(projectId: number, events: readonly DirtyEvent[], previousItemKeys: readonly string[]): void;
+queueCodeDeltaRetry(projectId: number, events: readonly DirtyEvent[], previousItemKeys: readonly string[]): void;
+removeProject(projectId: number, options?: ProjectRemovalOptions): Promise<void>;
+performProjectRemoval(projectId: number, options: ProjectRemovalOptions): Promise<void>;
+recoverInterruptedJobsPassively(): void;
+jobGenerationIsReferenced(job: SemanticJobRow): boolean;
+dispose(): Promise<void>;
+drainForDisposal(): Promise<void>;
+recoverExpiredMemoryMutationFences(now?: number): number;
+retryPendingProjectRemovals(): Promise<number>;
+scheduleProjectRemovalRetry(delayMs?: number): void;
+drainPendingProjectRemovals(): Promise<number>;
+docsCollectionExists(collectionId: number): boolean;
+embeddingForPurpose(purpose: SemanticPurpose): EmbeddingService;
+embeddingDisabled(purpose: SemanticPurpose): boolean;
+disabledResult(purpose: SemanticPurpose): ReindexResult;
+pauseDocsBackfillsForDisabled(): Promise<void>;
+queueDocsBackfill(collectionId: number, error: unknown): void;
+pendingDocsBackfillJobs(): Promise<SemanticJobRow[]>;
+hasPendingDocsBackfills(): Promise<boolean>;
+currentDocsBackfill(id: number): SemanticJobRow | null;
+scheduleDocsBackfillRetry(delayMs?: number): void;
+drainPendingDocsBackfills(): Promise<number>;
+runPurpose(purpose: SemanticPurpose, force: boolean): Promise<ReindexResult>;
+ensureGeneration(purpose: SemanticPurpose, force: boolean): Promise<SemanticGenerationRow>;
+resolveGeneration(purpose: SemanticPurpose, force: boolean): Promise<SemanticGenerationRow>;
+assertSingleActiveGenerationPerFile(purpose: SemanticPurpose): void;
+workerDropGeneration(namespace: string, generationId: number): Promise<void>;
+workerListIds(namespace: string, generationId: number): Promise<string[]>;
+workerDeleteIds(namespace: string, generationId: number, ids: string[]): Promise<number>;
+workerDeleteItemKeys(namespace: string, generationId: number, itemKeys: string[]): Promise<number>;
+workerRemoveProject(projectId: number): Promise<void>;
+recoverPendingCleanupJobs(purpose: SemanticPurpose): Promise<void>;
+recoverAbandonedBuildingGenerations(purpose: SemanticPurpose): Promise<void>;
+performCleanupJob(job: SemanticJobRow): Promise<number>;
+assertNamespaceProjectActive(namespace: string): void;
+prepareNamespaceGeneration(namespace: string, purpose: SemanticPurpose, generationId: number, expectedItems: number): void;
+buildCodeNamespace(projectId: number, generation: SemanticGenerationRow, force: boolean): Promise<void>;
+drainActiveCodeDeltas(projectId: number, rootPath: string, generation: SemanticGenerationRow, initial: SemanticJobRow[]): Promise<void>;
+captureCodeDeltaJobs(namespace: string, generationId: number, includePreviousGenerations?: boolean): SemanticJobRow[];
+runCodeEmbedding(projectId: number, rootPath: string, _namespace: string, jobId: number | null, paths?: readonly string[], reportNamespaceProgress?: boolean): Promise<EmbeddingRetryResult>;
+verifyCodeVectorCoverage(projectId: number, rootPath: string, generationId: number, namespace: string): Promise<number>;
+buildDocsNamespace(collectionId: number, generation: SemanticGenerationRow, force: boolean): Promise<void>;
+verifyDocsVectorCoverage(collectionId: number, generationId: number, namespace: string): Promise<number>;
+buildSnapshotNamespace(projectId: number, generation: SemanticGenerationRow, force: boolean): Promise<void>;
+buildMemoryNamespace(scope: 'project' | 'user', projectId: number, generation: SemanticGenerationRow, force: boolean): Promise<void>;
+targetedMemoryMutationKeys(captured: readonly SemanticJobRow[]): string[] | null;
+reconcileTargetedMemoryMutation(scope: 'project' | 'user', projectId: number, generation: SemanticGenerationRow, namespace: string, itemKeys: readonly string[]): Promise<{ namespaceItems: number; processedKeys: number }>;
+captureDocsMutationJobs(namespace: string): SemanticJobRow[];
+hasOpenDocsMutationJobs(namespace: string): boolean;
+hasLiveDocsMutationFence(namespace: string): boolean;
+captureMemoryMutationJobs(namespace: string): SemanticJobRow[];
+hasLiveMemoryMutationFence(namespace: string): boolean;
+verifySnapshotVectorCoverage(projectId: number, generationId: number, namespace: string): Promise<number>;
+memorySourceRows(scope: 'project' | 'user', projectId: number): AgentMemoryRow[];
+verifyMemoryVectorCoverage(scope: 'project' | 'user', projectId: number, generationId: number, namespace: string): Promise<number>;
+verifyMemoryItems(generationId: number, namespace: string, expected: ReadonlyMap<string, string>, label: string): Promise<number>;
+verifyPhysicalVectorIds(namespace: string, generationId: number, expectedIds: readonly string[]): Promise<void>;
+completeNamespace(namespace: string, generationId: number, jobId: number, indexed: number, expected: number, previousActiveGenerationId: number | null): Promise<void>;
+cleanupGenerationIfUnreferenced(namespace: string, generationId: number | null): Promise<void>;
+pauseNamespace(namespace: string, jobId: number, error: unknown): void;
+refreshGenerationProgress(generationId: number): void;
+serial(namespace: string, operation: () => Promise<void>, allowProjectRemoval?: boolean): Promise<void>;
+}

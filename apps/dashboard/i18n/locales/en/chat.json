@@ -913,5 +913,6 @@
   "workflow.dependsOn": "depends on {{steps}}",
   "workflow.stepTools_one": "{{count}}{{limit}} tool",
   "workflow.stepTools_other": "{{count}}{{limit}} tools",
-  "workflow.lastTool": "last {{tool}}"
+  "workflow.lastTool": "last {{tool}}",
+  "messages.durationMs": "{{duration}}ms"
 }

@@ -6,7 +6,7 @@
  * (openTabIds/activeRequestId) — via a merge read-modify-write so neither
  * clobbers the other. Key convention mirrors state/workspace-layout.ts.
  */
-export interface ApiClientUiState {
+interface ApiClientUiState {
   /** Folder names that are collapsed. */
   collapsed: string[];
   /** Whether the implicit "Top level" group is collapsed. */

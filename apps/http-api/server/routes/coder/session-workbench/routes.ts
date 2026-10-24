@@ -60,7 +60,7 @@ function sessionIdParam(value: string): SessionId {
   return asSessionId(value.toLowerCase());
 }
 
-export interface MountSessionWorkbenchRoutesOptions {
+interface MountSessionWorkbenchRoutesOptions {
   service?: SessionWorkbenchListService;
   resources?: Pick<
     SessionWorkbenchResourceService,

@@ -12,7 +12,7 @@
  * project list is unchanged. Mirrors migration 150/151 (idempotent column add).
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

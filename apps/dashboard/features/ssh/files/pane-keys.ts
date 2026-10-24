@@ -11,7 +11,7 @@
  * effects.
  */
 
-export type PaneKeyIntent =
+type PaneKeyIntent =
   | { kind: 'none' }
   /** Move the cursor to `index`. `mode` decides what happens to the selection. */
   | { kind: 'move'; index: number; mode: 'select' | 'range' | 'lead' }
@@ -23,7 +23,7 @@ export type PaneKeyIntent =
   | { kind: 'refresh' }
   | { kind: 'clear' };
 
-export interface PaneKeyContext {
+interface PaneKeyContext {
   /** Row count in the CURRENT (sorted) order. */
   count: number;
   /** Index of the cursor row, or -1 when there is none yet. */
@@ -32,7 +32,7 @@ export interface PaneKeyContext {
   pageSize: number;
 }
 
-export interface PaneKeyEvent {
+interface PaneKeyEvent {
   key: string;
   shiftKey: boolean;
   ctrlKey: boolean;
@@ -95,7 +95,7 @@ export function paneKeyIntent(e: PaneKeyEvent, ctx: PaneKeyContext): PaneKeyInte
 }
 
 /** How long a type-ahead prefix stays alive between keystrokes. */
-export const TYPEAHEAD_RESET_MS = 500;
+const TYPEAHEAD_RESET_MS = 500;
 
 export interface TypeaheadState {
   buffer: string;

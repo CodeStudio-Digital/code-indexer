@@ -3,7 +3,7 @@ import type { RuntimeRouteCommit, RuntimeRouteRecord } from '@mcp/agent-runtime-
 import type { ControlPlaneFileRepository } from '@mcp/session-storage';
 import { hashControlPlanePayload, type ControlPlaneRunContext } from '@mcp/store/control-plane/index.js';
 
-export function runtimeRequestId(attemptId: string, key: string): string {
+function runtimeRequestId(attemptId: string, key: string): string {
   const hex = createHash('sha256').update(`runtime-request:v1:${attemptId}:${key}`).digest('hex');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }

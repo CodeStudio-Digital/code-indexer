@@ -10,7 +10,7 @@
  * messages; `codePrefix` namespaces the machine-readable error codes.
  */
 import type { ResolvedBinding } from '../pipelines/index.js';
-import { createChatProviderAsync } from '../providers/factory.js';
+import { createCoderProvider } from '../providers/factory.js';
 import { pickChatFn } from './chat-dispatcher.js';
 import type { ChatCallOptions, ChatCallResult, ChatMessage } from './llm-chat.js';
 import { abortedChatResult } from './chat-retry.js';
@@ -96,7 +96,7 @@ export async function coderProviderChat(
     else options.signal.addEventListener('abort', onAbort, { once: true });
   }
   try {
-    const provider = await createChatProviderAsync(binding.provider.id, binding.modelId, {
+    const provider = await createCoderProvider(binding.provider.id, binding.modelId, {
       providerId: binding.provider.id,
     });
     controller.signal.throwIfAborted();

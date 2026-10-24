@@ -138,7 +138,7 @@ describe('terseDescription — pure transform for bootstrap profile', () => {
   });
 });
 
-describe('maybeTerse — env-gated wrapper', () => {
+describe('maybeTerse — stable full descriptions', () => {
   it('returns desc unchanged when CODER_TERSE_TOOLS is unset', () => {
     const prev = process.env.CODER_TERSE_TOOLS;
     delete process.env.CODER_TERSE_TOOLS;
@@ -150,13 +150,13 @@ describe('maybeTerse — env-gated wrapper', () => {
     }
   });
 
-  it('shortens when CODER_TERSE_TOOLS=1', () => {
+  it('ignores the retired CODER_TERSE_TOOLS override', () => {
     const prev = process.env.CODER_TERSE_TOOLS;
     process.env.CODER_TERSE_TOOLS = '1';
     try {
       const long = 'Short first. ' + 'x'.repeat(500);
       const out = maybeTerse(long);
-      expect(out).toBe('Short first.');
+      expect(out).toBe(long);
     } finally {
       if (prev === undefined) delete process.env.CODER_TERSE_TOOLS;
       else process.env.CODER_TERSE_TOOLS = prev;

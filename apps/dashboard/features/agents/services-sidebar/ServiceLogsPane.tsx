@@ -26,7 +26,7 @@ interface HistoryLine {
   at_ms: number;
 }
 
-export interface ServiceLogsPaneProps {
+interface ServiceLogsPaneProps {
   sessionId?: string;
   serviceId?: string;
 }

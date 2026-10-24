@@ -1,15 +1,16 @@
 /**
  * Infra coverage for the per-project DB layer (tiered-hybrid split, plan §6).
- * Runs real better-sqlite3 under Node — verifies path resolution, schema reuse,
+ * Runs real better-sqlite3 — verifies path resolution, schema reuse,
  * the ATTACH federation primitive (parity + batching), and pool LRU lifecycle.
  *
- * ABI note: needs `pnpm node:rebuild` (better-sqlite3 built for Node, not
- * Electron) — ERR_DLOPEN_FAILED here is an ABI mismatch, not a logic bug.
+ * Use the runtime matching the installed better-sqlite3 ABI (Electron in the
+ * desktop checkout); do not rebuild shared native modules just for this suite.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { MIGRATIONS } from '../migrations/index.js';
 import {
   resolveProjectDbLocation,
   centralFallbackDir,
@@ -85,7 +86,7 @@ describe('resolveProjectDbLocation', () => {
 });
 
 describe('ProjectDb (schema reuse)', () => {
-  it('opens a project DB with the full schema and a non-zero version', () => {
+  it('opens a project DB with the current indexing schema and filesystem-session cutover', () => {
     const root = freshDir();
     const loc = resolveProjectDbLocation(1, root);
     const pdb = new ProjectDb(1, loc.dbPath);
@@ -95,9 +96,12 @@ describe('ProjectDb (schema reuse)', () => {
         `SELECT name FROM sqlite_master WHERE type='table'`,
       ).all() as { name: string }[]).map((r) => r.name);
       expect(tables).toContain('files');
-      expect(tables).toContain('coder_sessions');
+      expect(tables).toContain('symbols');
+      expect(tables).not.toContain('coder_sessions');
+      expect(tables).not.toContain('coder_messages');
+      expect(tables).not.toContain('company_sessions');
       const v = pdb.raw().prepare(`SELECT MAX(version) v FROM schema_version`).get() as { v: number };
-      expect(v.v).toBeGreaterThanOrEqual(161);
+      expect(v.v).toBe(Math.max(...MIGRATIONS.map((migration) => migration.version)));
       expect(existsSync(loc.dbPath)).toBe(true);
     } finally {
       pdb.close();

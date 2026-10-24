@@ -15,7 +15,7 @@ import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
 import type { ProcessInventoryEntry } from '../process-inventory.js';
 
 export type KillMode = 'graceful' | 'force';
-export type KillMethod = 'owner' | 'tree';
+type KillMethod = 'owner' | 'tree';
 
 export async function executeKill(
   pid: number,

@@ -45,7 +45,7 @@ export class RouteCache {
  * reconciliation poll yet long enough to collapse the duplicate concurrent
  * bursts. Set `MCP_HOT_READ_CACHE_MS=0` to disable caching entirely.
  */
-export const HOT_READ_TTL_MS = (() => {
+const HOT_READ_TTL_MS = (() => {
   const raw = process.env.MCP_HOT_READ_CACHE_MS;
   const n = raw == null ? NaN : Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : 300;

@@ -17,7 +17,7 @@ import type { Context, Next } from 'hono';
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0']);
 
-export function isLocalOrigin(origin: string | undefined | null): boolean {
+function isLocalOrigin(origin: string | undefined | null): boolean {
   if (!origin || origin === 'null') return true; // same-origin GET, native fetch, opaque
   try {
     const url = new URL(origin);

@@ -165,8 +165,9 @@ describe('message-count floor — compactWithLLM keeps recent turns on a dense, 
 
     // Tiny protect budget → token cutoff keeps ~the last message only.
     const protectTokens = estimateMessageTokens(msgs[msgs.length - 1]) + 1;
-    // Generous ceiling so the floor (not the budget) is the binding constraint.
-    const maxTailTokens = msgs.reduce((a, m) => a + estimateMessageTokens(m), 0) + 1;
+    // Fit eight complete tool turns, but not the entire user turn. The fixed
+    // user-turn preservation policy then yields to the bounded tail ceiling.
+    const maxTailTokens = msgs.slice(-16).reduce((a, m) => a + estimateMessageTokens(m), 0) + 1;
 
     const result = await compactWithLLM({
       messages: msgs,

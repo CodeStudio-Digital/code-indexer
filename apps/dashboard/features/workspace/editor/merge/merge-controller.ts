@@ -18,7 +18,7 @@ import { wireGutter } from './merge-gutter.js';
 
 const STICKY = monaco.editor.TrackedRangeStickiness.GrowsOnlyWhenTypingAfter;
 
-export interface MergeLabels {
+interface MergeLabels {
   ours: string;
   theirs: string;
   both: string;

@@ -1,6 +1,6 @@
 import type { ConversationChapter, VisualGroup } from '../types.js';
 
-export type ChapterTranscriptItem =
+type ChapterTranscriptItem =
   | { kind: 'chapter'; chapter: ConversationChapter; key: string; seq: number }
   | { kind: 'message'; group: VisualGroup; key: string; seq: number };
 
@@ -23,7 +23,7 @@ export function visualGroupKey(group: VisualGroup): string {
   return `assistant:${firstStableId ?? firstSeq ?? 'unknown'}`;
 }
 
-export function visualGroupSeqs(group: VisualGroup): number[] {
+function visualGroupSeqs(group: VisualGroup): number[] {
   const values = group.kind === 'user'
     ? [group.usage?.seq ?? group.messageId]
     : group.usages.map((usage, index) => usage?.seq ?? group.messageIds[index]);

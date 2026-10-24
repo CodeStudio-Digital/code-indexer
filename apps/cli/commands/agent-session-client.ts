@@ -9,15 +9,15 @@ export interface AgentCliOptions {
   maxTurns?: number; plan?: boolean; agent?: string; profile?: string;
   worktree?: string | boolean; worktreeBranch?: string;
 }
-export type AgentCliRequest = (path: string, init?: RequestInit) => Promise<Response>;
-export interface AgentCliIO {
+type AgentCliRequest = (path: string, init?: RequestInit) => Promise<Response>;
+interface AgentCliIO {
   write(text: string): void;
   flush?(): Promise<void>;
   prompt(question: string, signal: AbortSignal): Promise<string>;
 }
 interface Session { id: string; provider: string; model: string; }
 
-export async function agentCliJson<T>(request: AgentCliRequest, path: string, init?: RequestInit): Promise<T> {
+async function agentCliJson<T>(request: AgentCliRequest, path: string, init?: RequestInit): Promise<T> {
   const response = await request(path, { ...init,
     headers: { 'content-type': 'application/json', ...init?.headers } });
   if (!response.ok) throw new Error((await response.text()) || `Agent request failed: HTTP ${response.status}`);

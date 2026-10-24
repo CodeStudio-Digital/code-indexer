@@ -2,14 +2,14 @@ import { create } from 'zustand';
 
 const TOGGLE_KEY = 'mcp-ide:ai-complete';
 
-export interface AiCompleteIssue {
+interface AiCompleteIssue {
   kind: 'unconfigured' | 'manual_only' | 'timeout' | 'provider_error';
   /** Human-readable cause from the server (model name, suggested fix). */
   message?: string;
 }
 
 /** One-shot chip popover: setup CTA or "how to enable" hint. */
-export type AiCompleteNudge = 'unconfigured' | 'enable-hint' | 'enabled-hint' | null;
+type AiCompleteNudge = 'unconfigured' | 'enable-hint' | 'enabled-hint' | null;
 
 interface AiCompleteState {
   enabled: boolean;

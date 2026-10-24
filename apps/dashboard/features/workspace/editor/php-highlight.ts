@@ -108,7 +108,7 @@ const PHP_ATTRIBUTE_STATES: Record<string, MonacoNs.languages.IMonarchLanguageRu
 export const PHP_EXTRA_RULES = EXTRA_PHP_RULES;
 
 /** The attribute states we add — exported for the regression test. */
-export const PHP_ATTRIBUTE_RULES = PHP_ATTRIBUTE_STATES;
+const PHP_ATTRIBUTE_RULES = PHP_ATTRIBUTE_STATES;
 
 /** Build the enriched language def without mutating Monaco's shared object. */
 export function enrichedPhp(): MonacoNs.languages.IMonarchLanguage {
@@ -148,7 +148,7 @@ export function enrichPhpHighlighting(monaco: Monaco): void {
 }
 
 /** Backward-compatible alias; installation is now idempotent and race-free. */
-export function reassertPhpHighlighting(monaco: Monaco): void {
+function reassertPhpHighlighting(monaco: Monaco): void {
   enrichPhpHighlighting(monaco);
 }
 

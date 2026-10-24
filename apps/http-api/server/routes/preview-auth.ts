@@ -55,7 +55,7 @@ function getSecret(): Buffer {
   return cachedSecret;
 }
 
-export interface MintedPreviewToken {
+interface MintedPreviewToken {
   value: string;
   /** epoch ms at which a hypothetical verifier would reject the cookie. */
   expiresAt: number;

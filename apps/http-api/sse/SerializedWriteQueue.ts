@@ -7,16 +7,16 @@
  * its last acknowledged sequence.
  */
 
-export const DEFAULT_STREAM_MAX_PENDING_WRITES = 2_048;
+const DEFAULT_STREAM_MAX_PENDING_WRITES = 2_048;
 /**
  * The replay bus retains at most 8 MiB before JSON encoding. Escaping control
  * characters can expand a valid retained string by up to 6x on the wire, so
  * the subscriber bound must accommodate one full healthy replay.
  */
-export const DEFAULT_STREAM_MAX_PENDING_BYTES = 52 * 1024 * 1024;
-export const DEFAULT_STREAM_DRAIN_TIMEOUT_MS = 5_000;
+const DEFAULT_STREAM_MAX_PENDING_BYTES = 52 * 1024 * 1024;
+const DEFAULT_STREAM_DRAIN_TIMEOUT_MS = 5_000;
 
-export interface SerializedWriteQueueOptions {
+interface SerializedWriteQueueOptions {
   maxPendingWrites?: number;
   maxPendingBytes?: number;
   signal?: AbortSignal;

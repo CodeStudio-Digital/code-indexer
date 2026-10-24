@@ -1,3 +1,5 @@
+import { compactHistoryForLLM } from './runner/assembly/compact-history.js';
+export { compactHistoryForLLM } from './runner/assembly/compact-history.js';
 import { EventEmitter } from 'node:events';
 import { randomUUID, createHash } from 'node:crypto';
 import { resolve as pathResolve, relative as pathRelative, isAbsolute } from 'node:path';
@@ -25,7 +27,6 @@ import { resolveHeartbeatIntervalMs, resolveToolTimeoutMs } from '@mcp/code-agen
 // isNewCompactionEnabled, postCompactCleanup, cutoff helpers — all
 // dead, all dropped from the import surface.
 import {
-  applyRollingReduction,
   REDUCIBLE_READ_TOOLS,
   buildReadDedupKey,
   getStringField,
@@ -40,8 +41,6 @@ import {
   evaluateToolInvocation,
   findScopeViolations,
   isIrreversibleTool,
-  isPlanModeWorkflowTool,
-  type PolicyContext,
 } from '@mcp/code-agent/core/policy.js';
 import {
   ReadCoverageLedger,
@@ -67,6 +66,7 @@ import {
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { getModelContextWindow, getModelMaxTools, getEffectiveContextWindow } from '@mcp/code-agent/providers/capabilities.js';
 import { runToolFilterHook } from '@mcp/code-agent/core/hooks.js';
+import { asSessionId } from '@mcp/session-storage';
 import { resolveTemperature } from '@mcp/code-agent/inference/temperature.js';
 import { estimateCost } from '@mcp/code-agent/providers/pricing-cache.js';
 import { buildActiveContextBlock } from '@mcp/code-agent/core/active-context.js';
@@ -377,87 +377,6 @@ export function normalizeMessagesForCache(
   ));
 }
 
-/**
- * Per-turn history transformer applied right before the request hits the
- * provider. Two-layer strategy:
- *
- *   1. Push-time truncation (already done at block creation) keeps the
- *      PER-BLOCK size bounded, which is enough for 99% of sessions.
- *
- *   2. Auto-compaction (delegated to core/compaction.ts) kicks in ONLY when
- *      the accumulated total still exceeds PRUNE_MINIMUM, at which point
- *      older tool_result contents get swapped for deterministic markers
- *      until the protected tail fits under PRUNE_PROTECT.
- *
- * The compaction is a pure transformation — the persistent history on disk
- * stays intact — and uses a deterministic cutoff so repeated calls on the
- * same prefix produce byte-identical output. That keeps prompt-prefix caches
- * hot across turns even after compaction has fired.
- */
-export function compactHistoryForLLM(
-  messages: AgentMessage[],
-  limits?: { minimum: number; protect: number },
-  /**
-   * Optional tunables snapshot. When omitted, defaults to `envTunables()` —
-   * env-driven behavior identical to the legacy module-level constants.
-   * Runner instances pass `this.tunables` so per-session/per-tier overrides
-   * flow through to the turn-budget warning threshold.
-   */
-  tunables?: CoderTunables,
-  /** Per-turn reducer stats observer (telemetry — mig 143). */
-  onReducerStats?: (s: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number }) => void,
-): AgentMessage[] {
-  const effectiveTunables = tunables ?? envTunables();
-  // Camada 5 — rolling reduction runs FIRST and is cheap (linear scan,
-  // pure function, deterministic). It retires stale repeated reads/searches
-  // before the size-based compaction even sees them, so sessions grow
-  // sublinearly. Disabled via CODER_ROLLING_REDUCER=0 for diagnostics.
-  // DEFAULT: defer-all. In-place rewrites bust the provider prompt-cache
-  // from that point on, and telemetry showed a mid-run flush trading ~2k
-  // freed chars for a ~70k-token uncached re-prefill. So the per-turn view
-  // only DETECTS retirements; they are APPLIED durably by the Compacting
-  // node, the one pass that rewrites the prefix anyway. The 32 KiB tranche is
-  // now the product invariant; the legacy immediate/defer-all switches were
-  // removed after the cache-preservation behavior became authoritative.
-  let working = messages;
-  const rolled = applyRollingReduction(messages, { flushThresholdChars: 32_768 });
-  onReducerStats?.({
-    retired: rolled.reduced,
-    freedChars: rolled.freedChars,
-    pendingRetired: rolled.pendingRetired,
-    pendingChars: rolled.pendingChars,
-  });
-  if (rolled.reduced > 0) {
-    console.log(
-      `[coder] rolling reducer retired ${rolled.reduced} stale tool_result(s) ` +
-        `(~${rolled.freedChars} chars freed, ${rolled.pendingRetired} pending below flush threshold)`,
-    );
-    working = rolled.messages;
-  }
-  // Frente B (PR 2 da reavaliação) — char-based `compactMessages` foi
-  // REMOVIDO. A compactação destrutiva agora é feita exclusivamente pelo
-  // LLM compactor no nó `Compacting` (que dispara em ~75% do effective
-  // context window). Aqui ficamos só com a `applyRollingReduction` acima
-  // (Camada 5) e a sanitização de tool_use/tool_result orfãos abaixo.
-  // O parâmetro `limits` agora é ignorado — assinatura mantida só por
-  // compat de chamadores.
-  void limits;
-  const result = { messages: working, applied: false, prunedBlocks: 0, prunedChars: 0 };
-  const total = approxChars(result.messages);
-  if (total > effectiveTunables.turnBudgetChars) {
-    console.warn(
-      `[coder] turn payload ${total} chars exceeds budget ${effectiveTunables.turnBudgetChars}. ` +
-      `Lower CODER_PUSH_TIME_CAP or increase CODER_TURN_BUDGET_CHARS.`,
-    );
-  }
-
-  // Safety nets (orphan tool_result removal → synthetic tool_result
-  // injection for orphaned tool_use → consecutive same-role merge) live in
-  // `repairToolPairing` — extracted verbatim to core/transcript-repair.ts so
-  // the subagent resume path sanitizes captured transcripts with the exact
-  // same logic. One implementation, two call sites.
-  return repairToolPairing(result.messages);
-}
 
 // (RunnerEvents interface moved to './runner/events.ts'. Re-exported below
 // so external imports `from './runner.js'` keep their type paths unchanged.)
@@ -1645,34 +1564,37 @@ export class CoderRunner extends EventEmitter {
           this.opts.onResponseId?.(id, messageCount);
         },
         isPlanApproved: () => this.isPlanApproved(),
-        toolGate: (toolName, _input) => {
-          // Plan/spec gates: mutating tools blocked until the user approves
-          // the plan/spec. The detailed wording mirrors the legacy refusal
-          // shape — `runner.ts` legacy path has richer rejection text; the
-          // BT minimal path here keeps it short and explicit.
-          //
-          // Critical: the gate MUST respect `planApproved` / `specApproved`,
-          // otherwise `runner.approvePlan()` (called by submit_plan after
-          // user approval) does nothing and every mutating tool gets
-          // refused even though the user said "go". This was a regression
-          // when the BT bridge replaced the legacy `invokeToolWithGuards`
-          // path — that one consulted the approval flags; the bridge
-          // version originally checked only `planMode`/`specMode`.
+        toolGate: (toolName, input) => {
           const tool = this.findTool(toolName);
           if (!tool) return null;
-          const mutates = tool.mutates ?? (tool.source === 'mcp_external');
-          // Execution-intent workflow verbs (execute_tasks) reach their
-          // handler even unapproved in PLAN mode — the handler runs the
-          // human-gated plan→build transition instead of mutating directly.
-          // Spec mode stays strict (the handler has no spec→build path), so
-          // execute_tasks remains gated there. Shared predicate keeps this in
-          // sync with policy.ts. See isPlanModeWorkflowTool.
-          const planWorkflowExempt = isPlanModeWorkflowTool(toolName);
-          if (this.opts.planMode && !this.planApproved && mutates && !planWorkflowExempt) {
-            return '[plan-mode: mutating tool blocked. Call `submit_plan` first; tools unlock after approval.]';
+          const args = typeof input === 'object' && input !== null && !Array.isArray(input)
+            ? input as Record<string, unknown> : {};
+          const policyContext = {
+            planMode: !!this.opts.planMode,
+            planApproved: this.planApproved,
+            specMode: !!this.opts.specMode,
+            specApproved: this.specApproved,
+            taskScope: this.currentTaskScope,
+            sandboxBound: !!this.opts.toolContext.ports?.fs || !!this.opts.toolContext.ports?.shell,
+          };
+          const decision = evaluateToolInvocation(tool, args, policyContext);
+          let refusal = decision.allowed ? null : { reason: decision.reason, detail: decision.detail };
+          const scope = this.currentTaskScope;
+          // A task grants a path-scoped plan unlock; it cannot bypass spec or sandbox gates.
+          if (scope && decision.metadata.mutates && decision.metadata.scopeAware
+            && (decision.allowed || decision.reason === 'plan_mode')) {
+            const paths = extractPathsFromToolArgs(toolName, args);
+            const outside = findScopeViolations(paths, scope.files, isPathInsideScope);
+            if (outside.length > 0) {
+              refusal = { reason: 'task_scope', detail: `Tool '${toolName}' targets paths outside task '${scope.id}': ${outside.join(', ')}` };
+            } else if (paths.length > 0) {
+              const scopedDecision = evaluateToolInvocation(tool, args, { ...policyContext, planApproved: true });
+              refusal = scopedDecision.allowed ? null : { reason: scopedDecision.reason, detail: scopedDecision.detail };
+            }
           }
-          if (this.opts.specMode && !this.specApproved && mutates) {
-            return '[spec-mode: mutating tool blocked. Call `submit_spec` first; tools unlock after approval.]';
+          if (refusal) {
+            this.emit('blocked', { runId: this.runId, turn: this.turn, tool: toolName, ...refusal });
+            return `[${refusal.reason.replaceAll('_', '-')}: ${refusal.detail}]`;
           }
           const softGuard = evaluateSoftAgentDecisionGuardrail(tool, {
             enabled: this.opts.agentDecisionSoftGuardrail === true,
@@ -2347,7 +2269,6 @@ export class CoderRunner extends EventEmitter {
    */
   async run(): Promise<RunResult> {
     const hookBus = this.opts.hookBus;
-    if (!hookBus) return this.runViaBehaviorTree();
 
     const startedAt = Date.now();
     const startStage = this.isSubagent ? 'agent_spawned' : 'run_started';
@@ -2355,7 +2276,7 @@ export class CoderRunner extends EventEmitter {
     // HookBus contains handler failures, but keep this boundary defensive so
     // lifecycle observation can never become execution authority.
     try {
-      await hookBus.fireObservation(startStage, {
+      await hookBus?.fireObservation(startStage, {
         runId: this.runId,
         sessionId: this.sessionId ?? null,
         agentId: this.opts.agentId ?? null,
@@ -2369,6 +2290,24 @@ export class CoderRunner extends EventEmitter {
     try {
       const result = await this.runViaBehaviorTree();
       outcome = { ok: true, reason: result.reason };
+      // Company lifecycle hooks predate HookBus. Keep their completion contract
+      // at the same terminal boundary, including hosts without a HookBus.
+      if (!this.isSubagent && this.opts.hookRegistry?.hasHandlers) {
+        try {
+          await this.opts.hookRegistry.fireCompletion({
+            sessionId: this.sessionId ?? asSessionId(this.runId),
+            projectName: this.opts.toolContext.projectName,
+            provider: this.provider.name,
+            model: this.provider.model,
+            turn: this.turn,
+            reason: result.reason,
+            totalUsage: result.totalUsage,
+            turnCount: this.turn,
+          });
+        } catch {
+          // Lifecycle observers cannot change the run outcome.
+        }
+      }
       return result;
     } catch (error) {
       outcome = {
@@ -2378,7 +2317,7 @@ export class CoderRunner extends EventEmitter {
       throw error;
     } finally {
       try {
-        await hookBus.fireObservation(terminalStage, {
+        await hookBus?.fireObservation(terminalStage, {
           runId: this.runId,
           sessionId: this.sessionId ?? null,
           agentId: this.opts.agentId ?? null,

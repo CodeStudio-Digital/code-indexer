@@ -6,7 +6,7 @@
  * The "authoring" region is tree + editor TOGETHER (the editor's content depends
  * on the tree selection, so they hide as one unit); "preview" is the live shell.
  */
-export interface DocsStudioUi {
+interface DocsStudioUi {
   authoringCollapsed: boolean;
   rightCollapsed: boolean;
 }

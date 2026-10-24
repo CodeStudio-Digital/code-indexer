@@ -18,7 +18,7 @@ function firstRule(rules: typeof JAVA_EXTRA_RULES, source: string): unknown {
 
 describe('enriched Java/C# grammars', () => {
   it('replaces both lazy tokenizer factories once per Monaco instance', () => {
-    const registerTokensProviderFactory = vi.fn(() => ({ dispose() {} }));
+    const registerTokensProviderFactory = vi.fn((_language: string, _factory: { create(): unknown }) => ({ dispose() {} }));
     const monaco = { languages: { registerTokensProviderFactory } } as never;
 
     enrichJavaCsharpHighlighting(monaco);

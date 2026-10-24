@@ -41,7 +41,7 @@ function SortHeader({ label, k, sortKey, sortDir, onSort, align = 'left' }: Sort
   );
 }
 
-export interface ProcessRowsProps {
+interface ProcessRowsProps {
   rows: TaskRow[];
   sortKey: SortKey | null;
   sortDir: SortDir;

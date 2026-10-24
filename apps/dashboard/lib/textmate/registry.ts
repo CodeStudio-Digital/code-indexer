@@ -23,7 +23,7 @@ import { loadWASM, createOnigScanner, createOnigString } from 'vscode-oniguruma'
 // fetched at runtime (no CDN), which keeps the Electron CSP story local-only.
 import onigWasmUrl from 'vscode-oniguruma/release/onig.wasm?url';
 
-export { INITIAL, type IGrammar, type StateStack };
+export { INITIAL, type StateStack };
 
 /**
  * scope → grammar-JSON loader. The first block is the languages we surface in

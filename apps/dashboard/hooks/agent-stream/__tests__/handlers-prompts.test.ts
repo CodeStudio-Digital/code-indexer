@@ -9,7 +9,7 @@ import type { SessionId, StreamBlock, UpdateSession } from '../types.js';
 function setup() {
   const blocks: StreamBlock[] = [];
   const handlers = createEventHandlers({
-    sid: 1 as unknown as SessionId,
+    sid: '00000000-0000-4000-8000-000000000001' as unknown as SessionId,
     blocks,
     toolIndex: new Map<string, number>(),
     flush: vi.fn(),

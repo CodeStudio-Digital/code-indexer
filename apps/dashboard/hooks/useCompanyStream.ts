@@ -35,13 +35,13 @@ import { mapAutonomyStreamEvent } from '../state/company/stream-handlers/autonom
 import type { NotificationSourceContext } from '../features/notifications/index.js';
 
 // Re-export client state types so legacy consumers keep their imports.
-export type { AgentStreamState, BoardMessage, FallbackNotice } from '../state/company/types.js';
+export type { AgentStreamState, BoardMessage } from '../state/company/types.js';
 
-export type CompanyStreamSurface =
+type CompanyStreamSurface =
   | { kind: 'company' }
   | { kind: 'app_studio'; appSessionId: string };
 
-export interface CompanyStreamTransport {
+interface CompanyStreamTransport {
   basePath: string;
   statePath: string;
   includeKanban: boolean;
@@ -51,7 +51,7 @@ export interface CompanyStreamTransport {
   keepAttachedWhileOrchestratorLive: boolean;
 }
 
-export interface CompanyStreamCursor {
+interface CompanyStreamCursor {
   seq: number;
   busId: string | null;
 }
@@ -99,7 +99,7 @@ export function isCompanyStreamOwner(
     && !controller.signal.aborted;
 }
 
-export interface CompanyStreamEventPump {
+interface CompanyStreamEventPump {
   enqueue(event: SSEEvent): void;
   flush(): Promise<void>;
   discard(): void;

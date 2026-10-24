@@ -4,7 +4,7 @@
  * `../utils.ts` (`readDataUrlBase64`), shared with file attachments.
  */
 
-export type TranscribeErrorCode = 'no-model' | 'http' | 'empty';
+type TranscribeErrorCode = 'no-model' | 'http' | 'empty';
 
 export class TranscribeError extends Error {
   constructor(readonly code: TranscribeErrorCode, message?: string) {

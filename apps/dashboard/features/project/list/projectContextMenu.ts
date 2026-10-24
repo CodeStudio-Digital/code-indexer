@@ -20,9 +20,9 @@ import {
 } from 'lucide-react';
 import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 import { toast } from '../../../components/ui/prompt-dialog.js';
-import type { ProjectCardData } from './ProjectCard.js';
+import type { ProjectCardData } from './project-card-types.js';
 
-export interface BuildProjectMenuArgs {
+interface BuildProjectMenuArgs {
   /** Only id/name/root_path are read — the title-bar switcher passes a
    *  lightweight `{id,name,root_path}` while the cards pass full data. */
   project: Pick<ProjectCardData, 'id' | 'name' | 'root_path'>;

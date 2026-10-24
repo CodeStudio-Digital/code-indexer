@@ -24,7 +24,7 @@
  *   - estimated_cost_usd   per-turn USD cost computed from model-registry pricing.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

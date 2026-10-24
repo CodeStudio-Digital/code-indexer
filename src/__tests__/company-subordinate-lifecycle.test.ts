@@ -53,14 +53,14 @@ describe('resolveSpawnProjectBinding', () => {
   });
 
   describe('role bound to multiple projects', () => {
-    it('requires an explicit choice', () => {
-      expect(() =>
+    it('defaults to the first bound project when no explicit choice is supplied', () => {
+      expect(
         resolveSpawnProjectBinding({
           role: 'frontend',
           specProjectId: undefined,
           boundProjectIds: [1, 2, 3],
         }),
-      ).toThrow(/bound to multiple projects \[1, 2, 3\]/);
+      ).toBe(1);
     });
 
     it('accepts an id from the bound set', () => {
@@ -90,9 +90,6 @@ describe('resolveSpawnProjectBinding', () => {
     ).toThrow(/Role 'qa'/);
     expect(() =>
       resolveSpawnProjectBinding({ role: 'qa', specProjectId: 99, boundProjectIds: [1] }),
-    ).toThrow(/Role 'qa'/);
-    expect(() =>
-      resolveSpawnProjectBinding({ role: 'qa', specProjectId: undefined, boundProjectIds: [1, 2] }),
     ).toThrow(/Role 'qa'/);
     expect(() =>
       resolveSpawnProjectBinding({ role: 'qa', specProjectId: 99, boundProjectIds: [1, 2] }),

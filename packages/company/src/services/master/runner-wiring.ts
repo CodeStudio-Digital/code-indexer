@@ -18,7 +18,7 @@
  * update its private state without becoming class methods themselves.
  */
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
-import type { RunCoderHandle } from '@mcp/code-agent/index.js';
+import type { RunCoderHandle } from '@mcp/code-agent/index/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';

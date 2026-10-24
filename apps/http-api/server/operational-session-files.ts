@@ -18,13 +18,13 @@ import {
 
 export type OperationalRuntimeKind = 'company' | 'app_studio';
 
-export interface OperationalProject {
+interface OperationalProject {
   id: ProjectId;
   name: string;
   root_path: string;
 }
 
-export interface OperationalProjectResolver {
+interface OperationalProjectResolver {
   getProject(projectId: ProjectId): OperationalProject | null;
 }
 
@@ -44,13 +44,13 @@ export interface CompanySessionFileRow {
   updated_at: string;
 }
 
-export interface CompanySessionProjectFileRow {
+interface CompanySessionProjectFileRow {
   company_session_id: CompanySessionId;
   project_id: ProjectId;
   label: string | null;
 }
 
-export interface CompanySessionFullFileRow {
+interface CompanySessionFullFileRow {
   session: CompanySessionFileRow;
   projects: CompanySessionProjectFileRow[];
   agentRuns: Array<Record<string, unknown>>;

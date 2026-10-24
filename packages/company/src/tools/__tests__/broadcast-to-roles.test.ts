@@ -3,7 +3,7 @@
  * several roles via the inbox, plus a board mirror.
  */
 import { describe, it, expect, vi } from 'vitest';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import { buildMasterTools } from '@mcp/company/tools/master-tools.js';
 
 const MASTER_AGENT_RUN_ID = 'a0000000-0000-4000-8000-000000000007';

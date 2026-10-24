@@ -1,6 +1,6 @@
 import type { PlanResolution } from '../../../hooks/useAgentStream.js';
 
-export interface PlanToolResult {
+interface PlanToolResult {
   content: string;
   isError: boolean;
 }

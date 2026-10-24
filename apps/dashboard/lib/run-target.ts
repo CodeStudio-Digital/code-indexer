@@ -20,7 +20,7 @@ const EXT_RUNTIME: Record<string, FileRuntime> = {
   cs: 'dotnet',
 };
 
-export interface RunTarget {
+interface RunTarget {
   runtime: FileRuntime;
   /** Doubles as the runner `manager` tag (the union now includes the runtimes). */
   manager: RunnerManager;

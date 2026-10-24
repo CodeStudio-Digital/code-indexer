@@ -56,8 +56,5 @@ export function workspaceColor(syntheticProjectId: number): AccentColor {
 export function projectColor(projectId: number): AccentColor {
   return accentFromHue(Math.round(projectId * 137.508 + 60));
 }
-
-/** How many visual groups to show initially when opening a session. */
-export const INITIAL_PAGE_SIZE = 30;
 /** How many more groups to load when user clicks "Load earlier" or infinite scroll triggers. */
 export const LOAD_MORE_SIZE = 40;

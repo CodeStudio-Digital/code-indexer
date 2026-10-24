@@ -22,9 +22,9 @@
 import { killProcessTreesSync } from '@mcp/shared/utils/process-tree.js';
 import { killTree } from './tree-kill.js';
 
-export type ChildKind = 'pty' | 'process' | 'server';
+type ChildKind = 'pty' | 'process' | 'server';
 
-export interface TrackedChild {
+interface TrackedChild {
   /** Stable id; auto-assigned by `register` when omitted. */
   id: string;
   kind: ChildKind;

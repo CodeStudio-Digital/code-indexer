@@ -38,7 +38,7 @@ import {
   type FailureStreakState,
   type FailureStreakVerdict,
 } from '../guards/failure-streak.js';
-import type { DupCallEntry } from '../machine/types.js';
+import type { DupCallEntry } from '../guards/dup-call-entry.js';
 import { withAbortAndTimeout, isTimeoutError, isAbortError } from './executing-abort.js';
 import { resolveToolInvocationMetadata } from '../../policy.js';
 import { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS } from '../../tool-timeouts.js';

@@ -1,4 +1,4 @@
-import type { PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import type { PreviewInvoke } from '@mcp/code-agent/tools/preview/contracts.js';
 import type { PreviewWindow } from './cdp.js';
 
 const PREVIEW_BODY_DEFAULT_CHARS = 20_000;

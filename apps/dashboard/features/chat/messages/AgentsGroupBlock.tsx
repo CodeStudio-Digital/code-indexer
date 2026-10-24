@@ -1,3 +1,5 @@
+import type { AgentsGroupResultSource } from './agents-group-result-source.js';
+
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Bot, Check, ChevronDown, ChevronRight, Loader2, Maximize2, X } from 'lucide-react';
@@ -13,12 +15,6 @@ interface AgentsGroupBlockProps {
   sessionId?: string;
 }
 
-export interface AgentsGroupResultSource {
-  sessionId: string;
-  toolUseId: string;
-  input?: Record<string, unknown>;
-  isTruncated?: boolean;
-}
 
 export const AgentsGroupBlock = React.memo(AgentsGroupBlockInner, (prev, next) => {
   // Re-render when any agent's status, toolCallCount, or summary changes,

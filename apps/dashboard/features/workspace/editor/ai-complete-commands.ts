@@ -16,7 +16,7 @@ import { useAiCompleteStore } from './ai-complete-store.js';
 // by the provider's next provideInlineCompletions call.
 let forceProvideArmed = false;
 
-export function armForceProvide(): void {
+function armForceProvide(): void {
   forceProvideArmed = true;
 }
 

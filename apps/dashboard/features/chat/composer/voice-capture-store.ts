@@ -7,7 +7,7 @@
  * waveform + drive the logo). No per-frame React state — see VoiceCaptureBar.
  */
 import { useSyncExternalStore } from 'react';
-import type { RecorderStatus } from './useAudioRecorder.js';
+import type { RecorderStatus } from './recorder-types.js';
 
 interface VoiceCaptureState {
   status: RecorderStatus;
@@ -36,7 +36,7 @@ export function getVoiceCapture(): VoiceCaptureState {
   return state;
 }
 
-export function subscribeVoiceCapture(cb: () => void): () => void {
+function subscribeVoiceCapture(cb: () => void): () => void {
   listeners.add(cb);
   return () => { listeners.delete(cb); };
 }

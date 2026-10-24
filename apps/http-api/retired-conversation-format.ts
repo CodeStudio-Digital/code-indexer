@@ -2,7 +2,7 @@ import { lstat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { asSessionId } from '@mcp/session-storage';
 
-export const RETIRED_CONVERSATION_FORMAT_CODE = 'RETIRED_CONVERSATION_FORMAT';
+const RETIRED_CONVERSATION_FORMAT_CODE = 'RETIRED_CONVERSATION_FORMAT';
 
 export class RetiredConversationFormatError extends Error {
   readonly code = RETIRED_CONVERSATION_FORMAT_CODE;

@@ -21,7 +21,7 @@ export type CellCommitMove = 'none' | 'down' | 'right' | 'left';
 
 const ROW_H = 24;
 
-export interface GridBodyCellProps {
+interface GridBodyCellProps {
   cellId: string;
   value: unknown;
   width: number;

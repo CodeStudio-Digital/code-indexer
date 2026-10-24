@@ -91,8 +91,8 @@ describe('professional keymap core', () => {
     useKeymapStore.setState({ preset: 'vscode', overrides: {} });
     const fired: string[] = [];
     const unregister = registerCommandHandlers([
-      { id: 'workbench.commandPalette', run: () => fired.push('palette') },
-      { id: 'view.keymapSettings', run: () => fired.push('keymap') },
+      { id: 'workbench.commandPalette', run: () => { fired.push('palette'); } },
+      { id: 'view.keymapSettings', run: () => { fired.push('keymap'); } },
     ]);
     const uninstall = installKeymapDispatcher();
     const key = (code: string) => ({
@@ -121,7 +121,7 @@ describe('professional keymap core', () => {
       removeEventListener() {},
     });
     const fired: string[] = [];
-    const unregister = registerCommandHandlers([{ id: 'navigate.searchEverywhere', run: () => fired.push('search') }]);
+    const unregister = registerCommandHandlers([{ id: 'navigate.searchEverywhere', run: () => { fired.push('search'); } }]);
     const uninstall = installKeymapDispatcher();
     const shift = () => ({
       code: 'ShiftLeft', key: 'Shift', ctrlKey: false, metaKey: false, altKey: false, shiftKey: true,
@@ -145,7 +145,7 @@ describe('professional keymap core', () => {
     });
     useKeymapStore.getState().setBindings('navigate.back', ['Mouse4']);
     const fired: string[] = [];
-    const unregister = registerCommandHandlers([{ id: 'navigate.back', run: () => fired.push('back') }]);
+    const unregister = registerCommandHandlers([{ id: 'navigate.back', run: () => { fired.push('back'); } }]);
     const uninstall = installKeymapDispatcher();
     const mouse = (type: string) => ({
       type, button: 3, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
@@ -171,7 +171,7 @@ describe('professional keymap core', () => {
       removeEventListener: (type: string, fn: EventListener) => listeners.set(type, (listeners.get(type) ?? []).filter((item) => item !== fn)),
     });
     const committed: string[] = [];
-    const dispose = installShortcutRecorder({ onCommit: (binding) => committed.push(binding), onCancel: vi.fn() });
+    const dispose = installShortcutRecorder({ onCommit: (binding) => { committed.push(binding); }, onCancel: vi.fn() });
     const key = (type: string, code: string, altKey: boolean) => ({
       type, code, key: code === 'AltLeft' ? 'Alt' : 'k', altKey,
       ctrlKey: false, metaKey: false, shiftKey: false, repeat: false, isComposing: false,
@@ -193,7 +193,7 @@ describe('professional keymap core', () => {
       removeEventListener: (type: string, fn: EventListener) => listeners.set(type, (listeners.get(type) ?? []).filter((item) => item !== fn)),
     });
     const committed: string[] = [];
-    const dispose = installShortcutRecorder({ onCommit: (binding) => committed.push(binding), onCancel: vi.fn() });
+    const dispose = installShortcutRecorder({ onCommit: (binding) => { committed.push(binding); }, onCancel: vi.fn() });
     const mouse = (type: string, button: number) => ({
       type, button, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false,
       preventDefault: vi.fn(), stopPropagation: vi.fn(), stopImmediatePropagation: vi.fn(),

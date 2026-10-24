@@ -53,14 +53,14 @@ describe('resolveToolTimeoutMs — classification', () => {
     expect(resolveToolTimeoutMs(makeTool({ name: 'ask_user', interactive: true }))).toBe(Infinity);
   });
 
-  it('returns Infinity for repeatable wait/poll tools', async () => {
+  it('keeps repeatable wait/poll tools bounded without an explicit opt-out', async () => {
     const { resolveToolTimeoutMs } = await import('@mcp/code-agent/core/tool-timeouts.js');
-    expect(resolveToolTimeoutMs(makeTool({ name: 'wait_for_compile_clean', repeatable: true }))).toBe(Infinity);
+    expect(resolveToolTimeoutMs(makeTool({ name: 'wait_for_compile_clean', repeatable: true }))).toBe(5 * 60_000);
   });
 
   it('classifies known slow native tools as SLOW (30 min default)', async () => {
     const { resolveToolTimeoutMs, SLOW_TIMEOUT_MS } = await import('@mcp/code-agent/core/tool-timeouts.js');
-    for (const name of ['docs_deep_research', 'implement_subagent', 'review_subagent', 'code_exec', 'run_command']) {
+    for (const name of ['docs_deep_research', 'implement_subagent', 'review_subagent', 'code_exec']) {
       expect(resolveToolTimeoutMs(makeTool({ name }))).toBe(SLOW_TIMEOUT_MS);
     }
     expect(SLOW_TIMEOUT_MS).toBe(30 * 60_000);
@@ -107,26 +107,26 @@ describe('resolveToolTimeoutMs — env overrides', () => {
     clearEnv();
   });
 
-  it('applies MCP_TOOL_NORMAL_TIMEOUT_MS and MCP_TOOL_SLOW_TIMEOUT_MS', async () => {
+  it('keeps product timeouts unchanged by retired environment switches', async () => {
     process.env.MCP_TOOL_NORMAL_TIMEOUT_MS = '99';
     process.env.MCP_TOOL_SLOW_TIMEOUT_MS = '777';
     const { resolveToolTimeoutMs, NORMAL_TIMEOUT_MS, SLOW_TIMEOUT_MS } = await import(
       '@mcp/code-agent/core/tool-timeouts.js'
     );
-    expect(NORMAL_TIMEOUT_MS).toBe(99);
-    expect(SLOW_TIMEOUT_MS).toBe(777);
-    expect(resolveToolTimeoutMs(makeTool({ name: 'read_file' }))).toBe(99);
-    expect(resolveToolTimeoutMs(makeTool({ name: 'docs_deep_research' }))).toBe(777);
+    expect(NORMAL_TIMEOUT_MS).toBe(5 * 60_000);
+    expect(SLOW_TIMEOUT_MS).toBe(30 * 60_000);
+    expect(resolveToolTimeoutMs(makeTool({ name: 'read_file' }))).toBe(5 * 60_000);
+    expect(resolveToolTimeoutMs(makeTool({ name: 'docs_deep_research' }))).toBe(30 * 60_000);
   });
 
-  it('falls back to defaults on invalid env (with a warn)', async () => {
+  it('ignores invalid values for retired timeout switches', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     process.env.MCP_TOOL_NORMAL_TIMEOUT_MS = 'not-a-number';
     process.env.MCP_TOOL_SLOW_TIMEOUT_MS = '-5';
     const { NORMAL_TIMEOUT_MS, SLOW_TIMEOUT_MS } = await import('@mcp/code-agent/core/tool-timeouts.js');
     expect(NORMAL_TIMEOUT_MS).toBe(5 * 60_000);
     expect(SLOW_TIMEOUT_MS).toBe(30 * 60_000);
-    expect(warn).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 });
@@ -144,12 +144,12 @@ describe('resolveHeartbeatIntervalMs', () => {
     expect(resolveHeartbeatIntervalMs()).toBe(5_000);
   });
 
-  it('reads MCP_TOOL_HEARTBEAT_MS on every call (no module reload needed)', async () => {
+  it('keeps the fixed heartbeat interval despite retired overrides', async () => {
     const { resolveHeartbeatIntervalMs } = await import('@mcp/code-agent/core/tool-timeouts.js');
     process.env.MCP_TOOL_HEARTBEAT_MS = '1234';
-    expect(resolveHeartbeatIntervalMs()).toBe(1234);
+    expect(resolveHeartbeatIntervalMs()).toBe(5_000);
     process.env.MCP_TOOL_HEARTBEAT_MS = '0';
-    expect(resolveHeartbeatIntervalMs()).toBe(0);
+    expect(resolveHeartbeatIntervalMs()).toBe(5_000);
   });
 
   it('falls back to default on invalid input', async () => {
@@ -157,7 +157,7 @@ describe('resolveHeartbeatIntervalMs', () => {
     const { resolveHeartbeatIntervalMs } = await import('@mcp/code-agent/core/tool-timeouts.js');
     process.env.MCP_TOOL_HEARTBEAT_MS = 'oops';
     expect(resolveHeartbeatIntervalMs()).toBe(5_000);
-    expect(warn).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 });

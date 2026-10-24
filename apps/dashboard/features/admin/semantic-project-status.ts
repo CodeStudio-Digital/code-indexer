@@ -5,13 +5,13 @@ import type {
 
 export type ProjectSemanticScope = 'code' | 'snapshot' | 'project_memory';
 
-export interface ProjectSemanticScopeSummary {
+interface ProjectSemanticScopeSummary {
   scope: ProjectSemanticScope;
   namespace: string;
   status: SemanticNamespaceStatusView | null;
 }
 
-export interface ProjectSemanticStorageSummary {
+interface ProjectSemanticStorageSummary {
   dbPaths: string[];
   sizeBytes: number;
 }

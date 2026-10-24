@@ -78,7 +78,7 @@ export interface SshSecret {
 }
 
 /** What the host editor collects; secrets are plaintext here and encrypted before save. */
-export interface HostFormValues {
+interface HostFormValues {
   label: string;
   hostname: string;
   port: string;

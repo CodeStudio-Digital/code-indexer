@@ -52,7 +52,7 @@ const recordingTool: CoderTool = {
   handler: async () => ({ content: 'wrote something' }),
 };
 
-function makeRunner(options: { planMode?: boolean; tool?: CoderTool; input?: Record<string, unknown> } = {}) {
+function makeRunner(options: { planMode?: boolean; specMode?: boolean; tool?: CoderTool; input?: Record<string, unknown> } = {}) {
   const tool = options.tool ?? recordingTool;
   const registry = new ToolRegistry();
   registry.register(tool);
@@ -62,6 +62,7 @@ function makeRunner(options: { planMode?: boolean; tool?: CoderTool; input?: Rec
     systemPrompt: 'sys',
     toolContext: { cwd: '/tmp', projectName: 'test' },
     planMode: options.planMode,
+    specMode: options.specMode,
     initialMessages: [{ role: 'user', content: [{ type: 'text', text: 'go' }] }],
   });
 }
@@ -95,6 +96,22 @@ describe('runner + policy integration', () => {
     expect(results).toEqual([{ name: 'recording_writer', content: 'wrote something' }]);
   });
 
+  it.each([false, true])('keeps spec approval independent of a scoped plan unlock (approved=%s)', async (approved) => {
+    let writes = 0;
+    const tool: CoderTool = {
+      ...recordingTool,
+      handler: async () => { writes++; return { content: 'wrote something' }; },
+    };
+    const runner = makeRunner({ planMode: true, specMode: true, tool });
+    runner.beginTaskScope({ id: 'task-1', files: ['src/foo.ts'] });
+    if (approved) runner.approveSpec('spec/task.md');
+    const blocked: string[] = [];
+    runner.on('blocked', (event) => blocked.push(event.reason));
+    await runner.run();
+    expect(writes).toBe(approved ? 1 : 0);
+    expect(blocked).toEqual(approved ? [] : ['spec_mode']);
+  });
+
   it('emits blocked with reason="task_scope" when the path is outside the scope', async () => {
     const runner = makeRunner({ planMode: true, input: { path: 'lib/elsewhere.ts' } });
     runner.beginTaskScope({ id: 'task-1', files: ['src/foo.ts'] });
@@ -116,6 +133,6 @@ describe('runner + policy integration', () => {
     );
     await runner.run();
     expect(blocked).toEqual([]);
-    expect(results).toEqual([{ name: 'recording_writer', isError: undefined }]);
+    expect(results).toEqual([{ name: 'recording_writer', isError: false }]);
   });
 });

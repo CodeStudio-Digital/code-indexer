@@ -11,9 +11,9 @@ import {
 } from './dialog.js';
 import { cn } from '../../lib/utils.js';
 
-export type DialogVariant = 'info' | 'success' | 'warning' | 'destructive';
+type DialogVariant = 'info' | 'success' | 'warning' | 'destructive';
 
-export interface ConfirmOptions {
+interface ConfirmOptions {
   title: string;
   description?: string;
   confirmLabel?: string;
@@ -21,7 +21,7 @@ export interface ConfirmOptions {
   variant?: DialogVariant;
 }
 
-export interface NotifyOptions {
+interface NotifyOptions {
   title: string;
   description?: string;
   variant?: DialogVariant;

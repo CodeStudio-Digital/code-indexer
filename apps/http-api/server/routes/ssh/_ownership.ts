@@ -4,7 +4,7 @@ import type { ServerDeps } from '../../deps.js';
 
 export type SshHostStorageScope = 'shared' | 'project';
 
-export type ScopedSshHost = SshHost & { storage_scope: SshHostStorageScope };
+type ScopedSshHost = SshHost & { storage_scope: SshHostStorageScope };
 
 export interface ResolvedSshHost {
   host: SshHost;
@@ -12,7 +12,7 @@ export interface ResolvedSshHost {
   storage_scope: SshHostStorageScope;
 }
 
-export interface AmbiguousSshHost {
+interface AmbiguousSshHost {
   ambiguous: true;
 }
 
@@ -27,7 +27,7 @@ export interface AmbiguousSshHost {
  * a mismatch as "not found". Mirrors the api-client `_ownership.ts` model.
  */
 
-export function hostInProject(store: SshStore, projectId: number, hid: number): SshHost | null {
+function hostInProject(store: SshStore, projectId: number, hid: number): SshHost | null {
   const h = store.getHost(hid);
   return h && h.project_id === projectId ? h : null;
 }

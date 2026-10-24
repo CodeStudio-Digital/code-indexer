@@ -197,7 +197,12 @@ export function SearchEverywhere({ projectId, onOpenFile }: { projectId: number;
         limit: 20,
         supersessionKey: searchEverywhereSupersessionKey(projectId),
         consumer: 'search_everywhere',
-      }, { signal }).catch(() => ({ results: [], diagnostics: { vectorError: 'unavailable' } }));
+      }, { signal }).catch(() => ({ results: [], diagnostics: {
+        vectorAvailable: false,
+        embeddingAvailable: false,
+        vectorError: 'unavailable',
+        telemetryRequestId: undefined,
+      } }));
     const semanticNotice = (
       response.diagnostics.vectorAvailable === false
       || response.diagnostics.embeddingAvailable === false

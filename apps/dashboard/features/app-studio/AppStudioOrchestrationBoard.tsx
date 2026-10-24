@@ -25,7 +25,7 @@ import {
   type AppWorkItemView,
 } from './app-studio-api.js';
 
-export type AppWorkGroup = 'active' | 'ready' | 'blocked' | 'queued' | 'completed' | 'cancelled';
+type AppWorkGroup = 'active' | 'ready' | 'blocked' | 'queued' | 'completed' | 'cancelled';
 
 const GROUP_ORDER: AppWorkGroup[] = ['active', 'ready', 'blocked', 'queued', 'completed', 'cancelled'];
 const STATUS_GROUP: Record<AppWorkItemStatus, AppWorkGroup> = {
@@ -75,7 +75,7 @@ export function currentWorkAttempt(item: AppWorkItemView): AppWorkAttemptView | 
   return [...item.attempts].sort((a, b) => b.attempt - a.attempt || b.seq - a.seq)[0] ?? null;
 }
 
-export interface AppWorkRuntimeSummary {
+interface AppWorkRuntimeSummary {
   role: string;
   agentRunId: string | null;
   attempt: number | null;

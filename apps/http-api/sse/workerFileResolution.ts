@@ -26,7 +26,7 @@ import { resolve as resolvePath, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** True when this process was started via the `tsx` loader. */
-export function isRunningUnderTsx(): boolean {
+function isRunningUnderTsx(): boolean {
   if (process.execArgv.some((arg) => arg.includes('tsx'))) return true;
   // Electron + bundlers don't propagate NODE_OPTIONS into `execArgv` —
   // they only set the env var. tsx itself reads NODE_OPTIONS at boot, so

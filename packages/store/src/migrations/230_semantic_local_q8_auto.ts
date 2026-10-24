@@ -2,7 +2,7 @@
  * Existing generations remain immutable; changing the desired embedding
  * target to q8 intentionally requires a new generation on next project open. */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

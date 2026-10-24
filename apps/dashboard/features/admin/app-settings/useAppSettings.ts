@@ -82,7 +82,7 @@ export function useAppSettings() {
     try {
       const r = await fetch('/api/admin/settings/restart', { method: 'POST' });
       if (!r.ok && r.status !== 202) throw new Error(`HTTP ${r.status}`);
-      toast.message(t('toast.restarting'), { description: t('toast.restartingDesc') });
+      toast.info(t('toast.restarting'), { description: t('toast.restartingDesc') });
     } catch (e) {
       toast.error(t('toast.restartFailed'), { description: e instanceof Error ? e.message : String(e) });
     }

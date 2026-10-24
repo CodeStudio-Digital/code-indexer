@@ -55,7 +55,7 @@ export function upsertActiveProcess(
   return copy;
 }
 
-export function upsertActiveProcesses(
+function upsertActiveProcesses(
   processes: ActiveProcess[],
   patches: ActiveProcessPatch[],
   now = Date.now(),

@@ -63,7 +63,7 @@ export function findTextMatchOffsets(value: string, rawQuery: string, matchCase:
   return offsets;
 }
 
-export function findSurfaceTextRanges(root: HTMLElement, rawQuery: string, matchCase: boolean): Range[] {
+function findSurfaceTextRanges(root: HTMLElement, rawQuery: string, matchCase: boolean): Range[] {
   const query = rawQuery.trim();
   if (!query) return [];
   const ranges: Range[] = [];

@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { SessionWriter, computeRequestHash } from '../packages/session-storage/src/session-writer.ts';
+import { SessionWriter, computeRequestHash } from '@mcp/session-storage/session-writer.js';
 import { ConversationProjection } from '@mcp/session-storage/fs-store/conversation-codec.js';
-import { ToolRegistry } from '../packages/code-agent/src/core/registry.ts';
-import { dispatchTools } from '../packages/code-agent/src/core/runner/nodes/executing-dispatch.ts';
-import { TurnProjector } from '../apps/dashboard/hooks/agent-stream/turn-projector.ts';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { dispatchTools } from '@mcp/code-agent/core/runner/nodes/executing-dispatch.js';
+import { fileURLToPath } from 'node:url';
 
 const round = (ms) => Math.round(ms * 1000) / 1000;
 const stats = (values) => {
@@ -69,18 +69,6 @@ async function persistence(turns) {
   }
 }
 
-function stream(blockCount) {
-  const projector = new TurnProjector({ sessionId: randomUUID(), updateSession: () => {},
-    initialBlocks: Array.from({ length: blockCount }, (_, i) => ({ type: 'tool',
-      call: { id: `tool-${i}`, name: 'read_file', status: 'done' } })),
-    scheduler: { requestFrame: () => 1, cancelFrame: () => {}, setFallback: () => 1, clearFallback: () => {} },
-  });
-  const start = performance.now();
-  for (let i = 0; i < 10_000; i++) projector.dispatch('text', { text: 'x' });
-  const elapsedMs = round(performance.now() - start);
-  projector.dispose();
-  return { existingBlocks: blockCount, deltas: 10_000, handlerMs: elapsedMs, includesDom: false };
-}
 
 async function dispatch(delays = [['fast', 20], ['slow', 200]]) {
   const registry = new ToolRegistry();
@@ -107,7 +95,9 @@ const report = { schemaVersion: 1, measuredAt: new Date().toISOString(), node: p
   head: execFileSync('git', ['-c', 'safe.directory=D:/MCP', 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   synthetic: true, persistence: [], streaming: [], dispatch: null };
 for (const count of [100, 1_000, 10_000]) report.persistence.push(await persistence(count));
-for (const count of [50, 1_000, 5_000]) report.streaming.push(stream(count));
+report.streaming = JSON.parse(execFileSync(process.execPath, ['--import', 'tsx',
+  fileURLToPath(new URL('../apps/dashboard/performance/stream-projector.ts', import.meta.url))],
+  { encoding: 'utf8', windowsHide: true }));
 report.dispatch = await dispatch();
 report.independentReadBatch = await dispatch(Array.from({ length: 4 }, (_, index) => [`read_${index}`, 100]));
 const json = JSON.stringify(report, null, 2);

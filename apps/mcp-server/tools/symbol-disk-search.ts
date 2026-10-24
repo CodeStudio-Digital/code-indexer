@@ -5,9 +5,9 @@ import { readProjectFile } from './project-file-read.js';
 const ignored = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', '.mcp-indexer', '.cache', '.turbo', 'coverage']);
 const sourceFile = /\.(?:[cm]?[jt]sx?|py|go|rs|java|cs|kt|swift|rb|php|[ch]|cpp|hpp)$/i;
 const identifier = /[\p{L}\p{N}_$]/u;
-export interface DiskReference { file_path: string; line: number; context: string; context_truncated: boolean; context_characters: number }
-export interface DiskReferenceCursor { file_offset: number; line_offset: number }
-export interface DiskReferences {
+interface DiskReference { file_path: string; line: number; context: string; context_truncated: boolean; context_characters: number }
+interface DiskReferenceCursor { file_offset: number; line_offset: number }
+interface DiskReferences {
   references: DiskReference[]; observedMatches: number; complete: boolean; scannedFiles: number;
   skippedFiles: number; warnings: string[]; next?: DiskReferenceCursor;
 }

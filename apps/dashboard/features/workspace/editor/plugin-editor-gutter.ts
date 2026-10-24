@@ -137,7 +137,7 @@ export function pluginEditorContextFromEditor(
 ): PluginEditorContext | undefined {
   const fallback = fallbackEditorContext(fallbackPath, fallbackLanguageId);
   const model = editor?.getModel();
-  if (!model || model.isDisposed()) return fallback;
+  if (!editor || !model || model.isDisposed()) return fallback;
 
   const parsed = parseModelPath(model.uri.path);
   if (parsed.projectId != null && parsed.projectId !== projectId) return fallback;

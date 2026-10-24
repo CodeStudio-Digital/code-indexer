@@ -193,10 +193,7 @@ export function AppTeamPanel({ appSessionId, onCollapse }: { appSessionId: strin
           roleIdx={editing.index}
           availableSkills={skillsList?.skills ?? []}
           providerOptions={providerOptions}
-          getModelsForProvider={(providerId) => getModelsForProvider(providerId).map((model) => ({
-            ...model,
-            mode: model.mode ?? undefined,
-          }))}
+          getModelsForProvider={getModelsForProvider}
           onUpdate={(patch) => setEditing((current) => current ? { ...current, draft: { ...current.draft, ...patch } } : current)}
           onClose={() => void saveRole()}
           onCancel={() => setEditing(null)}

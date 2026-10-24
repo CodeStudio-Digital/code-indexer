@@ -24,7 +24,7 @@
  * is idempotent at the runner level (migrations only run once).
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

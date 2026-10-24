@@ -12,7 +12,7 @@ import type {
   ToolRepeatPolicy,
 } from '@mcp/code-agent/core/tool.js';
 import { aliasNormalizationEnabled, normalizeToolArgs } from '@mcp/code-agent/core/tool-arg-aliases.js';
-import type { DupCallEntry } from '../machine/types.js';
+import type { DupCallEntry } from './dup-call-entry.js';
 import { previewToolArgs, stableArgsKey } from '../dup-utils.js';
 
 export const DUP_REFUSE_MIN = 3;

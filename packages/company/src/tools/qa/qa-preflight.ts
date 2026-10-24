@@ -19,7 +19,8 @@
  */
 import { tryGetChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
-import { fetchSidecarVersion, getQaEndpointEnvStore } from './qa-get-browser-endpoint.js';
+import { fetchSidecarVersion } from './qa-sidecar-probe.js';
+import { getQaEndpointEnvStore } from './qa-endpoint-state.js';
 
 // ─── Pure retry core ─────────────────────────────────────────────
 

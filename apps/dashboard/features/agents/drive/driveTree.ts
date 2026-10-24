@@ -88,7 +88,7 @@ function countFiles(nodes: DriveTreeNode[]): number {
  * read-only MIRROR of the sandbox docs tree — the Drive panel renders
  * them in a separate collapsed section instead of the main tree.
  */
-export const DOCS_MIRROR_PREFIX = '__docs__/';
+const DOCS_MIRROR_PREFIX = '__docs__/';
 
 export interface DriveMirrorFile {
   /** Path with the `__docs__/` prefix stripped (e.g. "main/adr/0001.md"). */

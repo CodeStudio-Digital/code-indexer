@@ -38,7 +38,11 @@ function installFakeDocument(): { setHidden: (hidden: boolean) => void } {
 // The module binds its visibilitychange handler once, on first subscribe, so the
 // fake document has to exist BEFORE the module is evaluated. A fresh import per
 // test keeps lane state from leaking between cases.
-type Clock = typeof import('../shared-clock.js');
+async function loadClock() {
+  const { subscribeNow, subscribeNowFast, readNow, __resetSharedClockForTests, __sharedClockTimerCount } = await import('../shared-clock.js');
+  return { subscribeNow, subscribeNowFast, readNow, __resetSharedClockForTests, __sharedClockTimerCount };
+}
+type Clock = Awaited<ReturnType<typeof loadClock>>;
 
 let clock: Clock;
 let doc: { setHidden: (hidden: boolean) => void };
@@ -47,7 +51,7 @@ beforeEach(async () => {
   vi.useFakeTimers();
   doc = installFakeDocument();
   vi.resetModules();
-  clock = await import('../shared-clock.js');
+  clock = await loadClock();
 });
 
 afterEach(() => {

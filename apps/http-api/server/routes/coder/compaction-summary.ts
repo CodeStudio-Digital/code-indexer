@@ -10,7 +10,7 @@ import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
 import type { FsCoderSession } from '@mcp/session-storage/fs-store/index.js';
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 
-export interface ReliableSummaryResult {
+interface ReliableSummaryResult {
   summary: CompactionSummaryV3 | null;
   provider: string | null;
   model: string | null;

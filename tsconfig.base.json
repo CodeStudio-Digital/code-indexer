@@ -17,58 +17,168 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "@mcp/shared": ["packages/shared/src/index.ts"],
-      "@mcp/shared/*": ["packages/shared/src/*"],
-      "@mcp/store": ["packages/store/src/index.ts"],
-      "@mcp/store/*": ["packages/store/src/*"],
-      "@mcp/services": ["packages/services/src/index.ts"],
-      "@mcp/services/*": ["packages/services/src/*"],
-      "@mcp/indexer": ["packages/indexer/src/index.ts"],
-      "@mcp/indexer/*": ["packages/indexer/src/*"],
-      "@mcp/app-studio/*": ["packages/app-studio/src/*"],
-      "@mcp/code-agent": ["packages/code-agent/src/index.ts"],
-      "@mcp/code-agent/*": ["packages/code-agent/src/*"],
-      "@mcp/docs-agent": ["packages/docs-agent/src/index.ts"],
-      "@mcp/docs-agent/*": ["packages/docs-agent/src/*"],
-      "@mcp/company": ["packages/company/src/index.ts"],
-      "@mcp/company/*": ["packages/company/src/*"],
-      "@mcp/company-contracts": ["packages/company-contracts/src/index.ts"],
-      "@mcp/company-contracts/*": ["packages/company-contracts/src/*"],
-      "@mcp/agent-runtime-contracts": ["packages/agent-runtime-contracts/src/index.ts"],
-      "@mcp/agent-runtime-contracts/*": ["packages/agent-runtime-contracts/src/*"],
-      "@mcp/agent-runtime-host": ["packages/agent-runtime-host/src/index.ts"],
-      "@mcp/agent-runtime-host/tool-result.js": ["packages/agent-runtime-host/src/tool-result.ts"],
-      "@mcp/session-storage": ["packages/session-storage/src/index.ts"],
-      "@mcp/session-storage/*": ["packages/session-storage/src/*"],
-      "@mcp/candidate-pipeline": ["packages/candidate-pipeline/src/index.ts"],
-      "@mcp/candidate-pipeline/*": ["packages/candidate-pipeline/src/*"],
-      "@mcp/orchestrator-host": ["packages/orchestrator-host/src/index.ts"],
-      "@mcp/orchestrator-host/*": ["packages/orchestrator-host/src/*"],
-      "@mcp/api-bus": ["packages/api-bus/src/index.ts"],
-      "@mcp/api-bus/*": ["packages/api-bus/src/*"],
-      "@mcp/api-handlers": ["packages/api-handlers/src/index.ts"],
-      "@mcp/api-handlers/*": ["packages/api-handlers/src/*"],
-      "@mcp/worker-pool": ["packages/worker-pool/src/index.ts"],
-      "@mcp/worker-pool/*": ["packages/worker-pool/src/*"],
-      "@mcp/provider-sdk": ["packages/provider-sdk/src/index.ts"],
-      "@mcp/provider-sdk/*": ["packages/provider-sdk/src/*"],
-      "@mcp/provider-runtime": ["packages/provider-runtime/src/index.ts"],
-      "@mcp/provider-runtime/*": ["packages/provider-runtime/src/*"],
-      "@mcp/provider-engine": ["packages/provider-engine/src/index.ts"],
-      "@mcp/provider-engine/*": ["packages/provider-engine/src/*"],
-      "@mcp/plugin-sdk": ["packages/plugin-sdk/src/index.ts"],
-      "@mcp/plugin-sdk/*": ["packages/plugin-sdk/src/*"],
-      "@mcp/plugin-host": ["packages/plugin-host/src/index.ts"],
-      "@mcp/plugin-host/*": ["packages/plugin-host/src/*"],
-      "@mcp/plugin-market-client": ["packages/plugin-market-client/src/index.ts"],
-      "@mcp/plugin-market-client/*": ["packages/plugin-market-client/src/*"],
-      "@mcp/podman-core": ["packages/podman-core/src/index.ts"],
-      "@mcp/podman-core/*": ["packages/podman-core/src/*"],
-      "@mcp/db-drivers": ["packages/db-drivers/src/index.ts"],
-      "@mcp/db-drivers/*": ["packages/db-drivers/src/*"],
-      "@mcp/secret-box": ["packages/secret-box/src/index.ts"],
-      "@mcp/secret-box/*": ["packages/secret-box/src/*"],
-      "@apps/*": ["apps/*"]
+      "@mcp/shared": [
+        "packages/shared/src/index.ts"
+      ],
+      "@mcp/shared/*": [
+        "packages/shared/src/*"
+      ],
+      "@mcp/store": [
+        "packages/store/src/index.ts"
+      ],
+      "@mcp/store/*": [
+        "packages/store/src/*"
+      ],
+      "@mcp/services": [
+        "packages/services/src/index.ts"
+      ],
+      "@mcp/services/*": [
+        "packages/services/src/*"
+      ],
+      "@mcp/indexer": [
+        "packages/indexer/src/index.ts"
+      ],
+      "@mcp/indexer/*": [
+        "packages/indexer/src/*"
+      ],
+      "@mcp/app-studio/*": [
+        "packages/app-studio/src/*"
+      ],
+      "@mcp/code-agent": [
+        "packages/code-agent/src/index.ts"
+      ],
+      "@mcp/code-agent/*": [
+        "packages/code-agent/src/*"
+      ],
+      "@mcp/docs-agent": [
+        "packages/docs-agent/src/index.ts"
+      ],
+      "@mcp/docs-agent/*": [
+        "packages/docs-agent/src/*"
+      ],
+      "@mcp/company": [
+        "packages/company/src/index.ts"
+      ],
+      "@mcp/company/*": [
+        "packages/company/src/*"
+      ],
+      "@mcp/company-contracts": [
+        "packages/company-contracts/src/index.ts"
+      ],
+      "@mcp/company-contracts/*": [
+        "packages/company-contracts/src/*"
+      ],
+      "@mcp/agent-runtime-contracts": [
+        "packages/agent-runtime-contracts/src/index.ts"
+      ],
+      "@mcp/agent-runtime-contracts/*": [
+        "packages/agent-runtime-contracts/src/*"
+      ],
+      "@mcp/agent-runtime-host": [
+        "packages/agent-runtime-host/src/index.ts"
+      ],
+      "@mcp/agent-runtime-host/tool-result.js": [
+        "packages/agent-runtime-host/src/tool-result.ts"
+      ],
+      "@mcp/session-storage": [
+        "packages/session-storage/src/index.ts"
+      ],
+      "@mcp/session-storage/*": [
+        "packages/session-storage/src/*"
+      ],
+      "@mcp/candidate-pipeline": [
+        "packages/candidate-pipeline/src/index.ts"
+      ],
+      "@mcp/candidate-pipeline/*": [
+        "packages/candidate-pipeline/src/*"
+      ],
+      "@mcp/orchestrator-host": [
+        "packages/orchestrator-host/src/index.ts"
+      ],
+      "@mcp/orchestrator-host/*": [
+        "packages/orchestrator-host/src/*"
+      ],
+      "@mcp/api-bus": [
+        "packages/api-bus/src/index.ts"
+      ],
+      "@mcp/api-bus/*": [
+        "packages/api-bus/src/*"
+      ],
+      "@mcp/api-handlers": [
+        "packages/api-handlers/src/index.ts"
+      ],
+      "@mcp/api-handlers/*": [
+        "packages/api-handlers/src/*"
+      ],
+      "@mcp/worker-pool": [
+        "packages/worker-pool/src/index.ts"
+      ],
+      "@mcp/worker-pool/*": [
+        "packages/worker-pool/src/*"
+      ],
+      "@mcp/provider-sdk": [
+        "packages/provider-sdk/src/index.ts"
+      ],
+      "@mcp/provider-sdk/*": [
+        "packages/provider-sdk/src/*"
+      ],
+      "@mcp/provider-runtime": [
+        "packages/provider-runtime/src/index.ts"
+      ],
+      "@mcp/provider-runtime/*": [
+        "packages/provider-runtime/src/*"
+      ],
+      "@mcp/provider-engine": [
+        "packages/provider-engine/src/index.ts"
+      ],
+      "@mcp/provider-engine/*": [
+        "packages/provider-engine/src/*"
+      ],
+      "@mcp/plugin-sdk": [
+        "packages/plugin-sdk/src/index.ts"
+      ],
+      "@mcp/plugin-sdk/*": [
+        "packages/plugin-sdk/src/*"
+      ],
+      "@mcp/plugin-host": [
+        "packages/plugin-host/src/index.ts"
+      ],
+      "@mcp/plugin-host/*": [
+        "packages/plugin-host/src/*"
+      ],
+      "@mcp/plugin-market-client": [
+        "packages/plugin-market-client/src/index.ts"
+      ],
+      "@mcp/plugin-market-client/*": [
+        "packages/plugin-market-client/src/*"
+      ],
+      "@mcp/podman-core": [
+        "packages/podman-core/src/index.ts"
+      ],
+      "@mcp/podman-core/*": [
+        "packages/podman-core/src/*"
+      ],
+      "@mcp/db-drivers": [
+        "packages/db-drivers/src/index.ts"
+      ],
+      "@mcp/db-drivers/*": [
+        "packages/db-drivers/src/*"
+      ],
+      "@mcp/secret-box": [
+        "packages/secret-box/src/index.ts"
+      ],
+      "@mcp/secret-box/*": [
+        "packages/secret-box/src/*"
+      ],
+      "@apps/*": [
+        "apps/*"
+      ],
+      "@mcp/vault-crypto": [
+        "packages/vault-crypto/src/index.ts"
+      ],
+      "@mcp/vault-crypto/*": [
+        "packages/vault-crypto/src/*"
+      ]
     }
   }
 }

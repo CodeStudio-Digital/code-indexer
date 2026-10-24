@@ -3,7 +3,7 @@ import i18n from '../../../i18n/index.js';
 
 type Monaco = typeof MonacoNs;
 
-export type DiagnosticDirection = 'next' | 'previous';
+type DiagnosticDirection = 'next' | 'previous';
 
 export const NEXT_DIAGNOSTIC_COMMAND = 'mcp.editor.problem.next';
 export const PREVIOUS_DIAGNOSTIC_COMMAND = 'mcp.editor.problem.previous';

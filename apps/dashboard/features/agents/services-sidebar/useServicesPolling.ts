@@ -18,7 +18,7 @@ import {
 } from '../../../state/company/index.js';
 import type { ServiceRow } from './types.js';
 
-export interface UseServicesPollingResult {
+interface UseServicesPollingResult {
   services: ServiceRow[];
   loading: boolean;
   error: string | null;

@@ -113,7 +113,7 @@ async function buildPreload() {
 
 console.log('Building CodeStudio Electron app…');
 run('node', ['scripts/check-desktop-runtime-dependencies.mjs']);
-run('node', ['--import', 'tsx', 'scripts/generate-internal-mcp-catalog.ts', '--check']);
+run('node', ['--import', 'tsx', 'apps/mcp-server/scripts/generate-internal-mcp-catalog.ts', '--check']);
 console.log(`  root: ${root}`);
 console.log(
   `  flags: tsc=${!skipTsc} dashboard=${!skipDashboard}`
@@ -189,7 +189,8 @@ if (noPackage) {
 runTool('@electron/rebuild', 'electron-rebuild', ['-f', '-o', 'better-sqlite3']);
 
 // 4. electron-builder
-const builderArgs = ['--config', 'apps/electron/electron-builder.json'];
+// Publishing is a separate release stage that runs only after verification.
+const builderArgs = ['--config', 'apps/electron/electron-builder.json', '--publish', 'never'];
 if (output) builderArgs.push(`--config.directories.output=${resolve(root, output)}`);
 if (target) {
   const platformFlag = {

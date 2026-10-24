@@ -15,7 +15,7 @@ interface SSEStream {
   writeSSE(message: { event?: string; data: string; id?: string }): Promise<unknown>;
 }
 
-export const DEFAULT_HEARTBEAT_MS = 20_000;
+const DEFAULT_HEARTBEAT_MS = 20_000;
 
 export function attachHeartbeat(stream: SSEStream, intervalMs: number = DEFAULT_HEARTBEAT_MS): () => void {
   const timer = setInterval(() => {

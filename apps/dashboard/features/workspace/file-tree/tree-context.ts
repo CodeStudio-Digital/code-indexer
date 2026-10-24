@@ -44,7 +44,7 @@ const RUNTIME_LABEL: Record<FileRuntime, string> = {
 };
 
 /** Seleção viva (count para o rótulo; getPaths lido no clique). */
-export interface MenuSelection {
+interface MenuSelection {
   count: number;
   getPaths: () => string[];
 }
@@ -54,21 +54,21 @@ export interface MenuSelection {
  * `projectRoot` (root_path nativo) habilita "Absolute path"; `repoRoot`
  * (posix, do git) + `isRepo` habilitam o caminho repo-relative e o submenu Git.
  */
-export interface MenuContext {
+interface MenuContext {
   projectRoot?: string | null;
   repoRoot?: string | null;
   isRepo?: boolean;
 }
 
-export function posixBasename(p: string): string {
+function posixBasename(p: string): string {
   const ix = p.lastIndexOf('/');
   return ix < 0 ? p : p.slice(ix + 1);
 }
-export function posixDirname(p: string): string {
+function posixDirname(p: string): string {
   const ix = p.lastIndexOf('/');
   return ix <= 0 ? '' : p.slice(0, ix);
 }
-export function posixJoin(a: string, b: string): string {
+function posixJoin(a: string, b: string): string {
   if (!a) return b;
   return a.endsWith('/') ? a + b : `${a}/${b}`;
 }
@@ -247,7 +247,7 @@ export function buildContextItems(
               : entry.path;
             const url = gitRemote ? githubUrlFor(gitRemote, defaultBranch, relPosix) : null;
             if (!url) {
-              toast.message(i18n.t('workspace:fileTree.noGithubRemote'), {
+              toast.info(i18n.t('workspace:fileTree.noGithubRemote'), {
                 description: i18n.t('workspace:fileTree.noGithubRemoteBody'),
               });
               return;

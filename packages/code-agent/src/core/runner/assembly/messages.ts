@@ -13,7 +13,7 @@
 import type { AgentMessage, ContentBlock } from '@mcp/code-agent/core/messages.js';
 import type { CoderTunables } from '@mcp/code-agent/core/tunables.js';
 import type { CompactionLimits } from '@mcp/code-agent/core/compaction.js';
-import { compactHistoryForLLM } from '@mcp/code-agent/core/runner.js';
+import { compactHistoryForLLM } from './compact-history.js';
 import { formatDynamicInjection, type DynamicInjectionResult } from './dynamic-injection.js';
 
 export interface AssembleMessagesArgs {

@@ -11,7 +11,7 @@ import * as monaco from 'monaco-editor';
 import type { MergeRegion } from './model/types.js';
 import type { ThreePaneHandles } from './three-pane-models.js';
 
-export interface MergeAlign {
+interface MergeAlign {
   update(): void;
   dispose(): void;
 }

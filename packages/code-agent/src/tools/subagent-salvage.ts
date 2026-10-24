@@ -1,6 +1,6 @@
 import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import type { SubagentCollected } from '@mcp/code-agent/tools/implement-subagent.js';
+import type { SubagentCollected } from './subagent-collected.js';
 import { consumeStream } from '@mcp/code-agent/core/runner/nodes/executing-stream.js';
 
 export interface SalvageSummaryArgs {

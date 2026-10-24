@@ -78,7 +78,7 @@ export function buildPlaywrightReportUrl(opts: {
 }
 
 /** Soft-abort: marks the run as `aborted` so the UI stops showing the spinner. */
-export async function abortRun(opts: { sessionId: string; runId: string }): Promise<{ run: QaRun }> {
+async function abortRun(opts: { sessionId: string; runId: string }): Promise<{ run: QaRun }> {
   const res = await fetch(`${BASE}/${opts.sessionId}/qa/runs/${opts.runId}/abort`, {
     method: 'POST',
   });

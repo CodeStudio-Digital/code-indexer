@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import type { RunCoderHandle } from '@mcp/code-agent/index.js';
+import type { RunCoderHandle } from '@mcp/code-agent/index/types.js';
 import type { IMetaBusPublisher } from '../ports.js';
 import { MetaBusWirer } from '../MetaBusWirer.js';
 

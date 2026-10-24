@@ -14,7 +14,7 @@ import type { SyncPullItem, SyncPushItem } from '@mcp/api-bus';
 import type { ApiCollection, ApiEnvironment, ApiRequest, KvRow } from '../types.js';
 import { redactSecrets, REDACTION_PLACEHOLDER } from '../ai/redact.js';
 
-export interface EnvBody {
+interface EnvBody {
   name: string;
   baseUrl: string;
   isDefault: boolean;
@@ -65,7 +65,7 @@ export function planEnvPush(
   });
 }
 
-export interface EnvApplyAction {
+interface EnvApplyAction {
   clientDocId: string;
   version: number;
   deleted: boolean;
@@ -314,7 +314,7 @@ export function planCollectionPush(
   });
 }
 
-export interface CollectionApplyAction {
+interface CollectionApplyAction {
   clientDocId: string;
   version: number;
   deleted: boolean;

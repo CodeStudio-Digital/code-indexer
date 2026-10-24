@@ -10,6 +10,7 @@ import {
   SESSION_STORAGE_LAYOUT_VERSION,
 } from '../../session-layout-guard.js';
 import { filesystemSessionCutover263 } from '../263_filesystem_session_cutover.js';
+import { MIGRATIONS } from '../index.js';
 
 describe('migration 263 filesystem session cutover', () => {
   const handles: Array<{ close(): void }> = [];
@@ -33,7 +34,7 @@ describe('migration 263 filesystem session cutover', () => {
           version: number;
         }
       ).version,
-    ).toBe(267);
+    ).toBe(Math.max(...MIGRATIONS.map((migration) => migration.version)));
     expect(
       (
         db.prepare('SELECT value FROM app_settings WHERE key = ?').get(

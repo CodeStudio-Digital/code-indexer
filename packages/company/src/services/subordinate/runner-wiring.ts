@@ -13,7 +13,7 @@
  * runner interception wiring.
  */
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
-import type { RunCoderHandle } from '@mcp/code-agent/index.js';
+import type { RunCoderHandle } from '@mcp/code-agent/index/types.js';
 import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
 import type { IMetaBusWirer } from '@mcp/company/services/ports.js';
 

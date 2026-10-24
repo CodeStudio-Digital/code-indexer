@@ -14,7 +14,7 @@ import { cn } from '../../lib/utils.js';
 import { Badge } from '../ui/badge.js';
 import { Button } from '../ui/button.js';
 
-export interface ToolAssignmentOption {
+interface ToolAssignmentOption {
   name: string;
   tier: string;
   source: string;
@@ -166,7 +166,7 @@ function ToolGroup({
   );
 }
 
-export interface ToolAssignmentEditorProps {
+interface ToolAssignmentEditorProps {
   tools: ToolAssignmentOption[];
   selected: string[];
   onChange: (tools: string[]) => void;
@@ -203,7 +203,7 @@ export function ToolAssignmentEditor({
     [baselineSelected],
   );
 
-  const allTools = useMemo(() => {
+  const allTools = useMemo<ToolAssignmentOption[]>(() => {
     const knownNames = new Set(tools.map((tool) => tool.name));
     return [
       ...tools,

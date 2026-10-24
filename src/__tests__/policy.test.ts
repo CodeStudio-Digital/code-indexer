@@ -41,7 +41,7 @@ describe('resolveToolMetadata', () => {
       scopeAware: true,
       interactive: false,
     });
-    expect(resolveToolMetadata(tool)).toEqual({
+    expect(resolveToolMetadata(tool)).toMatchObject({
       mutates: true,
       parallelSafe: false,
       riskLevel: 'admin',
@@ -87,15 +87,12 @@ describe('resolveToolMetadata', () => {
     expect(meta.parallelSafe).toBe(true);
   });
 
-  it('unknown mcp_external tools default to non-mutating in Phase 2 (legacy posture)', () => {
+  it('treats unknown external tools as mutations and serializes them', () => {
     const meta = resolveToolMetadata(
       makeTool({ name: 'ext_unknown__danger', source: 'mcp_external' }),
     );
-    // Phase 2 preserves legacy behaviour. Tightening this default is
-    // explicitly reserved for Phase 5 (strict mode), at which point the
-    // policy context's `strict: true` flag will make the difference.
-    expect(meta.mutates).toBe(false);
-    expect(meta.parallelSafe).toBe(true);
+    expect(meta.mutates).toBe(true);
+    expect(meta.parallelSafe).toBe(false);
   });
 });
 

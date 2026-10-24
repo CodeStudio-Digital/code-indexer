@@ -20,7 +20,7 @@ const windowProjects = new Map<number, number>();
 /** Windows whose `closed` cleanup is already attached (avoid double-binding). */
 const tracked = new WeakSet<BrowserWindow>();
 
-export interface OpenProjectEntry {
+interface OpenProjectEntry {
   windowId: number;
   projectId: number;
   focused: boolean;

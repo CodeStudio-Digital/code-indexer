@@ -38,11 +38,6 @@ function readKey(ctx: ToolContext): object | null {
   return (ctx.runner as unknown as object) ?? null;
 }
 
-/** Test-only compatibility hook retained after redundant creates became idempotent. */
-export function _resetCreateBurstForKey(_key: object): void {
-  // No burst state remains.
-}
-
 async function readGoal(ctx: ToolContext): Promise<GoalState | null> {
   if (ctx.getGoalState) {
     const persisted = await ctx.getGoalState();

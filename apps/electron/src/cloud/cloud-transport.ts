@@ -16,7 +16,7 @@ function hv(v: string): string {
   return String(v).replace(/[^\x20-\x7e]/g, '').trim();
 }
 
-export interface TransportDeps {
+interface TransportDeps {
   baseUrl: string;
   getAccessToken: () => Promise<string | null>;
   invalidateAccess: () => void;
@@ -73,4 +73,4 @@ export function createCloudTransport(deps: TransportDeps) {
   };
 }
 
-export type CloudTransport = ReturnType<typeof createCloudTransport>;
+type CloudTransport = ReturnType<typeof createCloudTransport>;

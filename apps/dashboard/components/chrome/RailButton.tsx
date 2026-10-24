@@ -16,7 +16,7 @@ import type { LucideIcon } from 'lucide-react';
 import { cn } from '../../lib/utils.js';
 import { useContextMenu, type ContextMenuItem } from '../ui/context-menu.js';
 
-export interface RailButtonProps {
+interface RailButtonProps {
   icon: LucideIcon;
   label: string;
   active: boolean;

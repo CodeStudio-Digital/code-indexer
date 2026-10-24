@@ -4,7 +4,7 @@
  * with a UI-facing `kind`, so screens branch on intent (re-login, upsell, bot
  * check, …) rather than raw codes. Pure — unit-tested for exhaustiveness.
  */
-export type CloudErrorKind =
+type CloudErrorKind =
   | 'invalid_input'
   | 'auth_required'
   | 'email_unverified'

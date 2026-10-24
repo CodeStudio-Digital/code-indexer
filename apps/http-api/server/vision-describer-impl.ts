@@ -61,7 +61,7 @@ function cacheKey(req: VisionDescribeRequest): string {
   return `${img}:${prm}`;
 }
 
-export interface VisionDescriberDeps {
+interface VisionDescriberDeps {
   resolver: PipelineProviderResolver;
 }
 

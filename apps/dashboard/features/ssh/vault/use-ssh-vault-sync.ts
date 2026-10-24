@@ -144,7 +144,7 @@ export interface ShareRecipient {
   keyChanged: boolean;
 }
 
-export interface VaultSyncSummary {
+interface VaultSyncSummary {
   pushed: number;
   conflicts: number;
   pulledApplied: number;

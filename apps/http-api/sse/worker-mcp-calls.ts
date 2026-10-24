@@ -1,8 +1,8 @@
-import type { MessageBridge } from '../../../packages/orchestrator-host/src/index.js';
+import type { MessageBridge } from '@mcp/orchestrator-host';
 import { err, unknownToolOutcome } from "@mcp/agent-runtime-host/tool-result.js";
 import type { McpExternalPool } from './McpExternalPool.js';
 
-export interface WorkerMcpCallRequest {
+interface WorkerMcpCallRequest {
   callId?: string; serverId: string; toolName: string; args: Record<string, unknown>;
   catalogueRevision?: string; runId?: number; authority?: unknown;
 }

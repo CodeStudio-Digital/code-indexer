@@ -144,7 +144,7 @@ export function notFound(c: Context, message = 'Not found') {
  * filesystem catalog + session.json. Missing parents fail closed; there is no
  * SQLite or legacy-id fallback.
  */
-export interface ResolvedCompanySessionContext {
+interface ResolvedCompanySessionContext {
   requestedId: CompanySessionId;
   rootId: CompanySessionId;
   requestedFiles: CompanySessionFiles;

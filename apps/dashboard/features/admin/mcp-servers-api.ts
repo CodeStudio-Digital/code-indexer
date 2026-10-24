@@ -66,7 +66,7 @@ export async function testMcpServer(id: string): Promise<McpServerTestResult> {
   return (await r.json()) as McpServerTestResult;
 }
 
-export async function fetchServerTools(id: string): Promise<McpServerToolInfo[]> {
+async function fetchServerTools(id: string): Promise<McpServerToolInfo[]> {
   const r = await fetch(`/api/admin/mcp-servers/${id}/tools`);
   if (!r.ok) return [];
   const j = (await r.json()) as { tools: McpServerToolInfo[] };

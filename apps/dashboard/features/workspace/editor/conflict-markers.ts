@@ -71,9 +71,9 @@ export function parseConflictRegions(text: string): ConflictRegion[] {
   return regions;
 }
 
-export type ConflictSide = 'current' | 'incoming' | 'both';
+type ConflictSide = 'current' | 'incoming' | 'both';
 
-export interface ConflictLabels {
+interface ConflictLabels {
   current: string;
   incoming: string;
   both: string;
@@ -169,8 +169,8 @@ export function attachConflictUI(
 
   const cmdId = ensureApplyCommand(monaco);
 
-  const emitter = new monaco.Emitter<void>();
-  const provider = monaco.languages.registerCodeLensProvider('*', {
+  const emitter = new monaco.Emitter<MonacoNs.languages.CodeLensProvider>();
+  const lensProvider: MonacoNs.languages.CodeLensProvider = {
     onDidChange: emitter.event,
     provideCodeLenses: (m) => {
       if (m.uri.toString() !== uri) return { lenses: [], dispose() { /* */ } };
@@ -184,9 +184,10 @@ export function attachConflictUI(
       });
       return { lenses, dispose() { /* */ } };
     },
-  });
+  };
+  const provider = monaco.languages.registerCodeLensProvider('*', lensProvider);
 
-  const sub = model.onDidChangeContent(() => { refresh(); emitter.fire(); });
+  const sub = model.onDidChangeContent(() => { refresh(); emitter.fire(lensProvider); });
 
   return {
     dispose() {

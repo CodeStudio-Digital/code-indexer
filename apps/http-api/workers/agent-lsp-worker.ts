@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline';
-import { TsLanguageService } from '../../../packages/code-agent/src/lsp/ts-service.js';
-import { lspPage, type AgentLspQuery, type AgentLspAnswer } from '../../../packages/code-agent/src/ports/lsp-port.js';
+import { TsLanguageService } from '@mcp/code-agent/lsp/ts-service.js';
+import { lspPage, type AgentLspQuery, type AgentLspAnswer } from '@mcp/code-agent/ports/lsp-port.js';
 
 // Stdout is the framed protocol; compiler diagnostics belong on stderr.
 console.log = console.info = console.warn = (...args: unknown[]) => console.error(...args);

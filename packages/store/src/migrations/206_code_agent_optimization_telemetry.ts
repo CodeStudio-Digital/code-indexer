@@ -3,7 +3,7 @@
  * Additive and guarded because project DBs trim all coder/quality tables.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

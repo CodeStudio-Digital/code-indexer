@@ -56,8 +56,8 @@ export function SaveRequestDialog({ projectId, open, onOpenChange, collections, 
   const onFolderChange = async (v: string) => {
     if (v === '__newfolder__') {
       const n = await prompt({ title: t('saveDialog.newFolderTitle'), placeholder: t('saveDialog.folderNamePlaceholder') });
-      const t = n?.trim();
-      if (t) { setFolders((f) => (f.includes(t) ? f : [...f, t].sort((a, b) => a.localeCompare(b)))); setFolder(t); }
+      const folderName = n?.trim();
+      if (folderName) { setFolders((f) => (f.includes(folderName) ? f : [...f, folderName].sort((a, b) => a.localeCompare(b)))); setFolder(folderName); }
       return;
     }
     setFolder(v);

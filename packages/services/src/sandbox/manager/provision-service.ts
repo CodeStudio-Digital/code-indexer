@@ -32,7 +32,7 @@ import {
   DEFAULT_SANDBOX_ISOLATION,
   DEFAULT_SANDBOX_LIMITS,
 } from '@mcp/services/sandbox/types.js';
-import type { ProvisionServiceRequest } from '@mcp/services/sandbox/sandbox-manager.js';
+import type { ProvisionServiceRequest } from '../sandbox-manager/types.js';
 import type { ISandboxDriver } from '@mcp/services/sandbox/ports/sandbox-driver.js';
 import type { PortAllocator } from '@mcp/services/sandbox/port-allocator.js';
 import type { SandboxRegistry } from '@mcp/services/sandbox/manager/state/registry.js';

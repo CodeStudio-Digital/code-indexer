@@ -11,7 +11,7 @@ import { useWorkspaceStore } from '../../state/workspace.js';
 import { saveFile, saveAllDirty } from '../workspace/editor/save.js';
 import { getActiveEditor } from '../workspace/editor/editor-models.js';
 
-export interface ProjectCommandDeps {
+interface ProjectCommandDeps {
   projectId: number;
   toggleBottomTerminal: () => void;
   toggleProjectFiles: () => void;

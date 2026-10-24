@@ -3,7 +3,7 @@ import type { LucideIcon } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../ui/dialog.js';
 import { cn } from '../../lib/utils.js';
 
-export type WorkBoardTone = 'neutral' | 'blue' | 'amber' | 'violet' | 'green' | 'red';
+type WorkBoardTone = 'neutral' | 'blue' | 'amber' | 'violet' | 'green' | 'red';
 
 const TONE: Record<WorkBoardTone, string> = {
   neutral: 'border-border bg-muted/60 text-muted-foreground',
@@ -49,13 +49,13 @@ export function WorkBoardCardContent({
   );
 }
 
-export function WorkBoardProgress({ value, max, tone = 'green' }: { value: number; max: number; tone?: 'green' | 'amber' | 'violet' }) {
+function WorkBoardProgress({ value, max, tone = 'green' }: { value: number; max: number; tone?: 'green' | 'amber' | 'violet' }) {
   const percentage = max > 0 ? Math.max(0, Math.min(100, (value / max) * 100)) : 0;
   const color = tone === 'amber' ? 'bg-amber-500' : tone === 'violet' ? 'bg-violet-500' : 'bg-emerald-500';
   return <div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className={cn('h-full transition-[width]', color)} style={{ width: `${percentage}%` }} /></div>;
 }
 
-export function WorkBoardSection({ icon: Icon, title, count, action, children }: { icon?: LucideIcon; title: ReactNode; count?: ReactNode; action?: ReactNode; children: ReactNode }) {
+function WorkBoardSection({ icon: Icon, title, count, action, children }: { icon?: LucideIcon; title: ReactNode; count?: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
     <section className="mt-5">
       <div className="mb-2 flex items-center gap-1.5">

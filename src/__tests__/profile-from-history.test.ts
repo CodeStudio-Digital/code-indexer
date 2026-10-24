@@ -12,7 +12,7 @@ import { inferProfileFromHistory } from '@mcp/code-agent/tools/tiers.js';
 describe('inferProfileFromHistory', () => {
   it('returns bootstrap when only bootstrap tools were used', () => {
     expect(
-      inferProfileFromHistory(['read_file', 'list_directory', 'ask_user']),
+      inferProfileFromHistory(['mcp__read_file', 'list_directory', 'ask_user']),
     ).toBe('bootstrap');
   });
 
@@ -34,7 +34,7 @@ describe('inferProfileFromHistory', () => {
 
   it('treats unknown / external tool names as bootstrap by default', () => {
     expect(
-      inferProfileFromHistory(['ext_my_server__do_thing', 'read_file']),
+      inferProfileFromHistory(['ext_my_server__do_thing', 'mcp__read_file']),
     ).toBe('bootstrap');
   });
 

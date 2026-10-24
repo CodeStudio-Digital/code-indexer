@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CodeIndexDB } from '../db.js';
 import { ProviderStore } from '../provider-store.js';
+import { getDefinition, registerProvider, unregisterProvider } from '@mcp/services/providers/registry.js';
 
 interface Handle {
   db: CodeIndexDB;
@@ -43,6 +44,7 @@ describe('seedFromEnvIfEmpty — env tokens are inert', () => {
   });
   afterEach(() => {
     teardown(h);
+    unregisterProvider('seed-test-plugin');
     if (orig !== undefined) process.env.ZAI_API_KEY = orig;
     else delete process.env.ZAI_API_KEY;
   });
@@ -90,5 +92,25 @@ describe('seedFromEnvIfEmpty — env tokens are inert', () => {
     const zai = h.store.getProvider('zai');
     expect(zai!.api_key).toBe('my-real-key');
     expect(zai!.enabled).toBe(true);
+  });
+
+  it('seeds newly registered plugin metadata without enabling its credentials', () => {
+    const builtin = getDefinition('openai')!;
+    registerProvider({
+      ...builtin,
+      kind: 'seed-test-plugin',
+      displayName: 'Seed test plugin',
+      defaultBaseURL: 'https://seed-test.invalid/v1',
+      envVars: ['SEED_TEST_PLUGIN_API_KEY'],
+    });
+
+    h.store.seedFromEnvIfEmpty();
+
+    expect(h.store.getProvider('seed-test-plugin')).toMatchObject({
+      name: 'Seed test plugin',
+      base_url: 'https://seed-test.invalid/v1',
+      enabled: false,
+      api_key: null,
+    });
   });
 });

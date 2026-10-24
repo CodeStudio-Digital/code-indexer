@@ -14,5 +14,8 @@
   "dependencies": {
     "@mcp/agent-runtime-contracts": "workspace:*",
     "@mcp/provider-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.2"
   }
 }

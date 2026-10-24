@@ -110,9 +110,10 @@ describe('update_task — error paths', () => {
       current_task_id: null,
       tasks: [task({ id: 'task_1', title: 'X' })],
     });
-    const r = await updateTask.handler({ task_id: 'task_99', status: 'skipped' }, ctx);
+    const unknownId = 'tsk_00000099';
+    const r = await updateTask.handler({ task_id: unknownId, status: 'skipped' }, ctx);
     expect(r.isError).toBe(true);
-    expect(r.content).toContain("unknown task_id 'task_99'");
+    expect(r.content).toContain(`unknown task_id '${unknownId}'`);
     expect(r.content).toContain('id=task_1');
   });
 

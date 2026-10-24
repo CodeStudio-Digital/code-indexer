@@ -17,7 +17,7 @@ import {
   type TerminalShell,
 } from '../../../state/terminal-shell-prefs.js';
 
-export interface ShellPicker {
+interface ShellPicker {
   /** Detected + custom shells, for the picker menu. */
   shells: TerminalShell[];
   /** The shell "+" will spawn (preferred, or first available). */

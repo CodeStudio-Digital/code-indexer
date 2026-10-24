@@ -24,7 +24,7 @@ import type { SshHost, SshHostStorageScope } from '../types.js';
  * `sshHostScope` falls back to `is_shared` when the scope is absent — the two
  * must never disagree.
  */
-export interface HostDocRef {
+interface HostDocRef {
   id: number;
   is_shared: number;
   storage_scope: SshHostStorageScope;

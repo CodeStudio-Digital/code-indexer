@@ -9,7 +9,7 @@ import { useTranslation } from 'react-i18next';
 import { norm } from '../../../lib/normalize.js';
 import type { SettingCategory, SettingItem } from './types.js';
 
-export interface FilterArgs {
+interface FilterArgs {
   items: SettingItem[];
   activeCategory: SettingCategory | 'all';
   query: string;

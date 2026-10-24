@@ -73,7 +73,7 @@ function inEditable(target: EventTarget | null): boolean {
 
 type PendingListener = (prefix: string | null) => void;
 const pendingListeners = new Set<PendingListener>();
-export function onChordPending(fn: PendingListener): () => void {
+function onChordPending(fn: PendingListener): () => void {
   pendingListeners.add(fn);
   return () => pendingListeners.delete(fn);
 }
@@ -131,7 +131,7 @@ export function installKeymapDispatcher(): () => void {
         const cmd = getCommand(id);
         if (!cmd) continue;
         if (inEditable(e.target) && !cmd.allowInInputs) continue;
-        if (cmd.when && !cmd.when()) continue;
+        if (!cmd.available || (cmd.handler?.when && !cmd.handler.when())) continue;
         e.preventDefault();
         e.stopPropagation();
         if (isPrefix) setPending(sequence, id);

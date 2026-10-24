@@ -344,7 +344,7 @@ function nodeSearchText(node: DbTreeNode, conn?: DbConnection): string {
   ].filter(Boolean).join(' '));
 }
 
-export type ConnectionTreeRenderItem =
+type ConnectionTreeRenderItem =
   | { kind: 'node'; key: string; node: DbTreeNode }
   | { kind: 'group'; key: string; label: string }
   | { kind: 'schema-filter'; key: string; nodeId: string; depth: number; value: string };

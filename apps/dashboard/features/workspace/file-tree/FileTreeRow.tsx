@@ -32,7 +32,7 @@ function IndentGuides({ depth }: { depth: number }) {
   );
 }
 
-export interface FileTreeRowProps {
+interface FileTreeRowProps {
   entry: TreeEntry;
   depth: number;
   projectId: number;
@@ -160,7 +160,7 @@ interface InlineRenameInputProps {
   onCancel: () => void;
 }
 
-export function InlineRenameInput({ initialName, depth, iconColor, Icon, onSubmit, onCancel }: InlineRenameInputProps) {
+function InlineRenameInput({ initialName, depth, iconColor, Icon, onSubmit, onCancel }: InlineRenameInputProps) {
   const [value, setValue] = useState(initialName);
   const inputRef = useRef<HTMLInputElement>(null);
 

@@ -8,7 +8,7 @@
  * with existing callers and tests.
  */
 import type { AgentId } from '@mcp/code-agent/agents/index.js';
-import type { CoderAttachment } from '@mcp/code-agent/index.js';
+import type { CoderAttachment } from '@mcp/code-agent/index/types.js';
 import type { RoleSkills } from '@mcp/company/types.js';
 import type { RoleDispatchSource } from '@mcp/company/services/subordinate/role-runtime.js';
 

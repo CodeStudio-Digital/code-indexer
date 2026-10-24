@@ -43,7 +43,7 @@ import {
  * the sandbox manager. Exported because the delete-plan needs to
  * enumerate which volumes the cleanup CAN remove.
  */
-export function nodeModulesVolumeName(sessionId: CompanySessionId | string, serviceId?: string): string {
+function nodeModulesVolumeName(sessionId: CompanySessionId | string, serviceId?: string): string {
   const safeSession = String(sessionId).replace(/[^a-zA-Z0-9_.-]/g, '-').slice(0, 48);
   const base = `mcp-sbx-nm-${safeSession}`;
   return serviceId ? `${base}-${serviceId}` : base;

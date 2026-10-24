@@ -14,7 +14,7 @@ import { apiBaseUrl } from '../../lib/api-client.js';
 import { usePolling } from '../../hooks/usePolling.js';
 import type { ProcessSnapshot } from './columns.js';
 
-export interface KillOutcome {
+interface KillOutcome {
   ok: boolean;
   /** Machine-readable denial reason (`main_process_protected`, …). */
   code?: string;

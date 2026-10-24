@@ -10,33 +10,20 @@ import {
 
 describe('tool tiers', () => {
   it('bootstrap tier contains exactly the expected tools', () => {
-    // Locked-down count so accidental additions show up in CI.
-    // Bumped to 41 when `find_tools` + `request_review` were added (Camadas
-    // 3 and 4 — lazy tool discovery and reviewer subagent).
-    // Bumped to 42 when `rag_search_docs` joined (Documentação feature —
-    // read-only RAG over the user-curated doc corpus).
-    // Refreshed to 53 (the prior hardcoded 54 had drifted by one — bootstrap
-    // membership is unchanged by the cozy-scone tool retirement).
-    expect(TIER_COUNTS.bootstrap).toBe(53);
+    // Current explicit surface after progressive tool disclosure.
+    expect(TIER_COUNTS.bootstrap).toBe(37);
   });
 
   it('navigate tier contains the expected tools', () => {
-    // 54 after the 2026-07 tool audit retired the six 0-call symbol/overview
-    // MCP tools (get_file_structure / search_concepts / search_by_kind /
-    // get_class_members / get_symbol_details / get_architecture — −6 from the
-    // prior 60, which itself reflected the cozy-scone cross-project/snapshot
-    // retirement). See docs/audit/TOOL_AUDIT.md.
-    expect(TIER_COUNTS.navigate).toBe(54);
+    expect(TIER_COUNTS.navigate).toBe(57);
   });
 
   it('admin tier contains the expected tools', () => {
-    // 11 after retiring delete_project + the snapshot CRUD tools
-    // (add/update/delete_snapshot + get_snapshot_history — −5). See plan cozy-scone.
-    expect(TIER_COUNTS.admin).toBe(11);
+    expect(TIER_COUNTS.admin).toBe(9);
   });
 
   it('classifies bootstrap tools correctly', () => {
-    expect(getToolTier('read_file')).toBe('bootstrap');
+    expect(getToolTier('mcp__read_file')).toBe('bootstrap');
     expect(getToolTier('mcp__get_project_pulse')).toBe('bootstrap');
     expect(getToolTier('ask_user')).toBe('bootstrap');
     expect(getToolTier('expand_toolset')).toBe('bootstrap');
@@ -47,6 +34,7 @@ describe('tool tiers', () => {
   });
 
   it('classifies navigate tools correctly', () => {
+    expect(getToolTier('read_file')).toBe('navigate');
     expect(getToolTier('write_file')).toBe('navigate');
     expect(getToolTier('edit_file')).toBe('navigate');
     expect(getToolTier('multi_edit')).toBe('navigate');
@@ -63,7 +51,6 @@ describe('tool tiers', () => {
     expect(getToolTier('git_add')).toBe('admin');
     expect(getToolTier('mcp__index_project')).toBe('admin');
     expect(getToolTier('mcp__get_costs')).toBe('admin');
-    expect(getToolTier('mcp__get_diff')).toBe('admin');
     expect(getToolTier('enter_worktree')).toBe('admin');
     expect(getToolTier('exit_worktree')).toBe('admin');
   });
@@ -88,7 +75,7 @@ describe('tool tiers', () => {
       { name: 'mcp__index_project' },
     ];
     const bootstrap = filterByTiers(tools, profileToTiers('bootstrap'));
-    expect(bootstrap.map((t) => t.name).sort()).toEqual(['mcp__get_project_pulse', 'read_file']);
+    expect(bootstrap.map((t) => t.name).sort()).toEqual(['mcp__get_project_pulse']);
 
     const navigate = filterByTiers(tools, profileToTiers('navigate'));
     expect(navigate.map((t) => t.name).sort()).toEqual([

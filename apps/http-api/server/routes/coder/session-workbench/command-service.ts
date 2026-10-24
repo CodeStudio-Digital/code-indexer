@@ -37,11 +37,11 @@ type CommandStore = {
   ): Promise<FsSessionEvent | null>;
 };
 
-export type SessionWorkbenchEnabledSkillResolver = (
+type SessionWorkbenchEnabledSkillResolver = (
   session: FsCoderSession,
 ) => Promise<Set<string>>;
 
-export type SessionWorkbenchCommandEventPublisher = (
+type SessionWorkbenchCommandEventPublisher = (
   event: SessionWorkbenchEvent,
 ) => void | Promise<void>;
 

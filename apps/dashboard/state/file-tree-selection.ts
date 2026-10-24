@@ -101,6 +101,6 @@ export const useSelectionStore = create<SelectionState>((set, get) => ({
 }));
 
 /** Snapshot dos paths selecionados (para delete/copy, lidos no clique). */
-export function currentSelection(): string[] {
+function currentSelection(): string[] {
   return [...useSelectionStore.getState().selected];
 }

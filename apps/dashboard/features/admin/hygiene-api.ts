@@ -32,14 +32,14 @@ export interface CleanupResult {
   vector_error: string | null;
 }
 
-export interface PurgeSummary {
+interface PurgeSummary {
   project_id: number;
   vectors_known: number;
   vectors_deleted: number;
   vector_error: string | null;
 }
 
-export interface SqlSweepResult {
+interface SqlSweepResult {
   ok: boolean;
   languages_normalized: number;
   stale_runs_closed: number;
@@ -80,7 +80,7 @@ export function runGlobalSqlCleanup(): Promise<SqlSweepResult> {
   return postJson<SqlSweepResult>('/api/hygiene/global/sql-cleanup');
 }
 
-export interface ClearAllDataResult {
+interface ClearAllDataResult {
   ok: boolean;
   projects_cleared: number;
   vectors_deleted: number;
@@ -95,7 +95,7 @@ export function clearAllProjectData(): Promise<ClearAllDataResult> {
   return postJson<ClearAllDataResult>('/api/projects/clear-all-data');
 }
 
-export interface ClearOneResult {
+interface ClearOneResult {
   ok: boolean;
   vectors_known: number;
   vectors_deleted: number;

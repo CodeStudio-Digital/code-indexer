@@ -70,8 +70,8 @@ describe('buildSystemPrompt per-agent identity sections', () => {
   it('keeps the base body regardless of agentId', () => {
     for (const id of ['explore', 'build', 'admin'] satisfies AgentId[]) {
       const p = buildSystemPrompt({ ...base, agentId: id });
-      expect(p).toContain('MCP Code Indexer');
-      expect(p).toContain('get_project_pulse');
+      expect(p).toContain('You work inside CodeStudio');
+      expect(p).toContain('# Operating contract');
     }
   });
 });

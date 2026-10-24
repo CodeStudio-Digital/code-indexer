@@ -1,3 +1,4 @@
+import type { CompanyOrchestratorPort } from './orchestrator-port.js';
 /**
  * CompanyOrchestrator — facade that composes the focused services owning the
  * domain logic. Service wiring lives in `./orchestrator/wire-services.ts`;
@@ -6,8 +7,9 @@
  * keeps `metaBus`, exposes service handles, and delegates the public API so
  * tools / HTTP routes / CompanyContext consumers keep working unchanged.
  */
-import type { MasterStartResult } from '@mcp/code-agent/index.js';
+import type { MasterStartResult } from '@mcp/code-agent/index/types.js';
 import type { CoderRunBus } from '@apps/http-api/coder-bus.js';
+import type { QaRunCompletedPayload } from './tools/qa/qa-event-types.js';
 import type { CompanyStore } from '@mcp/store/company-store.js';
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/fs-session-store.js';
@@ -80,7 +82,7 @@ export interface CompanyOrchestratorOpts {
   db: CodeIndexDB;
 }
 
-export class CompanyOrchestrator {
+export class CompanyOrchestrator implements CompanyOrchestratorPort {
   readonly companySessionId: CompanySessionId;
   /**
    * When non-null, this orchestrator is a sub-session ("front tab") of the
@@ -108,6 +110,10 @@ export class CompanyOrchestrator {
 
   private readonly ctx: SessionContext;
   private readonly publisher: MetaBusPublisher;
+
+  publishQaResult(payload: QaRunCompletedPayload): void {
+    this.publisher.publish('qa_run_completed', payload);
+  }
   private readonly kanban: KanbanService | null;
   private readonly board: BoardBridge;
   private readonly status: AgentStatusUpdater;

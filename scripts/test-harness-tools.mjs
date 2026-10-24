@@ -17,6 +17,8 @@ const nodeOnly = [
   'src/__tests__/worktree.test.ts',
 ];
 const groups = [
+  'apps/mcp-server/__tests__/mcp-bridge-outcome.test.ts',
+  'src/__tests__/semantic-queue-cleanup.test.ts',
   'apps/http-api/sse/__tests__/CoderWorkerPool.test.ts',
   'packages/code-agent/src/runtime/__tests__/bounded-tool-result-data.test.ts',
   'packages/store/src/db/__tests__/schema-bootstrap.test.ts',

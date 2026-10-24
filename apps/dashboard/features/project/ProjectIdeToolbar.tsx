@@ -71,6 +71,10 @@ export function ProjectBranchControl({ projectId }: { projectId: number }) {
         <BranchPopover
           projectId={projectId}
           onMutated={() => setRefresh((value) => value + 1)}
+          onRequestCommit={() => {
+            useWorkspaceLayout.getState().setActiveLeft('git');
+            setOpen(false);
+          }}
           onClose={() => setOpen(false)}
         />
       </PopoverContent>

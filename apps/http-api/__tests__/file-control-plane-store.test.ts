@@ -116,6 +116,19 @@ describe('FileControlPlaneStore', () => {
     return { store, context, preparation, admission, bus, abortWorker, provideInput, activate };
   }
 
+  it('dispatches domain events through the public runtime-event method', async () => {
+    const { authority, context } = await preparingAttempt();
+    const append = vi.spyOn(authority, 'appendRuntimeEvent').mockResolvedValue();
+    await authority.appendToolBoundary({ context, toolUseId: 'tool-1', toolName: 'read_file', phase: 'started' });
+    await authority.recordDivergences(context, [{ kind: 'fixture-divergence' }]);
+    expect(append).toHaveBeenCalledTimes(2);
+    expect(append.mock.calls[0][0]).toMatchObject({
+      sessionId: context.sessionId,
+      payload: { toolUseId: 'tool-1', toolName: 'read_file' },
+    });
+    expect(append.mock.calls[1][0]).toMatchObject({ sessionId: context.sessionId });
+  });
+
   it('preserves a worker terminal committed between the HTTP observation and queued fallback', async () => {
     const { authority, context } = await preparingAttempt();
     expect((await authority.getAttemptState(context)).command.status).toBe('accepted');

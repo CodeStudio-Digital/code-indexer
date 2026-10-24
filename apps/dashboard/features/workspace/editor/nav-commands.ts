@@ -55,7 +55,7 @@ function entryAt(editor: CodeEditor): NavEntry | null {
   }
 }
 
-export function currentNavPosition(): NavEntry | null {
+function currentNavPosition(): NavEntry | null {
   const editor = getActiveEditor();
   return editor ? entryAt(editor) : null;
 }

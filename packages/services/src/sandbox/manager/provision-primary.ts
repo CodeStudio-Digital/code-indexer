@@ -77,7 +77,7 @@ import {
   type ReconcileDeps,
 } from '@mcp/services/sandbox/manager/reconcile.js';
 import { prepareWorkdir } from '@mcp/services/sandbox/manager/prepare-workdir.js';
-import type { ProvisionRequest } from '@mcp/services/sandbox/sandbox-manager.js';
+import type { ProvisionRequest } from '../sandbox-manager/types.js';
 
 export interface ProvisionPrimaryDeps {
   driver: ISandboxDriver;

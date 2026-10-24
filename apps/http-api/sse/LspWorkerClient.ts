@@ -26,7 +26,7 @@ import {
 } from '@mcp/api-handlers/lsp/executor-types.js';
 import type { resolveWorkerFile } from './workerFileResolution.js';
 
-export interface LspWorkerClientOpts {
+interface LspWorkerClientOpts {
   dbPath: string;
   /** Evict after this long with no compute in flight. Default 10min —
    *  respawn pays a TS Program rebuild, so keep it warmer than the indexer. */

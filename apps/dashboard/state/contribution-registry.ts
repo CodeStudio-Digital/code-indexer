@@ -9,7 +9,7 @@
 import { create } from 'zustand';
 import { apiCall } from '../lib/api-client.js';
 
-export interface ContribTheme {
+interface ContribTheme {
   pluginNs: string;
   id: string;
   label: string;
@@ -17,7 +17,7 @@ export interface ContribTheme {
   tokens: Record<string, string>;
 }
 
-export interface ContribCommand {
+interface ContribCommand {
   pluginNs: string;
   id: string;
   label: string;
@@ -65,7 +65,7 @@ export interface ContribStatusBarItem {
   scope?: 'application' | 'project' | 'module';
 }
 
-export interface ContribRunConfiguration {
+interface ContribRunConfiguration {
   pluginNs: string;
   id: string;
   title: string;
@@ -89,7 +89,7 @@ export interface ContribToolWindow {
   entry: string;
 }
 
-export interface ContribProjectModule {
+interface ContribProjectModule {
   pluginNs: string;
   id: string;
   title: string;
@@ -98,7 +98,7 @@ export interface ContribProjectModule {
   tools?: string[];
 }
 
-export interface CollectedContributions {
+interface CollectedContributions {
   themes: ContribTheme[];
   commands: ContribCommand[];
   toolWindows: ContribToolWindow[];

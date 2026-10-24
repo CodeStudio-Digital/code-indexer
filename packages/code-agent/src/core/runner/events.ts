@@ -8,7 +8,7 @@ import type {
 } from '@mcp/code-agent/core/messages.js';
 import type { StopReason, TransitionKind } from './types.js';
 import type { RecoveryKind } from './recovery-config.js';
-import type { AsyncOperationSnapshot } from './operations.js';
+import type { AsyncOperationSnapshot } from './operation-types.js';
 
 /**
  * Events emitted by the runner. CLI and SSE handler both consume these.

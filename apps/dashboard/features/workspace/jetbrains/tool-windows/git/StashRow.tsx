@@ -19,14 +19,14 @@ import {
 import { useContextMenu, type ContextMenuItem } from '../../../../../components/ui/context-menu.js';
 import { cn } from '../../../../../lib/utils.js';
 
-export interface StashRowEntry {
+interface StashRowEntry {
   index: string;
   shortSha: string;
   branch: string | null;
   message: string;
 }
 
-export interface StashRowProps {
+interface StashRowProps {
   entry: StashRowEntry;
   busy: boolean;
   onOpen: () => void;

@@ -32,7 +32,7 @@ export interface ChangeToolbarActions {
   onClose(): void;
 }
 
-export interface ChangeToolbarHandle {
+interface ChangeToolbarHandle {
   element: HTMLElement;
   /** Refresh per-change bits: the preview text + whether an original exists. */
   update(state: { baselineText: string }): void;

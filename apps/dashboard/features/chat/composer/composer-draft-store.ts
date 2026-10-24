@@ -16,7 +16,7 @@
  */
 import type { AgentAttachment } from '../../../hooks/agent-stream/types.js';
 
-export interface ComposerDraft {
+interface ComposerDraft {
   text: string;
   attachments: AgentAttachment[];
 }

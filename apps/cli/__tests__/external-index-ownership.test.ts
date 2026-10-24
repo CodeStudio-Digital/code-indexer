@@ -44,7 +44,7 @@ describe('external index ownership contract', () => {
   });
 
   it('runs background memory hygiene inside the service pre-write fence', () => {
-    const sweeper = source('apps/http-api/sse/memory-sweeper.ts');
+    const sweeper = source('apps/http-api/sse/memory-sweeper-loop.ts');
     expect(sweeper).toMatch(/runScopeMutationAsync\(\s*'project'/);
     expect(sweeper).toMatch(/runScopeMutationAsync\(\s*'user'/);
     expect(sweeper).not.toContain('noteScopeMutation(');

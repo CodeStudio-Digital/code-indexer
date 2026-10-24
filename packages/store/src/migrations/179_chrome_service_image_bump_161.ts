@@ -21,7 +21,7 @@
  * re-running on a post-bump row is a no-op (the WHERE clause won't match).
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

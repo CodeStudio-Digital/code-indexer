@@ -143,4 +143,3 @@ export function createAppSettingsRouter(dbPath: string): Hono {
 }
 
 /** Re-export for the dashboard so it can import types from one place. */
-export { APP_SETTINGS };

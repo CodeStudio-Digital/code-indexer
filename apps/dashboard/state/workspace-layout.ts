@@ -11,13 +11,13 @@
 
 import { create } from 'zustand';
 
-export type WorkbenchSide = 'left' | 'right' | 'bottom';
-export type LeftToolId = string;
-export type RightToolId = string;
-export type BottomToolId = string;
-export type PrimarySurfaceId = string;
+type WorkbenchSide = 'left' | 'right' | 'bottom';
+type LeftToolId = string;
+type RightToolId = string;
+type BottomToolId = string;
+type PrimarySurfaceId = string;
 
-export interface PersistedWorkspaceLayout {
+interface PersistedWorkspaceLayout {
   activeLeft: LeftToolId | null;
   activeRight: RightToolId | null;
   activeBottom: BottomToolId | null;
@@ -25,7 +25,7 @@ export interface PersistedWorkspaceLayout {
   previewVisible: boolean;
 }
 
-export interface PersistedProjectNavigation {
+interface PersistedProjectNavigation {
   activeLeft: LeftToolId | null;
   primarySurface: PrimarySurfaceId;
 }
@@ -51,9 +51,9 @@ interface WorkspaceLayoutState extends PersistedWorkspaceLayout {
   setPrimarySurface: (id: PrimarySurfaceId) => void;
 }
 
-export const WORKSPACE_LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout-v3';
-export const LEGACY_WORKSPACE_LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout-v2';
-export const PROJECT_NAVIGATION_STORAGE_PREFIX = 'mcp-ide:project-navigation-v1:';
+const WORKSPACE_LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout-v3';
+const LEGACY_WORKSPACE_LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout-v2';
+const PROJECT_NAVIGATION_STORAGE_PREFIX = 'mcp-ide:project-navigation-v1:';
 
 export const DEFAULT_WORKSPACE_LAYOUT: PersistedWorkspaceLayout = {
   activeLeft: 'files',
@@ -254,6 +254,6 @@ export const useWorkspaceLayout = create<WorkspaceLayoutState>((set) => {
   };
 });
 
-export function getWorkspaceLayoutSnapshot(): WorkspaceLayoutState {
+function getWorkspaceLayoutSnapshot(): WorkspaceLayoutState {
   return useWorkspaceLayout.getState();
 }

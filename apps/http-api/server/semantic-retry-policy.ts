@@ -1,5 +1,5 @@
 /** Durable circuit breaker for background inference. Manual reindex bypasses it. */
-export interface SemanticRetryState {
+interface SemanticRetryState {
   attempt: number;
   not_before_ms: number;
   blocked: boolean;

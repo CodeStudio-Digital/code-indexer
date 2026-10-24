@@ -1,3 +1,5 @@
+import { guardMcpToolResult } from './mcp-output-guard.js';
+export { guardPathologicalMcpOutput } from './mcp-output-guard.js';
 import { listMcpResourcePage, readMcpResource } from './mcp-resource-bridge.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -5,14 +7,10 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
-import type {
-  CoderTool,
-  ToolContext,
-  ToolResult,
-  ToolSourceTruncation,
-} from '@mcp/code-agent/core/tool.js';
+import type { CoderTool, ToolContext, ToolResult, ToolSourceTruncation } from '@mcp/code-agent/core/tool.js';
 import type { JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
+import { okStructured } from '@mcp/code-agent/core/model-output.js';
 import { asAbortSignal } from '@mcp/code-agent/core/abort-signal.js';
 import { internalMcpContract } from './internal-mcp-contract.js';
 import { INTERNAL_MCP_CATALOG } from './generated/internal-mcp-catalog.js';
@@ -24,12 +22,10 @@ import { inferToolErrorInfo } from '@mcp/code-agent/core/tool-error-info.js';
 import type { SessionOverlay } from '@mcp/code-agent/overlay/session-overlay.js';
 import { getOverlayHandler } from '@mcp/code-agent/overlay/overlay-handlers.js';
 import { capFor } from '@mcp/code-agent/core/runner/output-caps.js';
-import { capToolContent } from '@mcp/code-agent/core/runner/pure-helpers.js';
+
 import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-output-telemetry.js';
 
 const READ_FILE_HARD_MAX = 800;
-const MCP_PATHOLOGICAL_OUTPUT_CHARS = 8_000_000;
-const MCP_PATHOLOGICAL_STORE_MAX_CHARS = 32_000_000;
 /**
  * "Unrestricted tool output" overrides — picked when the active session has
  * `unrestricted_tool_output = 1`. Deliberately not Infinity so the cap arithmetic
@@ -59,74 +55,6 @@ function schemaProperties(schema: JsonSchema): Record<string, unknown> | null {
 function schemaHasProperty(schema: JsonSchema, property: string): boolean {
   const props = schemaProperties(schema);
   return props ? property in props : false;
-}
-
-/** Last-resort guard for a broken/hostile MCP server. */
-function guardPathologicalMcpOutputDetailed(
-  text: string,
-  ctx: ToolContext,
-  pathologicalCap = MCP_PATHOLOGICAL_OUTPUT_CHARS,
-): { content: string; sourceTruncations?: ToolSourceTruncation[] } {
-  const guardCap = Number.isFinite(pathologicalCap) && pathologicalCap > 0
-    ? Math.floor(pathologicalCap)
-    : 8_000_000;
-  if (text.length <= guardCap) return { content: text };
-  const outputId = text.length <= MCP_PATHOLOGICAL_STORE_MAX_CHARS
-    ? ctx.toolOutputStore?.put(text) ?? undefined
-    : undefined;
-  const contextualCap = ctx.toolOutputInlineCap;
-  const inlineCap = Math.max(1, Math.min(
-    guardCap,
-    typeof contextualCap === 'number' && Number.isFinite(contextualCap) && contextualCap > 0
-      ? Math.floor(contextualCap)
-      : guardCap,
-  ));
-  const content = capToolContent(
-    text,
-    inlineCap,
-    outputId,
-    'mcp_pathological_output',
-    'head_tail',
-    'output_store',
-    text.length,
-  ).content;
-  return {
-    content,
-    sourceTruncations: [{
-      technique: 'mcp-pathological-guard',
-      inputSize: text.length,
-      outputSize: content.length,
-      unit: 'chars',
-      recoverable: !!outputId,
-      ...(outputId ? { outputId } : {}),
-    }],
-  };
-}
-
-export function guardPathologicalMcpOutput(
-  text: string,
-  ctx: ToolContext,
-  pathologicalCap = MCP_PATHOLOGICAL_OUTPUT_CHARS,
-): string {
-  return guardPathologicalMcpOutputDetailed(text, ctx, pathologicalCap).content;
-}
-
-function guardMcpToolResult(
-  result: ToolResult,
-  ctx: ToolContext,
-  additional: ToolSourceTruncation[] = [],
-): ToolResult {
-  const guarded = guardPathologicalMcpOutputDetailed(result.content, ctx);
-  const sourceTruncations = [
-    ...(result.sourceTruncations ?? []),
-    ...additional,
-    ...(guarded.sourceTruncations ?? []),
-  ];
-  return {
-    ...result,
-    content: guarded.content,
-    ...(sourceTruncations.length > 0 ? { sourceTruncations } : {}),
-  };
 }
 
 /**
@@ -301,7 +229,7 @@ export class McpToolBridge {
             try {
               const value = await toolCtx.agentReads.read(t.name as AgentReadName, args, signal);
               signal?.throwIfAborted();
-              return guardMcpToolResult(ok(JSON.stringify(value)), toolCtx);
+              return guardMcpToolResult(okStructured(value), toolCtx);
             } catch (error) { return err(`Agent query failed: ${error instanceof Error ? error.message : error}`); }
           }
           if (t.name === 'export_docs' && toolCtx.mutationFence?.mode === 'enforce') {

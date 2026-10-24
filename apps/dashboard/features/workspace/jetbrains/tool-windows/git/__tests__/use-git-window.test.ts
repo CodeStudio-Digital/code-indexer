@@ -25,7 +25,7 @@ describe('createGitReloadCoordinator', () => {
 
   it('coalesces a burst of watcher refreshes behind one debounce window', async () => {
     const coordinator = createGitReloadCoordinator(100);
-    const runner = vi.fn(async () => {});
+    const runner = vi.fn(async (_run: { silent: boolean; isCurrent(): boolean }) => {});
     coordinator.setRunner(runner);
 
     const first = coordinator.request({ silent: true, debounce: true });
@@ -78,7 +78,7 @@ describe('createGitReloadCoordinator', () => {
 
   it('lets an explicit refresh bypass and absorb a pending watcher debounce', async () => {
     const coordinator = createGitReloadCoordinator(100);
-    const runner = vi.fn(async () => {});
+    const runner = vi.fn(async (_run: { silent: boolean; isCurrent(): boolean }) => {});
     coordinator.setRunner(runner);
 
     const watcher = coordinator.request({ silent: true, debounce: true });

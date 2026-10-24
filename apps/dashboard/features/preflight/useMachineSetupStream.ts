@@ -2,7 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import type { MachineSetupEvent } from '@mcp/api-bus';
 import { apiStream } from '../../lib/api-client.js';
 
-export type MachineStatus = 'idle' | 'running' | 'done' | 'error';
+type MachineStatus = 'idle' | 'running' | 'done' | 'error';
 interface PhaseInfo { phase: string; label: string }
 interface MachineError { message: string; stderrTail?: string }
 

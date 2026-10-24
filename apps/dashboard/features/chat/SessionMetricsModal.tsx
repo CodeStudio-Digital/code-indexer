@@ -1,14 +1,10 @@
 import { useTranslation } from 'react-i18next';
 import { useState } from 'react';
 import { formatClock } from '../../lib/datetime.js';
-import { Activity, AlertTriangle, BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, MessageSquare, PiggyBank, Scissors, Wrench } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
+import { BarChart3, ChevronDown, ChevronRight, Database, DollarSign, FileText, History, Loader2, MessageSquare, PiggyBank, Scissors, Wrench } from 'lucide-react';
+
 import { useApi } from '../../hooks/useApi.js';
-import {
-  freshPromptTokens,
-  promptCacheHitRatio,
-  promptInputTokens,
-} from './prompt-cache-metrics.js';
+import { freshPromptTokens, promptCacheHitRatio, promptInputTokens } from './prompt-cache-metrics.js';
 
 interface ToolBreakdown {
   name: string;
@@ -138,12 +134,6 @@ interface SessionTelemetrySummary {
     tierSavedTokensEstTotal: number;
     hasUnpricedTurns: boolean;
   };
-}
-
-interface SessionMetricsModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  sessionId: string | null;
 }
 
 function formatK(n: number): string {
@@ -399,23 +389,6 @@ export function SessionMetricsView({
             </>
           )}
     </div>
-  );
-}
-
-export function SessionMetricsModal({ open, onOpenChange, sessionId }: SessionMetricsModalProps) {
-  const { t } = useTranslation(['chat']);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Activity className="h-4 w-4" />
-            {t('chat:metrics.title')}
-          </DialogTitle>
-        </DialogHeader>
-        <SessionMetricsView sessionId={sessionId} active={open} />
-      </DialogContent>
-    </Dialog>
   );
 }
 

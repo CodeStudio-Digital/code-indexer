@@ -9,7 +9,7 @@
  */
 
 import type { EventEmitter } from 'node:events';
-import type { RunCoderHandle } from '@mcp/code-agent/index.js';
+import type { RunCoderHandle } from '@mcp/code-agent/index/types.js';
 import type { IMetaBusPublisher, IMetaBusWirer } from '@mcp/company/services/ports.js';
 
 /**

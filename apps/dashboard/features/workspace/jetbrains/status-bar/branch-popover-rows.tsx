@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../../../lib/utils.js';
 
-export interface ActionRowProps {
+interface ActionRowProps {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   hint?: string;
@@ -61,7 +61,7 @@ export interface BranchRowData {
   tipSubject: string;
 }
 
-export interface BranchRowProps {
+interface BranchRowProps {
   branch: BranchRowData;
   busy: boolean;
   onClick: () => void;

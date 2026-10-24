@@ -23,7 +23,7 @@ import type { ContextMenuItem } from '../../../components/ui/context-menu.js';
 
 type TFn = (key: string, opts?: Record<string, unknown>) => string;
 
-export interface PaneMenuArgs {
+interface PaneMenuArgs {
   kind: 'local' | 'remote';
   selCount: number;
   /** Right-clicked empty space (no target row). */

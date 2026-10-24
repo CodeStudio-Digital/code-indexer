@@ -32,7 +32,7 @@ export function buildFileGitActions(
     try {
       const { patch } = await apiCall<{ patch: string }>('projectGit.diff', { projectId, path });
       if (!patch.trim()) {
-        toast.message(i18n.t('workspace:git.noChanges'), { description: path });
+        toast.info(i18n.t('workspace:git.noChanges'), { description: path });
         return;
       }
       useWorkspaceStore.getState().openDiff({

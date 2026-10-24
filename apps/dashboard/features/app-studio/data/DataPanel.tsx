@@ -30,7 +30,7 @@ import type { AppStudioSessionDetail } from '../app-studio-api.js';
 import { TableSheetDialog } from './TableSheetDialog.js';
 import { type AppDataQueryResult, type AppDataTable, provisionAppData, runAppDataQuery, useAppData } from './useAppData.js';
 
-export function dataTabUnlocked(detail: AppStudioSessionDetail | null): boolean {
+function dataTabUnlocked(detail: AppStudioSessionDetail | null): boolean {
   return detail != null;
 }
 

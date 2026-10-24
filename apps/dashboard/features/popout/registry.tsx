@@ -15,7 +15,7 @@ import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 /** Params de uma surface, sempre strings (vêm da query da rota). */
 export type SurfaceParams = Record<string, string>;
 
-export interface DetachableSurface {
+interface DetachableSurface {
   kind: string;
   /** Título nativo da janela + document.title (mostrado na caption/taskbar). */
   titleFor: (params: SurfaceParams) => string;

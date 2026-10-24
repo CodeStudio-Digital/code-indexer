@@ -1,3 +1,4 @@
+import type { OwnedProjectIndexService } from '../server/owned-project-index-types.js';
 import { registerWorkerMcpCalls } from './worker-mcp-calls.js';
 /**
  * Pool of worker-backed coder runs (P17).
@@ -268,7 +269,7 @@ function mirrorBusLifecycleEvent(
  * emit when `setGlobalDocSearch(null)` was active.
  */
 export interface CoderWorkerDocDeps extends WorkerMemoryDeps {
-  projectIndex?: import('../server/owned-project-index.js').OwnedProjectIndexService | null;
+  projectIndex?: OwnedProjectIndexService | null;
   documentExport?: Pick<import('@mcp/services/services/exporter.js').ExportService, 'exportProject'> | null;
   agentReads?: OwnedAgentReadService | null;
   docSearch?: DocSearchBackend | null;
@@ -285,7 +286,7 @@ export interface CoderWorkerDocDeps extends WorkerMemoryDeps {
   // same mutable-box wiring, handlers in worker-memory-handlers.ts.
 }
 
-export interface CoderWorkerPoolOpts {
+interface CoderWorkerPoolOpts {
   /** Absolute path Node spawns — built `.js` in prod, dev bootstrap `.mjs` in dev. */
   workerFile: string;
   /** Extra execArgv (reserved). */
@@ -398,7 +399,7 @@ interface PoolEntry {
   controlPlaneLeaseRenewTimer: ReturnType<typeof setInterval> | null;
 }
 
-export interface RunFreshOpts {
+interface RunFreshOpts {
   userMessage: string;
   attachments?: CoderAttachment[];
   maxTurns?: number;
@@ -473,7 +474,7 @@ export interface RunFreshOpts {
  * preventing three concurrent sessions from each being allowed to expand to
  * 2 GB before V8 applies pressure. Operators can still override this limit.
  */
-export const DEFAULT_CODER_WORKER_HEAP_MB = 1_024;
+const DEFAULT_CODER_WORKER_HEAP_MB = 1_024;
 /** Keep a wide safety margin below the 10-minute executor lease. */
 export const CONTROL_PLANE_LEASE_RENEW_INTERVAL_MS = 60_000;
 /**

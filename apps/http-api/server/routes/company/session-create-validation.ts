@@ -50,7 +50,7 @@ export interface CreateSessionBody {
   operational_rules?: string;
 }
 
-export interface SessionProjectBindingCandidate {
+interface SessionProjectBindingCandidate {
   id: number;
   name: string;
   root_path: string;

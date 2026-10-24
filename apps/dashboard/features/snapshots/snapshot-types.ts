@@ -47,7 +47,7 @@ export const CATEGORIES = [
   'procedure',
 ] as const;
 
-export type SnapshotCategory = (typeof CATEGORIES)[number];
+type SnapshotCategory = (typeof CATEGORIES)[number];
 
 /**
  * Tailwind classes for the category pill. The two-tone palette mirrors

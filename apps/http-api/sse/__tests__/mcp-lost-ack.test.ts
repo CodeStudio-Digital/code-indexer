@@ -4,11 +4,11 @@ import { expect, it } from 'vitest';
 import { McpExternalPool } from '../McpExternalPool.js';
 import { registerWorkerMcpCalls } from '../worker-mcp-calls.js';
 import { RemoteMcpServerManager } from '../../workers/RemoteMcpServerManager.js';
-import { MessageBridge } from '../../../../packages/orchestrator-host/src/index.js';
-import type { McpServerConfig } from '../../../../packages/store/src/mcp-server-store.js';
-import { ToolRegistry } from '../../../../packages/code-agent/src/core/registry.js';
-import { ToolCallLedger } from '../../../../packages/code-agent/src/core/tool-call-ledger.js';
-import { dispatchTools } from '../../../../packages/code-agent/src/core/runner/nodes/executing-dispatch.js';
+import { MessageBridge } from '@mcp/orchestrator-host';
+import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
+import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
+import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
+import { dispatchTools } from '@mcp/code-agent/core/runner/nodes/executing-dispatch.js';
 
 it('sends one real HTTP mutation when the server executes it then drops the ACK', async () => {
   let mutations = 0, discoveries = 0;

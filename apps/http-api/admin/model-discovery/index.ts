@@ -26,7 +26,7 @@ import { thirdPartyProviderSpecSchema, providerSpecSchema, type ProviderSpec } f
 import { getDefinition } from '@mcp/services/providers/registry.js';
 import { resolveCreds } from '@mcp/services/providers/shared/resolver.js';
 
-export interface DiscoveryResult {
+interface DiscoveryResult {
   models: UpsertModelInput[];
   /** Catalog ETag returned by the provider, or null when unavailable. */
   etag: string | null;

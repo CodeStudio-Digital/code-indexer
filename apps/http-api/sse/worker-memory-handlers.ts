@@ -16,6 +16,7 @@
  * empty retrieval / skipped distillation instead of throwing.
  */
 import type { RunEndMemory } from '@mcp/services/memory/run-end.js';
+import type { LiteralMemoryEntry } from '@mcp/shared/memory-write.js';
 import type { InvestigationSemanticIndexPort } from '@mcp/code-agent/tools/investigation-embedder.js';
 import { timeCall } from '../server/perf/slow-ipc.js';
 import { WorkerMemoryReads } from './worker-memory-reads.js';
@@ -41,7 +42,7 @@ export interface WorkerMemoryDeps {
     save(
       projectId: number,
       projectName: string,
-      entry: import('@mcp/shared/memory-write.js').LiteralMemoryEntry,
+      entry: LiteralMemoryEntry,
       control?: import('@mcp/services/memory/mutation-control.js').MemoryMutationControl,
     ): Promise<{ created: number; merged: number; skipped: number } | null>;
     recall(

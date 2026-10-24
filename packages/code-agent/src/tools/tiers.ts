@@ -31,7 +31,6 @@
  */
 import {
   APP_STUDIO_TOOLS,
-  BUILDER_TOOLS,
   COMPANY_TOOLS,
   QA_TOOLS,
   SANDBOX_TOOLS,
@@ -42,7 +41,6 @@ import {
 // public entry point for tier data.
 export {
   APP_STUDIO_TOOLS,
-  BUILDER_TOOLS,
   COMPANY_TOOLS,
   QA_TOOLS,
   SANDBOX_TOOLS,

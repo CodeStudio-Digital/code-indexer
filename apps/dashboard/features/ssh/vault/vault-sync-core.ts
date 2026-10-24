@@ -46,7 +46,7 @@ export interface VaultCacheEntry {
   /** Monotonic sequence assigned to this body (bumped only when the plaintext changes). */
   seq: number;
 }
-export interface VaultPushPlan {
+interface VaultPushPlan {
   items: SyncPushItem[];
   /** New per-doc {hash, ciphertext, seq} cache the hook should persist. */
   cache: Record<string, VaultCacheEntry>;
@@ -124,7 +124,7 @@ export function resolveRefs(
   };
 }
 
-export interface VaultApplyAction<T = object> {
+interface VaultApplyAction<T = object> {
   clientDocId: string;
   kind: VaultKind;
   version: number;

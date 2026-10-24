@@ -21,7 +21,7 @@
  * a tight cluster and were the largest cohesive block left in that
  * file (~250 LOC).
  */
-import type { RunCoderHandle, CoderAttachment } from '@mcp/code-agent/index.js';
+import type { RunCoderHandle, CoderAttachment } from '@mcp/code-agent/index/types.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
 import type {

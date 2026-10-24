@@ -7,7 +7,7 @@ const EMPTY_BREAKPOINTS: DebugSourceBreakpoint[] = [];
 type ProjectBreakpoints = Record<string, DebugSourceBreakpoint[]>;
 type BreakpointsByProject = Record<string, ProjectBreakpoints>;
 
-export interface DebugBreakpointRuntimeStatus {
+interface DebugBreakpointRuntimeStatus {
   sessionId: string;
   requestedLine: number;
   line: number;

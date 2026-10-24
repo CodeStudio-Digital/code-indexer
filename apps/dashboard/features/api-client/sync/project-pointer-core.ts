@@ -49,7 +49,7 @@ export function projectPointerToPush(pointer: ProjectPointer, baseVersion: numbe
   };
 }
 
-export interface ProjectApplyAction {
+interface ProjectApplyAction {
   clientDocId: string;
   version: number;
   deleted: boolean;

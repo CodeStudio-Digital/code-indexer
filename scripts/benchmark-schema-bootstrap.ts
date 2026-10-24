@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { Database } from '../packages/store/src/db/types.js';
-import { initSchema } from '../packages/store/src/db/schema/index.js';
+import { Database } from '@mcp/store/db/types.js';
+import { initSchema } from '@mcp/store/db/schema/index.js';
 
 const output = process.argv[2];
 if (!output) throw new Error('Expected an output report path');

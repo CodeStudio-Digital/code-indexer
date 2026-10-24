@@ -118,7 +118,7 @@ export interface SessionWorkbenchRuntimeState {
   waitingForInput: boolean | null;
 }
 
-export type SessionWorkbenchPluginCapabilityResolver = (
+type SessionWorkbenchPluginCapabilityResolver = (
   session: FsCoderSession,
 ) => Promise<SessionWorkbenchPluginCapability[]>;
 

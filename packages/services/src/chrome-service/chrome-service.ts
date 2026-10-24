@@ -32,7 +32,7 @@ import type { ChromeServiceStore, ChromeServiceConfig } from '@mcp/store/chrome-
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
 import type { IQaTestRunStore } from '../qa/store/interfaces.js';
 import { getSandboxManager } from '../sandbox/index.js';
-import { hasQaPlaywrightSkill } from '@mcp/company/services/SandboxService.js';
+import { hasQaPlaywrightSkill } from '@mcp/company/services/qa-skills.js';
 import {
   buildHostFacingWsEndpoint,
   buildLoopbackHealthUrl,

@@ -12,12 +12,13 @@
  * bundle is missing, `index.html` returns a friendly placeholder instead of a
  * blank iframe so the gap is obvious.
  */
-import { existsSync, createReadStream } from 'node:fs';
+import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import type { Hono } from 'hono';
+import { drawioVendorDir } from '@mcp/shared/assets/drawio-vendor.js';
+
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -38,29 +39,6 @@ const CONTENT_TYPES: Record<string, string> = {
   '.map': 'application/json; charset=utf-8',
   '.xml': 'application/xml; charset=utf-8',
 };
-
-let cachedDir: string | null | undefined;
-
-/** Resolve the vendored draw.io directory once (env → packaged → source). */
-export function drawioVendorDir(): string | null {
-  if (cachedDir !== undefined) return cachedDir;
-  const candidates: string[] = [];
-  if (process.env.MCP_DRAWIO_DIR) candidates.push(process.env.MCP_DRAWIO_DIR);
-  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'drawio'));
-  // Source / dev: this module sits at apps/http-api/server/routes — the vendor
-  // dir is two levels up. Works for tsx (source) and the mirrored dist layout.
-  try {
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    candidates.push(path.resolve(here, '../../vendor/drawio'));
-    // Development launches compiled dist/apps/http-api while the vendored
-    // editor stays in the source tree (electron-builder copies it separately).
-    candidates.push(path.resolve(here, '../../../../../apps/http-api/vendor/drawio'));
-  } catch {
-    /* import.meta.url unavailable — skip */
-  }
-  cachedDir = candidates.find((d) => existsSync(path.join(d, 'index.html'))) ?? null;
-  return cachedDir;
-}
 
 /** Minimal placeholder when the bundle isn't vendored — keeps the iframe honest. */
 const PLACEHOLDER = `<!doctype html><html><head><meta charset="utf-8"><title>draw.io not installed</title>

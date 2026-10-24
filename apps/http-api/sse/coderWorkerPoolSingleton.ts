@@ -54,7 +54,7 @@ function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'coder-worker');
 }
 
-export interface CoderWorkerStatus {
+interface CoderWorkerStatus {
   enabled: boolean;
   resolved: ResolvedWorker | null;
   reason: string | null;
@@ -227,7 +227,7 @@ export function setCoderWorkerSessionWriterHandoff(
   sessionWriterHandoffBox.release = release;
 }
 
-export function getCoderWorkerControlPlaneStore(): ControlPlaneAuthority | null {
+function getCoderWorkerControlPlaneStore(): ControlPlaneAuthority | null {
   return controlPlaneBox.store;
 }
 

@@ -7,7 +7,7 @@
  * 14 lines. No ranges or pre-release ordering: just `>`, `<`, `==` between two
  * `M.m.p` strings (negative / zero / positive).
  */
-export function compareSemver(a: string, b: string): number {
+function compareSemver(a: string, b: string): number {
   const pa = parse(a);
   const pb = parse(b);
   for (let i = 0; i < 3; i++) {

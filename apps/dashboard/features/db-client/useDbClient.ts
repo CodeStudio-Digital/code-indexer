@@ -63,7 +63,7 @@ export interface UseDbClient {
   reorderTab: (id: string, beforeId: string | null) => void;
 }
 
-export interface UseDbClientOptions {
+interface UseDbClientOptions {
   /** Mirrors a DB work item into the host IDE's editor tab strip. */
   onOpenWorkTab?: (tab: WorkTab) => void;
 }

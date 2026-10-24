@@ -125,7 +125,7 @@ function isResourceAllowedForPolicy(
   return Boolean(project && policy.projectIds.includes(project.id));
 }
 
-export interface McpHttpDeps {
+interface McpHttpDeps {
   /** Resolves a request-bound AuthContext from Hono's variable bag. */
   resolveAuthContext?: (c: import('hono').Context) => AuthContext | undefined;
   /** Middleware to run before the transport handler (auth, rate limit, ...). */

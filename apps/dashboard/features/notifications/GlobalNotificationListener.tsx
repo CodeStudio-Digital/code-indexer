@@ -59,7 +59,7 @@ export function GlobalNotificationListener() {
   return null;
 }
 
-export function dispatchGlobalNotification(source: GlobalNotificationEnvelope): void {
+function dispatchGlobalNotification(source: GlobalNotificationEnvelope): void {
   const data = asPayload(source.data);
   const context: NotificationSourceContext = {
     ...source.context,

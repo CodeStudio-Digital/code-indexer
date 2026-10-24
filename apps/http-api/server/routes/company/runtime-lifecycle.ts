@@ -5,7 +5,7 @@ import {
 } from '../../../sse/companyOrchestrator.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 
-export type AbortCompanyRuntimeResult =
+type AbortCompanyRuntimeResult =
   | { ok: true }
   | { ok: false; reason: 'not_active' }
   | {

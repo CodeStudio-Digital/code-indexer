@@ -656,5 +656,7 @@
   "snapshots.noHistory": "Nenhuma versão anterior.",
   "snapshots.editSnapshot": "Editar snapshot",
   "snapshots.formDescription": "Use Markdown — a aba Visualização no painel de detalhes renderiza o conteúdo.",
-  "snapshots.noMatch": "Nenhum snapshot corresponde a esta busca."
+  "snapshots.noMatch": "Nenhum snapshot corresponde a esta busca.",
+  "index.semanticTest.lexicalBaseline": "Referência lexical (FTS)",
+  "index.semanticTest.semanticOnly": "só semântico"
 }

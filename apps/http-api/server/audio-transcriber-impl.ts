@@ -33,7 +33,7 @@ const TRANSCRIBE_SYSTEM =
   'markdown fences. Preserve the spoken language. If the audio is silent or unintelligible, output nothing.';
 const TRANSCRIBE_PROMPT = 'Transcribe this audio recording verbatim.';
 
-export interface TranscribeRequest {
+interface TranscribeRequest {
   /** Base64-encoded audio bytes (no data: prefix). */
   base64: string;
   /** MIME type of the recording, e.g. `audio/webm;codecs=opus`. */
@@ -42,11 +42,11 @@ export interface TranscribeRequest {
   language?: string;
 }
 
-export interface IAudioTranscriber {
+interface IAudioTranscriber {
   transcribe(req: TranscribeRequest): Promise<string>;
 }
 
-export interface AudioTranscriberDeps {
+interface AudioTranscriberDeps {
   resolver: PipelineProviderResolver;
 }
 

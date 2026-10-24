@@ -1,5 +1,5 @@
 /** Hybrid dedup never refuses an invocation merely because it appeared earlier. */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
@@ -57,7 +57,7 @@ function runRepeatedTool(repeatPolicy: CoderTool['repeatPolicy'], content: strin
   const registry = new ToolRegistry();
   registry.register(tool);
   const runner = new CoderRunner({
-    provider: new RepeatingProvider('status_tool', { scope: 'same' }, 6),
+    provider: new RepeatingProvider('status_tool', { scope: 'same' }, 3),
     registry,
     systemPrompt: 'sys',
     toolContext: { cwd: '/tmp', projectName: 'test' },
@@ -69,31 +69,16 @@ function runRepeatedTool(repeatPolicy: CoderTool['repeatPolicy'], content: strin
 }
 
 describe('hybrid cross-turn dedup', () => {
-  beforeEach(() => {
-    process.env.CODER_DEDUP_POLICY = 'hybrid';
-    // Prove that the old signature backstop would have fired on call 3 if
-    // hybrid had not moved cross-turn enforcement to result-aware shadow.
-    process.env.CODER_DOOM_LOOP_THRESHOLD = '3';
-    process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD = '3';
-    process.env.CODER_DOMINANCE_WINDOW = '100';
-  });
-
-  afterEach(() => {
-    delete process.env.CODER_DEDUP_POLICY;
-    delete process.env.CODER_DOOM_LOOP_THRESHOLD;
-    delete process.env.CODER_DOOM_LOOP_FUZZY_THRESHOLD;
-    delete process.env.CODER_DOMINANCE_WINDOW;
-  });
-
+  // Exercise cross-turn reuse below the independent five-repeat loop guard.
   it('executes stable calls again on later turns even with identical args/results', async () => {
     const scenario = runRepeatedTool('stable', 'unchanged snapshot'.repeat(8));
     await scenario.run();
-    expect(scenario.count()).toBe(6);
+    expect(scenario.count()).toBe(3);
   });
 
   it.each(['volatile', 'pollable'] as const)('%s calls always execute', async (policy) => {
     const scenario = runRepeatedTool(policy, 'unchanged live status'.repeat(8));
     await scenario.run();
-    expect(scenario.count()).toBe(6);
+    expect(scenario.count()).toBe(3);
   });
 });

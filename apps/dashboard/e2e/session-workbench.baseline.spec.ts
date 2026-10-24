@@ -88,8 +88,9 @@ test('captures the read-only legacy workbench network/render baseline', async ({
 
   const readRenderMeasurement = () => page.evaluate<RenderMeasurement>(() => {
     const metrics = (window as Window & {
-      __CSW_BASELINE__: { commits: number[]; mutationRecords: number };
+      __CSW_BASELINE__?: { commits: number[]; mutationRecords: number };
     }).__CSW_BASELINE__;
+    if (!metrics) throw new Error('Render measurement was not initialized');
     return { commits: metrics.commits.length, mutationRecords: metrics.mutationRecords };
   });
 
@@ -148,7 +149,8 @@ test('captures the read-only legacy workbench network/render baseline', async ({
   }
 
   const pushDiagnosticBurst = (firstSeq: number) => page.evaluate(async ({ id, start }) => {
-    const workerLog = await import('/hooks/agent-stream/worker-log-store.ts');
+    const workerLogUrl = '/hooks/agent-stream/worker-log-store.ts';
+    const workerLog = await import(/* @vite-ignore */ workerLogUrl) as typeof import('../hooks/agent-stream/worker-log-store.js');
     for (let offset = 0; offset < 500; offset += 1) {
       const seq = start + offset;
       workerLog.pushWorkerLog(id, {

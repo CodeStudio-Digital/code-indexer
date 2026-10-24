@@ -7,7 +7,7 @@
  * under the active Knowledge profile, never copied across vector spaces.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

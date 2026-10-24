@@ -10,7 +10,7 @@
 import type * as MonacoNs from 'monaco-editor';
 import { useWorkspaceStore } from '../../../state/workspace.js';
 
-export interface SftpEditHandle {
+interface SftpEditHandle {
   /** The Monaco model — disposed by the janitor when the tab closes. */
   model: MonacoNs.editor.ITextModel;
   /** Upload the current model value over SFTP; resolves true on success. */
@@ -56,7 +56,7 @@ export function registerSftpEdit(projectId: number, path: string, handle: SftpEd
 }
 
 /** Is there a live SFTP-edit session for this tab? (save router uses this.) */
-export function isSftpEditOpen(projectId: number, path: string): boolean {
+function isSftpEditOpen(projectId: number, path: string): boolean {
   return handles.has(keyOf(projectId, path));
 }
 

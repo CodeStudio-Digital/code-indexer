@@ -10,7 +10,7 @@ import type { HighlighterGeneric, BundledLanguage, BundledTheme } from 'shiki';
 const THEMES = ['github-dark', 'github-light'] as const;
 
 let promise: Promise<HighlighterGeneric<BundledLanguage, BundledTheme>> | null = null;
-const loadedLangs = new Set<string>();
+const loadedLangs = new Set<BundledLanguage>();
 
 export async function getHighlighter() {
   if (!promise) {
@@ -22,13 +22,15 @@ export async function getHighlighter() {
   return promise;
 }
 
-export async function ensureLang(lang: string): Promise<string> {
-  if (lang === 'text' || loadedLangs.has(lang)) return lang;
+export async function ensureLang(lang: string): Promise<BundledLanguage | 'text'> {
+  if (lang === 'text') return lang;
+  const candidate = lang as BundledLanguage;
+  if (loadedLangs.has(candidate)) return candidate;
   try {
     const hl = await getHighlighter();
-    await hl.loadLanguage(lang as BundledLanguage);
-    loadedLangs.add(lang);
-    return lang;
+    await hl.loadLanguage(candidate);
+    loadedLangs.add(candidate);
+    return candidate;
   } catch {
     // Unknown/unsupported language — fall back to plain text so we still
     // render the content instead of crashing.

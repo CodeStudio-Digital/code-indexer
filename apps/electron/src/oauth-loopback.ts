@@ -55,7 +55,7 @@ export function clearAuthCapture(): void {
   authCapture = null;
 }
 
-export interface LoopbackResult {
+interface LoopbackResult {
   ok: boolean;
   port?: number;
   error?: string;

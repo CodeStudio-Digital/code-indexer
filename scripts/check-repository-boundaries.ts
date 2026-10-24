@@ -24,6 +24,14 @@ export interface RepositoryBoundaryConfig {
   schemaVersion: number;
   domains: RepositoryDomain[];
   allowedCrossDomainPackages: Record<string, string[]>;
+  /** Narrow producer-owned APIs for packages that also contain implementation. */
+  allowedCrossDomainImports?: Record<string, string[]>;
+  /** Contract packages built together in this monorepo, not independently published. */
+  allowedWorkspacePackages?: Record<string, string[]>;
+  /** Explicit application composition APIs, only callable within their domain. */
+  unitEntrypoints?: string[];
+  /** Modules supplied by a runtime rather than the package registry. */
+  runtimeModules?: Record<string, string[]>;
   publicationPackages: string[];
   forbiddenTrackedPatterns: string[];
 }
@@ -162,13 +170,19 @@ const manifestDependencies = (manifest: PackageManifest): Map<string, string> =>
   return dependencies;
 };
 
-const gitTrackedFiles = (root: string): string[] => {
-  const output = execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'buffer' });
+const gitWorkingTreeFiles = (root: string): string[] => {
+  const output = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+    cwd: root,
+    encoding: 'buffer',
+  });
   return output
     .toString('utf8')
     .split('\0')
     .filter(Boolean)
     .map(toRepoPath)
+    // The index still lists unstaged deletions. Analyze existing sources,
+    // including new files, without requiring staging before this check.
+    .filter((file) => statSync(resolve(root, file), { throwIfNoEntry: false })?.isFile())
     .sort();
 };
 
@@ -189,7 +203,7 @@ const fallbackFiles = (root: string): string[] => {
 
 const repositoryFiles = (root: string): string[] => {
   try {
-    return gitTrackedFiles(root);
+    return gitWorkingTreeFiles(root);
   } catch {
     return fallbackFiles(root);
   }
@@ -297,6 +311,7 @@ export const analyzeRepository = (
 
     for (const specifier of extractModuleSpecifiers(source, file)) {
       if (BUILTINS.has(specifier) || specifier.startsWith('node:')) continue;
+      if (config.runtimeModules?.[file]?.includes(specifier)) continue;
       if (specifier.startsWith('.')) {
         const absoluteTarget = resolve(root, dirname(file), specifier);
         const target = toRepoPath(relative(root, absoluteTarget));
@@ -315,7 +330,8 @@ export const analyzeRepository = (
             detail: `${sourceDomain}->${targetDomain}`,
           });
         }
-        if (targetDomain && targetUnit !== sourceUnit) {
+        const publicEntrypoint = targetDomain === sourceDomain && config.unitEntrypoints?.includes(target);
+        if (targetDomain && targetUnit !== sourceUnit && !publicEntrypoint) {
           addIssue(issues, {
             kind: 'cross-unit-relative-import',
             file,
@@ -370,7 +386,9 @@ export const analyzeRepository = (
       }
       if (targetDomain && targetDomain !== sourceDomain) {
         const allowed = new Set(config.allowedCrossDomainPackages[sourceDomain] ?? []);
-        if (!allowed.has(dependencyName)) {
+        const allowedImport = allowed.has(dependencyName)
+          || config.allowedCrossDomainImports?.[sourceDomain]?.includes(specifier);
+        if (!allowedImport) {
           addIssue(issues, {
             kind: 'forbidden-domain-import',
             file,
@@ -380,7 +398,11 @@ export const analyzeRepository = (
           });
         }
         const declaredVersion = declared.get(dependencyName);
-        if (declaredVersion?.startsWith('workspace:')) {
+        // A shared root manifest does not make every source directory an
+        // independently versioned workspace. The import rule above still applies.
+        const ownsManifest = localManifest && sourceUnit !== '.';
+        const allowedWorkspace = config.allowedWorkspacePackages?.[sourceDomain]?.includes(dependencyName);
+        if (ownsManifest && !allowedWorkspace && declaredVersion?.startsWith('workspace:')) {
           addIssue(issues, {
             kind: 'cross-domain-workspace-dependency',
             file: ownerManifest.path,

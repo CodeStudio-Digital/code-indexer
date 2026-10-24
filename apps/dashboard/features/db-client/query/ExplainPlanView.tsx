@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { GitBranch, Table2 } from 'lucide-react';
 import type { DbQueryResult } from '../types.js';
 
-export interface PlanNode {
+interface PlanNode {
   id: string;
   label: string;
   relation?: string;

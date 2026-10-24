@@ -5,13 +5,15 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./*": "./src/*"
+    "./*": "./src/*",
+    "./preview/contracts.js": "./src/preview/contracts.ts",
+    "./preview/inspector-assets.js": "./src/preview/inspector-assets.ts"
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
     "@mcp/candidate-pipeline": "workspace:*",
-    "@mcp/provider-sdk": "workspace:*",
     "@mcp/provider-engine": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*",
     "@mcp/session-storage": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
@@ -19,11 +21,12 @@
     "magic-string": "^0.30.21",
     "officeparser": "^7.2.1",
     "playwright-core": "1.61.1",
+    "quickjs-emscripten": "0.32.0",
     "turndown": "^7.2.4",
-    "unpdf": "^1.6.2",
-    "quickjs-emscripten": "0.32.0"
+    "unpdf": "^1.6.2"
   },
   "devDependencies": {
-    "@babel/types": "^7.29.7"
+    "@babel/types": "^7.29.7",
+    "vitest": "^4.1.2"
   }
 }

@@ -1,9 +1,9 @@
 import type { ProviderDefinition } from '@mcp/provider-sdk';
-// Leaf subpath imports (not the barrel): the barrel re-exports discoverModels,
-// which would drag the discovery subgraph into registry's module cycle. These
-// two leaves keep the registry↔store cycle to the adapter path only.
+// Load declarative specs separately so database seeding can use their metadata
+// without constructing runtime adapters or importing model discovery.
 import { buildProviderDefinition } from '@mcp/provider-engine/build-definition.js';
 import { BUILTIN_SPECS } from '@mcp/provider-engine/specs/index.js';
+import { setProviderSeedDefinitionsResolver } from './seed-catalog.js';
 
 /**
  * Provider registry — single source of truth for all provider shapes.
@@ -28,15 +28,7 @@ import { BUILTIN_SPECS } from '@mcp/provider-engine/specs/index.js';
  * the exact former BUILTIN_DEFINITIONS order.
  */
 
-/**
- * Lazily-built singleton. The registry sits on the pre-existing
- * registry↔store↔seed import cycle (`store/provider/seed.ts` statically imports
- * `listDefinitions`). Building the Map eagerly at module eval would call
- * `buildProviderDefinition` while `@mcp/provider-engine/build-definition.ts` is
- * still mid-initialization (its `WIRES` const in the temporal dead zone) whenever
- * the cycle is entered engine-first. Deferring to first access guarantees every
- * module in the cycle has finished evaluating before any definition is built.
- */
+/** Construct adapters only when a runtime consumer requests the registry. */
 let registrySingleton: Map<string, ProviderDefinition> | null = null;
 function registry(): Map<string, ProviderDefinition> {
   if (registrySingleton) return registrySingleton;
@@ -98,3 +90,5 @@ export function getDefinition(kind: string): ProviderDefinition | undefined {
 export function listCoderKinds(): string[] {
   return listDefinitions().filter((d) => !!d.createCoder).map((d) => d.kind);
 }
+
+setProviderSeedDefinitionsResolver(listDefinitions);

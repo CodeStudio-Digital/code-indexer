@@ -29,7 +29,7 @@
 const DEFAULT_INTERVAL_MS = 5 * 60 * 1000;
 const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
 
-export interface CoderWatchdogHandle {
+interface CoderWatchdogHandle {
   /** Stop the periodic sweep. Idempotent. */
   stop(): void;
   /** Force a one-shot sweep RIGHT NOW (returns the number of rows touched). */
@@ -39,7 +39,7 @@ export interface CoderWatchdogHandle {
   readonly staleAfterMs: number;
 }
 
-export interface StartCoderWatchdogArgs {
+interface StartCoderWatchdogArgs {
   sessionStore: {
     recoverStuckRunningSessions(options: {
       maxAgeMs?: number;

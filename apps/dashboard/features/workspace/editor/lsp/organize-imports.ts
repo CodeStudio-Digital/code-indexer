@@ -27,7 +27,7 @@ interface OrganizeImportsResult {
  * Aplica edits 1-based do api-bus ao model ativo. IRange é interface — objeto
  * plano serve (sem depender do namespace monaco; const enums ficam de fora).
  */
-export function applyEditsToActiveModel(
+function applyEditsToActiveModel(
   model: MonacoNs.editor.ITextModel,
   edits: OrganizeImportsResult['edits'],
 ): void {

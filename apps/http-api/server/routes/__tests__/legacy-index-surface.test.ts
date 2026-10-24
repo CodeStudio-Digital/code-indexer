@@ -22,7 +22,7 @@ describe('retired LLM index surfaces', () => {
   });
 
   it('keeps the search result UI independent from legacy summaries', () => {
-    const panel = source('apps/dashboard/features/search/SearchPanel.tsx');
+    const panel = source('apps/dashboard/features/search-everywhere/SearchEverywhere.tsx');
     const preview = source('apps/dashboard/features/search/search-result-preview.ts');
     expect(panel).not.toMatch(/data\.(?:summary|concepts|layer|complexity)/);
     expect(preview).not.toMatch(/data\.(?:summary|concepts|layer|complexity)/);

@@ -15,21 +15,20 @@ export async function runAgentCommand(task: string, options: AgentCliOptions): P
   const keepAlive = setInterval(() => {}, 1_000);
   const interrupted = () => controller.abort(new Error('CLI interrupted'));
   process.once('SIGINT', interrupted); process.once('SIGTERM', interrupted);
-  let runtime: ReturnType<typeof import('../../http-api/server.js').createApp> | undefined;
+  let runtime: Awaited<ReturnType<typeof import('../../http-api/public.js').createAgentCliRuntime>> | undefined;
   let shutdown: (() => Promise<void>) | undefined;
   try {
-    const { createApp } = await import('../../http-api/server.js');
-    const { shutdownAppRuntime } = await import('../../http-api/server/runtime-shutdown.js');
+    const { createAgentCliRuntime } = await import('../../http-api/public.js');
     controller.signal.throwIfAborted();
-    runtime = createApp();
-    shutdown = () => shutdownAppRuntime({ ...runtime!, reason: 'cli-agent-finished' });
-    const projects = runtime.db.listProjects();
+    runtime = await createAgentCliRuntime();
+    shutdown = () => runtime!.close();
+    const projects = runtime.listProjects();
     const project = options.project ? projects.find(row => row.name === options.project)
       : projects.find(row => resolve(row.root_path) === resolve(process.cwd()));
     if (!options.session && !project) throw new Error(options.project ? `Project '${options.project}' not found`
       : `No indexed project at ${process.cwd()}. Pass --project <name> or run 'mcp-code-indexer index .' first.`);
     const result = await runAgentSession({ task, options, projectId: project?.id, projectName: options.session ? undefined : project?.name,
-      request: async (path, init) => runtime!.app.request(path, init), signal: controller.signal,
+      request: async (path, init) => runtime!.request(path, init), signal: controller.signal,
       io: { write: text => { process.stdout.write(text); }, prompt: promptStdin,
         flush: async () => { if (process.stdout.writableNeedDrain) await once(process.stdout, 'drain', { signal: controller.signal }); } } });
     return result.classification === 'completed' ? 0 : result.classification === 'cancelled' ? 130 : 1;

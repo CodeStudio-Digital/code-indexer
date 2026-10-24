@@ -41,7 +41,7 @@ let eluWarned = false;
  * `true` once the runtime is known to maintain loop timing. Latches: `loopStart`
  * is set once during boot and never cleared, so a single positive is final.
  */
-export function eluTrusted(): boolean {
+function eluTrusted(): boolean {
   if (eluAvailable) return true;
   const loopStart = performance.nodeTiming?.loopStart ?? -1;
   if (loopStart > 0) {
@@ -120,7 +120,7 @@ export function gcMsIn(fromMono: number, toMono: number): number {
 
 // ─── Synchronous busy accounting ─────────────────────────────────────────
 
-export interface SyncWindow {
+interface SyncWindow {
   /** Measured synchronous ms in this window, counted at depth 0 only. */
   busyMs: number;
   /** Longest single section seen at any depth — the thing worth naming. */
@@ -150,11 +150,11 @@ function noteTop(label: string, ms: number): void {
  * outermost contributes to `busyMs`, so a bus event wrapping ten SQL statements
  * counts once, not eleven.
  */
-export function enterSyncSection(label: string): { label: string; start: number; depth: number } {
+function enterSyncSection(label: string): { label: string; start: number; depth: number } {
   return { label, start: performance.now(), depth: depth++ };
 }
 
-export function exitSyncSection(token: { label: string; start: number; depth: number }): void {
+function exitSyncSection(token: { label: string; start: number; depth: number }): void {
   const ms = performance.now() - token.start;
   depth = Math.max(0, depth - 1);
   if (token.depth === 0) busyMs += ms;
@@ -168,7 +168,7 @@ export function noteSyncLeaf(label: string, ms: number): void {
 }
 
 /** Convenience wrapper for a synchronous callback. */
-export function noteSyncSection<T>(label: string, fn: () => T): T {
+function noteSyncSection<T>(label: string, fn: () => T): T {
   const token = enterSyncSection(label);
   try {
     return fn();
@@ -201,7 +201,7 @@ export function stallEvidenceInfo(): {
 }
 
 /** Test seam. */
-export function resetStallEvidence(): void {
+function resetStallEvidence(): void {
   eluAvailable = null;
   eluProbes = 0;
   eluWarned = false;

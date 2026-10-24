@@ -1,3 +1,4 @@
+import type { UseProvidersResult } from '../../hooks/useProviders.js';
 import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Crown, MessageSquareText, Server, Settings2, Wrench } from 'lucide-react';
@@ -59,10 +60,8 @@ interface RoleEditModalProps {
   role: RoleConfig;
   roleIdx: number;
   availableSkills: SkillDef[];
-  providerOptions: Array<{ id: string; label: string }>;
-  getModelsForProvider: (
-    provider: string,
-  ) => Array<{ id: string; name: string; mode?: string; supported_reasoning_levels?: string[] | null }>;
+  providerOptions: UseProvidersResult['providerOptions'];
+  getModelsForProvider: UseProvidersResult['getModelsForProvider'];
   onUpdate: (patch: Partial<RoleConfig>) => void;
   onClose: () => void;
   /**

@@ -9,16 +9,6 @@ export type {
   QaRunStatus,
   QaTestResult,
   QaTestStatus,
-  QaRunTrigger,
-  QaTestPlanScenario,
-  QaTestPlanSection,
-  QaRunStartedPayload,
-  QaRunTestResultPayload,
-  QaRunCompletedPayload,
-  QaBugFiledPayload,
-  QaEventName,
-  QaEventMap,
-  QaFailingTest,
 } from '@mcp/services/qa/types.js';
 
 /**

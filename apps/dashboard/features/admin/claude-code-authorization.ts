@@ -1,14 +1,14 @@
-export interface ClaudeCodeAuthorizationUrls {
+interface ClaudeCodeAuthorizationUrls {
   authorizeUrl: string;
   manualAuthorizeUrl?: string;
 }
 
-export interface ClaudeCodeAuthorizationOpeners {
+interface ClaudeCodeAuthorizationOpeners {
   openExternal?: (url: string) => void;
   openWindow: (url: string) => void;
 }
 
-export type ClaudeCodeAuthorizationMode = 'automatic' | 'manual';
+type ClaudeCodeAuthorizationMode = 'automatic' | 'manual';
 
 /**
  * Opens the selected Claude Code authorization without changing its PKCE flow.

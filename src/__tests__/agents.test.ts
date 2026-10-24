@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { AGENTS, isAgentId, getAgent, agentsSummary } from '@mcp/code-agent/agents/index.js';
 
 describe('agent presets', () => {
-  it('exposes exactly the four built-in agents', () => {
-    expect(Object.keys(AGENTS).sort()).toEqual(['admin', 'build', 'explore', 'plan']);
+  it('exposes the built-in core and specialist agents', () => {
+    expect(Object.keys(AGENTS).sort()).toEqual(['admin', 'api', 'app_db', 'app_orchestrator', 'build', 'builder', 'diagram', 'explore', 'plan', 'research', 'spec']);
   });
 
   it('explore is read-only with bootstrap profile', () => {
@@ -39,7 +39,7 @@ describe('agent presets', () => {
     expect(isAgentId('')).toBe(false);
   });
 
-  it('agentsSummary lists all four agents', () => {
+  it('agentsSummary includes the four core agents', () => {
     const s = agentsSummary();
     expect(s).toContain('explore');
     expect(s).toContain('plan');

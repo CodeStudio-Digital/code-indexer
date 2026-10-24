@@ -86,23 +86,23 @@
   ],
   "allowedCrossDomainPackages": {
     "core": [
-      "@codestudio/agent-runtime-contracts",
-      "@codestudio/agent-runtime-host",
-      "@codestudio/market-client",
-      "@codestudio/provider-contracts"
+      "@mcp/agent-runtime-contracts",
+      "@mcp/agent-runtime-host",
+      "@mcp/plugin-market-client",
+      "@mcp/provider-sdk"
     ],
     "desktop": [
       "@codestudio/cloud-client",
       "@codestudio/core-host",
-      "@codestudio/local-api-contracts"
+      "@mcp/api-bus"
     ],
     "cloud": [],
     "market": [],
     "plugin-platform": [
-      "@codestudio/market-client"
+      "@mcp/plugin-market-client"
     ],
     "agent-runtime": [
-      "@codestudio/provider-contracts"
+      "@mcp/provider-sdk"
     ]
   },
   "publicationPackages": [
@@ -144,5 +144,40 @@
     "apps/landingpage/**",
     "apps/website/**",
     "codestudio-web/**"
-  ]
+  ],
+  "allowedCrossDomainImports": {
+    "desktop": [
+      "@mcp/shared/utils/serializable-stream.js",
+      "@mcp/shared/assets/drawio-vendor.js",
+      "@mcp/session-storage/run-limits.js",
+      "@mcp/code-agent/tools/diagram/render-port.js",
+      "@mcp/code-agent/tools/preview/contracts.js",
+      "@mcp/services/preview/contracts.js",
+      "@mcp/services/preview/inspector-assets.js",
+      "@mcp/shared/attachments/policy.js"
+    ]
+  },
+  "allowedWorkspacePackages": {
+    "core": [
+      "@mcp/agent-runtime-contracts",
+      "@mcp/agent-runtime-host",
+      "@mcp/plugin-market-client",
+      "@mcp/provider-sdk"
+    ],
+    "agent-runtime": [
+      "@mcp/provider-sdk"
+    ],
+    "plugin-platform": [
+      "@mcp/plugin-market-client"
+    ]
+  },
+  "unitEntrypoints": [
+    "apps/http-api/public.js",
+    "apps/mcp-server/agent-read-client.js"
+  ],
+  "runtimeModules": {
+    "scripts/harness-session-storage-compat.mjs": [
+      "original-fs"
+    ]
+  }
 }

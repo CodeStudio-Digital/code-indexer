@@ -34,7 +34,7 @@ export interface ProcessSnapshotSources {
   processInventoryProvider?: () => ProcessInventoryEntry[];
 }
 
-export interface ProcessSnapshot {
+interface ProcessSnapshot {
   at: number;
   mainPid: number;
   cores: number;

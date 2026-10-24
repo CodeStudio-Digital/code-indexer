@@ -22,14 +22,14 @@ export interface BulkDeleteProject {
   root_path: string;
 }
 
-export type FolderDeleteStatus =
+type FolderDeleteStatus =
   | 'not_requested'
   | 'deleted'
   | 'already_missing'
   | 'skipped'
   | 'failed';
 
-export interface BulkProjectDeleteItemResult {
+interface BulkProjectDeleteItemResult {
   id: number;
   name: string;
   root_path: string;
@@ -38,7 +38,7 @@ export interface BulkProjectDeleteItemResult {
   error: string | null;
 }
 
-export interface BulkProjectDeleteResult {
+interface BulkProjectDeleteResult {
   ok: boolean;
   projects_deleted: number;
   folders_deleted: number;

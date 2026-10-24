@@ -8,9 +8,9 @@ import type {
 import { resolveCompanySessionCapabilities } from '@mcp/company/services/session-capabilities.js';
 import { resolveCompanySessionContext } from '../_helpers.js';
 
-export type CompanyRouteSurface = 'kanban';
+type CompanyRouteSurface = 'kanban';
 
-export interface CompanyRouteRuntime {
+interface CompanyRouteRuntime {
   requestedSessionId: CompanySessionId;
   rootSessionId: CompanySessionId;
   runtimeKind: CompanyRuntimeKind;
@@ -22,7 +22,7 @@ export interface CompanyRouteRuntime {
  * The App link is deliberately not needed for generic Company surfaces:
  * `app_studio` denies Company Kanban whether the link is healthy or broken.
  */
-export async function resolveCompanyRouteRuntime(
+async function resolveCompanyRouteRuntime(
   sessionStore: FsSessionStore,
   requestedSessionId: CompanySessionId,
 ): Promise<CompanyRouteRuntime | null> {
@@ -42,7 +42,7 @@ export async function resolveCompanyRouteRuntime(
   };
 }
 
-export async function routeAllowsCompanySurface(
+async function routeAllowsCompanySurface(
   sessionStore: FsSessionStore,
   sessionId: CompanySessionId,
   surface: CompanyRouteSurface,

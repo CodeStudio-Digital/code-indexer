@@ -165,7 +165,7 @@ interface OpenSections {
   untracked: boolean;
 }
 
-export interface GitWindowModel {
+interface GitWindowModel {
   status: GitStatus | null;
   loading: boolean;
   error: string | null;
@@ -269,7 +269,8 @@ export function useGitWindow(
       const [s, ms] = await Promise.all([
         (includeFiles
           ? loadCompleteStatus(projectId, repoPath)
-          : apiCall<GitStatus>('projectGit.status', { projectId, repoPath, includeFiles: false }))
+          : apiCall<GitStatus>('projectGit.status', { projectId, repoPath, includeFiles: false })
+              .then((value) => ({ ...value, counts: null })))
           .then((value) => {
             finishStatusSpan({ status: 'ok' });
             return value;
@@ -290,11 +291,7 @@ export function useGitWindow(
       ]);
       if (!isCurrent()) return;
       setStatus(s);
-      if ('counts' in s) {
-        setStatusCounts(s.counts);
-      } else {
-        setStatusCounts(null);
-      }
+      setStatusCounts(s.counts);
       setMergeState(ms);
       staleWhileHidden.current = false;
       // Feed the editor's conflict registry (project-relative paths) so open

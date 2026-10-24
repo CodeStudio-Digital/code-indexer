@@ -104,15 +104,15 @@ describe('compaction — atomicity (no orphan tool_use ⇄ tool_result after cut
 });
 
 describe('compaction — token limits scale with model context window', () => {
-  it('Claude 200K: trigger ≈ 200K − 20K output − 13K buffer', () => {
+  it('Claude Opus 4.7 catalog window reserves output and buffer before compacting', () => {
     const limits = deriveTokenLimits('claude-opus-4-7');
-    expect(limits.rawWindow).toBe(200_000);
-    expect(limits.effective).toBe(200_000 - 20_000); // output capped at 20K
-    expect(limits.trigger).toBe(200_000 - 20_000 - 13_000);
+    expect(limits.rawWindow).toBe(1_000_000);
+    expect(limits.effective).toBe(1_000_000 - 20_000); // output capped at 20K
+    expect(limits.trigger).toBe(1_000_000 - 20_000 - 20_000);
     expect(limits.isFallback).toBe(false);
   });
 
-  it('DeepSeek 1M: trigger ≈ 1M − 20K − 13K (much higher than Claude)', () => {
+  it('DeepSeek 1M: trigger ≈ 1M − 20K − 13K', () => {
     const limits = deriveTokenLimits('deepseek-v4-flash');
     expect(limits.rawWindow).toBe(1_000_000);
     expect(limits.trigger).toBeGreaterThan(900_000);

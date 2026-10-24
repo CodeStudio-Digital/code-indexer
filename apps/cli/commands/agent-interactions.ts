@@ -1,4 +1,4 @@
-export interface AgentCliInteractionIO {
+interface AgentCliInteractionIO {
   write(text: string): void;
   prompt(question: string): Promise<string>;
   respond(path: string, body: unknown): Promise<void>;

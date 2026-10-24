@@ -6,7 +6,7 @@ import type { ValidateBearerToken } from '@mcp/services/auth/use-cases/validate-
 import { presentAuthError } from './error-presenter.js';
 import { parseBearerHeader, safeRequestHeaders } from './headers.js';
 
-export interface BearerMiddlewareDeps {
+interface BearerMiddlewareDeps {
   validate: ValidateBearerToken;
   enforceRate?: EnforceRateLimit;
   audit: RecordAudit;

@@ -59,6 +59,6 @@ export function useActiveRepoPath(projectId: number): string | undefined {
 }
 
 /** Non-hook read for imperative callsites (event handlers). */
-export function getActiveRepoPath(projectId: number): string | undefined {
+function getActiveRepoPath(projectId: number): string | undefined {
   return useGitActiveRepo.getState().byProject[projectId];
 }

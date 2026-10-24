@@ -1,3 +1,5 @@
+import type { SubagentCollected } from './subagent-collected.js';
+export type { SubagentCollected } from './subagent-collected.js';
 /**
  * Generalized subagent runner — extracted from src/coder/tools/subagent.ts so
  * that both the read-only `spawn_subagent` (explore) flow AND the new
@@ -234,11 +236,6 @@ export function buildHardBudgetNudge(input: {
     'or another validation sweep. Convert anything still unverified into Open questions instead of investigating further.';
 }
 
-export interface SubagentCollected {
-  memos: ReadonlyArray<import('@mcp/code-agent/tools/subagent-collector.js').SubagentMemo>;
-  snapshots: ReadonlyArray<import('@mcp/code-agent/tools/subagent-collector.js').SubagentSnapshotRef>;
-  boardPosts: ReadonlyArray<import('@mcp/code-agent/tools/subagent-collector.js').SubagentBoardPostRef>;
-}
 
 export function emptyCollected(): SubagentCollected {
   return { memos: [], snapshots: [], boardPosts: [] };

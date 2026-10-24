@@ -106,9 +106,9 @@ function ScenarioRow({ scenario }: { scenario: AnnotatedScenario }) {
   );
 }
 
-function scenarioVisual(scenario: AnnotatedScenario): StatusVisual {
+function scenarioVisual(scenario: AnnotatedScenario): StatusVisual | { icon: '○'; label: string; toneClass: 'text-zinc-400' } {
   if (scenario.verdict === 'not-run') {
-    return { icon: '○', label: 'Not run yet', toneClass: 'text-zinc-400' } as StatusVisual;
+    return { icon: '○', label: 'Not run yet', toneClass: 'text-zinc-400' };
   }
   return formatTestStatus(scenario.verdict);
 }

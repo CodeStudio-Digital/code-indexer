@@ -13,9 +13,9 @@ import type { CapabilityKind } from '../pipeline-bindings-api.js';
 import type { AdminModel, AdminProvider } from '../types.js';
 import { type PresetId, pickModel, pickProvider, presetById, providerSupports } from './presets.js';
 
-export type SetupStep = 'preset' | 'buckets' | 'review' | 'applying' | 'done';
+type SetupStep = 'preset' | 'buckets' | 'review' | 'applying' | 'done';
 
-export interface WizardBucket { kind: CapabilityKind; required: boolean }
+interface WizardBucket { kind: CapabilityKind; required: boolean }
 
 /** Required = can't be switched off. text_llm is the only hard requirement. */
 export const WIZARD_BUCKETS: WizardBucket[] = [
@@ -25,9 +25,9 @@ export const WIZARD_BUCKETS: WizardBucket[] = [
   { kind: 'autocomplete', required: false },
 ];
 
-export interface BucketSel { enabled: boolean; providerId: string; modelId: string }
+interface BucketSel { enabled: boolean; providerId: string; modelId: string }
 
-export interface SetupState {
+interface SetupState {
   step: SetupStep;
   preset: PresetId;
   buckets: Record<string, BucketSel>;

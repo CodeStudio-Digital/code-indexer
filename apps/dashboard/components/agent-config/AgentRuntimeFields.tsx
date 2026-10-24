@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-export interface AgentRuntimeModelOption {
+interface AgentRuntimeModelOption {
   id: string;
   name: string;
   mode?: string | null;
@@ -9,7 +9,7 @@ export interface AgentRuntimeModelOption {
   default_reasoning_level?: string | null;
 }
 
-export interface AgentRuntimeValue {
+interface AgentRuntimeValue {
   provider: string;
   model: string;
   reasoningEffort?: string;

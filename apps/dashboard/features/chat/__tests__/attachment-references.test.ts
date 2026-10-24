@@ -1,18 +1,16 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { filesToAttachments } from '../utils.js';
 
-const desktopGlobal = globalThis as typeof globalThis & { electronAPI?: ElectronAPI };
-const originalElectronAPI = desktopGlobal.electronAPI;
 
 afterEach(() => {
-  desktopGlobal.electronAPI = originalElectronAPI;
+  vi.unstubAllGlobals();
 });
 
 describe('desktop attachment references', () => {
   it('keeps an unsupported OS file as a path instead of reading its bytes', async () => {
-    desktopGlobal.electronAPI = {
+    vi.stubGlobal('electronAPI', {
       getPathForFile: () => 'C:\\Temp\\48bc9f98.tmp',
-    } as ElectronAPI;
+    } satisfies Pick<ElectronAPI, 'getPathForFile'>);
     const file = new File([new Uint8Array([0, 1, 2, 3])], '48bc9f98.tmp', {
       type: 'application/octet-stream',
     });
@@ -27,9 +25,9 @@ describe('desktop attachment references', () => {
   });
 
   it('retains the portable rejection when no native reference exists', async () => {
-    desktopGlobal.electronAPI = {
+    vi.stubGlobal('electronAPI', {
       getPathForFile: () => '',
-    } as ElectronAPI;
+    } satisfies Pick<ElectronAPI, 'getPathForFile'>);
     const file = new File(['opaque'], 'payload.tmp', { type: 'application/octet-stream' });
 
     await expect(filesToAttachments([file], [], { preferFileReferences: true }))

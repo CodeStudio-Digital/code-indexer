@@ -11,10 +11,21 @@ pnpm install --frozen-lockfile
 pnpm run check:boundaries
 pnpm exec vitest run src/__tests__/repository-boundaries.test.ts
 pnpm typecheck
+pnpm run check:arch
 pnpm run build:all
 ```
 
 Run focused tests for the area changed before the broader checks.
+
+`pnpm typecheck` validates both the backend and the dashboard in strict mode.
+For the complete local suite after preparing desktop dependencies, use
+`pnpm test:workspace`. Database tests run with Electron's SQLite ABI; process
+fixtures run with Node. Reports are written to `.tmp/test-workspace/` and all
+fixtures use the operating system temporary directory. This avoids rebuilding
+the native SQLite addon between the two groups.
+The same command includes the migration/tooling Vitest suites and the build
+script tests that use Node's native test runner. Browser scenarios have their
+own runner: `pnpm test:visual` against an isolated dashboard test server.
 
 ## Architecture rules
 

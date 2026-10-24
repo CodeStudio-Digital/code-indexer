@@ -10,7 +10,7 @@ import type { CoderRunBus } from '../coder-bus.js';
 import { coderStreamIdentity, subscribeCoderFacadeEvents } from './coder-facade-events.js';
 import { CoderInteractionNotPendingError } from './coder-runtime-errors.js';
 
-export interface CoderFacadeActivation {
+interface CoderFacadeActivation {
   store: FileControlPlaneAuthority;
   context: ControlPlaneRunContext;
   preparation: CoderAttemptPreparationV1;

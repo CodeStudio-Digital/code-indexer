@@ -43,11 +43,11 @@ export function getElectronProfiler(): ElectronProfiler | null {
  *
  * No-op for the in-process host, where `impl.isTracing()` is already the truth.
  */
-export function setElectronTracingFlag(tracing: boolean): void {
+function setElectronTracingFlag(tracing: boolean): void {
   tracingCache = tracing;
 }
 
 /** Last value pushed via `setElectronTracingFlag`. For forwarding shims only. */
-export function getCachedElectronTracingFlag(): boolean {
+function getCachedElectronTracingFlag(): boolean {
   return tracingCache;
 }

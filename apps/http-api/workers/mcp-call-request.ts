@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { MessageBridge } from '../../../packages/orchestrator-host/src/index.js';
+import type { MessageBridge } from '@mcp/orchestrator-host';
 import { err, unknownToolOutcome, type ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
 
 /** Race only the response wait. Remote cancellation never proves non-execution. */

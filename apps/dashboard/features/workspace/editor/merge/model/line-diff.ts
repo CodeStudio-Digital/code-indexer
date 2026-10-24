@@ -7,7 +7,7 @@
  * instead of blowing memory.
  */
 
-export interface LineSegment {
+interface LineSegment {
   kind: 'equal' | 'delete' | 'insert';
   // half-open [start, end) over the normalized line arrays.
   baseStart: number;
@@ -18,7 +18,7 @@ export interface LineSegment {
 
 const MAX_DP_CELLS = 4_000_000;
 
-export function normalizeEol(s: string): string {
+function normalizeEol(s: string): string {
   return s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 }
 
@@ -112,7 +112,7 @@ export interface ChangeBlock {
   otherEnd: number;
 }
 
-export interface Span extends ChangeBlock {
+interface Span extends ChangeBlock {
   kind: 'equal' | 'change';
 }
 

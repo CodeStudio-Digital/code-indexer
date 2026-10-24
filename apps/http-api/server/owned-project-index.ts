@@ -1,12 +1,9 @@
+import type { OwnedProjectIndexService } from './owned-project-index-types.js';
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { ServerDeps } from './deps.js';
 
-export interface OwnedProjectIndexService {
-  reconcile(projectId: number, input: Record<string, unknown>, control: {
-    signal: AbortSignal; assertCurrent(): void;
-  }): Promise<string>;
-}
+
 
 /** The project and services come from the session's application owner. Never
  * register another project or discover an owner through a TCP port. */
@@ -14,7 +11,7 @@ export function createOwnedProjectIndex(deps: Pick<ServerDeps, 'db' | 'projectIn
   return new OwnedProjectIndex(deps);
 }
 
-export class OwnedProjectIndex implements OwnedProjectIndexService {
+class OwnedProjectIndex implements OwnedProjectIndexService {
   constructor(private readonly deps: Pick<ServerDeps, 'db' | 'projectIndexService' | 'semanticCoordinator'>) {}
   async reconcile(projectId: number, input: Record<string, unknown>, control: Parameters<OwnedProjectIndexService['reconcile']>[2]) {
     const deps = this.deps;

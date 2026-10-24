@@ -60,7 +60,7 @@ import { disposeClaudeCodeOAuthResources } from '@mcp/services/services/oauth/cl
 import { getMemoryLedger } from './perf/memory-ledger.js';
 import { stopPersistentPerfDiagnostics } from './perf/persistent-diagnostics.js';
 
-export interface RuntimeShutdownResources {
+interface RuntimeShutdownResources {
   deps: ServerDeps;
   mcpPool: McpExternalPool;
   chromeService: ChromeService;

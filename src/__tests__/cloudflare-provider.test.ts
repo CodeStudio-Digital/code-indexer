@@ -79,7 +79,7 @@ describe('cloudflare.createCoder', () => {
       { apiKey: 'cf-token', extra: { account_id: 'abc123' } },
       undefined,
     );
-    expect(openAIChatCalls[0].model).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast');
+    expect(openAIChatCalls[0].model).toBe('@cf/moonshotai/kimi-k2.7-code');
   });
 
   it('throws an actionable error when account_id is missing', () => {

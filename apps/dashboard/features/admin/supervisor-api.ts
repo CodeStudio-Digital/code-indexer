@@ -36,7 +36,7 @@ export type SupervisionState =
   | 'FAILED_BOOT'
   | 'FAILED_RESURRECT';
 
-export interface BreakerStatusSnapshot {
+interface BreakerStatusSnapshot {
   agents: Array<{ agentRunId: string; recentAttempts: number; tripped: boolean }>;
   roles: Array<{ role: string; recentFailures: number; quarantinedUntilMs: number | null }>;
   globalIncidentsInWindow: number;
@@ -151,7 +151,7 @@ export async function releaseReadOnlyMode(
  *   - Ignored `id:` and `retry:` (we don't honor server-suggested retry)
  *   - Trailing `\n\n` framing
  */
-export interface SupervisorStreamCallbacks {
+interface SupervisorStreamCallbacks {
   onConnected?: () => void;
   onIncident?: (env: SupervisorIncidentEnvelope) => void;
   onError?: (err: Error) => void;

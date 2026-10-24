@@ -57,7 +57,7 @@ import { mountPreviewInspectIpc } from './src/preview-inspect-ipc.js';
 import { mountPreviewCaptureIpc } from './src/preview-capture-ipc.js';
 import { mountCloudIpc } from './src/cloud/cloud-ipc.js';
 import { installGlobalHardening, applyProductionHardening } from './src/security-hardening.js';
-import { APP_DISPLAY_NAME, APP_USER_MODEL_ID, resolveAppIconPath } from './src/app-icon.js';
+import { APP_IDENTITY, resolveAppIconPath } from './src/app-icon.js';
 import { createSplashWindow, whenSplashPainted, updateSplashStatus, closeSplash } from './src/splash-window.js';
 import { enrichElectronProcessMetrics } from './src/process-metrics.js';
 import {
@@ -193,11 +193,11 @@ protocol.registerSchemesAsPrivileged([
 async function bootstrap() {
   // Electron must be ready before any BrowserWindow can open. Do this FIRST
   // so the splash can be shown to cover the heavy in-process backend boot.
-  app.setName(APP_DISPLAY_NAME);
+  app.setName(APP_IDENTITY.displayName);
   await app.whenReady();
 
   if (process.platform === 'win32') {
-    app.setAppUserModelId(APP_USER_MODEL_ID);
+    app.setAppUserModelId(APP_IDENTITY.userModelId);
   }
 
   // Allow microphone capture for the composer voice-dictation button. Electron

@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import * as childProcess from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   isSupportedLspNodeVersion,
@@ -14,8 +15,15 @@ import {
   serverById,
 } from '../server-registry.js';
 
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
+
 const tmps: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.mocked(childProcess.execFileSync).mockClear();
   for (const dir of tmps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -102,6 +110,7 @@ describe('LspServerManager Node policy', () => {
   });
 
   it('probes a selected Node executable when its directory has no version token', () => {
+    const probe = vi.mocked(childProcess.execFileSync).mockReturnValueOnce(`v${process.versions.node}\n`);
     const def = { ...serverById('intelephense')!, serverNodeRange: '>=1.0.0' };
     expect(lspNodeRuntimeStatus(
       { resolveNodeBin: () => dirname(process.execPath) },
@@ -112,6 +121,25 @@ describe('LspServerManager Node policy', () => {
       source: 'project',
       version: process.versions.node,
     });
+    expect(probe).toHaveBeenCalledExactlyOnceWith(
+      join(dirname(process.execPath), process.platform === 'win32' ? 'node.exe' : 'node'),
+      ['--version'],
+      { encoding: 'utf8', timeout: 2_000, windowsHide: true },
+    );
+  });
+
+  it('falls back to the compatible app runtime when probing the selected Node times out', () => {
+    const probe = vi.mocked(childProcess.execFileSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error('selected Node timed out'), { code: 'ETIMEDOUT' });
+    });
+    const nodeBin = join(tmpdir(), 'mcp-lsp-selected-node-without-version');
+    const def = { ...serverById('intelephense')!, serverNodeRange: '>=1.0.0' };
+    expect(lspNodeRuntimeStatus({ resolveNodeBin: () => nodeBin }, 7, def)).toMatchObject({
+      satisfied: true,
+      source: 'app',
+      version: process.versions.node,
+    });
+    expect(probe).toHaveBeenCalledOnce();
   });
 
   it('explains when neither project nor app Node satisfies the profile', () => {

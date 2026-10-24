@@ -1,3 +1,5 @@
+import { JDTLS_LOMBOK_RELPATH } from './lsp-server-constants.js';
+export { JDTLS_LOMBOK_RELPATH } from './lsp-server-constants.js';
 import { join } from 'node:path';
 import { initOptionsForServer, jdtJavaSettings } from './lsp-config-map.js';
 import { jdtlsSpawnSpec, omnisharpSpawnSpec } from './java-csharp-launch.js';
@@ -13,7 +15,7 @@ const RUFF_BASE = 'https://github.com/astral-sh/ruff/releases/download/0.11.13';
 const JDTLS_URL = 'https://download.eclipse.org/jdtls/milestones/1.60.0/jdt-language-server-1.60.0-202606262232.tar.gz';
 const JDTLS_SHA256 = 'e94c303d8198f977930803582738771fd18c52c5492878410bf222b1aa81ef1d';
 const JDTLS_LAUNCHER = 'plugins/org.eclipse.equinox.launcher_1.7.200.v20260619-2039.jar';
-export const JDTLS_LOMBOK_RELPATH = 'lombok/lombok-1.18.46.jar';
+
 const JDTLS_LOMBOK_URL = 'https://projectlombok.org/downloads/lombok-1.18.46.jar';
 const JDTLS_LOMBOK_SHA256 = '01f7b1a015e33e2b62d5f5f37053306357ab1415fd181fcba7794f5d198c1126';
 const OMNISHARP_BASE = 'https://github.com/OmniSharp/omnisharp-roslyn/releases/download/v1.39.15';

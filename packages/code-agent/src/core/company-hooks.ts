@@ -16,7 +16,7 @@
  *   but this hook allows custom post-completion behavior.
  */
 import type { RuntimeHookRegistry } from '@mcp/code-agent/core/hook-registry.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 
 export function registerCompanyHooks(
   hookRegistry: RuntimeHookRegistry,

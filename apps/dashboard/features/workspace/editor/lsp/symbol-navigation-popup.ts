@@ -197,6 +197,6 @@ export async function showSymbolNavigationPopup(
   queueMicrotask(() => { if (!disposed) filter.focus(); });
 }
 
-export function __resetSymbolNavigationPopupForTests(): void {
+function __resetSymbolNavigationPopupForTests(): void {
   projectRoots.clear();
 }

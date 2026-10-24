@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { PreflightReport } from '@mcp/api-bus';
 import { apiCall } from '../../lib/api-client.js';
 
-export type PreflightStatus = 'idle' | 'loading' | 'ready' | 'error';
+type PreflightStatus = 'idle' | 'loading' | 'ready' | 'error';
 
 /** Runs `system.preflight` on mount and on demand (Re-check). */
 export function usePreflight() {

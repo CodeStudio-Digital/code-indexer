@@ -57,14 +57,14 @@ describe('resolveSpawnProjectBinding', () => {
   });
 
   describe('multi-project binding', () => {
-    it('requires an explicit project_id', () => {
-      expect(() =>
+    it('uses the first bound project when project_id is omitted', () => {
+      expect(
         resolveSpawnProjectBinding({
           role: 'qa',
           specProjectId: undefined,
           boundProjectIds: [12, 13],
         }),
-      ).toThrow(/bound to multiple projects \[12, 13\].*Pass project_id/);
+      ).toBe(12);
     });
 
     it('accepts one of the bound project ids', () => {

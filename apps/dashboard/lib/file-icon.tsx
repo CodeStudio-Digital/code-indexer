@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { isIgnoreFilePath } from '@mcp/shared/utils/language-id.js';
 
-export interface FileIconSpec {
+interface FileIconSpec {
   Icon: LucideIcon;
   /** Tailwind class — applied directly to the icon for inline coloring. */
   colorClass: string;

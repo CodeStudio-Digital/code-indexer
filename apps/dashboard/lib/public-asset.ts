@@ -26,7 +26,7 @@
  */
 const BASE_HREF = new URL(import.meta.env.BASE_URL, document.baseURI).href;
 
-export function publicAsset(relativePath: string): string {
+function publicAsset(relativePath: string): string {
   return new URL(relativePath.replace(/^\/+/, ''), BASE_HREF).href;
 }
 

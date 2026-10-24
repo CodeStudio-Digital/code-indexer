@@ -22,7 +22,7 @@
  *    project can be removed cleanly even when Vectorize is unreachable.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

@@ -10,8 +10,8 @@
  * sistema" (sem injeção de PATH). Node fica na coluna própria `node_version`.
  */
 
-export type RuntimeVersionKey = 'php' | 'python' | 'java' | 'dotnet';
-export type RuntimeVersions = Partial<Record<RuntimeVersionKey, string>>;
+type RuntimeVersionKey = 'php' | 'python' | 'java' | 'dotnet';
+type RuntimeVersions = Partial<Record<RuntimeVersionKey, string>>;
 
 const KEYS: readonly RuntimeVersionKey[] = ['php', 'python', 'java', 'dotnet'];
 

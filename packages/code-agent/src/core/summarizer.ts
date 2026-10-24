@@ -22,7 +22,6 @@ export {
   parseCompactionSummaryV3,
   renderChapterV3,
   renderResumeV3,
-  renderSummaryV3,
   separatePreviousResumeV3,
   summarizeSpanV3,
   summaryV2ToV3,

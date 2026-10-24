@@ -2,7 +2,7 @@ import type * as MonacoNs from 'monaco-editor';
 import i18n from '../../../i18n/index.js';
 import { useSeStore } from '../../search-everywhere/se-store.js';
 
-export const SEMANTIC_SEARCH_ACTION_ID = 'mcp.semanticSearch';
+const SEMANTIC_SEARCH_ACTION_ID = 'mcp.semanticSearch';
 const MAX_QUERY_CHARS = 1_000;
 
 /** Selection first, then the word under the cursor, then the current line.

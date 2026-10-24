@@ -81,7 +81,7 @@ export function resolveShareSelection(hosts: SshHost[], selection: ShareChoice[]
   return out;
 }
 
-export interface ShareImpact {
+interface ShareImpact {
   hosts: number;
   /** Hosts that will publish at least one decrypted secret. */
   withCredentials: number;

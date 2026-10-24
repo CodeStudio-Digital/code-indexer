@@ -46,7 +46,7 @@ vi.mock('../qa-preflight.js', () => ({
 }));
 
 import { qaStartRun, setQaTestRunStore } from '../qa-start-run.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 /** qa_start_run ignores the ToolContext — a minimal stub satisfies the signature. */

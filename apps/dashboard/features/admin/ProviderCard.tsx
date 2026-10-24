@@ -195,7 +195,7 @@ export function ProviderCard({
                         >
                           <option value="">auto</option>
                           {m.supported_reasoning_levels.map((lv) => {
-                            const label = typeof lv === 'string' ? lv : (lv as Record<string, unknown>)?.effort ?? String(lv);
+                            const label = typeof lv === 'string' ? lv : String((lv as Record<string, unknown>)?.effort ?? lv);
                             return (
                               <option key={label} value={label}>
                                 {label}

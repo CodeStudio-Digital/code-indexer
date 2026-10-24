@@ -2,13 +2,13 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { TREE_BLOCK as DEFAULT_IGNORE } from '@mcp/shared/utils/fs-ignore.js';
 
-export interface TreeEntry {
+interface TreeEntry {
   name: string;
   type: 'file' | 'dir';
   size: number | null;
 }
 
-export interface FileReadResult {
+interface FileReadResult {
   content: string;
   encoding: 'utf-8' | 'base64';
   truncated: boolean;

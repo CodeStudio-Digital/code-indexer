@@ -132,7 +132,7 @@ export function createWorkspaceTextModelService(monaco: Monaco): {
         file.projectId === target.projectId &&
         file.path === target.relPath,
     );
-    if (open?.content !== null && open?.content !== undefined) return open.content;
+    if (open && 'content' in open && open.content !== null) return open.content;
 
     const result = await apiCall<ReadResult>('files.read', {
       projectId: target.projectId,

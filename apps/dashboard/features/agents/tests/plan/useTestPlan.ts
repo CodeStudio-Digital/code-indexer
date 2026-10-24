@@ -21,7 +21,7 @@ interface FetchPlanResult {
   content: string;
 }
 
-export interface UseTestPlanResult {
+interface UseTestPlanResult {
   loading: boolean;
   error: string | null;
   exists: boolean;

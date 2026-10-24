@@ -35,7 +35,7 @@ interface SemanticWorkerIdleState {
   queued: number;
 }
 
-export interface SemanticRerankerDiagnostics {
+interface SemanticRerankerDiagnostics {
   policy: 'auto' | 'explicit';
   requested_model: string;
   resolved_model: string | null;

@@ -15,7 +15,7 @@ import { CloudflareConnectCard } from './CloudflareConnectCard.js';
 import { DeployProgressCard } from './DeployProgressCard.js';
 import { LiveAppCard } from './LiveAppCard.js';
 
-export function publishTabUnlocked(detail: AppStudioSessionDetail | null): boolean {
+function publishTabUnlocked(detail: AppStudioSessionDetail | null): boolean {
   return detail?.stage === 'ready' || detail?.stage === 'live';
 }
 

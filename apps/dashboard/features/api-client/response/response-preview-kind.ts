@@ -1,6 +1,6 @@
 /** Content-type → how to preview/pretty-print a response body. Pure. */
-export type PreviewKind = 'json' | 'html' | 'xml' | 'image' | 'text';
-export type PrettyLang = 'json' | 'xml' | 'html' | 'javascript' | 'plaintext';
+type PreviewKind = 'json' | 'html' | 'xml' | 'image' | 'text';
+type PrettyLang = 'json' | 'xml' | 'html' | 'javascript' | 'plaintext';
 
 export function contentType(headers: Record<string, string | string[] | undefined>): string {
   const v = headers['content-type'] ?? headers['Content-Type'];
@@ -22,8 +22,4 @@ export function prettyLanguage(ct: string, body: string): PrettyLang {
   if (kind === 'xml') return 'xml';
   if (/javascript|ecmascript/.test(ct)) return 'javascript';
   return 'plaintext';
-}
-
-export function isImageContentType(ct: string): boolean {
-  return /^image\//.test(ct);
 }

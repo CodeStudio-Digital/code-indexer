@@ -114,7 +114,7 @@ function readablePhase(phase?: string): string {
   return phase.replaceAll('_', ' ');
 }
 
-export function formatElapsed(elapsedMs: number): string {
+function formatElapsed(elapsedMs: number): string {
   const seconds = Math.max(0, Math.floor(elapsedMs / 1_000));
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);

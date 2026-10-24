@@ -26,7 +26,9 @@ describe('deferred first-party MCP preparation', () => {
     tools[0]!.parameters.required = ['local_edit'];
     expect(JSON.stringify(INTERNAL_MCP_CATALOG)).toBe(original);
     const read = vi.fn(async () => ({ runs: [] }));
-    await tools.find(tool => tool.name === 'mcp__list_agent_runs')!.handler({}, { ...ctx(), agentReads: { read } });
+    const result = await tools.find(tool => tool.name === 'mcp__list_agent_runs')!.handler({}, { ...ctx(), agentReads: { read } });
+    expect(result.structuredData).toEqual({ runs: [] });
+    expect(result.contentFormat).toBe('markdown');
     expect(read).toHaveBeenCalledOnce(); expect(fake.transports).not.toHaveBeenCalled();
     await bridge.close(); expect(fake.closes).not.toHaveBeenCalled();
     const closed = await tools.find(tool => tool.name === 'mcp__list_agent_runs')!.handler({}, { ...ctx(), agentReads: { read } });

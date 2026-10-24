@@ -64,7 +64,7 @@ export function inferNodeDevPort(
   return 5173;
 }
 
-export type ExternalProvisionSpec =
+type ExternalProvisionSpec =
   | {
       mountKind: 'external';
       imageSource: 'project_dockerfile';
@@ -126,7 +126,7 @@ export function resolveExternalProjectSpec(
 const MEMORY_RE = /^\d+(\.\d+)?\s*(b|k|m|g|kb|mb|gb|ki|mi|gi)?$/i;
 const CPUS_RE = /^\d+(\.\d+)?$/;
 
-export interface SandboxLimitsInput {
+interface SandboxLimitsInput {
   memory?: string;
   cpus?: string;
   pids?: number;

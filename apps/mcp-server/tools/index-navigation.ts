@@ -1,7 +1,7 @@
 import { defineTool, mcpAccess, type McpToolResult } from '../tool.js';
 import { normalizeFilePath, withProject } from './_helpers.js';
 
-export const indexPageSchema = {
+const indexPageSchema = {
   offset: { type: 'number' as const, description: 'Result offset, default 0. Restart from 0 after index changes.' },
   limit: { type: 'number' as const, description: 'Page size, default 200, maximum 500.' },
 };
@@ -10,7 +10,7 @@ export function indexPageArgs(args: Record<string, unknown>, fallback = 200) {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1) throw new Error('offset must be non-negative and limit positive integers');
   return { offset, limit: Math.min(limit, 500) };
 }
-export function indexPageResult(name: string, args: Record<string, unknown>, page: { total: number; offset: number; nextOffset?: number; items: unknown[] }, text: string, empty: string): McpToolResult {
+function indexPageResult(name: string, args: Record<string, unknown>, page: { total: number; offset: number; nextOffset?: number; items: unknown[] }, text: string, empty: string): McpToolResult {
   if (page.offset > page.total) throw new Error('Offset exceeds current results; restart from offset 0 after index changes');
   const more = page.nextOffset != null;
   const partial = more || page.offset > 0;

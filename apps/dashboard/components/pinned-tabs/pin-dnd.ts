@@ -7,9 +7,9 @@
  */
 import type { DragEvent } from 'react';
 
-export const PIN_MIME = 'application/x-mcp-pin';
+const PIN_MIME = 'application/x-mcp-pin';
 
-export interface PinDragPayload {
+interface PinDragPayload {
   id: string;
 }
 

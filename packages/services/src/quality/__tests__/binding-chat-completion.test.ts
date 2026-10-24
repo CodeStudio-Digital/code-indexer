@@ -4,7 +4,7 @@ import type { ResolvedBinding } from '../../pipelines/provider-resolver.js';
 
 const chat = vi.fn();
 vi.mock('../../providers/factory.js', () => ({
-  createChatProviderAsync: vi.fn(async () => ({ model: 'm', name: 'fake', setModel: vi.fn(), chat })),
+  createCoderProvider: vi.fn(async () => ({ model: 'm', name: 'fake', setModel: vi.fn(), chat })),
 }));
 
 import { coderProviderChat } from '../binding-chat.js';

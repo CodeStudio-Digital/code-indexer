@@ -21,7 +21,7 @@ type TeamRuntimeProxyTarget =
   | '/plan-response'
   | '/wake-master';
 
-export interface AppTeamRuntimeBinding {
+interface AppTeamRuntimeBinding {
   appSessionId: SessionId;
   companySessionId: CompanySessionId;
 }
@@ -41,7 +41,7 @@ type AppTeamRuntimeBindingResult =
  * the authorization boundary that prevents one App from driving another App's
  * team through the facade.
  */
-export async function resolveAppTeamRuntimeBinding(
+async function resolveAppTeamRuntimeBinding(
   deps: Pick<
     ServerDeps,
     'appStudioStore' | 'operationalSessionFiles'

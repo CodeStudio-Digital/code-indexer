@@ -17,7 +17,7 @@ import {
 } from '@mcp/session-storage';
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 
-export interface NotificationRouteTarget {
+interface NotificationRouteTarget {
   kind: 'project' | 'global' | 'company';
   route: string;
   scopeId?: number | CompanySessionId;
@@ -25,11 +25,11 @@ export interface NotificationRouteTarget {
   label: string;
 }
 
-export interface NotificationSourceContext {
+interface NotificationSourceContext {
   target: NotificationRouteTarget;
 }
 
-export interface NotificationStreamEnvelope extends NotificationRuntimeEvent {
+interface NotificationStreamEnvelope extends NotificationRuntimeEvent {
   context: NotificationSourceContext;
 }
 

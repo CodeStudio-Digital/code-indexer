@@ -26,7 +26,7 @@ import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import type { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import type { IBoardPoster } from '@mcp/company/services/ports.js';
-import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
+import type { RoleConfig } from './role-config.js';
 import {
   buildMasterPromptInputs,
 } from '@mcp/company/services/master/prompt-builder.js';

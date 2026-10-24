@@ -12,7 +12,7 @@
  */
 import type { TaskKind } from './task-rows.js';
 
-export interface ClassifiedTask {
+interface ClassifiedTask {
   kind: TaskKind;
   label: string;
 }

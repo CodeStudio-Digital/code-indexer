@@ -35,7 +35,7 @@ export function SnapshotFilesProvider({
 }: {
   actions: SnapshotActions | null;
   files: Map<string, SnapshotFileSummary>;
-  children: React.ReactNode;
+  children?: React.ReactNode;
 }) {
   return (
     <ActionsContext.Provider value={actions}>

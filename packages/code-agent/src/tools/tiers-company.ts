@@ -75,9 +75,6 @@ export const SANDBOX_TOOLS: ReadonlySet<string> = new Set([
   'service_stop',
 ]);
 
-/** Backwards-compatible data export; the runtime tier is named `sandbox`. */
-export const BUILDER_TOOLS = SANDBOX_TOOLS;
-
 /**
  * Persistent App Studio v6 control plane. This list intentionally mirrors
  * `packages/company/src/tools/app-studio/index.ts::allTools` exactly. The 34

@@ -20,7 +20,7 @@ export interface NotificationRuntimeEvent {
   data: unknown;
 }
 
-export interface PublishNotificationRuntimeEvent {
+interface PublishNotificationRuntimeEvent {
   ts?: number;
   kind: NotificationRuntimeKind;
   sessionId: NotificationSessionId;
@@ -28,7 +28,7 @@ export interface PublishNotificationRuntimeEvent {
   data: unknown;
 }
 
-export type NotificationRuntimeListener = (event: NotificationRuntimeEvent) => void;
+type NotificationRuntimeListener = (event: NotificationRuntimeEvent) => void;
 
 const RING_CAPACITY = 200;
 const RING_TTL_MS = 15 * 60_000;
@@ -113,7 +113,7 @@ class NotificationEventBus {
 
 const bus = new NotificationEventBus();
 
-export function isNotificationRuntimeEvent(
+function isNotificationRuntimeEvent(
   kind: NotificationRuntimeKind,
   event: string,
 ): boolean {

@@ -2,20 +2,41 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "workspaces": {
     ".": {
+      "ignoreDependencies": [
+        "@aws-sdk/client-bedrock-agent-runtime",
+        "@babel/parser",
+        "@huggingface/transformers",
+        "chroma-js",
+        "magic-string",
+        "officeparser",
+        "openai",
+        "quickjs-emscripten",
+        "turndown",
+        "turndown-plugin-gfm",
+        "original-fs"
+      ],
       "entry": [
         "apps/cli/index.ts",
         "apps/mcp-server/index.ts",
+        "apps/mcp-server/scripts/generate-internal-mcp-catalog.ts",
         "apps/http-api/server.ts",
+        "apps/http-api/server/github-app-managed-git/runtime.ts",
         "apps/http-api/workers/*.{ts,mjs}",
         "apps/electron/main.ts",
         "apps/electron/preload.ts",
         "apps/electron/dev.ts",
         "apps/dashboard/main.tsx",
         "apps/dashboard/vite.config.ts",
+        "apps/dashboard/lib/radix-presence-react19.tsx",
+        "apps/dashboard/performance/renderer/fixture.tsx",
+        "apps/dashboard/performance/stream-projector.ts",
         "scripts/**/*.{ts,mjs}",
         "src/benchmarks/**/*.ts"
       ],
-      "project": ["src/**/*.ts", "apps/**/*.{ts,tsx}"]
+      "project": ["src/**/*.ts", "apps/**/*.{ts,tsx}"],
+      "paths": {
+        "/hooks/*": ["./apps/dashboard/hooks/*"]
+      }
     },
     "packages/*": {
       "entry": ["src/index.ts", "bench/**/*.ts"],

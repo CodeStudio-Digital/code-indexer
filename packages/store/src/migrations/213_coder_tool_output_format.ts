@@ -7,7 +7,7 @@
  * coder_tool_calls is central-only, so trimmed project DBs are a guarded no-op.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

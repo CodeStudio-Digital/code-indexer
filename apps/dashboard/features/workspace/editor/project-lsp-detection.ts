@@ -1,6 +1,6 @@
 import type { DetectedRunners } from '@mcp/api-bus';
 
-export type ProjectLspLanguage = 'java' | 'csharp';
+type ProjectLspLanguage = 'java' | 'csharp';
 
 /** Convert existing runner/project detection into languages worth probing at project open. */
 export function projectLspLanguages(detected: DetectedRunners | null): ProjectLspLanguage[] {

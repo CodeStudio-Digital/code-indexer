@@ -28,6 +28,6 @@ export function usePromptResolution<T = PromptResolution>(
  * reactive on purpose: the widget owns the value while mounted and only needs
  * the store to survive its own unmount.
  */
-export function usePromptDraftSeed<T>(id: string): T | undefined {
+function usePromptDraftSeed<T>(id: string): T | undefined {
   return getPromptDraft<T>(id);
 }

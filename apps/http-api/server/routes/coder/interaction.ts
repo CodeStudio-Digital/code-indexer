@@ -12,7 +12,7 @@ import {
 } from '@mcp/code-agent/tools/tasks.js';
 import { formatAskUserResult, formatDecisionGateResult } from '@mcp/code-agent/tools/interaction.js';
 import { approvalAskId, buildUserDeniedText } from '@mcp/code-agent/core/permission-gate.js';
-import { createChatProviderAsync } from '@mcp/services/providers/factory.js';
+import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ServerDeps } from '../../deps.js';
 import type { CoderRuntime } from './state.js';
 import { parseSessionIdParam, notFound } from '../_helpers.js';
@@ -601,7 +601,7 @@ export function mountCoderInteractionRoutes(
     const id = parseSessionIdParam(c);
     const body = await c.req.json<SwitchProviderBody>();
     if (!body.provider) return c.json({ error: 'provider required' }, 400);
-    const newProvider = await createChatProviderAsync(body.provider, body.model);
+    const newProvider = await createCoderProvider(body.provider, body.model);
     const updated = await withSessionLock(id, async () => {
       const session = await sessionStore.getSession(id);
       if (!session) return false;

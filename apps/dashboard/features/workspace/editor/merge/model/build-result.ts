@@ -8,7 +8,7 @@
 
 import type { MergeModel, MergeRegion, RegionSide } from './types.js';
 
-export interface RegionResultRange {
+interface RegionResultRange {
   regionId: string;
   startLine: number;
   /** endLine < startLine (= startLine-1) means the region is empty in the seed. */
@@ -20,7 +20,7 @@ export interface EolHint {
   finalNewline: boolean;
 }
 
-export interface InitialResult {
+interface InitialResult {
   text: string;
   regionResultRanges: RegionResultRange[];
   eol: '\n' | '\r\n';
@@ -52,7 +52,7 @@ function chosenSide(r: MergeRegion): RegionSide {
  * BOTH a 0-line (empty) region AND a single blank line. The span disambiguates:
  * an empty region has endLine === startLine - 1.
  */
-export function sideLineCount(s: RegionSide): number {
+function sideLineCount(s: RegionSide): number {
   return s.endLine >= s.startLine ? s.endLine - s.startLine + 1 : 0;
 }
 

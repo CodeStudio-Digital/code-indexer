@@ -67,14 +67,14 @@ interface JournalStorageByRun {
   payloadBytes: number;
 }
 
-export interface JournalStorageReport {
+interface JournalStorageReport {
   available: boolean;
   events: number;
   totalBytes: number;
   runs: JournalStorageByRun[];
 }
 
-export interface AgentRunShadowReport {
+interface AgentRunShadowReport {
   available: boolean;
   childRunsCreated: number;
   childRunsTerminalized: number;
@@ -100,7 +100,7 @@ interface EvaluationOverhead {
   samples: number;
 }
 
-export interface PolicyDivergenceReport {
+interface PolicyDivergenceReport {
   available: boolean;
   total: number;
   agreements: number;

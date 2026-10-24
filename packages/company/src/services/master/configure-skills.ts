@@ -9,7 +9,7 @@
  * sidebar-pinned skills), so it logs and returns.
  */
 import { resolveRoleSkills, type RoleSkills } from '@mcp/company/types.js';
-import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
+import type { RoleConfig } from './role-config.js';
 import type { SessionId } from '@mcp/session-storage';
 
 export interface SessionSkillSelectionStore {

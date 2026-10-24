@@ -12,7 +12,7 @@ import type { CapabilityKind, PipelineCatalogEntry } from '../pipeline-bindings-
 /** A capability bucket, plus "outros" for custom bindings outside the catalog. */
 export type CapabilityBucket = CapabilityKind | 'outros';
 
-export interface CapabilityMeta {
+interface CapabilityMeta {
   key: CapabilityBucket;
   /** Key suffix under `admin:pipelines.capability.*`. */
   i18nKey: string;

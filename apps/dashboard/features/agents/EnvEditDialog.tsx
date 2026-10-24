@@ -24,7 +24,7 @@ import {
   DialogTitle,
 } from '../../components/ui/dialog.js';
 import { Textarea } from '../../components/ui/textarea.js';
-import type { EnvRow } from './EnvRowEditor.js';
+import type { EnvRow } from './env-row-types.js';
 import { EnvScopeSelector, type EnvServiceOption } from './EnvScopeSelector.js';
 
 interface EnvEditDialogProps {

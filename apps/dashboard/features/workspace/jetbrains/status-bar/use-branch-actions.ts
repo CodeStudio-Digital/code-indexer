@@ -22,7 +22,7 @@ interface GitRunResult {
   stderr: string;
 }
 
-export interface UseBranchActions {
+interface UseBranchActions {
   projectId: number;
   /** Selected git root (submodule / nested repo); undefined = main repo. */
   repoPath?: string;

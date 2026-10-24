@@ -1,14 +1,33 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { webFetch, webSearch } from '@mcp/code-agent/tools/web.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
+import { newSessionId } from '@mcp/session-storage';
+import type { PublicWebRequest } from '@mcp/shared/utils/public-web-request.js';
+
+vi.mock('@mcp/shared/utils/public-web-request.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mcp/shared/utils/public-web-request.js')>();
+  return {
+    ...actual,
+    readPublicWeb: async (input: PublicWebRequest) => {
+      const url = actual.validatePublicWebUrl(input.url).href;
+      const response = await globalThis.fetch(url, { headers: input.headers, signal: input.signal });
+      const text = typeof response.text === 'function'
+        ? await response.text() : JSON.stringify(await response.json());
+      return {
+        url, status: response.status, statusText: response.statusText ?? '',
+        contentType: response.headers?.get('content-type') ?? 'application/json',
+        text, truncated: false, inputBytes: Buffer.byteLength(text), inputSizeExact: true,
+      };
+    },
+  };
+});
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-const ctx = (): ToolContext => ({ cwd: '/fake', projectName: 'test' });
+const ctx = (): ToolContext => ({ cwd: '/fake', projectName: 'test', sessionId: newSessionId() });
 
-// We cannot call the real fetch() in tests (network), so we mock the
-// module-level `fetchWithTimeout` and `cacheGet`/`cachePut` via vi.mock.
-// The web.ts module does NOT export these, so we mock the global `fetch`.
+// Bridge the bounded acquisition port to per-test fixtures. URL validation and
+// content conversion stay real; no DNS lookup or network socket is opened.
 
 function makeHtml(title: string, body: string): string {
   return `<!DOCTYPE html><html><head><title>${title}</title></head><body>${body}</body></html>`;
@@ -45,7 +64,7 @@ describe('web_fetch', () => {
   it('rejects non-HTTP/HTTPS URLs (SSRF guard)', async () => {
     const result = await webFetch.handler({ url: 'ftp://evil.com/file' }, ctx());
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('http:// or https://');
+    expect(result.content).toContain('http:// and https://');
   });
 
   it('rejects private/loopback IPs', async () => {
@@ -122,7 +141,7 @@ describe('web_search', () => {
   it('rejects empty query', async () => {
     const result = await webSearch.handler({ query: '' }, ctx());
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('empty');
+    expect(result.content).toContain('query must contain between 1 and 4096');
   });
 
   it('falls back to DuckDuckGo when BRAVE_API_KEY is not set', async () => {

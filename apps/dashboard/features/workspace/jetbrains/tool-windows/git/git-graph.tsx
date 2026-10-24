@@ -1,4 +1,4 @@
-import type { Commit } from './CommitRow.js';
+import type { Commit } from './commit-types.js';
 
 const LANE_COLORS = [
   '#8b5cf6',
@@ -35,7 +35,7 @@ export interface GitGraphRow {
   parents: GitGraphParentEdge[];
 }
 
-export interface GitGraphLayout {
+interface GitGraphLayout {
   rows: GitGraphRow[];
   maxLanes: number;
 }
@@ -97,7 +97,7 @@ export function buildGitGraph(commits: readonly Commit[]): GitGraphLayout {
   return { rows, maxLanes };
 }
 
-export function gitGraphWidth(maxLanes: number): number {
+function gitGraphWidth(maxLanes: number): number {
   return Math.max(28, Math.min(126, 14 + Math.max(1, maxLanes) * 14));
 }
 

@@ -33,7 +33,7 @@ export interface AppDataTable {
   health?: { status: 'ok' | 'warning'; issues: string[] };
 }
 
-export interface AppDataProvisionState {
+interface AppDataProvisionState {
   needed: boolean;
   issues: string[];
 }
@@ -46,7 +46,7 @@ interface DataResponse {
   error?: string;
 }
 
-export interface AppDataProvisionResult {
+interface AppDataProvisionResult {
   ok: true;
   applied: string[];
   provision: AppDataProvisionState | null;

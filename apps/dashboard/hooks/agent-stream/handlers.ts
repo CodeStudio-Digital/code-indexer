@@ -70,7 +70,7 @@ interface HandlerContext {
   clearStartsMidTurn?: () => void;
 }
 
-export type EventHandler = (data: Record<string, unknown>, eventName: string) => void;
+type EventHandler = (data: Record<string, unknown>, eventName: string) => void;
 
 export function createEventHandlers(ctx: HandlerContext): Record<string, EventHandler> {
   const {
@@ -150,7 +150,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
   };
   const sweepResolvedInteractiveCards = (): void => {
     refreshCleanupIndex();
-    if (![...pendingPromptIds].some(isPromptResolved)) return;
+    if (![...pendingPromptIds].some((id) => isPromptResolved(id))) return;
     let swept = false;
     for (let i = blocks.length - 1; i >= 0; i--) {
       const id = promptBlockId(blocks[i]);
@@ -958,7 +958,7 @@ export function createEventHandlers(ctx: HandlerContext): Record<string, EventHa
     },
 
     agent_progress: (data) => {
-      const d = data as AgentProgressPayload;
+      const d = data as unknown as AgentProgressPayload;
       const processId = agentProcessId(d.groupId, d.agentIndex);
       // execute_tasks already owns a user-friendly task process row. Its
       // internal tasks-wave agent group is the same work, not another row.
@@ -1324,7 +1324,7 @@ function removeLiveToolBlockByName(
 }
 
 /** Stable identity of an interactive prompt card, or undefined for other blocks. */
-export function promptBlockId(block: StreamBlock): string | undefined {
+function promptBlockId(block: StreamBlock): string | undefined {
   switch (block.type) {
     case 'plan': return block.plan.id;
     case 'spec': return block.spec.id;
@@ -1380,7 +1380,7 @@ function patchTask(
         started_at: (d as { started_at?: string }).started_at,
       };
     } else {
-      const fin = d as {
+      const fin = d as unknown as {
         status: StreamTaskStatus;
         result: StreamTask['result'] | null;
         finished_at: string;

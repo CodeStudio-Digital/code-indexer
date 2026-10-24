@@ -88,7 +88,7 @@ export const patchConnection = (p: number, cid: number, patch: Record<string, un
 export const deleteConnection = (p: number, cid: number) =>
   req<{ ok: true }>(`${root(p)}/connections/${cid}`, { method: 'DELETE' });
 
-export const reorderConnections = (p: number, orderedIds: number[]) =>
+const reorderConnections = (p: number, orderedIds: number[]) =>
   req<{ connections: DbConnection[] }>(`${root(p)}/connections/0/reorder`, j({ orderedIds })).then(
     (r) => r.connections,
   );

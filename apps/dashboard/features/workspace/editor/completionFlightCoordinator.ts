@@ -20,7 +20,7 @@ interface Flight<T> {
   cancel: (clientRequestId: string) => void;
 }
 
-export interface ClientCompletionLease<T> {
+interface ClientCompletionLease<T> {
   clientRequestId: string;
   promise: Promise<T>;
   typedThrough: string;

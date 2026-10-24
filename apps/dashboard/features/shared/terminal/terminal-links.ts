@@ -10,7 +10,7 @@
  * xterm. Offsets are 0-based half-open [startX, endX) into the source line.
  */
 
-export interface TerminalPathMatch {
+interface TerminalPathMatch {
   /** 0-based start index of the whole token (path + optional :line:col) in the line. */
   startX: number;
   /** 0-based end index (exclusive). */

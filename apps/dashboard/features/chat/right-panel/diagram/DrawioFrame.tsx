@@ -10,18 +10,13 @@
  * load. Autosave is debounced before it reaches `onChange`.
  */
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
-import {
-  drawioEmbedUrl,
-  parseDrawioEvent,
-  toDrawioExportAction,
-  type DrawioExportFormat,
-} from './drawio-embed.js';
+import { drawioEmbedUrl, parseDrawioEvent, toDrawioExportAction, type DrawioExportFormat } from './drawio-embed.js';
 
 export interface DrawioFrameHandle {
   exportDiagram(format: DrawioExportFormat): void;
 }
 
-export interface DrawioFrameProps {
+interface DrawioFrameProps {
   /** The mxGraph XML to load. Null/empty opens a blank editor. */
   xml: string | null;
   title?: string;

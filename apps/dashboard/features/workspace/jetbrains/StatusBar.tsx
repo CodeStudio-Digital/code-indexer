@@ -29,7 +29,7 @@ interface StatusBarProps {
 function StatusBarImpl({ projectId, projectName }: StatusBarProps) {
   const activeFilePath = useWorkspaceStore((s) => s.activeFilePath);
   const dirtyCount = useWorkspaceStore(
-    (s) => s.openFiles.filter((f) => f.kind !== 'diff' && f.dirty && f.projectId === projectId).length,
+    (s) => s.openFiles.filter((f) => 'dirty' in f && f.dirty && f.projectId === projectId).length,
   );
   // The indexing chip + file/symbol counters live in IndexStatusSection,
   // which owns the live subscription so progress frames re-render only that

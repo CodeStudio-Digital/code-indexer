@@ -196,7 +196,7 @@ export function CompanySessionView({
   // terminal spawn menu. Hook is cached per sessionId so cost is
   // amortised even when the terminal stays closed.
   const sandboxStatus = useSandboxStatus(sessionId);
-  const hasSandboxForTerminal = !!sandboxStatus.data?.containerId;
+  const hasSandboxForTerminal = !!sandboxStatus.data?.sandbox?.containerId;
 
   const persistBottom = useCallback((next: CompanyBottomTab | null) => {
     setActiveBottom(next);

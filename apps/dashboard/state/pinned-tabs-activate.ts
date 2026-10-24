@@ -27,7 +27,7 @@ export function activatePin(pin: Pin, navigate: NavigateFunction): void {
   }
 }
 
-export interface LiveView {
+interface LiveView {
   view: ActiveView;
   pathname: string;
   search: string;

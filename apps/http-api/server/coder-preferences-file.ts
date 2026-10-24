@@ -2,7 +2,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { atomicWriteJson } from '@mcp/session-storage';
 
-export interface CoderSelectedModel {
+interface CoderSelectedModel {
   provider: string;
   model: string;
 }

@@ -80,6 +80,17 @@ export interface CoderSession {
   updated_at: string;
 }
 
+/** Core transcript fields returned as `message_rows` by the full session read. */
+export interface CoderTranscriptRow {
+  id: string;
+  role: string;
+  content_json: string;
+  input_tokens: number;
+  output_tokens: number;
+  created_at: string;
+  is_meta: 0 | 1;
+}
+
 export interface CreateSessionInput {
   project_id: number;
   title: string;

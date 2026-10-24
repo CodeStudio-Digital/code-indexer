@@ -1,16 +1,10 @@
 import type { ReactNode } from 'react';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '../../components/ui/select.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select.js';
 import { cn } from '../../lib/utils.js';
 
 const EMPTY_VALUE = '__codestudio_api_select_empty__';
 
-export interface ApiClientSelectOption {
+interface ApiClientSelectOption {
   value: string;
   label: ReactNode;
   className?: string;

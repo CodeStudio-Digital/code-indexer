@@ -1,3 +1,5 @@
+import type { ProjectCardData } from './project-card-types.js';
+export type { ProjectCardData } from './project-card-types.js';
 /**
  * Tile-style card for the ProjectList grid layout — one project per
  * card with hover-lift, status badge, file/symbol counts and last-
@@ -19,18 +21,8 @@ import { useContextMenu } from '../../../components/ui/context-menu.js';
 import { cn, formatRelativeTime } from '../../../lib/utils.js';
 import { buildProjectContextMenuItems } from './projectContextMenu.js';
 
-export interface ProjectCardData {
-  id: number;
-  name: string;
-  root_path: string;
-  description?: string | null;
-  group_name?: string | null;
-  file_count: number;
-  symbol_count: number;
-  last_indexed: string | null;
-}
 
-export interface ProjectCardProps {
+interface ProjectCardProps {
   project: ProjectCardData;
   onSelect: () => void;
   onEdit: () => void;

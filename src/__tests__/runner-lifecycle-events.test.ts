@@ -94,7 +94,7 @@ describe('runner lifecycle events', () => {
 });
 
 describe('runner enqueue + interrupt primitives', () => {
-  it('pushUserMessage queues the text and does not interrupt the current turn', async () => {
+  it('pushUserMessage completes the current turn and consumes the queued text on the next turn', async () => {
     const provider = new GatedProvider();
     const release = provider.arm();
     const r = makeRunner(provider);
@@ -117,18 +117,15 @@ describe('runner enqueue + interrupt primitives', () => {
     expect(events).toContain('text_delta');
     expect(events).toContain('done');
 
-    // The pushed message stayed buffered — there were no further turns
-    // because the stream finished without tool_use blocks.
-    // Buffer is internal; verify indirectly: the runner exposes the messages
-    // array, and the pushed message is NOT yet there (pending until next
-    // flushPendingMessages, which only runs at start of a new turn).
+    // Queued input starts a subsequent turn after the active stream completes.
     const userTexts = r.messages
       .filter((m) => m.role === 'user')
       .flatMap((m) => m.content)
       .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
       .map((b) => b.text);
     expect(userTexts).toContain('go');
-    expect(userTexts).not.toContain('change of plan');
+    expect(userTexts).toContain('change of plan');
+    expect(userTexts).toHaveLength(2);
   });
 
   it('interruptWait resolves a pending wait with { interrupted: true }', async () => {

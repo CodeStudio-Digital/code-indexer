@@ -3,8 +3,30 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CodeIndexDB } from '@mcp/store/db.js';
+import Database from 'better-sqlite3';
+import { MIGRATIONS } from '@mcp/store/migrations/index.js';
+import { initSchema } from '@mcp/store/db/schema/index.js';
 import { computeStableId } from '@mcp/store/migrations/002_symbol_stable_id.js';
 import type { LLMSymbol } from '@mcp/shared/types.js';
+
+const migrationVersions = MIGRATIONS.map((migration) => migration.version).sort((a, b) => a - b);
+
+/** Inspect the historical schema before later migrations retire its tables. */
+function withHistoricalSchema(version: number, inspect: (db: Database.Database) => void): void {
+  const historical = new Database(':memory:');
+  try {
+    initSchema(historical);
+    historical.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)');
+    for (const migration of [...MIGRATIONS].sort((a, b) => a.version - b.version)) {
+      if (migration.version > version) break;
+      migration.up(historical);
+      historical.prepare('INSERT INTO schema_version (version, name) VALUES (?, ?)').run(migration.version, migration.name);
+    }
+    inspect(historical);
+  } finally {
+    historical.close();
+  }
+}
 
 function mkSym(overrides: Partial<LLMSymbol> = {}): LLMSymbol {
   return {
@@ -53,28 +75,34 @@ describe('CodeIndexDB', () => {
 
   describe('migrations', () => {
     it('applies all migrations on a fresh DB', () => {
-      expect(db.getSchemaVersion()).toBe(233);
+      expect(db.getSchemaVersion()).toBe(migrationVersions.at(-1));
+      // @ts-expect-error - accessing internal for test
+      const rows = db.db.prepare('SELECT version FROM schema_version ORDER BY version').all() as { version: number }[];
+      expect(rows.map((row) => row.version)).toEqual(migrationVersions);
     });
 
     it('re-opening an existing DB does not re-apply migrations', () => {
       db.close();
       const db2 = new CodeIndexDB(dbPath);
-      expect(db2.getSchemaVersion()).toBe(233);
+      expect(db2.getSchemaVersion()).toBe(migrationVersions.at(-1));
+      // @ts-expect-error - accessing internal for test
+      expect(db2.db.prepare('SELECT COUNT(*) AS count FROM schema_version').get()).toEqual({ count: migrationVersions.length });
       db2.close();
     });
 
     it('coder_messages has is_meta column from migration 075 (PR-4)', () => {
-      // @ts-expect-error - accessing internal for test
-      const cols = db.db.prepare("PRAGMA table_info(coder_messages)").all() as {
+      withHistoricalSchema(75, (historical) => {
+      const cols = historical.prepare("PRAGMA table_info(coder_messages)").all() as {
         name: string;
       }[];
       const names = cols.map((c) => c.name);
       expect(names).toContain('is_meta');
+      });
     });
 
     it('coder_sessions has goal_* columns from migration 068', () => {
-      // @ts-expect-error - accessing internal for test
-      const cols = db.db.prepare("PRAGMA table_info(coder_sessions)").all() as {
+      withHistoricalSchema(68, (historical) => {
+      const cols = historical.prepare("PRAGMA table_info(coder_sessions)").all() as {
         name: string;
       }[];
       const names = new Set(cols.map((c) => c.name));
@@ -84,6 +112,7 @@ describe('CodeIndexDB', () => {
       expect(names.has('goal_completion_note')).toBe(true);
       expect(names.has('goal_created_at')).toBe(true);
       expect(names.has('goal_updated_at')).toBe(true);
+      });
     });
 
     it('symbols.stable_id column exists', () => {
@@ -101,8 +130,7 @@ describe('CodeIndexDB', () => {
     });
 
     it('migration 067 drops `front_id` columns and `company_fronts` table', () => {
-      // @ts-expect-error - accessing internal for test
-      const inner = db.db as InstanceType<typeof import('better-sqlite3')>;
+      withHistoricalSchema(67, (inner) => {
       const tables = inner
         .prepare("SELECT name FROM sqlite_master WHERE type='table'")
         .all() as Array<{ name: string }>;
@@ -116,6 +144,15 @@ describe('CodeIndexDB', () => {
 
       const sessionCols = inner.prepare(`PRAGMA table_info(company_sessions)`).all() as Array<{ name: string }>;
       expect(sessionCols.some((c) => c.name === 'parent_session_id')).toBe(true);
+      });
+    });
+
+    it('keeps session tables retired after the filesystem cutover', () => {
+      // @ts-expect-error - accessing internal for test
+      const tables = db.db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[];
+      for (const retired of ['coder_messages', 'coder_sessions', 'company_sessions']) {
+        expect(tables.map((table) => table.name)).not.toContain(retired);
+      }
     });
   });
 

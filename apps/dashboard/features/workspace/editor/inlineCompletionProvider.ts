@@ -28,12 +28,7 @@ import {
   useAiCompleteStore,
 } from './ai-complete-store.js';
 
-export {
-  aiCompleteToggleUnset,
-  useAiCompleteStore,
-  type AiCompleteIssue,
-  type AiCompleteNudge,
-} from './ai-complete-store.js';
+
 
 type Monaco = typeof MonacoNs;
 
@@ -137,7 +132,7 @@ function maybeRetriggerResolved(
   triggerAutomaticSuggestion(anchor.uri, clientRequestId);
 }
 
-export function resetClientCompletionFlights(): void {
+function resetClientCompletionFlights(): void {
   clientFlights.clear();
   automaticRetrigger = null;
   retriggeredFlights.clear();

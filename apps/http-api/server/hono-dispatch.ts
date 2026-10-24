@@ -38,7 +38,7 @@ import { IN_PROCESS_ENV } from '@apps/http-api/server/middleware/local-origin.js
  * and others take JSON bodies — the IPC payload shape is uniform but
  * the Hono shape isn't.
  */
-export interface DispatchSpec {
+interface DispatchSpec {
   method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   /** Build the URL path from the IPC input. */
   url: (input: Record<string, unknown> | undefined) => string;

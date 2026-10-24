@@ -11,9 +11,9 @@
 import type { DragEvent } from 'react';
 import type { FsItem } from './fs-adapter.js';
 
-export const FS_MIME = 'application/x-mcp-fs';
+const FS_MIME = 'application/x-mcp-fs';
 
-export interface PaneDragPayload {
+interface PaneDragPayload {
   fromKind: 'local' | 'remote';
   items: FsItem[];
 }

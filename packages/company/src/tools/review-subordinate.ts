@@ -15,7 +15,7 @@ import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { JsonSchema } from "@mcp/provider-sdk";
 import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import { ProviderStore } from '@mcp/store/provider-store.js';
 import { PipelineProviderBindingsStore } from '@mcp/store/pipeline-provider-bindings-store.js';
 import { SessionSnapshotService } from '@mcp/services/services/session-snapshots.js';

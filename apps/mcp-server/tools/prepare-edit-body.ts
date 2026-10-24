@@ -3,7 +3,7 @@ import type { ToolContext } from '../context.js';
 import { getSymbolBody } from './symbol-body.js';
 import { findReferences } from './symbol-references.js';
 
-export interface EditBody {
+interface EditBody {
   error?: string; symbol_name: string; file_path: string; start_line: number; end_line: number; body: string;
   stable_id?: string | null; range_kind?: string; recovery?: unknown;
   declaration_line?: number;

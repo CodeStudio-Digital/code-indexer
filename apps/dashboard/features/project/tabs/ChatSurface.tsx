@@ -9,7 +9,7 @@ import AgentChat from '../../chat/index.js';
 import type { AgentChatWorkbenchSlots } from '../../chat/types.js';
 import { markRouteEvent } from '../../../lib/perf/route-startup-metrics.js';
 
-export interface ChatSurfaceProps {
+interface ChatSurfaceProps {
   projectId: number;
   projectName: string;
   initialSessionId?: string;

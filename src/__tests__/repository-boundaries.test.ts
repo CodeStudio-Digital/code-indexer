@@ -1,4 +1,5 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -40,6 +41,45 @@ afterEach(async () => {
 });
 
 describe('repository boundary analysis', () => {
+  it('ignores tracked files deleted from the working tree without staging', () => {
+    const root = fixture();
+    put(root, 'package.json', JSON.stringify({ name: 'fixture' }));
+    put(root, 'packages/alpha/package.json', JSON.stringify({ name: '@fixture/alpha' }));
+    const deleted = 'packages/alpha/src/removed.ts';
+    put(root, deleted, "import 'removed-dependency';\n");
+    execFileSync('git', ['init', '--quiet'], { cwd: root });
+    execFileSync('git', ['add', '.'], { cwd: root });
+    unlinkSync(join(root, deleted));
+
+    expect(execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }))
+      .toContain(`${deleted}\0`);
+    const result = analyzeRepository(root, config());
+    expect(result.trackedFiles).not.toContain(deleted);
+    expect(result.issues).toEqual([]);
+  });
+
+  it('checks new untracked sources while honoring ignored files', () => {
+    const root = fixture();
+    put(root, 'package.json', JSON.stringify({ name: 'fixture' }));
+    put(root, 'packages/alpha/package.json', JSON.stringify({ name: '@fixture/alpha' }));
+    put(root, '.gitignore', 'packages/alpha/src/ignored.ts\n');
+    execFileSync('git', ['init', '--quiet'], { cwd: root });
+    execFileSync('git', ['add', '.'], { cwd: root });
+    const added = 'packages/alpha/src/new source.ts';
+    put(root, added, "import 'untracked-dependency';\n");
+    put(root, 'packages/alpha/src/ignored.ts', "import 'ignored-dependency';\n");
+
+    const result = analyzeRepository(root, config());
+    expect(result.trackedFiles).toContain(added);
+    expect(result.trackedFiles).not.toContain('packages/alpha/src/ignored.ts');
+    expect(result.issues).toEqual([{
+      kind: 'undeclared-external-dependency',
+      file: added,
+      unit: 'packages/alpha',
+      specifier: 'untracked-dependency',
+    }]);
+  });
+
   it('extracts every supported static and dynamic module reference', () => {
     const source = [
       "import value from 'static-package';",
@@ -135,5 +175,47 @@ describe('repository boundary analysis', () => {
       additions: ['added'],
       removals: [],
     });
+  });
+
+  it('does not assign root workspace dependencies to an app while retaining the import boundary', () => {
+    const root = fixture();
+    put(root, 'package.json', JSON.stringify({ name: 'fixture', devDependencies: { '@fixture/beta': 'workspace:*' } }));
+    put(root, 'packages/beta/package.json', JSON.stringify({ name: '@fixture/beta' }));
+    put(root, 'apps/shell/main.ts', "import '@fixture/beta';\n");
+    const result = analyzeRepository(root, config(), ['package.json', 'packages/beta/package.json', 'apps/shell/main.ts']);
+    expect(result.issues.some(issue => issue.kind === 'cross-domain-workspace-dependency')).toBe(false);
+    expect(result.issues.some(issue => issue.kind === 'forbidden-domain-import')).toBe(true);
+  });
+
+  it('permits only a named contract subpath and an explicit same-domain application entrypoint', () => {
+    const root = fixture();
+    put(root, 'package.json', JSON.stringify({ name: 'fixture' }));
+    put(root, 'packages/alpha/package.json', JSON.stringify({ name: '@fixture/alpha', dependencies: { '@fixture/beta': 'workspace:*' } }));
+    put(root, 'packages/beta/package.json', JSON.stringify({ name: '@fixture/beta' }));
+    put(root, 'packages/alpha/src/index.ts', [
+      "import '@fixture/beta/contract.js';", "import '@fixture/beta/internal.js';",
+      "import '../../../apps/shell/public.js';", "import '../../../apps/shell/internal.js';",
+    ].join('\n'));
+    const result = analyzeRepository(root, config({
+      allowedCrossDomainImports: { alpha: ['@fixture/beta/contract.js'] },
+      allowedWorkspacePackages: { alpha: ['@fixture/beta'] },
+      unitEntrypoints: ['apps/shell/public.js'],
+    }), ['package.json', 'packages/alpha/package.json', 'packages/beta/package.json', 'packages/alpha/src/index.ts']);
+    expect(result.issues.map(issue => issue.specifier)).toEqual([
+      '../../../apps/shell/internal.js', '@fixture/beta',
+    ]);
+  });
+
+  it('limits runtime-provided modules to their declared entrypoint', () => {
+    const root = fixture();
+    put(root, 'package.json', JSON.stringify({ name: 'fixture' }));
+    // A synthetic module tests the per-entrypoint rule in both Node and
+    // Electron, whose builtinModules already includes original-fs globally.
+    put(root, 'apps/shell/main.ts', "import 'fixture-runtime-native';\n");
+    put(root, 'apps/shell/other.ts', "import 'fixture-runtime-native';\n");
+    const result = analyzeRepository(root, config({ runtimeModules: { 'apps/shell/main.ts': ['fixture-runtime-native'] } }),
+      ['package.json', 'apps/shell/main.ts', 'apps/shell/other.ts']);
+    expect(result.issues.filter(issue => issue.kind === 'undeclared-external-dependency').map(issue => issue.file))
+      .toEqual(['apps/shell/other.ts']);
   });
 });

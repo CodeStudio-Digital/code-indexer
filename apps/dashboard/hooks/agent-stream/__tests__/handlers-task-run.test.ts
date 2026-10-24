@@ -9,7 +9,7 @@ function setup() {
   const flushNow = vi.fn();
   const updateSession: UpdateSession = vi.fn();
   const handlers = createEventHandlers({
-    sid: 1,
+    sid: '00000000-0000-4000-8000-000000000001',
     blocks,
     toolIndex,
     flush,

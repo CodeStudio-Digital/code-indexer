@@ -10,13 +10,13 @@
  */
 
 /** Base URL of the self-hosted draw.io editor (Electron mcp://app vs browser dev). */
-export function drawioBaseUrl(): string {
+function drawioBaseUrl(): string {
   const isElectron =
     typeof window !== 'undefined' && !!(window as { electronAPI?: unknown }).electronAPI;
   return isElectron ? 'mcp://app/drawio' : '/drawio';
 }
 
-export interface DrawioUrlOpts {
+interface DrawioUrlOpts {
   dark?: boolean;
   libraries?: boolean;
 }
@@ -46,7 +46,7 @@ export function toDrawioExportAction(format: DrawioExportFormat): 'xmlsvg' | 'xm
 }
 
 /** An inbound message from the embedded editor (already JSON-parsed). */
-export interface DrawioEvent {
+interface DrawioEvent {
   event: string;
   xml?: string;
   data?: string;
@@ -60,8 +60,10 @@ export function parseDrawioEvent(data: unknown): DrawioEvent | null {
   if (typeof data !== 'string') return null;
   if (data.length === 0 || data[0] !== '{') return null;
   try {
-    const obj = JSON.parse(data) as Record<string, unknown>;
-    if (obj && typeof obj.event === 'string') return obj as DrawioEvent;
+    const obj: unknown = JSON.parse(data);
+    if (obj && typeof obj === 'object' && 'event' in obj && typeof obj.event === 'string') {
+      return { ...obj, event: obj.event };
+    }
   } catch {
     /* not a drawio JSON frame */
   }

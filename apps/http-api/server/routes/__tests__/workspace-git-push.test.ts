@@ -1,6 +1,7 @@
-import { afterAll, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -12,12 +13,13 @@ import {
 
 const dirs: string[] = [];
 
-afterAll(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+afterAll(async () => {
+  for (const dir of dirs) await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 function git(cwd: string, ...args: string[]): string {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  const result = spawnSync('git', ['-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`, '-c', 'core.fsmonitor=false', ...args], { cwd, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+  if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `git ${args.join(' ')} failed`);
   return result.stdout.trim();
 }
@@ -56,9 +58,12 @@ function advanceRemote(remote: string, file: string, contents: string): string {
   return git(other, 'rev-parse', 'HEAD');
 }
 
-describe('reviewed workspace push', () => {
+// Real local Git integration: fixture setup has its own process-startup budget.
+describe('reviewed workspace push', { timeout: 60_000 }, () => {
+  let fixture: ReturnType<typeof setup>;
+  beforeEach(() => { fixture = setup(); }, 60_000);
   it('uses the previewed target for commits and optional tags', async () => {
-    const { root, remote } = setup();
+    const { root, remote } = fixture;
     const preview = await gitPushPreview(root);
     expect(preview.commitCount).toBe(1);
     expect(preview.commits[0].subject).toBe('workspace outgoing');
@@ -86,7 +91,7 @@ describe('reviewed workspace push', () => {
   });
 
   it('updates a stale local branch with rebase and retries the push', async () => {
-    const { root, remote } = setup();
+    const { root, remote } = fixture;
     const remoteHead = advanceRemote(remote, 'remote-workspace.txt', 'remote work\n');
     const preview = await gitPushPreview(root);
 
@@ -105,7 +110,7 @@ describe('reviewed workspace push', () => {
   });
 
   it('keeps a conflicting rebase for resolution and does not retry the push', async () => {
-    const { root, remote } = setup();
+    const { root, remote } = fixture;
     advanceRemote(remote, 'workspace.txt', 'base\nremote version\n');
     const preview = await gitPushPreview(root);
 

@@ -211,7 +211,7 @@ export function getModelStats(): { models: number; totalChars: number; viewState
 }
 
 /** True only during the synchronous model patch performed below. */
-export function isApplyingExternalContent(model: MonacoNs.editor.ITextModel | null): boolean {
+function isApplyingExternalContent(model: MonacoNs.editor.ITextModel | null): boolean {
   return model !== null && externalContentPatches.has(model);
 }
 

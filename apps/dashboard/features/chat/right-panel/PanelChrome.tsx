@@ -12,7 +12,7 @@ import type { LucideIcon } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { WorkbenchPanelHeader } from '../../../components/workbench/index.js';
 
-export interface PanelChromeProps {
+interface PanelChromeProps {
   title: string;
   icon: LucideIcon;
   /** Right-aligned action slots (header buttons). Optional. */

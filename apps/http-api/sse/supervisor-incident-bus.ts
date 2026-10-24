@@ -27,7 +27,7 @@ export interface SupervisorIncidentEnvelope {
   detectedAtMs: number;
 }
 
-export type SupervisorIncidentListener = (env: SupervisorIncidentEnvelope) => void;
+type SupervisorIncidentListener = (env: SupervisorIncidentEnvelope) => void;
 
 /**
  * Bounded ring of recent incidents. Lets new SSE subscribers replay

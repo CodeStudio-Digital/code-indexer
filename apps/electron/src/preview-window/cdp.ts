@@ -24,8 +24,8 @@ export interface Viewport {
  *  responsive breakpoints work; true touch/UA device emulation is deferred. */
 export const DEFAULT_VIEWPORT: Viewport = { width: 1366, height: 768, deviceScaleFactor: 1, mobile: false };
 
-export interface ConsoleEntry { seq: number; level: string; text: string; ts: number; url?: string; line?: number }
-export interface NetEntry {
+interface ConsoleEntry { seq: number; level: string; text: string; ts: number; url?: string; line?: number }
+interface NetEntry {
   seq: number;
   requestId: string;
   url: string;
@@ -65,7 +65,7 @@ interface Waiter {
   onAbort?: () => void;
 }
 
-export interface PreviewCursor { consoleSeq: number; networkSeq: number }
+interface PreviewCursor { consoleSeq: number; networkSeq: number }
 
 export class PreviewWindow {
   readonly id: number;

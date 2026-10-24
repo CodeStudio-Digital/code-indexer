@@ -17,7 +17,7 @@ const KIND_META: Record<HistoryRevision['kind'], { label: string; cls: string }>
 };
 
 /** created_at do SQLite é UTC sem 'Z'; parseDbDate normaliza para a TZ local. */
-export function formatWhen(createdAt: string): string {
+function formatWhen(createdAt: string): string {
   const d = parseDbDate(createdAt);
   if (!d) return createdAt;
   const diffMs = Date.now() - d.getTime();

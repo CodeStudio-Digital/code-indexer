@@ -304,7 +304,7 @@ describe('ChatGPTCodexProvider stream handler', () => {
     })) void _;
 
     const args = create.mock.calls[0][0] as Record<string, unknown>;
-    expect(args.prompt_cache_key).toBe('coder-session-session-a');
+    expect(args.prompt_cache_key).toBe('coder-session-11111111-1111-4111-8111-111111111111');
   });
 
   it('normalizes GPT-5.6 cache reads and writes from Responses usage', async () => {
@@ -508,7 +508,7 @@ describe('ChatGPTCodexProvider stream handler', () => {
     const out: ChatDelta[] = [];
     for await (const d of provider.chat({ ...baseReq, thinking: true })) out.push(d);
     const args = create.mock.calls[0][0] as Record<string, unknown>;
-    expect(args.reasoning).toEqual({ effort: 'high', summary: 'auto' });
+    expect(args.reasoning).toEqual({ effort: 'high' });
   });
 
   it('sends reasoning.effort=minimal when thinking=false', async () => {
@@ -531,7 +531,7 @@ describe('ChatGPTCodexProvider stream handler', () => {
     const out: ChatDelta[] = [];
     for await (const d of provider.chat({ ...baseReq, thinking: false })) out.push(d);
     const args = create.mock.calls[0][0] as Record<string, unknown>;
-    expect(args.reasoning).toEqual({ effort: 'minimal', summary: 'auto' });
+    expect(args.reasoning).toEqual({ effort: 'minimal' });
   });
 
   it('falls back to highest available when thinking=true but capability lacks high', async () => {
@@ -579,7 +579,7 @@ describe('ChatGPTCodexProvider stream handler', () => {
     const out: ChatDelta[] = [];
     for await (const d of provider.chat({ ...baseReq, thinking: false, reasoningEffort: 'xhigh' })) out.push(d);
     const args = create.mock.calls[0][0] as Record<string, unknown>;
-    expect(args.reasoning).toEqual({ effort: 'xhigh', summary: 'auto' });
+    expect(args.reasoning).toEqual({ effort: 'xhigh' });
   });
 
   it('degrades an unsupported reasoningEffort to the thinking-derived effort', async () => {

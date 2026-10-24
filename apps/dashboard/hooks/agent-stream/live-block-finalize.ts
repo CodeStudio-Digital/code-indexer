@@ -1,7 +1,7 @@
 import type { StreamBlock } from './types.js';
 
 /** Terminal state to stamp on visualizations the run left behind. */
-export type LiveRunOutcome = 'completed' | 'aborted' | 'failed';
+type LiveRunOutcome = 'completed' | 'aborted' | 'failed';
 
 /**
  * Presentation-only blocks (activity/task_run/workflow) carry no durable identity,

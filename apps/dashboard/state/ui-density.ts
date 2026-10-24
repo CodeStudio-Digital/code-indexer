@@ -12,7 +12,7 @@ import { create } from 'zustand';
 
 export type Density = 'compact' | 'comfortable' | 'large';
 
-export interface DensityMetrics {
+interface DensityMetrics {
   /** fontSize do Monaco (px). */
   editorFontPx: number;
   /** altura de cada linha do Explorer (px) — virtualizer estimateSize. */
@@ -41,7 +41,7 @@ function loadPersisted(): Density {
 }
 
 /** Reflete a densidade no <html> (as CSS vars override por seletor de atributo). */
-export function applyDensity(d: Density): void {
+function applyDensity(d: Density): void {
   if (typeof document === 'undefined') return;
   document.documentElement.dataset.density = d;
 }
@@ -70,7 +70,7 @@ export const useUiDensity = create<DensityState>((set) => ({
     }),
 }));
 
-export const DENSITY_OPTIONS: ReadonlyArray<{ value: Density; label: string }> = [
+const DENSITY_OPTIONS: ReadonlyArray<{ value: Density; label: string }> = [
   { value: 'compact', label: 'Compact' },
   { value: 'comfortable', label: 'Comfortable' },
   { value: 'large', label: 'Large' },

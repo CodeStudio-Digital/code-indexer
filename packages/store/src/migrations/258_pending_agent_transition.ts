@@ -1,6 +1,6 @@
 /** Migration 258 — coalesced manual agent transition pending the next run. */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

@@ -4,18 +4,19 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
     "./*": "./src/*"
   },
   "dependencies": {
-    "@mcp/shared": "workspace:*",
-    "@mcp/store": "workspace:*",
-    "@mcp/services": "workspace:*",
-    "@mcp/code-agent": "workspace:*",
-    "@mcp/session-storage": "workspace:*",
-    "@mcp/company-contracts": "workspace:*",
-    "@mcp/candidate-pipeline": "workspace:*",
+    "@mcp/app-studio": "workspace:*",
     "@mcp/agent-runtime-host": "workspace:*",
-    "@mcp/provider-sdk": "workspace:*"
+    "@mcp/candidate-pipeline": "workspace:*",
+    "@mcp/code-agent": "workspace:*",
+    "@mcp/company-contracts": "workspace:*",
+    "@mcp/docs-agent": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*",
+    "@mcp/services": "workspace:*",
+    "@mcp/session-storage": "workspace:*",
+    "@mcp/shared": "workspace:*",
+    "@mcp/store": "workspace:*"
   }
 }

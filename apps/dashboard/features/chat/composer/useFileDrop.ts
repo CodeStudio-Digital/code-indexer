@@ -27,7 +27,7 @@ function installGlobalDropGuard(): void {
   window.addEventListener('drop', prevent);
 }
 
-export interface FileDropHandlers {
+interface FileDropHandlers {
   onDragEnter: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: (e: React.DragEvent) => void;

@@ -30,9 +30,9 @@ export type TemplateId =
   | 'git-clone'
   | 'empty';
 
-export type TemplateGroup = 'frontend' | 'fullstack' | 'edge' | 'start';
+type TemplateGroup = 'frontend' | 'fullstack' | 'edge' | 'start';
 
-export interface TemplateMeta {
+interface TemplateMeta {
   id: TemplateId;
   icon: LucideIcon;
   group: TemplateGroup;

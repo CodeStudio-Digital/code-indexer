@@ -11,8 +11,7 @@
 import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { JsonSchema } from "@mcp/provider-sdk";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
-import { publish as busPublish } from '@apps/http-api/coder-bus.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import type {
   QaFailingTest,
   QaRunCompletedPayload,
@@ -69,7 +68,7 @@ export function qaPublishResult(
     handler: async (args) => {
       try {
         const payload = coercePayload(args, agentRole, agentRunId);
-        busPublish(orchestrator.metaBus, 'qa_run_completed', payload);
+        orchestrator.publishQaResult(payload);
         const summary = `passed=${payload.passed} failed=${payload.failed} skipped=${payload.skipped}`;
         return ok(`Published qa_run_completed for "${payload.suite}" — ${summary}`);
       } catch (e) {

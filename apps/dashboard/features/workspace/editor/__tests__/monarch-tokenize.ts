@@ -21,7 +21,7 @@ interface CompiledLexer {
   defaultToken: string;
 }
 
-export interface Token { text: string; token: string }
+interface Token { text: string; token: string }
 
 /** Resolve `cases` actions down to a concrete token/next pair. */
 function resolve(action: Action, m: RegExpExecArray, state: string): Action {

@@ -33,7 +33,7 @@ type BedrockSdk = {
   CreateFoundationModelAgreementCommand: new (input: unknown) => unknown;
 };
 
-export type ModelAccessStatus = {
+type ModelAccessStatus = {
   modelId: string;
   agreementAvailability: { status: string } | undefined;
   authorizationStatus: string | undefined;

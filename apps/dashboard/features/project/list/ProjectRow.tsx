@@ -20,7 +20,7 @@ import { cn, formatRelativeTime } from '../../../lib/utils.js';
 import type { ProjectCardData } from './ProjectCard.js';
 import { buildProjectContextMenuItems } from './projectContextMenu.js';
 
-export interface ProjectRowProps {
+interface ProjectRowProps {
   project: ProjectCardData;
   /** Stable handlers from the parent (the row passes its own project back). */
   onSelect: (project: ProjectCardData) => void;

@@ -11,16 +11,7 @@ import { cloudCall } from '../../../lib/cloud/cloud-client.js';
 import { CloudError } from '../../../lib/cloud/cloud-errors.js';
 import type { ApiRequest } from '../types.js';
 import * as api from '../api.js';
-import {
-  bodyToUpsert,
-  mergeRequestForApply,
-  planEnvApply,
-  planEnvPush,
-  planCollectionApply,
-  planCollectionPush,
-  requestMatchKey,
-  type CollectionBody,
-} from './api-sync-core.js';
+import { bodyToUpsert, mergeRequestForApply, planEnvApply, planEnvPush, planCollectionApply, planCollectionPush, requestMatchKey, type CollectionBody } from './api-sync-core.js';
 
 interface SyncState {
   workspaceId: string;
@@ -35,7 +26,7 @@ interface SyncState {
   cursor: number;
 }
 
-export interface SyncSummary {
+interface SyncSummary {
   pushed: number;
   conflicts: number;
   pulledApplied: number;

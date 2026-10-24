@@ -6,9 +6,9 @@
 import type { DbEngine } from './types.js';
 
 /** Engine category — drives which UI surface (tables/SQL vs documents vs key-value) renders. */
-export type EngineKind = 'relational' | 'document' | 'keyvalue';
+type EngineKind = 'relational' | 'document' | 'keyvalue';
 
-export interface EngineMeta {
+interface EngineMeta {
   id: DbEngine;
   label: string;
   defaultPort?: number;
@@ -22,7 +22,7 @@ export interface EngineMeta {
   lazyDriver?: boolean;
 }
 
-export const ENGINES: EngineMeta[] = [
+const ENGINES: EngineMeta[] = [
   { id: 'postgres', label: 'PostgreSQL', defaultPort: 5432, available: true, engineKind: 'relational' },
   { id: 'mysql', label: 'MySQL', defaultPort: 3306, available: true, engineKind: 'relational' },
   { id: 'mariadb', label: 'MariaDB', defaultPort: 3306, available: true, engineKind: 'relational' },

@@ -60,7 +60,7 @@ export function clearConflicts(projectId?: number, repoPrefix?: string): void {
   emit();
 }
 
-export function isConflicted(projectId: number, path: string): boolean {
+function isConflicted(projectId: number, path: string): boolean {
   if (state.projectId !== projectId) return false;
   for (const set of state.byRepo.values()) if (set.has(path)) return true;
   return false;

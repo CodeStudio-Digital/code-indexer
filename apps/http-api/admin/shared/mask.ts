@@ -51,4 +51,4 @@ export function publicProvider(p: ProviderConfig) {
   };
 }
 
-export type PublicProvider = ReturnType<typeof publicProvider>;
+type PublicProvider = ReturnType<typeof publicProvider>;

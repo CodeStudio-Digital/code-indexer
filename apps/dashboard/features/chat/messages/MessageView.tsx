@@ -68,7 +68,7 @@ interface MessageViewProps {
   /** Session id — needed to lazy-fetch attachment base64 stripped from the
    *  list payload (see sessions.ts trimMessageBlocks). */
   sessionId?: string;
-  toolResultsById: Map<string, ToolResultView>;
+  toolResultsById: ReadonlyMap<string, ToolResultView>;
   usage?: MessageRow;
   onAnswer: PromptHandlers['onAnswer'];
   onPlanResponse: PromptHandlers['onPlanResponse'];
@@ -534,7 +534,7 @@ export function renderAssistantBlock(
   b: ContentBlock,
   i: number,
   handlers: PromptHandlers,
-  toolResultsById: Map<string, ToolResultView>,
+  toolResultsById: ReadonlyMap<string, ToolResultView>,
   tasksState: PersistedTasksState | null | undefined,
   activeTasksToolUseId?: string | null,
   sessionId?: string,

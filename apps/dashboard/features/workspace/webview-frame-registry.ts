@@ -9,7 +9,7 @@
  * `ready` handshake (WebviewWindow ↔ the iframe shim) makes this path rare —
  * this is defense-in-depth so a transient never surfaces as a hard error.
  */
-export interface PluginFrameInfo {
+interface PluginFrameInfo {
   namespace: string;
   projectId?: number;
 }

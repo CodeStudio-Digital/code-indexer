@@ -1,3 +1,5 @@
+import type { SpawnSubordinateDeps, SpawnResult } from './spawn-types.js';
+export type { SpawnSubordinateDeps } from './spawn-types.js';
 import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.js';
 /**
  * Spawn a fresh subordinate agent. Lifecycle:
@@ -18,99 +20,28 @@ import { getReadyDocsResearchTools } from '@mcp/docs-agent/bridges/docs-bridge.j
  * in one file and the orchestration is documented in one place. The
  * deps bag enumerates every collaborator the original method touched.
  */
-import {
-  runCoder,
-  type RunCoderOptions,
-} from '@mcp/code-agent/index.js';
+import { runCoder, type RunCoderOptions } from '@mcp/code-agent/index.js';
 import { installDocsDeepResearch } from '@mcp/docs-agent/bridges/docs-bridge.js';
 import { createBus } from '@apps/http-api/coder-bus.js';
 import { buildSubordinateCompanyBlock } from '@mcp/company/system-prompts.js';
 import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
-import {
-  resolveRoleSkills,
-  type AgentRunStatus,
-  type CompanyContext,
-  type SubordinateHandle,
-} from '@mcp/company/types.js';
-import type { ConcurrencyPolicy } from '@mcp/company/ConcurrencyPolicy.js';
-import type { SessionContext } from '@mcp/company/services/SessionContext.js';
-import type { HumanInTheLoop } from '@mcp/company/services/HumanInTheLoop.js';
+import { resolveRoleSkills, type CompanyContext, type SubordinateHandle } from '@mcp/company/types.js';
+
 import { getGlobalAgentSupervisor } from '@mcp/company/services/supervisor/global.js';
 import { wireSupervisorToRunner } from '@mcp/company/services/supervisor/wire-runner-events.js';
-import type { MasterAttention } from '@mcp/company/services/MasterAttention.js';
-import type {
-  IAgentStatusUpdater,
-  IBoardPoster,
-  IKanbanNotifier,
-  IMasterNotifier,
-  IMetaBusWirer,
-} from '@mcp/company/services/ports.js';
-import {
-  resolveSpawnProjectScope,
-  type SpawnSubordinateSpec,
-} from '@mcp/company/services/subordinate/spec.js';
-import {
-  readRoleRuntimePolicy,
-  resolveEffectiveRoleRuntime,
-  type CompanyRuntimeKind,
-} from '@mcp/company/services/subordinate/role-runtime.js';
-import {
-  resolveBindingForProject,
-} from '@mcp/company/services/subordinate/binding.js';
+
+import { resolveSpawnProjectScope, type SpawnSubordinateSpec } from '@mcp/company/services/subordinate/spec.js';
+import { readRoleRuntimePolicy, resolveEffectiveRoleRuntime, type CompanyRuntimeKind } from '@mcp/company/services/subordinate/role-runtime.js';
+import { resolveBindingForProject } from '@mcp/company/services/subordinate/binding.js';
 import { resolveAutonomy } from '@mcp/company/services/autonomy/autonomy-config.js';
-import type { AutonomyProvider } from '@mcp/company/services/autonomy/autonomy-provider.js';
+
 import { checkGlobalSubordinateBudget } from '@mcp/company/services/subordinate/global-budget.js';
-import {
-  attachSubordinateCompletionHandler,
-  type SubordinateCompletionDeps,
-} from '@mcp/company/services/subordinate/completion-handler.js';
-import {
-  wireSubordinateInterceptionsForRunner,
-} from '@mcp/company/services/subordinate/runner-wiring.js';
+import { attachSubordinateCompletionHandler } from '@mcp/company/services/subordinate/completion-handler.js';
+import { wireSubordinateInterceptionsForRunner } from '@mcp/company/services/subordinate/runner-wiring.js';
 import { getCompanyMemoryPorts } from '@mcp/company/services/memory/ports.js';
 import { fetchProjectMemoryBlock, fetchUserMemoryBlock } from '@mcp/company/services/memory/spawn-injection.js';
 import { buildAppStudioSubordinateRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';
 import { createCompanyCoderSession } from '@mcp/company/services/company-coder-sessions.js';
-
-export interface SpawnSubordinateDeps {
-  ctx: SessionContext;
-  board: IBoardPoster;
-  status: IAgentStatusUpdater;
-  kanban: IKanbanNotifier;
-  master: IMasterNotifier;
-  humanInLoop: HumanInTheLoop;
-  wirer: IMetaBusWirer;
-  attention: MasterAttention;
-  orchestratorRef: unknown;
-  concurrencyPolicy: ConcurrencyPolicy;
-  subordinates: Map<string, SubordinateHandle>;
-  runningIds: Set<string>;
-  /** Synchronous spawn-reservation counter (closes the cap TOCTOU). See
-   *  SubordinateLifecycle.pendingSpawns. */
-  pendingSpawns: { count: number };
-  notifyIdleChanged: () => void;
-  /** Wire HumanInTheLoop + meta-bus listeners on the runner. */
-  wireDeps: {
-    humanInLoop: HumanInTheLoop;
-    wirer: IMetaBusWirer;
-  };
-  /** Deps bag forwarded to `attachSubordinateCompletionHandler`. */
-  completionDeps: SubordinateCompletionDeps;
-  /** Helper to compose the `running` list in concurrency-error messages. */
-  listRunning: () => Array<{ agentRunId: string; role: string }>;
-  /**
-   * C2 — per-session autonomy config; source of the global-budget cap
-   * (`maxSubordinates`, default 8). Optional: callers/tests without it
-   * fall back to `resolveAutonomy(null, process.env)` — never crash.
-   */
-  autonomy?: Pick<AutonomyProvider, 'get'>;
-}
-
-interface SpawnResult {
-  agentRunId: string;
-  coderSessionId: string;
-  status: AgentRunStatus;
-}
 
 /**
  * Pure-ish: throws on validation failure, mutates `subordinates`/

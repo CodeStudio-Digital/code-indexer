@@ -17,7 +17,7 @@ export interface RefreshOutcome {
   refreshToken?: string; // the NEW rotated token
 }
 
-export interface TokenManagerDeps {
+interface TokenManagerDeps {
   store: SecureTokenStore;
   /** Calls POST /v1/auth/refresh with the current refresh token. */
   refresh: (refreshToken: string) => Promise<RefreshOutcome>;
@@ -89,4 +89,4 @@ export function createTokenManager(deps: TokenManagerDeps) {
   };
 }
 
-export type TokenManager = ReturnType<typeof createTokenManager>;
+type TokenManager = ReturnType<typeof createTokenManager>;

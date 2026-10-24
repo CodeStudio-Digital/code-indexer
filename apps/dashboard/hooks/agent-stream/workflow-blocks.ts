@@ -48,7 +48,7 @@ export interface WorkflowRunFinishedPayload {
   total_usage?: Usage;
 }
 
-export function findWorkflowRun(blocks: StreamBlock[], workflowId: string): WorkflowRunState | null {
+function findWorkflowRun(blocks: StreamBlock[], workflowId: string): WorkflowRunState | null {
   for (const block of blocks) {
     if (block.type === 'workflow' && block.run.workflowId === workflowId) return block.run;
   }

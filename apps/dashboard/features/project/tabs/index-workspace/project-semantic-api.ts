@@ -1,4 +1,4 @@
-export type ProjectSemanticJobStatus =
+type ProjectSemanticJobStatus =
   | 'pending'
   | 'running'
   | 'paused'
@@ -6,7 +6,7 @@ export type ProjectSemanticJobStatus =
   | 'failed'
   | 'cancelled';
 
-export interface ProjectSemanticRoute {
+interface ProjectSemanticRoute {
   generationId: number;
   dbPath?: string;
   tableName?: string;

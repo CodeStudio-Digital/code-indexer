@@ -1,3 +1,5 @@
+import type { RecorderStatus, RecorderErrorCode } from './recorder-types.js';
+export type { RecorderErrorCode } from './recorder-types.js';
 /**
  * useAudioRecorder — records mic audio via MediaRecorder, transcribes it via
  * `POST /api/coder/transcribe`, and hands the final text back through
@@ -15,16 +17,6 @@ import { readDataUrlBase64 } from '../utils.js';
 import { transcribeAudio, TranscribeError } from './transcribe-api.js';
 import { readMicDeviceId } from './mic-device.js';
 import { publishVoiceCapture, clearVoiceCaptureAnalyser, setVoiceCaptureStop } from './voice-capture-store.js';
-
-export type RecorderStatus = 'idle' | 'requesting' | 'recording' | 'transcribing' | 'error';
-export type RecorderErrorCode =
-  | 'denied'
-  | 'no-device'
-  | 'busy'
-  | 'unsupported'
-  | 'no-model'
-  | 'http'
-  | 'empty';
 
 /** Bound the permission/acquire phase so a hung getUserMedia can't pin the UI. */
 const GET_USER_MEDIA_TIMEOUT_MS = 20_000;

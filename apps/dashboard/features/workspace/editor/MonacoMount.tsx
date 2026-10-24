@@ -102,7 +102,7 @@ interface MonacoMountProps {
  * changes. PHP → PHP swaps therefore leave restored models untouched. Own the
  * invariant here on every concrete model activation.
  */
-export function reconcileModelLanguage(
+function reconcileModelLanguage(
   monaco: typeof MonacoNs,
   model: MonacoNs.editor.ITextModel,
 ): string {

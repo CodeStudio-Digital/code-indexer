@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
 import { fetchQaDiagnostics } from '../api/qa-api.js';
 import type { QaDiagnostics } from '../shared/types.js';
 
-export interface UseQaDiagnosticsResult {
+interface UseQaDiagnosticsResult {
   data: QaDiagnostics | null;
   loading: boolean;
   error: string | null;

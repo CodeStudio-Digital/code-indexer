@@ -1,25 +1,36 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Hono } from 'hono';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { mountProjectGitRoutes } from '../project-git.js';
 
 const root = mkdtempSync(join(tmpdir(), 'mcp-git-http-'));
-spawnSync('git', ['init', '-b', 'main'], { cwd: root });
-spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root });
-spawnSync('git', ['config', 'user.name', 'Test'], { cwd: root });
-writeFileSync(join(root, 'base.txt'), 'base\n');
-spawnSync('git', ['add', '.'], { cwd: root });
-spawnSync('git', ['commit', '-m', 'base'], { cwd: root });
+beforeAll(() => {
+  function git(...args: string[]): void {
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 30_000 });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(result.stderr || `git ${args.join(' ')} failed`);
+  }
+  git('init', '-b', 'main');
+  git('config', 'user.email', 'test@example.com');
+  git('config', 'user.name', 'Test');
+  git('config', 'commit.gpgsign', 'false');
+  writeFileSync(join(root, 'base.txt'), 'base\n');
+  git('add', '.');
+  git('commit', '-m', 'base');
+}, 60_000);
 
-afterAll(() => rmSync(root, { recursive: true, force: true }));
+afterAll(async () => {
+  await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+});
 
 function app() {
   const hono = new Hono();
   mountProjectGitRoutes(hono, {
-    db: { getProject: (id: number) => id === 1 ? { id, name: 'Test', root_path: root } : null },
+    db: { getProjectRootPath: (id: number) => id === 1 ? root : undefined },
   } as never);
   return hono;
 }

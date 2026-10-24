@@ -1,3 +1,5 @@
+import type { RuntimeLogKind, RuntimeSessionId, RuntimeEventEnvelope } from './runtime-event-types.js';
+export type { RuntimeEventEnvelope } from './runtime-event-types.js';
 import { addBusEventSink, type BufferedEvent, type CoderRunBus } from '../coder-bus.js';
 import { publishNotificationRuntimeEvent } from './notification-event-bus.js';
 import {
@@ -9,21 +11,10 @@ import {
   type PersistableRuntimeEvent,
   type RuntimeEventLogLocation,
 } from './runtime-event-log-storage.js';
-import type { CompanySessionId, SessionId } from '@mcp/session-storage';
 
-export type RuntimeLogKind = 'coder' | 'company';
-export type RuntimeSessionId = SessionId | CompanySessionId;
 
-export interface RuntimeEventEnvelope extends BufferedEvent {
-  /** Stable identity of the run bus. Older persisted rows may omit it. */
-  busId?: string;
-  ts: number;
-  kind: RuntimeLogKind;
-  sessionId: RuntimeSessionId;
-  opId?: string;
-  groupId?: string;
-  agentIndex?: number;
-}
+
+
 
 const CAP_PER_SESSION = 10_000;
 const EVICT_BATCH = 1_000;

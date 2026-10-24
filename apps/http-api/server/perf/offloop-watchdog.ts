@@ -142,13 +142,13 @@ parentPort.on('message', (message) => {
 });
 `;
 
-export interface OffloopWatchdogOptions {
+interface OffloopWatchdogOptions {
   thresholdMs?: number;
   pollMs?: number;
   repeatMs?: number;
 }
 
-export type OffloopActivityKind = 'handler' | 'background';
+type OffloopActivityKind = 'handler' | 'background';
 
 let watchdog: Worker | null = null;
 let warned = false;

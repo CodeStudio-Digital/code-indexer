@@ -17,7 +17,7 @@ interface PaginatedGitLogOptions {
   pageSize?: number;
 }
 
-export interface PaginatedGitLog {
+interface PaginatedGitLog {
   commits: Commit[];
   loading: boolean;
   loadingMore: boolean;

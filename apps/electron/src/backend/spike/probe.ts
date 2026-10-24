@@ -14,13 +14,13 @@ import { Worker } from 'node:worker_threads';
 
 const require = createRequire(import.meta.url);
 
-export interface SpikeCheck {
+interface SpikeCheck {
   name: string;
   ok: boolean;
   detail: string;
 }
 
-export interface SpikeReport {
+interface SpikeReport {
   env: Record<string, string>;
   checks: SpikeCheck[];
 }

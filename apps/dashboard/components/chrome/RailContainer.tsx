@@ -8,7 +8,7 @@
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/utils.js';
 
-export interface RailContainerProps {
+interface RailContainerProps {
   /** Which side of the content the rail sits on — drives the border edge. */
   side: 'left' | 'right';
   children: ReactNode;

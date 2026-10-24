@@ -3,13 +3,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '../../components/ui/badge.js';
 import { Button } from '../../components/ui/button.js';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '../../components/ui/dialog.js';
+
 import { Input } from '../../components/ui/input.js';
 import { Switch } from '../../components/ui/switch.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../../components/ui/collapsible.js';
@@ -96,15 +90,8 @@ function TierGroup({
   );
 }
 
-interface ToolConfigDialogProps {
-  sessionId: string | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
 /**
- * Headless body of the tool-config surface. Shared by the legacy modal
- * (`ToolConfigDialog`) and the new right-rail panel (`ToolConfigPanel`).
+ * Tool configuration body rendered by the session right panel.
  * The hook owns its fetch lifecycle; pass `sessionId=null` to suspend it
  * (e.g. while the panel is collapsed).
  */
@@ -166,20 +153,5 @@ export function ToolConfigView({ sessionId }: { sessionId: string | null }) {
         ))}
       </div>
     </div>
-  );
-}
-
-export function ToolConfigDialog({ sessionId, open, onOpenChange }: ToolConfigDialogProps) {
-  const { t } = useTranslation(['chat']);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle>{t('chat:toolConfig.title')}</DialogTitle>
-          <DialogDescription>{t('chat:toolConfig.description')}</DialogDescription>
-        </DialogHeader>
-        <ToolConfigView sessionId={open ? sessionId : null} />
-      </DialogContent>
-    </Dialog>
   );
 }

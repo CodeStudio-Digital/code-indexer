@@ -6,7 +6,7 @@
  *     pre-existing rows read back NULL (= all services, behavior kept).
  *   - Guarded: absent table → up() no-ops, never throws (trimmed DBs).
  *   - Idempotent: re-running up() adds nothing twice.
- *   - Full lineage (CodeIndexDB boot) lands ≥ 192 with the column.
+ *   - Historical lineage reaches 192 with the column; the current cutover retires the table.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import type DatabaseConstructor from 'better-sqlite3';
 import { CodeIndexDB } from '../../db.js';
+import { initSchema } from '../../db/schema/index.js';
 import { MIGRATIONS, getSchemaVersion, runMigrations } from '../index.js';
 import { companySessionEnvScope192 } from '../192_company_session_env_scope.js';
 
@@ -100,8 +101,25 @@ describe('migration 192 — full lineage on a fresh DB', () => {
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
   });
 
-  it('lands at >= 192 with the column present', () => {
-    expect(getSchemaVersion(db.raw())).toBeGreaterThanOrEqual(192);
-    expect(colNames(db.raw(), 'company_session_envs')).toContain('service_scope');
+  it('adds the column at historical version 192', () => {
+    const historical = new Database(':memory:');
+    try {
+      initSchema(historical);
+      historical.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)');
+      for (const migration of [...MIGRATIONS].sort((a, b) => a.version - b.version)) {
+        if (migration.version > 192) break;
+        migration.up(historical);
+        historical.prepare('INSERT INTO schema_version (version, name) VALUES (?, ?)').run(migration.version, migration.name);
+      }
+      expect(getSchemaVersion(historical)).toBe(192);
+      expect(colNames(historical, 'company_session_envs')).toContain('service_scope');
+    } finally {
+      historical.close();
+    }
+  });
+
+  it('retires the session environment table in the current filesystem cutover', () => {
+    expect(getSchemaVersion(db.raw())).toBe(Math.max(...MIGRATIONS.map((migration) => migration.version)));
+    expect(db.raw().prepare("SELECT name FROM sqlite_master WHERE name = 'company_session_envs'").get()).toBeUndefined();
   });
 });

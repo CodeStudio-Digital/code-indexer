@@ -11,7 +11,7 @@ import { useEffect, useRef } from 'react';
 import { subscribeShared } from './shared-stream.js';
 import { markRouteEvent } from '../lib/perf/route-startup-metrics.js';
 
-export interface GitMetaFrameDTO {
+interface GitMetaFrameDTO {
   branch: string | null;
   detached: boolean;
   changed: Array<'head' | 'ref' | 'sequencer'>;

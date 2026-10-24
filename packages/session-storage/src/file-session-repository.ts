@@ -85,9 +85,6 @@ export const SESSION_BUNDLE_DIRECTORIES = [
   'company',
 ] as const;
 
-/** @deprecated Use SESSION_BUNDLE_DIRECTORIES. */
-export const SESSION_LAYOUT_DIRECTORIES = SESSION_BUNDLE_DIRECTORIES;
-
 export type SessionEntityDirectory =
   | 'snapshots'
   | 'events'

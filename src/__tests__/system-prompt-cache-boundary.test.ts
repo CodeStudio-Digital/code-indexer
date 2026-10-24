@@ -129,23 +129,23 @@ describe('SYSTEM_PROMPT_DYNAMIC_BOUNDARY — static prefix byte-stability', () =
       repoMap: '# Repo map\n- src/app.ts',
     });
     const { staticPrefix, dynamicSuffix } = splitOnBoundary(prompt);
-    expect(staticPrefix).toContain('# Agent loop');
-    expect(staticPrefix).toContain('# Preambles before tool calls');
+    expect(staticPrefix).toContain('# Execution contract');
+    expect(staticPrefix).toContain('Before substantial tools, state the immediate objective');
     expect(staticPrefix).toContain('# Active context');
-    expect(dynamicSuffix).not.toContain('# Agent loop');
+    expect(dynamicSuffix).not.toContain('# Execution contract');
   });
 
   it('persistence framing (R6) is present in the agent-loop block', () => {
     const prompt = buildSystemPrompt(baseCtx);
-    expect(prompt).toContain('Persist until the user');
-    expect(prompt).toContain('end-to-end');
-    expect(prompt).toContain('do not stop at analysis');
+    expect(prompt).toContain('carry explicit change requests through implementation and verification');
+    expect(prompt).toContain('Proceed on reversible in-scope work');
+    expect(prompt).toContain('Respect Plan/Spec approval gates');
   });
 
   it('preamble guidance (R6) is present', () => {
     const prompt = buildSystemPrompt(baseCtx);
-    expect(prompt).toContain('1–2 sentence preamble');
-    expect(prompt).toContain('8–12 words');
+    expect(prompt).toContain('Before substantial tools, state the immediate objective');
+    expect(prompt).toContain('at least every 60 seconds');
   });
 });
 

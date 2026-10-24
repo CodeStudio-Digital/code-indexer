@@ -4,6 +4,7 @@ import {
 } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
 import {
   DELETE_ROW_DISPOSITIONS,
   DROP_TABLES,
@@ -18,34 +19,60 @@ import {
   type SchemaTable,
 } from '../manifest.js';
 
-function scanMigrationSourceSchema(): SchemaTable[] {
-  const directory = resolve('packages/store/src/migrations');
+function scanMigrationSchema(sources: readonly string[]): SchemaTable[] {
   const schema = new Map<string, Set<string>>();
   const add = (table: string, column: string): void => {
     const columns = schema.get(table) ?? new Set<string>();
     columns.add(column);
     schema.set(table, columns);
   };
-
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
-    const source = readFileSync(join(directory, entry.name), 'utf8');
+  const applySql = (sql: string): void => {
+    const events: Array<{ offset: number; apply: () => void }> = [];
     const create = /CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([a-z][a-z0-9_]*)\s*\(([\s\S]*?)\n\s*\);/gi;
-    for (const match of source.matchAll(create)) {
-      const table = match[1];
-      const columns = match[2].matchAll(
-        /^\s*([a-z][a-z0-9_]*)\s+(?:INTEGER|TEXT|BLOB|REAL|NUMERIC)\b/gim,
-      );
-      for (const column of columns) add(table, column[1]);
-    }
-    const helper = /(?:addColumnIfMissing|addColumn)\(\s*db\s*,\s*['"]([a-z][a-z0-9_]*)['"]\s*,\s*['"]([a-z][a-z0-9_]*)['"]/gi;
-    for (const match of source.matchAll(helper)) add(match[1], match[2]);
+    for (const match of sql.matchAll(create)) events.push({ offset: match.index!, apply: () => {
+      for (const column of match[2].matchAll(/^\s*([a-z][a-z0-9_]*)\s+(?:INTEGER|TEXT|BLOB|REAL|NUMERIC)\b/gim)) add(match[1], column[1]);
+    } });
     const alter = /ALTER\s+TABLE\s+([a-z][a-z0-9_]*)\s+ADD\s+COLUMN\s+([a-z][a-z0-9_]*)/gi;
-    for (const match of source.matchAll(alter)) add(match[1], match[2]);
+    for (const match of sql.matchAll(alter)) events.push({ offset: match.index!, apply: () => add(match[1], match[2]) });
+    const drop = /DROP\s+TABLE(?:\s+IF\s+EXISTS)?\s+([a-z][a-z0-9_]*)\s*;/gi;
+    for (const match of sql.matchAll(drop)) events.push({ offset: match.index!, apply: () => { schema.delete(match[1]); } });
+    const rename = /ALTER\s+TABLE\s+([a-z][a-z0-9_]*)\s+RENAME\s+TO\s+([a-z][a-z0-9_]*)/gi;
+    for (const match of sql.matchAll(rename)) events.push({ offset: match.index!, apply: () => {
+      const columns = schema.get(match[1]);
+      if (columns) { schema.set(match[2], columns); schema.delete(match[1]); }
+    } });
+    for (const event of events.sort((a, b) => a.offset - b.offset)) event.apply();
+  };
+  for (const source of sources) {
+    const tree = ts.createSourceFile('migration.ts', source, ts.ScriptTarget.Latest, true);
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node)) {
+        const argument = node.arguments[0];
+        if (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'exec' && argument) {
+          if (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) applySql(argument.text);
+          else if (ts.isTemplateExpression(argument)) applySql(argument.head.text + argument.templateSpans.map((span) => '?'+span.literal.text).join(''));
+        }
+        if (ts.isIdentifier(node.expression) && /^(?:addColumnIfMissing|addColumn)$/.test(node.expression.text)) {
+          const table = node.arguments[1], column = node.arguments[2];
+          if (table && column && ts.isStringLiteral(table) && ts.isStringLiteral(column)) add(table.text, column.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(tree);
   }
   return [...schema]
     .filter(([name]) => !/(?:_new|_v\d+)$/.test(name))
     .map(([name, columns]) => ({ name, columns: [...columns] }));
+}
+
+function scanMigrationSourceSchema(): SchemaTable[] {
+  const directory = resolve('packages/store/src/migrations');
+  const sources = readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => readFileSync(join(directory, entry.name), 'utf8'));
+  return scanMigrationSchema(sources);
 }
 
 describe('explicit SQLite disposition manifest', () => {
@@ -101,6 +128,20 @@ describe('explicit SQLite disposition manifest', () => {
     const schema = scanMigrationSourceSchema();
     expect(schema.length).toBeGreaterThan(50);
     expect(findUnclassifiedSessionSchema(schema)).toEqual([]);
+  });
+
+  it('follows retirement and table rebuilds without hiding recreated session schema', () => {
+    const create = (name: string) => 'db.exec(' + JSON.stringify('CREATE TABLE '+name+' (\n  id INTEGER,\n  session_id TEXT\n);') + ');';
+    const retired = create('retired_cache') + 'db.exec("DROP TABLE retired_cache;");';
+    expect(scanMigrationSchema([retired])).toEqual([]);
+    const recreated = scanMigrationSchema([retired, create('retired_cache')]);
+    expect(findUnclassifiedSessionSchema(recreated)).toEqual(['unclassified session schema: retired_cache (session_id)']);
+    const rebuilt = scanMigrationSchema([
+      create('rebuilt_cache'), create('rebuilt_cache_new')
+        + 'db.exec("DROP TABLE rebuilt_cache; ALTER TABLE rebuilt_cache_new RENAME TO rebuilt_cache;");',
+    ]);
+    expect(findUnclassifiedSessionSchema(rebuilt)).toEqual(['unclassified session schema: rebuilt_cache (session_id)']);
+    expect(scanMigrationSchema([create('commented_cache') + '// DROP TABLE commented_cache;'])).toHaveLength(1);
   });
 
   it('fails closed for a newly introduced unclassified session table', () => {

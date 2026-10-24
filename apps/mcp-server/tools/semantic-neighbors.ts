@@ -5,7 +5,7 @@ import { treeSitterSymbols } from '@mcp/indexer/indexer/incremental.js';
 
 export const semanticNeighbors = defineTool({
   name: 'semantic_neighbors', tier: 'navigate', ...mcpAccess('read'),
-  description: 'Find 1..50 semantically related symbols (default 10). Use project_name + symbol_name, optionally file_path to disambiguate; legacy symbol_id is also accepted. A bounded current-body excerpt and structural metadata form the query; missing/large files use structural context. Embedding/vector work runs in the semantic owner process; unavailable vectors return explicitly labelled lexical fallback. Results are verified against the same project index and deleted/foreign symbols are excluded.',
+  description: 'Find between 1 and 50 semantically related symbols (default 10). Use project_name + symbol_name, optionally file_path to disambiguate; legacy symbol_id is also accepted. A bounded current-body excerpt and structural metadata form the query; missing/large files use structural context. Embedding/vector work runs in the semantic owner process; unavailable vectors return explicitly labelled lexical fallback. Results are verified against the same project index and deleted/foreign symbols are excluded.',
   inputSchema: { type: 'object', properties: {
     project_name: { type: 'string' }, symbol_id: { type: 'integer', minimum: 1 }, symbol_name: { type: 'string' },
     file_path: { type: 'string' }, candidate_offset: { type: 'integer', minimum: 0 },

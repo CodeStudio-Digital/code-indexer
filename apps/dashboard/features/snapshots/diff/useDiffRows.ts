@@ -19,13 +19,13 @@ import type {
 
 const EMPTY: SnapshotReviewComment[] = [];
 
-export function isVisibleComment(c: SnapshotReviewComment): boolean {
+function isVisibleComment(c: SnapshotReviewComment): boolean {
   return c.status !== 'dismissed' && c.status !== 'sent';
 }
 
 /** Same precedence as the legacy renderer: prefer the new-side anchor, then
  *  fall back to the old-side anchor. */
-export function matchesLine(comment: SnapshotReviewComment, line: SnapshotHunkLine): boolean {
+function matchesLine(comment: SnapshotReviewComment, line: SnapshotHunkLine): boolean {
   if (!isVisibleComment(comment)) return false;
   if (comment.new_line != null && line.newLine != null) return comment.new_line === line.newLine;
   if (comment.old_line != null && line.oldLine != null) return comment.old_line === line.oldLine;
@@ -39,7 +39,7 @@ export type DiffRow =
   | { kind: 'line'; key: string; hunk: SnapshotHunk; line: SnapshotHunkLine; decided: boolean }
   | { kind: 'footer'; key: string; hunk: SnapshotHunk };
 
-export interface DiffRowsResult {
+interface DiffRowsResult {
   rows: DiffRow[];
   /** File-scoped comments (no hunk, no line) rendered above the diff body. */
   fileLevelComments: SnapshotReviewComment[];

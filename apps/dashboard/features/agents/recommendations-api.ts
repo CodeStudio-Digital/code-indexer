@@ -18,7 +18,7 @@ export interface RoleRecommendation {
   signals: RoleSignals;
 }
 
-export interface RecommendRoleResponse {
+interface RecommendRoleResponse {
   recommendations: RoleRecommendation[];
   durationMs: number;
 }
@@ -55,7 +55,7 @@ export interface KanbanPriorityDiagnostic {
   signals: KanbanPrioritySignals;
 }
 
-export interface RecomputeKanbanResponse {
+interface RecomputeKanbanResponse {
   ordered: Array<{ id: string; title: string; column: string; tag: string | null }>;
   diagnostics: KanbanPriorityDiagnostic[];
   durationMs: number;
@@ -74,7 +74,7 @@ export async function recomputeKanbanPriorities(sessionId: string): Promise<Reco
 
 // ─── C3 — proactive kanban ─────────────────────────────────────
 
-export interface KanbanRoleSuggestion {
+interface KanbanRoleSuggestion {
   cardId: string;
   role: string;
   score: number;
@@ -93,7 +93,7 @@ export async function suggestKanbanRoles(sessionId: string): Promise<KanbanRoleS
   return Array.isArray(body.suggestions) ? body.suggestions : [];
 }
 
-export interface DispatchKanbanCardResult {
+interface DispatchKanbanCardResult {
   ok: boolean;
   agentRunId?: string;
   role?: string;

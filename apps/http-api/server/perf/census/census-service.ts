@@ -17,7 +17,7 @@ const IDLE_STOP_MS = 20_000;
 const JANITOR_MS = 10_000;
 const DEFAULT_INTERVAL_MS = 2_000;
 
-export interface CensusSnapshot {
+interface CensusSnapshot {
   status: CensusStatus;
   /** Newest frame, or null while warming. */
   frame: CensusFrame | null;

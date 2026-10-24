@@ -6,6 +6,7 @@ vi.mock('../lsp-log.js', () => ({ logLsp: vi.fn(), incrementLspCounter: vi.fn() 
 
 import { registerCompletionProviders } from '../lsp/completion.js';
 import {
+  type CompletionListDTO,
   ANGULAR_COMPLETION_TRIGGERS,
   COMPLETION_TRIGGERS,
   mergeCompletionTriggers,
@@ -27,7 +28,7 @@ function completionMonaco(registrations: Registration[]) {
   return {
     Range: class {},
     languages: {
-      CompletionItemInsertTextRules: { InsertAsSnippet: 4 },
+      CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
       CompletionItemTag: { Deprecated: 1 },
       CompletionItemKind: new Proxy({}, { get: () => 1 }),
       registerCompletionItemProvider: (language: string, provider: { triggerCharacters?: string[] }) => {
@@ -158,7 +159,7 @@ describe('completion provider fidelity', () => {
     const monaco = {
       Range,
       languages: {
-        CompletionItemInsertTextRules: { InsertAsSnippet: 4 },
+        CompletionItemInsertTextRule: { InsertAsSnippet: 4 },
         CompletionItemTag: { Deprecated: 1 },
         CompletionItemKind: new Proxy({}, { get: () => 1 }),
         registerCompletionItemProvider: (_lang: string, provider: { provideCompletionItems: Function }) => {
@@ -176,8 +177,8 @@ describe('completion provider fidelity', () => {
       getLineMaxColumn: () => 20,
     };
     const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
-    const first = deferred<{ items: Array<{ label: string; kind: string }>; isIncomplete: boolean }>();
-    const second = deferred<{ items: Array<{ label: string; kind: string }>; isIncomplete: boolean }>();
+    const first = deferred<CompletionListDTO>();
+    const second = deferred<CompletionListDTO>();
     apiCall.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
 
     const oldRequest = provider.provideCompletionItems(model, { lineNumber: 1, column: 2 }, { triggerKind: 0 }, token);
@@ -208,7 +209,7 @@ describe('completion provider fidelity', () => {
     const monaco = {
       Range,
       languages: {
-        CompletionItemInsertTextRules: { InsertAsSnippet: 4 }, CompletionItemTag: { Deprecated: 1 },
+        CompletionItemInsertTextRule: { InsertAsSnippet: 4 }, CompletionItemTag: { Deprecated: 1 },
         CompletionItemKind: new Proxy({}, { get: () => 1 }),
         registerCompletionItemProvider: (_lang: string, provider: { provideCompletionItems: Function }) => {
           providers.push(provider); return { dispose() {} };
@@ -223,8 +224,8 @@ describe('completion provider fidelity', () => {
       getWordUntilPosition: () => ({ startColumn: 1, endColumn: 2 }), getLineMaxColumn: () => 20,
     });
     const token = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
-    const first = deferred<{ items: Array<{ label: string; kind: string }>; isIncomplete: boolean }>();
-    const second = deferred<{ items: Array<{ label: string; kind: string }>; isIncomplete: boolean }>();
+    const first = deferred<CompletionListDTO>();
+    const second = deferred<CompletionListDTO>();
     apiCall.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
 
     const a = providers[0]!.provideCompletionItems(model('a'), { lineNumber: 1, column: 2 }, { triggerKind: 0 }, token);

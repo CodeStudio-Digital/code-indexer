@@ -1,235 +1,23 @@
-import { createHash } from 'node:crypto';
-import { AsyncLocalStorage } from 'node:async_hooks';
+import { MemoryMutationCoordinator, type AgentMemoryMutationExecution } from './memory-mutation-coordinator.js';
+export type { AgentMemoryMutationExecution } from './memory-mutation-coordinator.js';
+import { MAX_MEMORY_CHUNKS, RRF_K, memoryVecId, agentMemoryEmbeddingTextHash, agentMemoryEmbeddingTexts, dedupeAgentMemoryHits } from './agent-memory-ranking.js';
+import type { AgentMemoryHit } from './agent-memory-ranking.js';
+export type { AgentMemoryHit } from './agent-memory-ranking.js';
+export { agentMemoryEmbeddingTextHash, agentMemoryEmbeddingTexts, dedupeAgentMemoryHits } from './agent-memory-ranking.js';
+
 import type { CodeIndexDB } from '@mcp/store/db.js';
 import { abortableRead } from '@mcp/shared/utils/abortable.js';
-import type {
-  AgentMemoryRow,
-  AgentMemoryScope,
-  AgentMemoryType,
-  VectorRecord,
-} from '@mcp/shared/types.js';
-import {
-  embedDocumentsForNamespace,
-  embedQueryForNamespace,
-  type EmbeddingService,
-} from '@mcp/indexer/search/embeddings.js';
+import type { AgentMemoryRow, AgentMemoryScope, AgentMemoryType, VectorRecord } from '@mcp/shared/types.js';
+import { embedDocumentsForNamespace, embedQueryForNamespace, type EmbeddingService } from '@mcp/indexer/search/embeddings.js';
 import type { VectorItemState, VectorStore, VectorWriteTarget } from '@mcp/store/vectors.js';
 import type { RerankerService } from '@mcp/indexer/search/reranker-types.js';
-import { slidingWindows } from '@mcp/shared/utils/sliding-window.js';
+
 import { projectMemoryNamespace, userMemoryNamespace } from '@mcp/shared/vector-namespace.js';
-import type {
-  SemanticMutation,
-  SemanticMutationFence,
-  SemanticMutationSink,
-} from '../semantic-mutation-sink.js';
-
-/**
- * Agent Memory service — embed-on-write + hybrid (FTS + vector RRF) search over
- * the dedicated `agent_memory` table, SEPARATE from snapshots.
- *
- * Deliberately NOT built on SnapshotService / HybridSearch (those are coupled
- * to the snapshots/code/docs flows). This is a small adapter that reuses the
- * SAME proven patterns: sliding-window chunking, scope-specific local vector
- * namespaces, reciprocal-rank fusion, and an FTS-only fallback when no
- * embedding backend is configured.
- */
-
-const MEMORY_WINDOW_CHARS = 2000;
-const MEMORY_OVERLAP_CHARS = 200;
-const MAX_MEMORY_CHUNKS = 4;
-const RRF_K = 60;
-const AUTO_MEMORY_SOURCES = new Set(['session', 'distill', 'migrated-snapshot']);
-const MEMORY_TEXT_STOPWORDS = new Set([
-  'after', 'before', 'from', 'into', 'must', 'rather', 'than', 'that', 'then',
-  'this', 'when', 'with', 'após', 'como', 'deve', 'esse', 'esta', 'isso',
-  'para', 'pela', 'pelo', 'porque', 'sem', 'uma',
-]);
-const MEMORY_TITLE_STOPWORDS = new Set([
-  'after', 'fix', 'for', 'gaps', 'in', 'limitation', 'must', 'on', 'requirement',
-  'rule', 'the', 'with',
-]);
-const MEMORY_DUPLICATE_CONTENT_THRESHOLD = 0.5;
-const MEMORY_DUPLICATE_TITLE_THRESHOLD = 0.75;
-
-interface MemoryMutationBatch {
-  /** One identity-discovery fence covers every INSERT in this namespace. */
-  identityFences: Map<string, SemanticMutationFence>;
-  /** Exact delete/update fences are kept separate, then settled in one tick. */
-  targetedFences: SemanticMutationFence[];
-  mutationError: unknown;
-}
-
-export interface AgentMemoryMutationExecution {
-  /**
-   * Execute one synchronous relational/fence section. Electron-main supplies a
-   * fail-fast busy-timeout wrapper; workers/tests use the direct default.
-   */
-  execute<T>(operation: () => T): T;
-  /**
-   * Optional async contention queue for batch settlement. It retries only the
-   * small synchronous callback and never holds the event loop while waiting.
-   */
-  retry?<T>(operation: () => T): Promise<T>;
-}
-
-/** Stable vector id for an agent-memory chunk (shape mirrors `sn_…`). */
-function memoryVecId(memoryId: number, chunk = 0): string {
-  const seed = chunk === 0 ? `agent_memory:${memoryId}` : `agent_memory:${memoryId}:${chunk}`;
-  return 'am_' + createHash('md5').update(seed).digest('hex').slice(0, 24);
-}
-
-/**
- * R1 — embedding hash includes the model fingerprint, so switching embedding
- * models invalidates the vector instead of leaving it silently stale.
- */
-export function agentMemoryEmbeddingTextHash(
-  row: Pick<AgentMemoryRow, 'name' | 'description' | 'content'>,
-  fingerprint: string,
-): string {
-  return createHash('md5')
-    .update(`${fingerprint}\n${row.name}\n${row.description}\n${row.content}`)
-    .digest('hex');
-}
-
-export function agentMemoryEmbeddingTexts(
-  row: Pick<AgentMemoryRow, 'name' | 'description' | 'content'>,
-): string[] {
-  const windows = slidingWindows(`${row.name}\n${row.description}\n${row.content}`, {
-    windowChars: MEMORY_WINDOW_CHARS,
-    overlapChars: MEMORY_OVERLAP_CHARS,
-    maxChunks: MAX_MEMORY_CHUNKS,
-  });
-  return windows.map((window, index) => index === 0 ? window : `${row.name}\n${window}`);
-}
-
-export interface AgentMemoryHit extends AgentMemoryRow {
-  /** Blended retrieval score (RRF fusion of FTS + vector ranks). */
-  score: number;
-}
-
-function memoryContentTokens(value: string): Set<string> {
-  return new Set(
-    value
-      .toLowerCase()
-      .normalize('NFKD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .split(/[^a-z0-9]+/)
-      .filter((token) => token.length > 3 && !MEMORY_TEXT_STOPWORDS.has(token)),
-  );
-}
-
-/** Containment overlap works better than union-Jaccard here: an automatic
- * distillation commonly repeats a short canonical fact inside a longer note. */
-function memoryContentSimilarity(left: ReadonlySet<string>, right: ReadonlySet<string>, minimumShared = 1): number {
-  if (left.size === 0 || right.size === 0) return 0;
-  let shared = 0;
-  const [smaller, larger] = left.size <= right.size ? [left, right] : [right, left];
-  for (const token of smaller) if (larger.has(token)) shared += 1;
-  if (shared < minimumShared) return 0;
-  return shared / Math.min(left.size, right.size);
-}
-
-function memoryTitleConcepts(value: string): Set<string> {
-  const concepts = value
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length > 2 && !MEMORY_TITLE_STOPWORDS.has(token))
-    .map((token) => {
-      if (
-        token.startsWith('disconnect')
-        || token.startsWith('connection')
-        || token === 'socket'
-      ) return 'disconnect';
-      if (
-        token.startsWith('persist')
-        || token === 'leak'
-        || token === 'stuck'
-        || token === 'indefinitely'
-      ) return 'unsettled';
-      if (token.startsWith('mutat')) return 'mutation';
-      if (token.startsWith('optim')) return 'optimistic';
-      if (
-        token.startsWith('rollback')
-        || token.startsWith('restor')
-        || token.startsWith('revert')
-      ) return 'rollback';
-      if (token.startsWith('callback')) return 'callback';
-      if (token.startsWith('event')) return 'event';
-      return token;
-    });
-  return new Set(concepts);
-}
-
-function memorySourceAuthority(source: string): number {
-  if (source === 'user') return 3;
-  if (source === 'agent') return 2;
-  if (source === 'migrated-snapshot') return 1.5;
-  if (source === 'session' || source === 'distill') return 1;
-  return 2;
-}
-
-/**
- * Collapse automatic paraphrases before they reach either recall_memory or the
- * MCP search bridge. Explicit user/agent memories are never collapsed against
- * each other. When an automatic note overlaps an explicit canonical fact, keep
- * the explicit content while retaining the best retrieval score of the group.
- */
-export function dedupeAgentMemoryHits(hits: AgentMemoryHit[]): AgentMemoryHit[] {
-  const kept: AgentMemoryHit[] = [];
-  // A candidate used to be normalized/tokenized anew for every pair. Cache
-  // only within this retrieval; no content or mutable row escapes the call.
-  const bodies = new Map<string, Set<string>>(), titles = new Map<string, Set<string>>();
-  const tokens = (value: string, title = false) => {
-    const cache = title ? titles : bodies;
-    let result = cache.get(value);
-    if (!result) { result = title ? memoryTitleConcepts(value) : memoryContentTokens(value); cache.set(value, result); }
-    return result;
-  };
-  for (const candidate of hits) {
-    const duplicateIndex = kept.findIndex((existing) => {
-      if (
-        !AUTO_MEMORY_SOURCES.has(existing.source)
-        && !AUTO_MEMORY_SOURCES.has(candidate.source)
-      ) {
-        return false;
-      }
-      return (
-        memoryContentSimilarity(tokens(existing.content), tokens(candidate.content))
-          >= MEMORY_DUPLICATE_CONTENT_THRESHOLD
-        || memoryContentSimilarity(tokens(existing.name, true), tokens(candidate.name, true), 2)
-          >= MEMORY_DUPLICATE_TITLE_THRESHOLD
-      );
-    });
-    if (duplicateIndex < 0) {
-      kept.push(candidate);
-      continue;
-    }
-
-    const existing = kept[duplicateIndex]!;
-    const candidateAuthority = memorySourceAuthority(candidate.source);
-    const existingAuthority = memorySourceAuthority(existing.source);
-    const candidateIsRicherAutomatic =
-      candidateAuthority === existingAuthority
-      && AUTO_MEMORY_SOURCES.has(candidate.source)
-      && tokens(candidate.content).size
-        > tokens(existing.content).size;
-    if (candidateAuthority > existingAuthority || candidateIsRicherAutomatic) {
-      kept[duplicateIndex] = {
-        ...candidate,
-        score: Math.max(existing.score, candidate.score),
-      };
-    }
-  }
-  return kept;
-}
+import type { SemanticMutation, SemanticMutationSink } from '../semantic-mutation-sink.js';
 
 export class AgentMemoryService {
+  private readonly mutations: MemoryMutationCoordinator;
   private projectNameCache = new Map<number, string>();
-  private readonly mutationBatch = new AsyncLocalStorage<MemoryMutationBatch>();
-  private mutationTail: Promise<void> = Promise.resolve();
-  private pendingMutationBatches = 0;
 
   constructor(
     private readonly db: CodeIndexDB,
@@ -238,10 +26,28 @@ export class AgentMemoryService {
     private readonly queryEmbeddingService: EmbeddingService | null = embeddingService,
     private readonly semanticMutationSink: SemanticMutationSink | null = null,
     private readonly reranker: RerankerService | null = null,
-    private readonly mutationExecution: AgentMemoryMutationExecution = {
+    mutationExecution: AgentMemoryMutationExecution = {
       execute: <T>(operation: () => T): T => operation(),
     },
-  ) {}
+  ) {
+    this.mutations = new MemoryMutationCoordinator(db, semanticMutationSink, mutationExecution);
+  }
+
+  private commitRelationalMutation<T>(inputs: readonly SemanticMutation[], mutation: () => T): T {
+    return this.mutations.commitRelationalMutation(inputs, mutation);
+  }
+
+  runMutationBatch<T>(operation: () => Promise<T>): Promise<T> {
+    return this.mutations.runMutationBatch(operation);
+  }
+
+  get hasDurableMutationQueue(): boolean {
+    return this.mutations.hasDurableMutationQueue;
+  }
+
+  runRelationalWrite<T>(operation: () => T): Promise<T> {
+    return this.mutations.runRelationalWrite(operation);
+  }
 
   private noteMutation(
     scope: AgentMemoryScope,
@@ -254,169 +60,6 @@ export class AgentMemoryService {
       itemKeys,
       operation,
     });
-  }
-
-  private commitRelationalMutation<T>(
-    inputs: readonly SemanticMutation[],
-    mutation: () => T,
-  ): T {
-    return this.mutationExecution.execute(() => {
-      const atomic = () => this.commitRelationalMutationNow(inputs, mutation);
-      // The durable fence store and agent_memory use the same central
-      // connection in every production composition. Keep fence start, source
-      // mutation, and fence settlement in one outer transaction so an async
-      // SQLITE_BUSY retry can never replay a partially committed memory save.
-      // Test/lightweight adapters that do not expose transaction retain the
-      // original ordered contract.
-      return typeof this.db.transaction === 'function'
-        ? this.db.transaction(atomic)
-        : atomic();
-    });
-  }
-
-  private commitRelationalMutationNow<T>(
-    inputs: readonly SemanticMutation[],
-    mutation: () => T,
-  ): T {
-    const canFence = typeof this.semanticMutationSink?.beginMutation === 'function'
-      && typeof this.semanticMutationSink?.settleMutation === 'function';
-    const batch = canFence ? this.mutationBatch.getStore() : undefined;
-    if (batch) {
-      try {
-        for (const input of inputs) {
-          const exactKeys = input.itemKeys.filter((key) => key !== '*');
-          if (input.itemKeys.includes('*') && !batch.identityFences.has(input.namespace)) {
-            const fence = this.semanticMutationSink!.beginMutation!({
-              namespace: input.namespace,
-              itemKeys: ['*'],
-              // Identity discovery is source-truth reconciliation. Keep it an
-              // upsert fence even if the caller also has exact delete keys, so
-              // a later INSERT in the same async batch cannot be filtered out.
-              operation: 'upsert',
-            });
-            if (fence) batch.identityFences.set(input.namespace, fence);
-          }
-          if (exactKeys.length > 0) {
-            const fence = this.semanticMutationSink!.beginMutation!({
-              namespace: input.namespace,
-              itemKeys: exactKeys,
-              operation: input.operation,
-            });
-            if (fence) batch.targetedFences.push(fence);
-          }
-        }
-        return mutation();
-      } catch (error) {
-        batch.mutationError ??= error;
-        throw error;
-      }
-    }
-
-    const fences: SemanticMutationFence[] = [];
-    if (canFence) {
-      try {
-        for (const input of inputs) {
-          const fence = this.semanticMutationSink!.beginMutation!(input);
-          if (fence) fences.push(fence);
-        }
-      } catch (error) {
-        for (const fence of fences) {
-          try { this.semanticMutationSink!.settleMutation!(fence, error); } catch { /* recovery owns it */ }
-        }
-        throw error;
-      }
-    }
-
-    let result!: T;
-    try {
-      result = mutation();
-    } catch (error) {
-      for (const fence of fences) {
-        try { this.semanticMutationSink!.settleMutation!(fence, error); } catch { /* preserve mutation error */ }
-      }
-      throw error;
-    }
-
-    if (canFence) {
-      for (const fence of fences) this.semanticMutationSink!.settleMutation!(fence);
-    } else {
-      for (const input of inputs) this.semanticMutationSink?.noteMutation(input);
-    }
-    return result;
-  }
-
-  /**
-   * Coalesce a logical extraction pass without weakening the pre-write
-   * activation barrier. INSERTs share one identity-discovery fence per
-   * namespace; exact archive/replace keys remain durable fences of their own.
-   * Every fence settles synchronously at the end, so the HTTP drain scheduler
-   * observes one namespace wake-up instead of one full pass per learned fact.
-   */
-  async runMutationBatch<T>(operation: () => Promise<T>): Promise<T> {
-    if (this.mutationBatch.getStore()) return operation();
-    if (this.pendingMutationBatches >= 64) throw new Error('Memory mutation queue is full');
-    this.pendingMutationBatches++;
-    // Dedupe and persistence share one owner. Serializing only the INSERT
-    // lets concurrent callers both observe "absent" and create two memories.
-    const result = this.mutationTail.then(() => this.runOwnedMutationBatch(operation));
-    this.mutationTail = result.then(() => undefined, () => undefined);
-    try { return await result; } finally { this.pendingMutationBatches--; }
-  }
-
-  private async runOwnedMutationBatch<T>(operation: () => Promise<T>): Promise<T> {
-    const batch: MemoryMutationBatch = {
-      identityFences: new Map(),
-      targetedFences: [],
-      mutationError: null,
-    };
-    let result!: T;
-    let operationError: unknown = null;
-    try {
-      result = await this.mutationBatch.run(batch, operation);
-    } catch (error) {
-      operationError = error;
-      batch.mutationError ??= error;
-    }
-
-    let settleError: unknown = null;
-    const fences = [
-      ...batch.identityFences.values(),
-      ...batch.targetedFences,
-    ];
-    for (const fence of fences) {
-      try {
-        const settle = () =>
-          this.mutationExecution.execute(() =>
-            this.semanticMutationSink!.settleMutation!(fence, batch.mutationError));
-        if (this.mutationExecution.retry) await this.mutationExecution.retry(settle);
-        else settle();
-      } catch (error) {
-        settleError ??= error;
-      }
-    }
-    if (operationError) throw operationError;
-    if (settleError) throw settleError;
-    return result;
-  }
-
-  get hasDurableMutationQueue(): boolean {
-    return typeof this.semanticMutationSink?.beginMutation === 'function'
-      && typeof this.semanticMutationSink?.settleMutation === 'function';
-  }
-
-  /**
-   * Run an arbitrary central-memory SQLite section through the same fail-fast
-   * adapter and async contention queue as normal agent-memory mutations.
-   *
-   * Background maintenance runs in Electron main and also updates session/log
-   * tables on the shared connection. Keeping this seam public lets those
-   * callers wait for SQLITE_BUSY without blocking the main event loop.
-   */
-  async runRelationalWrite<T>(operation: () => T): Promise<T> {
-    const attempt = (): T => this.mutationExecution.execute(operation);
-    return this.mutationExecution.retry
-      ? this.mutationExecution.retry(attempt)
-      : attempt();
   }
 
   /** Notify a bulk relational hygiene pass (duplicate consolidation/decay).

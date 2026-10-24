@@ -157,7 +157,10 @@ function LanguageSupport({ projectId }: { projectId: number }) {
   const [instances, setInstances] = useState<Array<{ projectId: number; serverId: string; state: string }>>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const refresh = async () => {
-    const [catalog, live] = await Promise.all([apiCall('lsp.listServers', undefined), apiCall('lsp.instances', undefined)]);
+    const [catalog, live] = await Promise.all([
+      apiCall<LspServerInfo[]>('lsp.listServers', undefined),
+      apiCall<Array<{ projectId: number; serverId: string; state: string }>>('lsp.instances', undefined),
+    ]);
     setServers(catalog); setInstances(live);
   };
   useEffect(() => { void refresh(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps

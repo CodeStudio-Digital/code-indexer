@@ -70,7 +70,7 @@ export interface BindingTestResult {
   known_models?: Array<{ model_id: string; mode: string }>;
 }
 
-export interface ResolvePreview {
+interface ResolvePreview {
   ok: boolean;
   resolved: null | {
     provider_id: string;
@@ -114,7 +114,7 @@ export async function fetchBindings(opts: {
   return (await r.json()) as { bindings: PipelineBinding[]; catalog: PipelineCatalogEntry[] };
 }
 
-export async function fetchCatalog(): Promise<{ catalog: PipelineCatalogEntry[]; grouped: Array<{ pipeline_name: string; roles: PipelineCatalogEntry[] }> }> {
+async function fetchCatalog(): Promise<{ catalog: PipelineCatalogEntry[]; grouped: Array<{ pipeline_name: string; roles: PipelineCatalogEntry[] }> }> {
   const r = await fetch('/api/admin/pipeline-bindings/catalog');
   if (!r.ok) throw new Error(`Failed to fetch catalog: ${r.status}`);
   return (await r.json()) as { catalog: PipelineCatalogEntry[]; grouped: Array<{ pipeline_name: string; roles: PipelineCatalogEntry[] }> };
@@ -148,7 +148,7 @@ export async function activateBinding(
   return (await r.json()) as { id: number; binding: PipelineBinding | null; disabledIds: number[] };
 }
 
-export type PatchBindingInput = Partial<UpsertBindingInput>;
+type PatchBindingInput = Partial<UpsertBindingInput>;
 
 export async function patchBinding(id: number, patch: PatchBindingInput): Promise<{ binding: PipelineBinding | null }> {
   const r = await fetch(`/api/admin/pipeline-bindings/${id}`, {
@@ -173,7 +173,7 @@ export async function testBinding(id: number): Promise<BindingTestResult> {
   return (await r.json()) as BindingTestResult;
 }
 
-export async function previewResolution(opts: {
+async function previewResolution(opts: {
   pipelineName: string;
   bindingRole: string;
   templateId?: number;
@@ -188,7 +188,7 @@ export async function previewResolution(opts: {
 
 // ─── Bulk operations ─────────────────────────────────────────────────────
 
-export interface BulkClearOptions {
+interface BulkClearOptions {
   /**
    * Restrict the wipe to a single scope. When omitted, the call wipes
    * EVERYTHING — and the server then requires `confirm: 'wipe-all'` to
@@ -202,7 +202,7 @@ export interface BulkClearOptions {
   confirm?: 'wipe-all';
 }
 
-export interface BulkApplyInput {
+interface BulkApplyInput {
   provider_id: string;
   model_id: string;
   model_mode?: string;
@@ -258,14 +258,14 @@ export async function bulkApplyBindings(input: BulkApplyInput): Promise<{ ok: bo
 
 // ─── Guided-setup profile apply ──────────────────────────────────────────
 
-export interface ProfileAssignment {
+interface ProfileAssignment {
   capability_kind: CapabilityKind;
   provider_id: string;
   model_id: string;
   model_mode?: string;
 }
 
-export interface BulkApplyProfileInput {
+interface BulkApplyProfileInput {
   /** The wizard only writes global; kept for symmetry with other bulk calls. */
   scope_type?: BindingScopeType;
   scope_id?: number | null;

@@ -10,9 +10,9 @@
  * pelo resolver de PATH.
  */
 
-export type WslRuntimeKind = 'node' | 'php' | 'python' | 'java' | 'dotnet';
-export type WslDistroVersions = Partial<Record<WslRuntimeKind, string>>;
-export type WslRuntimeVersions = Record<string, WslDistroVersions>;
+type WslRuntimeKind = 'node' | 'php' | 'python' | 'java' | 'dotnet';
+type WslDistroVersions = Partial<Record<WslRuntimeKind, string>>;
+type WslRuntimeVersions = Record<string, WslDistroVersions>;
 
 const KINDS: readonly WslRuntimeKind[] = ['node', 'php', 'python', 'java', 'dotnet'];
 

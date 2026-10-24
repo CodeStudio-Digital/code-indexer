@@ -24,6 +24,6 @@ export const useActiveSurface = create<ActiveSurfaceState>((set) => ({
   setProjectTab: (v) => set({ projectTab: v }),
 }));
 
-export function activeSurfaceSnapshot(): ActiveProjectTab | null {
+function activeSurfaceSnapshot(): ActiveProjectTab | null {
   return useActiveSurface.getState().projectTab;
 }

@@ -26,7 +26,7 @@
  * (`crawl_llm_extract_links`), and 099 (`crawl_force_browser`).
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

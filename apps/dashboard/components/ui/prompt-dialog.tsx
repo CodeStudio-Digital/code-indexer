@@ -97,7 +97,7 @@ export function prompt(opts: PromptOptions): Promise<string | null> {
 
 // ─── Confirm store ───────────────────────────────────────────
 
-export interface ConfirmOptions {
+interface ConfirmOptions {
   title: string;
   description?: string;
   confirmLabel?: string;
@@ -140,9 +140,9 @@ export function confirm(opts: ConfirmOptions): Promise<boolean> {
 
 // ─── Toast store ─────────────────────────────────────────────
 
-export type ToastKind = 'success' | 'error' | 'info' | 'warning';
+type ToastKind = 'success' | 'error' | 'info' | 'warning';
 
-export interface Toast {
+interface Toast {
   id: number;
   kind: ToastKind;
   title: string;
@@ -178,6 +178,9 @@ interface PushShape {
 }
 
 export const toast = {
+  message(title: string, opts: PushShape = {}): void {
+    useToastStore.getState().push({ kind: 'info', title, duration: 4000, ...opts });
+  },
   success(title: string, opts: PushShape = {}): void {
     useToastStore.getState().push({ kind: 'success', title, duration: 3000, ...opts });
   },

@@ -15,7 +15,7 @@ export interface Pane {
   model: monaco.editor.ITextModel;
 }
 
-export interface ThreePaneInit {
+interface ThreePaneInit {
   file: string;
   ours: string;
   theirs: string;

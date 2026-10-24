@@ -14,7 +14,7 @@
  */
 import { useEffect, useState } from 'react';
 
-export interface FeatureFlags {
+interface FeatureFlags {
   appStudioEnabled: boolean;
 }
 

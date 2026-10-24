@@ -134,7 +134,7 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
 
     const remove = async (b: GitBranch) => {
       if (b.isCurrent) { toast.error(t('git.branch.deleteCurrent'), { description: t('git.branch.deleteCurrentBody') }); return; }
-      if (b.isRemote) { toast.message(t('git.branch.remoteReadOnly'), { description: t('git.branch.remoteReadOnlyBody') }); return; }
+      if (b.isRemote) { toast.info(t('git.branch.remoteReadOnly'), { description: t('git.branch.remoteReadOnlyBody') }); return; }
       const ok = await confirm({ title: t('git.branch.deleteTitle', { branch: b.name }), description: b.ahead > 0 ? t('git.branch.deleteAheadBody', { count: b.ahead }) : t('git.branch.deleteBody'), confirmLabel: t('git.branchMenu.delete'), tone: 'destructive' });
       if (!ok) return;
       try {
@@ -215,7 +215,7 @@ export function useBranchOps({ projectId, repoPath, getBranches, onMutated, onCl
     const compare = async (b: GitBranch, worktree: boolean) => {
       try {
         const { patch } = await apiCall<{ patch: string }>('projectGit.branchDiff', { projectId, repoPath, branch: b.name, worktree });
-        if (!patch.trim()) { toast.message(t('git.branch.noDifferences'), { description: worktree ? t('git.branch.worktreeMatches', { branch: b.name }) : t('git.branch.matchesCurrent', { branch: b.name }) }); return; }
+        if (!patch.trim()) { toast.info(t('git.branch.noDifferences'), { description: worktree ? t('git.branch.worktreeMatches', { branch: b.name }) : t('git.branch.matchesCurrent', { branch: b.name }) }); return; }
         openDiff({ kind: 'diff', projectId, path: `branchdiff:${worktree ? 'wt' : 'cmp'}:${b.name}`, title: worktree ? `Diff vs ${b.name}` : `Compare ${b.name}`, patch, source: 'git-unstaged' });
         onClose?.();
       } catch (e) { toast.error(t('git.branch.compareFailed'), { description: e instanceof Error ? e.message : String(e) }); }

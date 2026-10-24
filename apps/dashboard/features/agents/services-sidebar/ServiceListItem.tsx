@@ -22,7 +22,7 @@ import { confirm } from '../../../components/ui/prompt-dialog.js';
 import { formatUptime, healthDotClassName, statusClassName, type ServiceRow } from './types.js';
 import type { UseServiceActionsResult } from './useServiceActions.js';
 
-export interface ServiceListItemProps {
+interface ServiceListItemProps {
   svc: ServiceRow;
   actions: UseServiceActionsResult;
   /** B6 — logs+timeline detail expansion. Optional: legacy mounts omit it. */

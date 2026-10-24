@@ -1,11 +1,11 @@
-export interface ElectronProcessMetric {
+interface ElectronProcessMetric {
   pid: number;
   type: string;
   name?: string;
   serviceName?: string;
 }
 
-export interface WindowProcessDescriptor {
+interface WindowProcessDescriptor {
   pid: number;
   url: string;
   appWindow: boolean;

@@ -3,7 +3,7 @@ import type { AgentRun, CoderAttemptAdmissionV1, CoderAttemptPreparationV1, Envi
 import type { ControlPlaneFileRepository } from '@mcp/session-storage';
 import { hashControlPlanePayload, stableControlPlaneJson, type ControlPlaneRunContext } from '@mcp/store/control-plane/index.js';
 
-export function preparationId(attemptId: string): string {
+function preparationId(attemptId: string): string {
   const bytes = createHash('sha256').update(`coder-attempt-preparation:v1:${attemptId}`).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 15) | 80;
   bytes[8] = (bytes[8] & 63) | 128;

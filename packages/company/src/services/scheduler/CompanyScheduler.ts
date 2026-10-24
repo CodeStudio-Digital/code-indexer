@@ -1,3 +1,5 @@
+import type { SchedulerSpawn } from './spawn-port.js';
+export type { SchedulerSpawn } from './spawn-port.js';
 /**
  * CompanyScheduler — autonomous dispatch loop (Phase 2 — "brain → hands").
  *
@@ -48,15 +50,6 @@ import { getGlobalCompanyRecommend } from './recommend-shim.js';
 const DEFAULT_TICK_MS = 20_000;
 const DEFAULT_MAX_PER_SWEEP = 1;
 
-/** Minimal spawn surface the scheduler needs — satisfied by SubordinateLifecycle. */
-export interface SchedulerSpawn {
-  spawn(spec: {
-    role: string;
-    task: string;
-    projectId?: number;
-    dispatchSource?: RoleDispatchSource;
-  }): Promise<{ agentRunId: string; coderSessionId: string }>;
-}
 
 export interface CompanySchedulerDeps {
   ctx: SessionContext;

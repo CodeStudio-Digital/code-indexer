@@ -1,4 +1,4 @@
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 export const appStudioProductModel212: Migration = {
   version: 212,

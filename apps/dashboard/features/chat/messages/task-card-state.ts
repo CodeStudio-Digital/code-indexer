@@ -1,7 +1,7 @@
 import type { StreamTask } from '../../../hooks/useAgentStream.js';
 import type { PersistedTasksState } from '../types.js';
 
-export interface TaskCardStateInput {
+interface TaskCardStateInput {
   /**
    * True only for the card backed by the session's CURRENT `coder_tasks_state`
    * row — i.e. the most recent `submit_tasks` tool_use block. The backend keeps
@@ -17,7 +17,7 @@ export interface TaskCardStateInput {
   result: { content: string; isError: boolean } | undefined;
 }
 
-export interface TaskCardState {
+interface TaskCardState {
   tasks: StreamTask[];
   resolved: 'approved' | 'rejected' | undefined;
 }

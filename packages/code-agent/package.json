@@ -7,21 +7,29 @@
     ".": "./src/index.ts",
     "./sessions/store.js": null,
     "./sessions/store/*": null,
-    "./*": "./src/*"
+    "./*": "./src/*",
+    "./tools/diagram/render-port.js": "./src/tools/diagram/render-port.ts",
+    "./tools/preview/contracts.js": "./src/tools/preview/contracts.ts"
   },
   "dependencies": {
     "@mcp/agent-runtime-contracts": "workspace:*",
     "@mcp/agent-runtime-host": "workspace:*",
+    "@mcp/candidate-pipeline": "workspace:*",
+    "@mcp/company": "workspace:*",
+    "@mcp/db-drivers": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*",
+    "@mcp/services": "workspace:*",
     "@mcp/session-storage": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
-    "@mcp/db-drivers": "workspace:*",
-    "@mcp/services": "workspace:*",
-    "@mcp/provider-sdk": "workspace:*",
-    "@mcp/candidate-pipeline": "workspace:*",
-    "chroma-js": "3.2.0"
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "chroma-js": "3.2.0",
+    "openai": "^4.85.4",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
-    "@types/chroma-js": "^3.1.2"
+    "@types/chroma-js": "^3.1.2",
+    "vitest": "^4.1.2"
   }
 }

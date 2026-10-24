@@ -13,7 +13,7 @@
  */
 import i18n from '../i18n/index.js';
 
-export type DateInput = string | number | Date | null | undefined;
+type DateInput = string | number | Date | null | undefined;
 
 /**
  * Parse any timestamp shape into a Date in the correct absolute instant, or

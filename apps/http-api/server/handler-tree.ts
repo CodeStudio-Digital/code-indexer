@@ -38,13 +38,13 @@ export function normalizeRouteKey(pathname: string): string {
  * Wire form of a call that the caller may cancel. Older clients send the bare
  * payload, so `decodeInvoke` accepts both.
  */
-export interface CancellableInvokeEnvelope {
+interface CancellableInvokeEnvelope {
   __mcpInvokeV1: true;
   requestId: string;
   payload: unknown;
 }
 
-export interface SerializedError {
+interface SerializedError {
   message: string;
   code?: string;
   status?: number;

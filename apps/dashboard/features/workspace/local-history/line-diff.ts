@@ -4,7 +4,7 @@
  * Para arquivos muito grandes cai num diff grosso (tudo removido + tudo
  * adicionado) para não estourar a tabela O(n·m).
  */
-export interface DiffLine {
+interface DiffLine {
   type: 'ctx' | 'add' | 'del';
   text: string;
 }

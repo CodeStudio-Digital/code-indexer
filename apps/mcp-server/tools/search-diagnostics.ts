@@ -1,7 +1,7 @@
 import type { SearchDiagnostics } from '@mcp/indexer/search/hybrid.js';
 
 /** Structural + generation coverage needed only for zero/degraded results. */
-export interface CoverageCounts {
+interface CoverageCounts {
   files_total: number;
   semantic_expected: number;
   semantic_indexed: number;

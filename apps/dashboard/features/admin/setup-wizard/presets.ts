@@ -12,9 +12,9 @@ import type { AdminModel, AdminProvider } from '../types.js';
 
 export type PresetId = 'economy' | 'balanced' | 'premium';
 
-export interface PresetBucketHint { providerKind: string; modelHint: string }
+interface PresetBucketHint { providerKind: string; modelHint: string }
 
-export interface Preset {
+interface Preset {
   id: PresetId;
   /** Optional buckets switched ON by default for this preset. */
   optionalOn: CapabilityKind[];

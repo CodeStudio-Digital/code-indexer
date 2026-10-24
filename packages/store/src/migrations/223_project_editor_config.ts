@@ -1,6 +1,6 @@
 /** Migration 223 — versioned per-project Monaco editor overrides. */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

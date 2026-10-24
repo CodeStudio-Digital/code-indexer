@@ -1,7 +1,7 @@
 import type { SessionId } from '@mcp/agent-runtime-contracts';
 import type { SessionWorkbenchEvent } from '@mcp/api-bus';
 
-export type SessionWorkbenchEventListener = (event: SessionWorkbenchEvent) => void;
+type SessionWorkbenchEventListener = (event: SessionWorkbenchEvent) => void;
 
 const RETAINED_EVENTS_PER_SESSION = 1_000;
 const MAX_RETAINED_SESSIONS = 32;
@@ -51,14 +51,14 @@ export function publishSessionWorkbenchEvent(event: SessionWorkbenchEvent): void
   hub.publish(event);
 }
 
-export function subscribeToSessionWorkbenchEvents(
+function subscribeToSessionWorkbenchEvents(
   sessionId: SessionId,
   listener: SessionWorkbenchEventListener,
 ): () => void {
   return hub.subscribe(sessionId, listener);
 }
 
-export function recentSessionWorkbenchEvents(
+function recentSessionWorkbenchEvents(
   sessionId: SessionId,
 ): readonly SessionWorkbenchEvent[] {
   return hub.recent(sessionId);

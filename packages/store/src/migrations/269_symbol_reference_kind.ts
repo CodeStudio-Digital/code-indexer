@@ -1,4 +1,4 @@
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 /** Preserve old rows as unknown; deriving call/import semantics from snippets
  * would invent evidence. Structural reindexing fills the classification. */

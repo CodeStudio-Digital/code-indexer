@@ -93,4 +93,4 @@ export function useCloudAuth() {
   return { session, entitlements, busy, error, challengeToken, signIn, signUp, verify2fa, cancel2fa, resendVerification, verifySent };
 }
 
-export type CloudAuthHook = ReturnType<typeof useCloudAuth>;
+type CloudAuthHook = ReturnType<typeof useCloudAuth>;

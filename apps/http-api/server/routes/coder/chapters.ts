@@ -70,7 +70,7 @@ export interface RebuildConversationChaptersInput {
   archived_only?: boolean;
 }
 
-export interface CoderChapterRoutesOptions {
+interface CoderChapterRoutesOptions {
   /**
    * Rebuild needs an LLM/provider and therefore does not belong to the store.
    * The compaction service can inject the orchestrator here when available.
@@ -94,7 +94,7 @@ function chapterCursor(
   return `${prefix}:${seq}`;
 }
 
-export interface CoderChapterRouteDeps {
+interface CoderChapterRouteDeps {
   readonly sessionStore: ConversationChapterStore;
 }
 

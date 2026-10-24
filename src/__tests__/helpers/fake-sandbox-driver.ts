@@ -26,7 +26,7 @@ import type {
   SandboxStatsSample,
 } from '@mcp/services/sandbox/ports/sandbox-driver.js';
 
-export interface FakeContainerState {
+interface FakeContainerState {
   id: string;
   image: string;
   running: boolean;
@@ -43,7 +43,7 @@ export interface FakeContainerState {
   createdAt: number;
 }
 
-export interface DriverCallLog {
+interface DriverCallLog {
   build: SandboxBuildSpec[];
   removeImage: string[];
   create: SandboxCreateSpec[];
@@ -60,7 +60,7 @@ export interface DriverCallLog {
   isPortListening: number[];
 }
 
-export interface FakeDriverOptions {
+interface FakeDriverOptions {
   /** When set, isPortListening returns true only for ports in this set. Default: any port that any container exposes. */
   portsListening?: number[] | 'auto';
   /** Override exec output for matching command substrings. */

@@ -1,6 +1,6 @@
 import type { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
-import { createContext } from '@mcp/api-handlers';
+import { createContext } from '@mcp/api-handlers/context.js';
 import type { LspApi } from '@mcp/api-bus';
 import type { ServerDeps } from '../../deps.js';
 import { parseIdParam } from '../_helpers.js';

@@ -17,13 +17,13 @@ import {
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 
-export interface RecommendRolesForSessionInput {
+interface RecommendRolesForSessionInput {
   companySessionId: CompanySessionId;
   taskText: string;
   k?: number;
 }
 
-export interface RecommendRolesForSessionResult {
+interface RecommendRolesForSessionResult {
   recommendations: Array<{
     role: string;
     kind: string;

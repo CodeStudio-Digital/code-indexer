@@ -7,7 +7,7 @@
  * primeiro), então a árvore "parece" restaurada em ~100ms mesmo com dirs profundos
  * pingando. Sem React, testável puro.
  */
-export interface BoundedQueue {
+interface BoundedQueue {
   /** Enfileira um job; dedup por key. Menor `priority` roda primeiro. */
   push(key: string, priority: number, run: () => Promise<void>): void;
   /** Cancela os pendentes (os in-flight rodam até o fim). */

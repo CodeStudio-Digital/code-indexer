@@ -9,7 +9,7 @@ function setup() {
   const flushNow = vi.fn();
   const onMessageComplete = vi.fn();
   const handlers = createEventHandlers({
-    sid: 7,
+    sid: '00000000-0000-4000-8000-000000000007',
     blocks,
     toolIndex,
     flush,

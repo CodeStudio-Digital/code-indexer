@@ -24,7 +24,7 @@ describe('imported session visuals', () => {
 
   it('shows the Claude Code origin in the active-session header', () => {
     const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(ChatHeader, {
-      session: importedSession('claude-code'), streaming: false, runDelta: {}, lastUsage: null,
+      session: importedSession('claude-code'), streaming: false, runDelta: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, lastUsage: null,
       stats: null, contextStatus: null, indexStatus: null, onOpenDetails: () => {},
     })));
     expect(html).toContain('Claude Code');
@@ -33,7 +33,7 @@ describe('imported session visuals', () => {
 
   it('shows the Codex origin in the active-session header', () => {
     const html = renderToStaticMarkup(createElement(TooltipProvider, null, createElement(ChatHeader, {
-      session: importedSession('codex'), streaming: false, runDelta: {}, lastUsage: null,
+      session: importedSession('codex'), streaming: false, runDelta: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, lastUsage: null,
       stats: null, contextStatus: null, indexStatus: null, onOpenDetails: () => {},
     })));
     expect(html).toContain('Codex');

@@ -1,3 +1,10 @@
+import { maybeSpillAgent } from './subagent-resume-spill.js';
+import { hydrateSpillPaths, approxBytesOf, durableProjection, parsePersistedGroup, sanitizeTranscriptForResume } from './subagent-resume-codec.js';
+export { sanitizeTranscriptForResume } from './subagent-resume-codec.js';
+import { maxSessionBytes, ttlMs, leaseMs, spillTerminalTranscripts, sweepIntervalMs, retainCompletedTranscripts, configureResumeSettings } from './subagent-resume-settings.js';
+export { retainCompletedTranscripts } from './subagent-resume-settings.js';
+import type { ResumableAgentState, ResumableGroup, ResumeRegistryConfiguration, ResumeCheckpointStore } from './subagent-resume-types.js';
+export type { ResumableAgentState, ResumableGroup, ResumeCheckpointStore } from './subagent-resume-types.js';
 /**
  * subagent-resume-registry — session-keyed retention of failed
  * ephemeral subagents so `resume_agent` can relaunch them FROM WHERE THEY
@@ -13,79 +20,12 @@
  * last messages) so the resumed request shares its prefix with the failed
  * run's last request — provider prompt caching absorbs most of the replay.
  */
-import type { AgentMessage, ChatUsage } from '@mcp/code-agent/core/messages.js';
+
 import type { StopReason } from '@mcp/code-agent/core/runner.js';
-import { repairToolPairing } from '@mcp/code-agent/core/transcript-repair.js';
-import type { SubagentLimits } from '@mcp/code-agent/tools/implement-subagent.js';
-import type { MicroAgentProfileId } from '@mcp/code-agent/tools/micro-agent-profiles.js';
-import type { SubagentResearchPolicy } from '@mcp/code-agent/tools/subagent-research-policy.js';
-import {
-  sanitizeCheckpointValue,
-  sanitizeMessagesForCheckpoint,
-} from '@mcp/code-agent/tools/orchestration-checkpoint-redaction.js';
-import {
-  createOrchestrationLeaseGuard,
-  type OrchestrationLeaseGuard,
-} from '@mcp/code-agent/tools/orchestration-lease-guard.js';
-import {
-  removeSessionSpill,
-  removeSpillFile,
-  spillTranscriptToDisk,
-} from '@mcp/code-agent/tools/subagent-transcript-spill.js';
+
+import { createOrchestrationLeaseGuard, type OrchestrationLeaseGuard } from '@mcp/code-agent/tools/orchestration-lease-guard.js';
+import { removeSessionSpill, removeSpillFile, spillTranscriptToDisk } from '@mcp/code-agent/tools/subagent-transcript-spill.js';
 import type { SessionId } from '@mcp/session-storage';
-
-export interface ResumableAgentState {
-  /** 0-based; matches agent_progress.agentIndex and the original roster. */
-  agentIndex: number;
-  label: string;
-  task: string;
-  /** Allowlist + systemPrompt are re-resolved from this at resume time. */
-  profileId: MicroAgentProfileId;
-  files?: string[];
-  /** Original soft research contract, preserved across resumptions. */
-  researchPolicy?: SubagentResearchPolicy;
-  maxTurns: number;
-  limits: SubagentLimits;
-  /**
-   * Pairing-repaired; retained in RAM for RESUMABLE (non-completed) agents.
-   * For a COMPLETED agent it is spilled to disk (see `spillPath`) and dropped
-   * from RAM, so a big all-completed group no longer pins tens of MB.
-   */
-  transcript?: AgentMessage[];
-  /**
-   * Set when this agent's transcript was spilled to a bundle entity instead of
-   * kept in `transcript`. read_agent_transcript falls back to it. Only
-   * completed (never-resumed) agents are spilled, so resume state is unaffected.
-   */
-  spillPath?: string;
-  reason: StopReason;
-  effectOutcome?: 'unknown';
-  /** Watchdog message / error text — feeds the continuation nudge. */
-  failureNote?: string;
-  /** Final report text (capped) — read_agent_transcript's fallback/summary. */
-  finalText?: string;
-  toolCallCount: number;
-  usage: ChatUsage;
-  /** 1 = original run; bumped on each resume. */
-  attempt: number;
-  capturedAt: number;
-  approxBytes: number;
-}
-
-export interface ResumableGroup {
-  /** == groupId for parallel spawns; fresh 8-hex for single spawns. */
-  spawnId: string;
-  sessionId: SessionId;
-  provider: string;
-  model: string;
-  createdAt: number;
-  /** Wall-clock of the last retain/access — drives TTL expiry. */
-  lastTouchedAt: number;
-  /** Monotonic touch sequence — drives deterministic LRU eviction. */
-  seq?: number;
-  /** FULL roster — completed agents keep metadata but carry no transcript. */
-  agents: ResumableAgentState[];
-}
 
 export function resumeNeedsReconciliation(state: Pick<ResumableAgentState, 'effectOutcome' | 'failureNote' | 'transcript'>): boolean {
   return state.effectOutcome === 'unknown' || /outcome[_ ]unknown/i.test(state.failureNote ?? '')
@@ -94,58 +34,6 @@ export function resumeNeedsReconciliation(state: Pick<ResumableAgentState, 'effe
 }
 
 const MAX_GROUPS_PER_SESSION = 8;
-/** Keep the tail of a transcript verbatim when byte-capping (prefix elision). */
-const PROTECTED_TAIL_MESSAGES = 20;
-const ELIDE_RESULT_OVER_BYTES = 2048;
-const ELIDED_MARKER = '[elided at resume-capture — re-read if needed]';
-
-interface ResumeRegistryConfiguration {
-  maxAgentBytes: number;
-  maxSessionBytes: number;
-  ttlMs: number;
-  leaseMs: number;
-  spillTerminalTranscripts: boolean;
-  retainCompletedTranscripts: boolean;
-  sweepIntervalMs: number;
-}
-
-const DEFAULT_CONFIGURATION: Readonly<ResumeRegistryConfiguration> = Object.freeze({
-  maxAgentBytes: 4 * 1024 * 1024,
-  maxSessionBytes: 48 * 1024 * 1024,
-  ttlMs: 45 * 60_000,
-  leaseMs: 120_000,
-  spillTerminalTranscripts: true,
-  retainCompletedTranscripts: true,
-  sweepIntervalMs: 5 * 60_000,
-});
-let configuration: Readonly<ResumeRegistryConfiguration> = DEFAULT_CONFIGURATION;
-
-// Caps read lazily so ops can tune them via env before the first spawn (a
-// module-const would freeze the value at import).
-function maxAgentBytes(): number {
-  return configuration.maxAgentBytes;
-}
-function maxSessionBytes(): number {
-  return configuration.maxSessionBytes;
-}
-function ttlMs(): number {
-  return configuration.ttlMs;
-}
-function leaseMs(): number {
-  return configuration.leaseMs;
-}
-/**
- * Spill COMPLETED transcripts to disk (default ON). `CODER_RESUME_SPILL=0`
- * keeps them in RAM (the pre-spill behavior). Only completed agents are ever
- * spilled — failed/aborted stay in RAM so resume_agent keeps working.
- */
-function spillTerminalTranscripts(): boolean {
-  return configuration.spillTerminalTranscripts;
-}
-/** How often the unref'd worker timer reclaims idle sessions (default 5min). */
-function sweepIntervalMs(): number {
-  return configuration.sweepIntervalMs;
-}
 
 const bySession = new Map<SessionId, Map<string, ResumableGroup>>();
 const storesBySession = new Map<SessionId, ResumeCheckpointStore>();
@@ -156,143 +44,10 @@ let touchSeq = 0;
 /** Unref'd worker-realm timer that reclaims idle sessions on the TTL cadence. */
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 
-export interface ResumeCheckpointStore {
-  saveOrchestrationCheckpoint(input: {
-    sessionId: SessionId;
-    kind: 'subagent_resume';
-    scopeId: string;
-    privacyClass: 'session_private_redacted';
-    payloadJson: string;
-    expiresAt: string;
-    leaseToken?: string;
-  }): Promise<boolean>;
-  loadOrchestrationCheckpoint(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    scopeId: string,
-  ): Promise<{ payload_json: string } | null>;
-  listOrchestrationCheckpoints(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    limit?: number,
-  ): Promise<Array<{ scope_id: string; payload_json: string }>>;
-  loadOrchestrationCheckpointForAudit?(
-    sessionId: SessionId, kind: 'subagent_resume', scopeId: string,
-  ): Promise<{ payload_json: string } | null>;
-  listOrchestrationCheckpointsForAudit?(
-    sessionId: SessionId, kind: 'subagent_resume', limit?: number,
-  ): Promise<Array<{ scope_id: string; payload_json: string }>>;
-  removeOrchestrationCheckpoint(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    scopeId: string,
-    leaseToken?: string,
-  ): Promise<void>;
-  tryAcquireOrchestrationCheckpoint(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    scopeId: string,
-    leaseMs?: number,
-  ): Promise<string | null>;
-  releaseOrchestrationCheckpoint(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    scopeId: string,
-    leaseToken: string,
-  ): Promise<void>;
-  renewOrchestrationCheckpoint(
-    sessionId: SessionId,
-    kind: 'subagent_resume',
-    scopeId: string,
-    leaseToken: string,
-    leaseMs?: number,
-  ): Promise<boolean>;
-  writeSubagentTranscript(
-    sessionId: SessionId,
-    spawnId: string,
-    agentIndex: number,
-    transcript: AgentMessage[],
-  ): Promise<string | null>;
-  findSubagentTranscript?(
-    sessionId: SessionId,
-    spawnId: string,
-    agentIndex: number,
-  ): Promise<string | null>;
-}
-
-async function hydrateSpillPaths(
-  group: ResumableGroup,
-  store?: ResumeCheckpointStore,
-): Promise<void> {
-  if (typeof store?.findSubagentTranscript !== 'function') return;
-  await Promise.all(group.agents.map(async (agent) => {
-    if (agent.transcript || agent.spillPath) return;
-    agent.spillPath = (
-      await store.findSubagentTranscript!(
-        group.sessionId,
-        group.spawnId,
-        agent.agentIndex,
-      )
-    ) ?? undefined;
-  }));
-}
-
 /** Stamp freshness — wall-clock for TTL, monotonic seq for deterministic LRU. */
 function touch(group: ResumableGroup): void {
   group.lastTouchedAt = Date.now();
   group.seq = ++touchSeq;
-}
-
-function approxBytesOf(value: unknown): number {
-  try { return JSON.stringify(value)?.length ?? 0; } catch { return 0; }
-}
-
-function durableProjection(group: ResumableGroup): ResumableGroup {
-  const projected = {
-    ...group,
-    agents: group.agents.map((agent) => ({
-      ...agent,
-      // Completed transcripts are useful in the current process but are not
-      // needed to resume and therefore never enter the durable checkpoint.
-      transcript: agent.reason === 'completed' || !agent.transcript
-        ? undefined
-        : sanitizeMessagesForCheckpoint(agent.transcript),
-      // The spill pointer is a host-local filesystem path — never persist it
-      // into the cross-executor checkpoint (another host has no such file).
-      spillPath: undefined,
-    })),
-  };
-  return sanitizeCheckpointValue(projected);
-}
-
-function parsePersistedGroup(
-  payloadJson: string,
-  sessionId: SessionId,
-  spawnId: string,
-): ResumableGroup | undefined {
-  try {
-    const group = JSON.parse(payloadJson) as ResumableGroup;
-    if (!group || group.sessionId !== sessionId || group.spawnId !== spawnId
-      || !Array.isArray(group.agents)
-      || !group.agents.every((agent) =>
-        agent && typeof agent.agentIndex === 'number'
-        && typeof agent.label === 'string'
-        && typeof agent.task === 'string'
-        && typeof agent.reason === 'string'
-        && typeof agent.attempt === 'number')) {
-      return undefined;
-    }
-    for (const agent of group.agents) {
-      if (agent.effectOutcome !== undefined && agent.effectOutcome !== 'unknown') return undefined;
-      if (agent.transcript) {
-        agent.transcript = sanitizeTranscriptForResume(agent.transcript, agent.reason);
-        agent.approxBytes = approxBytesOf(agent.transcript);
-      }
-    }
-    return group;
-  } catch {
-    return undefined;
-  }
 }
 
 async function persistGroup(
@@ -326,57 +81,6 @@ async function persistGroup(
   }
 }
 
-/**
- * Deterministic byte-cap: replace large tool_result contents with a marker
- * until under `MAX_AGENT_BYTES`. Prefers to keep the last
- * `PROTECTED_TAIL_MESSAGES` (recent context, prefix-stable) — a FIRST pass
- * elides only from the front. But the cap is a HARD guarantee: if the front
- * pass can't get under it (a giant single tool_result, or a transcript ≤
- * PROTECTED_TAIL messages where `editable===0`), a SECOND pass elides the tail
- * too, back-to-front, so an oversized short transcript can't blow the provider
- * context window when re-sent as the resume seed.
- */
-function capTranscriptBytes(transcript: AgentMessage[]): AgentMessage[] {
-  const cap = maxAgentBytes();
-  let total = approxBytesOf(transcript);
-  if (total <= cap) return transcript;
-  const out = transcript.map((m) => ({ ...m, content: [...m.content] }));
-
-  const elideMsg = (m: AgentMessage): void => {
-    if (m.role !== 'tool') return;
-    m.content = m.content.map((b) => {
-      if (total <= cap) return b;
-      if (b.type !== 'tool_result' || typeof b.content !== 'string') return b;
-      if (b.content.length <= ELIDE_RESULT_OVER_BYTES) return b;
-      total -= b.content.length - ELIDED_MARKER.length;
-      return { ...b, content: ELIDED_MARKER };
-    });
-  };
-
-  // Pass 1 — front (protect the tail).
-  const editable = Math.max(0, out.length - PROTECTED_TAIL_MESSAGES);
-  for (let i = 0; i < editable && total > cap; i++) elideMsg(out[i]);
-  // Pass 2 — still over: elide the protected tail too, newest last.
-  for (let i = out.length - 1; i >= editable && total > cap; i--) elideMsg(out[i]);
-  return out;
-}
-
-export function sanitizeTranscriptForResume(
-  transcript: AgentMessage[],
-  reason: StopReason,
-): AgentMessage[] {
-  // Pop trailing messages with empty content (stream died mid-assembly).
-  let end = transcript.length;
-  while (end > 0 && transcript[end - 1].content.length === 0) end--;
-  const repaired = repairToolPairing(
-    transcript.slice(0, end),
-    (name) =>
-      `[Interrupted — the subagent was stopped (${reason}) while "${name}" was running. ` +
-      `Result not captured. Re-issue this call if it still matters.]`,
-  );
-  return capTranscriptBytes(repaired);
-}
-
 function lruGroup(groups: Map<string, ResumableGroup>): ResumableGroup | null {
   let oldest: ResumableGroup | null = null;
   for (const g of groups.values()) {
@@ -389,35 +93,6 @@ function lruGroup(groups: Map<string, ResumableGroup>): ResumableGroup | null {
 function dropGroup(groups: Map<string, ResumableGroup>, group: ResumableGroup): void {
   for (const a of group.agents) if (a.spillPath) removeSpillFile(a.spillPath);
   groups.delete(group.spawnId);
-}
-
-/**
- * Spill a COMPLETED agent's (already sanitized) transcript to disk and drop it
- * from RAM, leaving a pointer + metadata. Only completed agents are spilled —
- * failed/aborted keep their in-RAM transcript so resume_agent can relaunch
- * them. A spill failure is non-fatal: the transcript simply stays in RAM.
- */
-async function maybeSpillAgent(
-  store: ResumeCheckpointStore | undefined,
-  sessionId: SessionId,
-  spawnId: string,
-  agent: ResumableAgentState,
-): Promise<void> {
-  if (agent.spillPath) { removeSpillFile(agent.spillPath); agent.spillPath = undefined; }
-  if (!spillTerminalTranscripts()) return;
-  if (agent.reason !== 'completed') return;
-  if (!agent.transcript || agent.transcript.length === 0) return;
-  const path = await spillTranscriptToDisk(
-    store,
-    sessionId,
-    spawnId,
-    agent.agentIndex,
-    agent.transcript,
-  );
-  if (path) {
-    agent.spillPath = path;
-    agent.transcript = undefined;
-  }
 }
 
 function sweep(sessionId: SessionId): void {
@@ -475,24 +150,12 @@ export function configureResumeRegistryForTests(
   overrides: Partial<ResumeRegistryConfiguration> | null,
 ): void {
   stopResumeSweepForTests();
-  configuration = overrides
-    ? Object.freeze({ ...DEFAULT_CONFIGURATION, ...overrides })
-    : DEFAULT_CONFIGURATION;
+  configureResumeSettings(overrides);
 }
 
 /** Test hook: RAM group count for a session WITHOUT triggering a lazy sweep. */
 export function peekSessionGroupCountForTests(sessionId: SessionId): number {
   return bySession.get(sessionId)?.size ?? 0;
-}
-
-/**
- * Whether transcripts of COMPLETED agents are retained too. Default ON since
- * the observability work (read_agent_transcript + the dashboard Transcript
- * tab need them); `CODER_RESUME_RETAIN_COMPLETED=0` restores failed-only.
- * Byte caps (per-agent/per-session) and TTL bound the extra memory.
- */
-export function retainCompletedTranscripts(): boolean {
-  return configuration.retainCompletedTranscripts;
 }
 
 /**

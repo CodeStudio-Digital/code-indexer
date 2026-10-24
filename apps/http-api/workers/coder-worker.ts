@@ -1198,8 +1198,8 @@ bridge.handle('readAgentTranscript', async (payload) => {
 bridge.handle('swapProvider', async (payload) => {
   recordRpc('swapProvider');
   const { provider, model } = payload as { provider: string; model: string };
-  const { createChatProviderAsync } = await import('@mcp/services/providers/factory.js');
-  const nextProvider = await createChatProviderAsync(provider, model);
+  const { createCoderProvider } = await import('@mcp/services/providers/factory.js');
+  const nextProvider = await createCoderProvider(provider, model);
   await getSharedSessionStore(
     dbPath,
     sessionContext.writerOwnerId,

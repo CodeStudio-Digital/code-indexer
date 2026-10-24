@@ -52,7 +52,7 @@ export interface AutoFixPolicyInput<P extends AutoFixProblem> {
   now: number;
 }
 
-export type AutoFixDecision<P extends AutoFixProblem> =
+type AutoFixDecision<P extends AutoFixProblem> =
   | { kind: 'skip' }
   /**
    * Busy→idle edge. The caller must advance the watermark to `now`; when

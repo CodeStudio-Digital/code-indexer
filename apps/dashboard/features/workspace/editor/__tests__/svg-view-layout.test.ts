@@ -1,8 +1,19 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
 import type { OpenFile } from '../../../../state/workspace.js';
 import { SvgView } from '../SvgView.js';
+
+import i18n from '../../../../i18n/index.js';
+import { bootstrapTestI18n } from '../../../../i18n/test-bootstrap.js';
+
+let previousLanguage: string;
+beforeAll(async () => {
+  await bootstrapTestI18n();
+  previousLanguage = i18n.language;
+  await i18n.changeLanguage('en');
+});
+afterAll(async () => { await i18n.changeLanguage(previousLanguage); });
 
 const file: OpenFile = {
   projectId: 7,

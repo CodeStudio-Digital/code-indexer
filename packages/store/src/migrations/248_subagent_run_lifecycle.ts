@@ -1,6 +1,6 @@
 /** Persist enough subagent liveness to distinguish a live worker from an orphan. */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

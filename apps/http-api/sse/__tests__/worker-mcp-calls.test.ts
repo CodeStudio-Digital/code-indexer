@@ -1,10 +1,10 @@
 import { MessageChannel } from 'node:worker_threads';
 import { expect, it, vi } from 'vitest';
-import { MessageBridge } from '../../../../packages/orchestrator-host/src/index.js';
+import { MessageBridge } from '@mcp/orchestrator-host';
 import { registerWorkerMcpCalls } from '../worker-mcp-calls.js';
 import { RemoteMcpServerManager } from '../../workers/RemoteMcpServerManager.js';
 import type { McpExternalPool } from '../McpExternalPool.js';
-import type { ToolContext } from '../../../../packages/code-agent/src/core/tool.js';
+import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 it('cancels only the owning bridge call and preserves ambiguous effects and image results', async () => {
   const channel = new MessageChannel();

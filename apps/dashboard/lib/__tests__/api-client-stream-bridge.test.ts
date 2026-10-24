@@ -5,7 +5,7 @@ const originalWindow = runtime.window;
 
 afterEach(() => {
   if (originalWindow) runtime.window = originalWindow;
-  else delete runtime.window;
+  else Reflect.deleteProperty(runtime, 'window');
   vi.resetModules();
 });
 

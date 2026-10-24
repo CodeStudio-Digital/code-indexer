@@ -72,7 +72,8 @@ describe('multi_edit', () => {
       buildCtx(dir),
     );
     expect(result.isError).toBe(true);
-    expect(result.content).toContain('aborted at edit #2');
+    expect(result.content).toContain('multi_edit aborted: 1 of 3 edits failed');
+    expect(result.content).toContain('#2');
     // File must be untouched.
     expect(readFileSync(file, 'utf-8')).toBe(ORIGINAL);
   });

@@ -66,7 +66,7 @@ const RUST_ATTRIBUTE_STATE: Rules = [
   { include: '@root' },
 ];
 
-export interface AnnotationSpec {
+interface AnnotationSpec {
   /** Monaco language id whose tokens-provider factory we replace. */
   id: string;
   /** Lazy loader for the bundled grammar we extend (never mutated). */

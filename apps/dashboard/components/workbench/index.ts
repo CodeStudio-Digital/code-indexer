@@ -1,9 +1,1 @@
-export {
-  WorkbenchPanelHeader,
-  WorkbenchPageHeader,
-  WorkbenchResizeHandle,
-  WorkbenchShell,
-  WorkbenchSurface,
-  WorkbenchTabStrip,
-  WorkbenchToolbar,
-} from './WorkbenchChrome.js';
+export { WorkbenchPanelHeader, WorkbenchPageHeader, WorkbenchResizeHandle, WorkbenchShell, WorkbenchSurface, WorkbenchToolbar } from './WorkbenchChrome.js';

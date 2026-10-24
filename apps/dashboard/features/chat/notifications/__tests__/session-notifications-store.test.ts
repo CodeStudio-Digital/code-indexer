@@ -14,7 +14,7 @@ import type { ToolLoopIntervention } from '../../../../hooks/agent-stream/types.
 // The store is module-global; each test uses a distinct session id so state
 // from one case never leaks into another.
 let nextSid = 9000;
-const sid = () => ++nextSid;
+const sid = () => `00000000-0000-4000-8000-${String(++nextSid).padStart(12, '0')}`;
 
 function failureStreak(severity: 'informational' | 'refused'): ToolLoopIntervention {
   return {

@@ -15,7 +15,7 @@ import type { SshHost } from './types.js';
 export const UNGROUPED = ' ungrouped';
 export const SHARED = ' shared';
 
-export interface HostGroups {
+interface HostGroups {
   groups: Map<string, SshHost[]>;
   /** Display order: SHARED first (when non-empty), then named groups, UNGROUPED last. */
   groupKeys: string[];

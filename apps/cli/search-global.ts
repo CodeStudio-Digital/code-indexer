@@ -1,9 +1,9 @@
-export interface GlobalSearchProject {
+interface GlobalSearchProject {
   id: number;
   name: string;
 }
 
-export type GlobalSearchProjectResult<TResult> =
+type GlobalSearchProjectResult<TResult> =
   | {
       ok: true;
       project: GlobalSearchProject;

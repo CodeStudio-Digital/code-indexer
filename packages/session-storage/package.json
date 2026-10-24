@@ -5,10 +5,14 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./*": "./src/*"
+    "./*": "./src/*",
+    "./run-limits.js": "./src/run-limits.ts"
   },
   "dependencies": {
     "@mcp/agent-runtime-contracts": "workspace:*",
     "@mcp/provider-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.2"
   }
 }

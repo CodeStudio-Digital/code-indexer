@@ -16,7 +16,7 @@
 import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { JsonSchema } from "@mcp/provider-sdk";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 
 const MAX_BATCH = 15;
 

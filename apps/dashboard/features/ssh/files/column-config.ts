@@ -20,7 +20,7 @@ export type ColumnId = 'size' | 'modified' | 'permissions' | 'owner' | 'group';
  */
 export const ROW_HEIGHT = 26;
 
-export interface ColumnDef {
+interface ColumnDef {
   id: ColumnId;
   /** i18n key suffix under `sftp.columns` (e.g. 'size' → t('sftp.columns.size')). */
   labelKey: string;

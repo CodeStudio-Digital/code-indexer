@@ -1,7 +1,5 @@
 import type { Hono } from 'hono';
-import { McpAgentRunManager } from '../../mcp-server/agent-run-manager.js';
-import { jsonRequest } from '../../mcp-server/agent-run-http.js';
-import type { ToolContext } from '../../mcp-server/context.js';
+import { createAgentReadClient } from '../../mcp-server/agent-read-client.js';
 import type { AgentReadName } from '@mcp/code-agent/ports/agent-read-port.js';
 import type { ServerDeps } from './deps.js';
 
@@ -11,7 +9,7 @@ export function createOwnedAgentReads(app: Hono, deps: Pick<ServerDeps, 'session
   return { async read(projectId: number, name: AgentReadName, input: Record<string, unknown>, signal: AbortSignal) {
     signal.throwIfAborted();
     if (!Number.isSafeInteger(projectId) || projectId <= 0) throw new Error('Agent reads require a project owner');
-    const request: typeof jsonRequest = (ctx, path, init) => jsonRequest(ctx, path, init, async (_url, requestInit) => {
+    const manager = createAgentReadClient(deps.config.dashboard.port, async (path, requestInit) => {
       const requestSignal = requestInit?.signal ? AbortSignal.any([signal, requestInit.signal]) : signal;
       requestSignal.throwIfAborted();
       if (requestInit?.method && requestInit.method !== 'GET') throw new Error('Agent read transport rejects mutations');
@@ -38,7 +36,6 @@ export function createOwnedAgentReads(app: Hono, deps: Pick<ServerDeps, 'session
       const response = await app.request(path, { ...requestInit, signal: requestSignal });
       requestSignal.throwIfAborted(); return response;
     });
-    const manager = new McpAgentRunManager({ config: deps.config } as ToolContext, request);
     if (name === 'list_agents') return manager.catalog(signal);
     if (name === 'list_agent_runs') return { runs: await manager.list(undefined, Number(input.limit ?? 50), signal) };
     if (name !== 'get_agent_run' && name !== 'get_agent_result') throw new Error('Unknown owned agent read');

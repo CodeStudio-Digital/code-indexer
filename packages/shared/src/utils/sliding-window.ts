@@ -8,7 +8,7 @@
  * the whole text while keeping each embed input bounded.
  */
 
-export interface SlidingWindowOptions {
+interface SlidingWindowOptions {
   /** Max characters per window (keeps each embed input bounded). */
   windowChars: number;
   /** Characters shared between consecutive windows so matches near a

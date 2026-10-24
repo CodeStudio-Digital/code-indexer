@@ -1,6 +1,6 @@
-import type { OpenTab } from '../../../state/workspace.js';
+import type { OpenFile, OpenTab } from '../../../state/workspace.js';
 
-function isRegularCodeFile(file: OpenTab): boolean {
+function isRegularCodeFile(file: OpenTab): file is OpenFile {
   if (file.kind && file.kind !== 'file') return false;
   return !/\.(?:md|markdown|mdx|drawio|svg|html?|xhtml)$/i.test(file.path);
 }

@@ -8,8 +8,8 @@ import type * as MonacoNs from 'monaco-editor';
 import { EDITOR_THEMES } from './catalog.js';
 import type { ThemeAppearance } from './types.js';
 
-export type { EditorThemeDef, ThemeAppearance } from './types.js';
-export { EDITOR_THEMES } from './catalog.js';
+
+
 
 /** Register the custom themes (built-in vs/vs-dark are skipped — already known). */
 export function defineEditorThemes(monaco: typeof MonacoNs): void {
@@ -23,7 +23,7 @@ export function defineEditorThemes(monaco: typeof MonacoNs): void {
   }
 }
 
-export interface ThemeOption {
+interface ThemeOption {
   id: string;
   label: string;
   appearance: ThemeAppearance;

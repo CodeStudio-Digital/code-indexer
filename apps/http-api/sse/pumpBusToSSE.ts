@@ -16,9 +16,9 @@ import {
   streamQueueLimits,
 } from './SerializedWriteQueue.js';
 
-export const LAST_EVENT_BUS_ID_HEADER = 'X-MCP-Bus-ID';
+const LAST_EVENT_BUS_ID_HEADER = 'X-MCP-Bus-ID';
 
-export interface PumpBusToSSEOptions {
+interface PumpBusToSSEOptions {
   /** Last-Event-ID equivalent for replay. `-1` means no replay. */
   since?: number;
   /** Whether to attach the periodic heartbeat. Defaults to `true`. */
@@ -206,7 +206,7 @@ export function parseLastEventId(c: Context): number {
   return Number.isFinite(n) ? n : -1;
 }
 
-export function parseLastEventBusId(c: Context): string | null {
+function parseLastEventBusId(c: Context): string | null {
   const header = c.req.header(LAST_EVENT_BUS_ID_HEADER)?.trim();
   return header && header.length <= 256 ? header : null;
 }

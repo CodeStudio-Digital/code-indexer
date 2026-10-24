@@ -21,7 +21,7 @@
  *    (timer fires after a newer acquire/destroy already changed the world).
  */
 
-export interface IdleResourceOptions<T> {
+interface IdleResourceOptions<T> {
   /** Label used in logs (e.g. `local-embeddings`). */
   name: string;
   /** Idle eviction TTL in ms. 0 (or negative) = never evict by idleness. */

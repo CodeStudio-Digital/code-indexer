@@ -27,12 +27,12 @@ export interface CommandSpec {
   allowInInputs?: boolean;
 }
 
-export interface CommandHandler {
+interface CommandHandler {
   run: () => void | Promise<void>;
   when?: () => boolean;
 }
 
-export interface CommandDef extends CommandSpec {
+interface CommandDef extends CommandSpec {
   handler?: CommandHandler;
   available: boolean;
 }

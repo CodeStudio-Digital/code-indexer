@@ -2,7 +2,7 @@
 import type * as MonacoNs from 'monaco-editor';
 import { apiStream, electronApi } from '../../../../lib/api-client.js';
 
-export interface ServerReadyFrame {
+interface ServerReadyFrame {
   languageId: string;
   state: string;
 }

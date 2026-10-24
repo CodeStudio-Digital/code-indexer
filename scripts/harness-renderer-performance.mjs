@@ -7,16 +7,17 @@ import { build, preview } from 'vite';
 import { chromium } from 'playwright-core';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const dashboard = resolve(repo, 'apps/dashboard');
 const reportPath = resolve(process.argv[2] ?? 'scratch/harness-renderer-performance.json');
 const outDir = resolve(repo, 'scratch/harness-renderer-dist');
 console.log('Building isolated renderer fixture');
 await build({
-  configFile: resolve(repo, 'apps/dashboard/vite.config.ts'), root: repo,
+  configFile: resolve(dashboard, 'vite.config.ts'), root: dashboard,
   build: { outDir, emptyOutDir: false, target: 'esnext',
-    rollupOptions: { input: resolve(repo, 'scripts/harness-renderer/index.html') } },
+    rollupOptions: { input: resolve(repo, 'apps/dashboard/performance/renderer/index.html') } },
   logLevel: 'error',
 });
-const server = await preview({ configFile: false, root: repo, build: { outDir },
+const server = await preview({ configFile: false, root: dashboard, build: { outDir },
   preview: { host: '127.0.0.1', port: 0, strictPort: false, open: false },
 });
 let browser;
@@ -33,7 +34,7 @@ try {
   page.setDefaultTimeout(30_000);
   await page.route('**/*', (route) => new URL(route.request().url()).origin === origin
     ? route.continue() : route.abort());
-  await page.goto(`${origin}/scripts/harness-renderer/index.html`);
+  await page.goto(`${origin}/performance/renderer/index.html`);
   console.log('Fixture loaded');
   await page.waitForFunction(() => typeof window.runHarnessStream === 'function');
   const transcript = page.locator('.chat-transcript');

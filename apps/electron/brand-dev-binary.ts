@@ -24,7 +24,7 @@ import { fileURLToPath } from 'node:url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Mirrors APP_DISPLAY_NAME in src/app-icon.ts and `productName` in
+// Mirrors APP_IDENTITY.displayName in src/app-icon.ts and `productName` in
 // electron-builder.json. Deliberately inlined rather than imported: this module
 // runs in the dev *launcher* (plain Node/tsx, outside Electron), and app-icon.ts
 // does a top-level `import { app } from 'electron'` that only resolves inside the

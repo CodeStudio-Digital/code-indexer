@@ -1,3 +1,4 @@
+import type { RoleConfig } from './RoleEditModal.js';
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Crown, LayoutTemplate, Pencil, Plus, Search, Trash2 } from 'lucide-react';
@@ -14,13 +15,6 @@ import {
 import { useApi, apiDelete } from '../../hooks/useApi.js';
 import { TemplateBuilderModal } from './TemplateBuilderModal.js';
 
-interface RoleConfig {
-  role: string;
-  provider: string;
-  model: string;
-  tier: string;
-  skills?: string[];
-}
 
 interface Template {
   id: number;

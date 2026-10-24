@@ -45,14 +45,14 @@ describe('OpenAIChatProvider — OpenRouter mode', () => {
     const provider = makeProvider(chunks({ choices: [{ delta: {}, finish_reason: 'stop' }] }));
     await collect(provider, { ...baseReq, thinking: true });
     const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
-    expect(args.reasoning).toEqual({ enabled: true });
+    expect(args.reasoning).toEqual({ enabled: true, exclude: false });
   });
 
   it('uses thinkingBudgetTokens as reasoning.max_tokens', async () => {
     const provider = makeProvider(chunks({ choices: [{ delta: {}, finish_reason: 'stop' }] }));
     await collect(provider, { ...baseReq, thinking: true, thinkingBudgetTokens: 2048 });
     const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
-    expect(args.reasoning).toEqual({ max_tokens: 2048 });
+    expect(args.reasoning).toEqual({ max_tokens: 2048, exclude: false });
   });
 
   it('streams OpenRouter reasoning deltas and usage reasoning tokens', async () => {

@@ -1,14 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Sparkles } from 'lucide-react';
+
 import { Badge } from '../../components/ui/badge.js';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '../../components/ui/dialog.js';
+
 import { Switch } from '../../components/ui/switch.js';
 
 interface SessionSkill {
@@ -25,18 +19,10 @@ interface SessionSkill {
   is_active: boolean;
 }
 
-interface SkillConfigDialogProps {
-  sessionId: string | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
-
 /**
- * Headless body of the skill-config surface — list + per-row toggle.
- * Used by both the legacy `SkillConfigDialog` (modal) and the new
- * `SkillConfigPanel` (right-rail). The body owns its own fetch lifecycle
- * keyed off `sessionId` and an explicit `loadKey` (bumped to force a
- * refetch when the panel mounts/visibility changes).
+ * Skill configuration body rendered by the session right panel.
+ * The body owns its fetch lifecycle, keyed by sessionId and loadKey,
+ * which is bumped when panel visibility changes.
  */
 export function SkillConfigView({
   sessionId,
@@ -137,29 +123,5 @@ export function SkillConfigView({
         </>
       )}
     </div>
-  );
-}
-
-export function SkillConfigDialog({ sessionId, open, onOpenChange }: SkillConfigDialogProps) {
-  const { t } = useTranslation(['chat']);
-  // Force a refetch each time the dialog opens by incrementing a load
-  // key — the view treats sessionId+loadKey as the dependency.
-  const [loadKey, setLoadKey] = useState(0);
-  useEffect(() => {
-    if (open) setLoadKey((k) => k + 1);
-  }, [open]);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4" />
-            {t('chat:skillConfig.title')}
-          </DialogTitle>
-          <DialogDescription>{t('chat:skillConfig.description')}</DialogDescription>
-        </DialogHeader>
-        <SkillConfigView sessionId={sessionId} loadKey={loadKey} showDescription={false} />
-      </DialogContent>
-    </Dialog>
   );
 }

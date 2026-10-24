@@ -12,7 +12,7 @@
  * `home-mixer/side_effects/phoenix_experiments_side_effect.rs:40-62`.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

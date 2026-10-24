@@ -1,12 +1,9 @@
+import type { UseProvidersResult } from '../../../hooks/useProviders.js';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RoleEditModal, type RoleConfig, type SkillDef } from '../RoleEditModal.js';
 import type { useCompanyStream } from '../../../hooks/useCompanyStream.js';
 
-interface ProviderOption {
-  id: string;
-  label: string;
-}
 
 interface RoleDialogProps {
   sessionId: string;
@@ -17,8 +14,8 @@ interface RoleDialogProps {
   /** Live runtime — provider/model edits on a running session hot-swap via switchProvider. */
   stream: ReturnType<typeof useCompanyStream>;
   skills: SkillDef[];
-  providerOptions: ProviderOption[];
-  getModelsForProvider: (provider: string) => Array<{ id: string; name: string; mode?: string }>;
+  providerOptions: UseProvidersResult['providerOptions'];
+  getModelsForProvider: UseProvidersResult['getModelsForProvider'];
   getDefaultModel: (provider: string) => string;
   onClose: () => void;
   onApplied: () => void;

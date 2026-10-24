@@ -24,7 +24,7 @@
  * Both tables are additive. Safe on fresh and existing databases.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

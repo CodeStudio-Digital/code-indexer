@@ -12,7 +12,7 @@ import { BrowserWindow } from 'electron';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-export interface ThumbnailRequest {
+interface ThumbnailRequest {
   url: string;
   /** Capture viewport width (default 1280×800). */
   width?: number;
@@ -24,7 +24,7 @@ export interface ThumbnailRequest {
   timeoutMs?: number;
 }
 
-export type ThumbnailResult = { ok: true; path: string } | { ok: false; error: string };
+type ThumbnailResult = { ok: true; path: string } | { ok: false; error: string };
 
 const SETTLE_MS = 800;
 

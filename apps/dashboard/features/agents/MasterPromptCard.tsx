@@ -23,8 +23,8 @@ export const MasterPromptCard = memo(function MasterPromptCard({
   onRespondPlan,
 }: {
   prompt: MasterPrompt;
-  onAnswerQuestion: (answer: string) => void;
-  onRespondPlan: (approved: boolean, feedback?: string) => void;
+  onAnswerQuestion?: (answer: string) => void;
+  onRespondPlan?: (approved: boolean, feedback?: string) => void;
 }) {
   const { t } = useTranslation(['agents', 'common']);
   const [text, setText] = useState('');
@@ -37,7 +37,7 @@ export const MasterPromptCard = memo(function MasterPromptCard({
   const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
   const submit = (fn: () => void): void => {
-    if (submittingRef.current) return; // already in flight — swallow the extra clicks
+    if (submittingRef.current || (prompt.kind === 'plan' ? !onRespondPlan : !onAnswerQuestion)) return;
     submittingRef.current = true;
     setSubmitting(true);
     try {
@@ -55,6 +55,7 @@ export const MasterPromptCard = memo(function MasterPromptCard({
   };
 
   const isPlan = prompt.kind === 'plan';
+  const interactionAvailable = isPlan ? !!onRespondPlan : !!onAnswerQuestion;
   const isPending = prompt.status === 'pending';
   const isAnswered = prompt.status === 'answered';
   const isCancelled = prompt.status === 'cancelled';
@@ -111,8 +112,8 @@ export const MasterPromptCard = memo(function MasterPromptCard({
               key={opt.value}
               size="sm"
               variant="outline"
-              disabled={submitting}
-              onClick={() => submit(() => onAnswerQuestion(opt.value))}
+              disabled={submitting || !interactionAvailable}
+              onClick={() => submit(() => onAnswerQuestion?.(opt.value))}
             >
               {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : opt.label}
             </Button>
@@ -127,21 +128,21 @@ export const MasterPromptCard = memo(function MasterPromptCard({
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={t('agents:company.answerPlaceholder')}
-            disabled={submitting}
+            disabled={submitting || !interactionAvailable}
             className="flex-1 rounded-md border bg-background px-3 py-1.5 text-xs resize-none disabled:opacity-60"
             rows={2}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey && text.trim() && !submitting) {
                 e.preventDefault();
-                submit(() => onAnswerQuestion(text.trim()));
+                submit(() => onAnswerQuestion?.(text.trim()));
               }
             }}
           />
           <Button
             size="sm"
             variant="default"
-            onClick={() => text.trim() && submit(() => onAnswerQuestion(text.trim()))}
-            disabled={submitting || !text.trim()}
+            onClick={() => text.trim() && submit(() => onAnswerQuestion?.(text.trim()))}
+            disabled={submitting || !interactionAvailable || !text.trim()}
             className="self-end gap-1"
           >
             {submitting
@@ -158,15 +159,15 @@ export const MasterPromptCard = memo(function MasterPromptCard({
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
             placeholder={t('agents:company.feedbackPlaceholder')}
-            disabled={submitting}
+            disabled={submitting || !interactionAvailable}
             className="w-full rounded-md border bg-background px-3 py-1.5 text-xs resize-none disabled:opacity-60"
             rows={2}
           />
           <div className="flex gap-2">
-            <Button size="sm" variant="default" disabled={submitting} onClick={() => submit(() => onRespondPlan(true, feedback || undefined))} className="gap-1">
+            <Button size="sm" variant="default" disabled={submitting || !interactionAvailable} onClick={() => submit(() => onRespondPlan?.(true, feedback || undefined))} className="gap-1">
               {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle className="h-3.5 w-3.5" />} {t('common:actions.approve')}
             </Button>
-            <Button size="sm" variant="outline" disabled={submitting} onClick={() => submit(() => onRespondPlan(false, feedback || undefined))} className="gap-1 text-destructive">
+            <Button size="sm" variant="outline" disabled={submitting || !interactionAvailable} onClick={() => submit(() => onRespondPlan?.(false, feedback || undefined))} className="gap-1 text-destructive">
               {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />} {t('common:actions.reject')}
             </Button>
           </div>

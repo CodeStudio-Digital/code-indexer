@@ -93,7 +93,7 @@ export function remapRoot(plan: TransferPlan, oldRoot: string, newRoot: string):
 }
 
 /** Split a name into [base, ext] — ext kept only for files (`a.txt` → `a` + `.txt`). */
-export function splitNameExt(name: string, isFile: boolean): [string, string] {
+function splitNameExt(name: string, isFile: boolean): [string, string] {
   if (!isFile) return [name, ''];
   const dot = name.lastIndexOf('.');
   return dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ''];

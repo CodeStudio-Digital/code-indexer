@@ -27,7 +27,7 @@ const NOISE_RUNTIME_RE = [
   /^Script error\.?$/i,
 ];
 
-export type ProblemSeverity = 'actionable' | 'noise';
+type ProblemSeverity = 'actionable' | 'noise';
 
 export function classifyProblem(m: ProblemMessage): ProblemSeverity {
   if (m.type === 'mcp:network') {

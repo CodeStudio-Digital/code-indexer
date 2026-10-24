@@ -19,7 +19,7 @@ const KNOWN_CLASSES = new Set([
 ]);
 
 /** Pure: i18n key for a known class, null otherwise. Exported for tests. */
-export function errorClassHintKey(errorClass: string | null | undefined): string | null {
+function errorClassHintKey(errorClass: string | null | undefined): string | null {
   if (!errorClass || typeof errorClass !== 'string') return null;
   return KNOWN_CLASSES.has(errorClass) ? `qa.errorClass.${errorClass}` : null;
 }

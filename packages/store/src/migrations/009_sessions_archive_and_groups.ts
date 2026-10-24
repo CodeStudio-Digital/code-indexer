@@ -11,7 +11,7 @@
  * All additive and idempotent — uses PRAGMA table_info before ALTER TABLE.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

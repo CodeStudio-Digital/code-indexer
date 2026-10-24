@@ -164,7 +164,7 @@ export function MergeTabView({ tab }: { tab: OpenMerge }) {
   );
 }
 
-function MergePane({ title, paneRef, accent }: { title: string; paneRef: React.RefObject<HTMLDivElement>; accent?: boolean }) {
+function MergePane({ title, paneRef, accent }: { title: string; paneRef: React.RefObject<HTMLDivElement | null>; accent?: boolean }) {
   return (
     <Panel defaultSize={33} minSize={15}>
       <div className="h-full flex flex-col min-h-0">

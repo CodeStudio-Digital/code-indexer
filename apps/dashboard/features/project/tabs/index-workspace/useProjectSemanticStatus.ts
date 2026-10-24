@@ -8,7 +8,7 @@ import {
   type ProjectUnusedVectorCleanupResult,
 } from './project-semantic-api.js';
 
-export interface ProjectSemanticState {
+interface ProjectSemanticState {
   status: ProjectSemanticStatus | null;
   loading: boolean;
   requesting: boolean;

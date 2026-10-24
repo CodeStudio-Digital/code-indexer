@@ -71,7 +71,7 @@ export const AC_PRESETS: AcPreset[] = [
   },
 ];
 
-export interface ApplyAcPresetInput {
+interface ApplyAcPresetInput {
   apiKey?: string;
   baseUrl?: string;
   modelId?: string;
@@ -79,7 +79,7 @@ export interface ApplyAcPresetInput {
   existingModelId?: string;
 }
 
-export interface ApplyAcPresetResult {
+interface ApplyAcPresetResult {
   ok: boolean;
   error?: string;
   /** Real synthetic completion probe failed but the binding can still be forced. */

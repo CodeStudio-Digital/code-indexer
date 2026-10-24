@@ -9,7 +9,7 @@
  * Idempotent (CREATE TABLE IF NOT EXISTS) — mirrors apiCollections147.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

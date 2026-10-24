@@ -4,6 +4,7 @@
  */
 import type { CoderTool } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { structuredResult } from '@mcp/code-agent/core/model-output.js';
 import {
   fsPort,
   resolveDiagramPath,
@@ -82,7 +83,10 @@ export const diagramListTool: CoderTool = {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return err(`Cannot list diagrams: ${error instanceof Error ? error.message : String(error)}`);
     }
     const next = more ? Number(offset) + names.length : null;
-    if (args.format === 'json') return { ...ok(JSON.stringify({ directory: DIAGRAMS_DIR, names, offset, next_offset: next, live_listing: true })), contentFormat: 'json' };
+    if (args.format === 'json') return structuredResult(
+      { directory: DIAGRAMS_DIR, names, offset, next_offset: next, live_listing: true },
+      '', { env: { MCP_TOOL_RESULT_MARKDOWN: '0' } },
+    );
     if (!names.length) return ok(offset ? 'No more diagrams at this offset. Restart at offset 0 after directory changes.' : 'No diagrams yet. Create one with diagram_create.');
     return ok(`${names.length} diagram(s) in ${DIAGRAMS_DIR}/:\n${names.map((n) => `- ${n}`).join('\n')}${next === null ? '' : `\nMore diagrams: call diagram_list with offset=${next}.`}`);
   },

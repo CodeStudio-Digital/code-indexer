@@ -21,7 +21,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-export interface UseResizableWidthOptions {
+interface UseResizableWidthOptions {
   defaultWidth: number;
   minWidth: number;
   maxWidth: number;
@@ -36,7 +36,7 @@ export interface UseResizableWidthOptions {
   anchor?: 'left' | 'right';
 }
 
-export interface UseResizableWidthResult {
+interface UseResizableWidthResult {
   width: number;
   resizing: boolean;
   startResize: (e: React.MouseEvent) => void;

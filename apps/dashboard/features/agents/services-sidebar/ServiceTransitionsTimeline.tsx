@@ -21,7 +21,7 @@ interface TransitionRow {
   at_ms: number;
 }
 
-export interface ServiceTransitionsTimelineProps {
+interface ServiceTransitionsTimelineProps {
   sessionId?: string;
   serviceId?: string;
 }

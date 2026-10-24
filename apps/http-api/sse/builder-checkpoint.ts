@@ -17,7 +17,8 @@ import {
   setBuilderCheckpointScreenshot,
   type LocatedBuilderCheckpoint,
 } from '../builder-checkpoint-files.js';
-import type { ServerDeps } from '../server/deps.js';
+import type { CodeIndexDB } from '@mcp/store/db.js';
+import type { SessionStore } from '@mcp/code-agent/index.js';
 
 const GIT_TIMEOUT_MS = 15_000;
 
@@ -60,9 +61,9 @@ async function labelFor(
   }
 }
 
-export interface BuilderCheckpointDeps {
-  db: ServerDeps['db'];
-  sessionStore: ServerDeps['sessionStore'];
+interface BuilderCheckpointDeps {
+  db: CodeIndexDB;
+  sessionStore: SessionStore;
 }
 
 // Module-global wiring (same pattern as setGlobalPreviewDevtools): the server
@@ -81,7 +82,7 @@ export function notifyBuilderRunEnded(sessionId: SessionId): void {
 }
 
 /** Run-end hook. Synchronous wrapper — the async work is detached. */
-export function maybeBuilderCheckpoint(
+function maybeBuilderCheckpoint(
   deps: BuilderCheckpointDeps,
   sessionId: SessionId,
 ): void {
@@ -138,7 +139,7 @@ async function runCheckpoint(
 }
 
 /** Electron-only, best-effort: dev-server screenshot for the timeline card. */
-export async function attachThumbnail(
+async function attachThumbnail(
   deps: BuilderCheckpointDeps,
   located: LocatedBuilderCheckpoint,
   projectId: number,

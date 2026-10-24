@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-export interface OpenApiSpecState {
+interface OpenApiSpecState {
   spec: unknown | null;
   loading: boolean;
   /**

@@ -3,55 +3,9 @@
  * contract (api-bus) and the saved-connection row shape (store) so components
  * import from one place.
  */
-export type {
-  DbConnection,
-  DbEngine,
-  DbSslMode,
-  CreateDbConnectionInput,
-  DbConnectionPatch,
-  DbSavedQuery,
-  DbQueryHistoryRow,
-} from '@mcp/store/db-client-store-types.js';
+export type { DbConnection, DbEngine, DbSslMode, DbSavedQuery, DbQueryHistoryRow } from '@mcp/store/db-client-store-types.js';
 
-export type {
-  DbConnectSpec,
-  DbColumn,
-  DbIndex,
-  DbForeignKey,
-  DbIncomingForeignKey,
-  DbTableRef,
-  DbTableInfo,
-  DbQueryResult,
-  DbQueryBatchResult,
-  DbIntrospectResult,
-  DbCatalogObject,
-  DbCatalogSnapshot,
-  DbSchemaSnapshot,
-  DbRowChangeKind,
-  DbColumnSpec,
-  DbCreateTableSpec,
-  DbAlterAction,
-  DbAlterTableSpec,
-  DbDropTableSpec,
-  DbDdlOp,
-  DbDdlSpec,
-  DbEditResult,
-  DbRowChangeInput,
-  DbBatchEditResult,
-  DbMigrationInput,
-  DbMigrationResult,
-  DbObjectKind,
-  DbGenerateKind,
-  DbRowBatch,
-  DbDumpFrame,
-  DbEngineKind,
-  DbCommand,
-  DbDriverStatus,
-  DbDriverInstallFrame,
-  DbTableSort,
-  DbWhereOp,
-  DbWhereCondition,
-} from '@mcp/api-bus';
+export type { DbConnectSpec, DbColumn, DbIndex, DbForeignKey, DbIncomingForeignKey, DbTableRef, DbTableInfo, DbQueryResult, DbQueryBatchResult, DbIntrospectResult, DbCatalogObject, DbCatalogSnapshot, DbSchemaSnapshot, DbRowChangeKind, DbColumnSpec, DbAlterAction, DbDdlOp, DbDdlSpec, DbEditResult, DbRowChangeInput, DbBatchEditResult, DbMigrationInput, DbMigrationResult, DbObjectKind, DbGenerateKind, DbRowBatch, DbDumpFrame, DbCommand, DbDriverStatus, DbDriverInstallFrame, DbTableSort, DbWhereOp, DbWhereCondition } from '@mcp/api-bus';
 
 /** A node in the connection tree (lazy-expanded). */
 export type DbTreeKind =

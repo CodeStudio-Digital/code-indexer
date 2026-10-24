@@ -11,7 +11,7 @@ import {
 
 type FetchLike = typeof fetch;
 
-export interface McpLocalServerResult {
+interface McpLocalServerResult {
   reached: boolean;
   ok: boolean;
   status: number | null;

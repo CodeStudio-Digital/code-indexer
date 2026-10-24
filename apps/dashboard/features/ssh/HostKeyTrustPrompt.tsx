@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '../../components/ui/button.js';
 import type { HostKeyDecision } from './api.js';
 
-export interface HostKeyTrustPromptProps {
+interface HostKeyTrustPromptProps {
   info: SshHostKeyInfo;
   mode: HostKeyDecision;
   onDecision: (accepted: boolean) => void;

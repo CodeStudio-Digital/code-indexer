@@ -47,7 +47,7 @@ function tryResolve(): ResolvedWorker | null {
   return resolveWorkerFile(import.meta.url, 'company-worker');
 }
 
-export interface WorkerOrchestratorStatus {
+interface WorkerOrchestratorStatus {
   enabled: boolean;
   resolved: ResolvedWorker | null;
   reason: string | null;
@@ -117,7 +117,7 @@ export function getWorkerOrchestratorPool(): WorkerOrchestratorPool {
   return cachedPool;
 }
 
-export function peekWorkerOrchestratorPool(): WorkerOrchestratorPool | null {
+function peekWorkerOrchestratorPool(): WorkerOrchestratorPool | null {
   return cachedPool;
 }
 

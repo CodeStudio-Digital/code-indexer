@@ -19,7 +19,7 @@ import { buildDocNavVerbs } from './doc-nav-backend.js';
 import { createHash } from 'node:crypto';
 
 /** What the `rag_search_docs` tool sends — superset of DocSearchInput. */
-export interface BackendSearchInput {
+interface BackendSearchInput {
   query: string;
   collection?: string;
   limit?: number;
@@ -29,13 +29,13 @@ export interface BackendSearchInput {
   project_id?: number;
 }
 
-export interface BackendReadChunkInput {
+interface BackendReadChunkInput {
   chunk_id: number;
   /** Neighbor window by `ord` (same source). Default 1, clamped to [0, 3]. */
   window?: number;
 }
 
-export interface DocChunkNeighbor {
+interface DocChunkNeighbor {
   chunk_id: number;
   ord: number;
   heading_path: string | null;
@@ -44,7 +44,7 @@ export interface DocChunkNeighbor {
   source_uri: string | null;
 }
 
-export interface DocChunkRead {
+interface DocChunkRead {
   chunk: {
     chunk_id: number;
     collection: string;
@@ -63,7 +63,7 @@ export interface DocChunkRead {
   next: DocChunkNeighbor[];
 }
 
-export interface DocSearchBackendDeps {
+interface DocSearchBackendDeps {
   docHybridSearch: DocHybridSearch;
   docStore: DocStore;
 }

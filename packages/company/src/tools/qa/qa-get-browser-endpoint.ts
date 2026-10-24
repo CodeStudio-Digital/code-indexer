@@ -1,3 +1,7 @@
+import { fetchSidecarVersion, type SidecarVersionInfo } from './qa-sidecar-probe.js';
+export { fetchSidecarVersion, type SidecarVersionInfo } from './qa-sidecar-probe.js';
+import { setQaEndpointEnvStore, getQaEndpointEnvStore } from './qa-endpoint-state.js';
+export { setQaEndpointEnvStore, getQaEndpointEnvStore } from './qa-endpoint-state.js';
 /**
  * Tool: `qa_get_browser_endpoint`. Returns the WebSocket URL the QA
  * agent must pass to `chromium.connect({ wsEndpoint })`. The endpoint
@@ -17,90 +21,22 @@
 import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { JsonSchema } from "@mcp/provider-sdk";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import { tryGetChromeService } from '@mcp/services/chrome-service/chrome-service.js';
 import type { ChromeServiceState } from '@mcp/services/chrome-service/chrome-service.js';
 import type { CompanySessionEnvStore } from '@mcp/store/company-session-env-store.js';
-// Module cycle with qa-preflight is intentional and runtime-safe: both
-// sides only reference each other inside function bodies (hoisted
-// function declarations), never during module init.
 import { preflightBrowser } from './qa-preflight.js';
 
-// ─── Module-level binding for the env store (used to surface the QA
-// preview-URL family alongside the wsEndpoint). Mirrors the existing
-// `setQaTestRunStore` pattern. Optional — when null we just omit the
-// PLAYWRIGHT_BASE_URL_* lines from the reply, never error.
 
-let envStore: CompanySessionEnvStore | null = null;
 
-export function setQaEndpointEnvStore(store: CompanySessionEnvStore | null): void {
-  envStore = store;
-}
-
-/**
- * B7 — read-only accessor for the bound env store. `qa-preflight.ts`
- * reuses the same boot wiring (both server.ts and company-worker call
- * `setQaEndpointEnvStore`) instead of introducing a second binding.
- */
-export function getQaEndpointEnvStore(): CompanySessionEnvStore | null {
-  return envStore;
-}
 
 const PARAMETERS: JsonSchema = {
   type: 'object',
   properties: {},
 };
 
-const HEALTH_PROBE_TIMEOUT_MS = 4_000;
 
-export interface SidecarVersionInfo {
-  ok: boolean;
-  status?: number;
-  /**
-   * Browser product string. The Playwright `run-server` health endpoint
-   * returns plain text `"Running"` (no version info), so this stays
-   * undefined unless we later extend the probe. Kept on the type for
-   * back-compat with v3.0 tests.
-   */
-  browser?: string;
-  /** Protocol version. Same caveat as `browser`. */
-  protocolVersion?: string;
-  /** Last error string when the probe failed. */
-  error?: string;
-}
 
-/**
- * Pure async helper: probe the Chrome Service's HTTP health endpoint.
- * `playwright run-server` answers any GET with status 200 + body
- * `"Running"` once it's listening; we just check the status, not the
- * body. (Calling `res.json()` would fail on the plain text — that was
- * the v4.0 ECONNREFUSED-looking-but-actually-200 bug.)
- *
- * Used inside the tool handler and standalone in tests via fetch
- * mocks.
- */
-export async function fetchSidecarVersion(
-  url: string,
-  fetchImpl: typeof fetch = fetch,
-  timeoutMs: number = HEALTH_PROBE_TIMEOUT_MS,
-): Promise<SidecarVersionInfo> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await fetchImpl(url, { method: 'GET', signal: controller.signal });
-    // Drain the body so the connection can be reused — we don't parse
-    // it because the run-server returns plain text, not JSON.
-    try { await res.text(); } catch { /* swallow */ }
-    if (!res.ok) {
-      return { ok: false, status: res.status };
-    }
-    return { ok: true, status: res.status };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 /**
  * Pure: collect the QA preview URL family for one session out of the
@@ -235,7 +171,7 @@ export function qaGetBrowserEndpoint(
     handler: async () => {
       try {
         const sessionId = orchestrator.companySessionId;
-        const previewUrls = collectPlaywrightBaseUrls(envStore, sessionId);
+        const previewUrls = collectPlaywrightBaseUrls(getQaEndpointEnvStore(), sessionId);
         const svc = tryGetChromeService();
         if (!svc) {
           // B7 — worker path: the singleton doesn't cross worker threads,

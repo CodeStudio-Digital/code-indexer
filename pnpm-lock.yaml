@@ -30,9 +30,6 @@ importers:
       '@google/genai':
         specifier: ^1.48.0
         version: 1.50.1(@modelcontextprotocol/sdk@1.29.0(zod@3.25.76))
-      '@google/generative-ai':
-        specifier: ^0.21.0
-        version: 0.21.0
       '@hono/node-server':
         specifier: ^1.19.12
         version: 1.19.14(hono@4.12.14)
@@ -45,9 +42,6 @@ importers:
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.52.2)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@radix-ui/react-avatar':
-        specifier: ^1.2.2
-        version: 1.2.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@radix-ui/react-collapsible':
         specifier: ^1.1.16
         version: 1.1.16(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -277,12 +271,51 @@ importers:
       '@fontsource-variable/jetbrains-mono':
         specifier: 5.2.8
         version: 5.2.8
+      '@mcp/agent-runtime-contracts':
+        specifier: workspace:*
+        version: link:packages/agent-runtime-contracts
+      '@mcp/agent-runtime-host':
+        specifier: workspace:*
+        version: link:packages/agent-runtime-host
       '@mcp/api-bus':
         specifier: workspace:*
         version: link:packages/api-bus
+      '@mcp/api-handlers':
+        specifier: workspace:*
+        version: link:packages/api-handlers
+      '@mcp/app-studio':
+        specifier: workspace:*
+        version: link:packages/app-studio
+      '@mcp/code-agent':
+        specifier: workspace:*
+        version: link:packages/code-agent
+      '@mcp/company':
+        specifier: workspace:*
+        version: link:packages/company
+      '@mcp/docs-agent':
+        specifier: workspace:*
+        version: link:packages/docs-agent
+      '@mcp/indexer':
+        specifier: workspace:*
+        version: link:packages/indexer
+      '@mcp/orchestrator-host':
+        specifier: workspace:*
+        version: link:packages/orchestrator-host
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:packages/provider-sdk
+      '@mcp/services':
+        specifier: workspace:*
+        version: link:packages/services
       '@mcp/session-storage':
         specifier: workspace:*
         version: link:packages/session-storage
+      '@mcp/shared':
+        specifier: workspace:*
+        version: link:packages/shared
+      '@mcp/store':
+        specifier: workspace:*
+        version: link:packages/store
       '@playwright/test':
         specifier: 1.61.1
         version: 1.61.1
@@ -372,18 +405,28 @@ importers:
       '@mcp/provider-sdk':
         specifier: workspace:*
         version: link:../provider-sdk
+    devDependencies:
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/api-bus:
     dependencies:
       '@mcp/agent-runtime-contracts':
         specifier: workspace:*
         version: link:../agent-runtime-contracts
+      '@mcp/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/api-handlers:
     dependencies:
       '@mcp/provider-sdk':
         specifier: workspace:*
         version: link:../provider-sdk
+      '@mcp/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/app-studio: {}
 
@@ -407,6 +450,9 @@ importers:
       '@mcp/candidate-pipeline':
         specifier: workspace:*
         version: link:../candidate-pipeline
+      '@mcp/company':
+        specifier: workspace:*
+        version: link:../company
       '@mcp/db-drivers':
         specifier: workspace:*
         version: link:../db-drivers
@@ -425,19 +471,37 @@ importers:
       '@mcp/store':
         specifier: workspace:*
         version: link:../store
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.12.1
+        version: 1.29.0(zod@3.25.76)
       chroma-js:
         specifier: 3.2.0
         version: 3.2.0
+      openai:
+        specifier: ^4.85.4
+        version: 4.104.0(encoding@0.1.13)(ws@8.20.0)(zod@3.25.76)
+      turndown:
+        specifier: ^7.2.4
+        version: 7.2.4
+      turndown-plugin-gfm:
+        specifier: ^1.0.2
+        version: 1.0.2
     devDependencies:
       '@types/chroma-js':
         specifier: ^3.1.2
         version: 3.1.2
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/company:
     dependencies:
       '@mcp/agent-runtime-host':
         specifier: workspace:*
         version: link:../agent-runtime-host
+      '@mcp/app-studio':
+        specifier: workspace:*
+        version: link:../app-studio
       '@mcp/candidate-pipeline':
         specifier: workspace:*
         version: link:../candidate-pipeline
@@ -447,6 +511,9 @@ importers:
       '@mcp/company-contracts':
         specifier: workspace:*
         version: link:../company-contracts
+      '@mcp/docs-agent':
+        specifier: workspace:*
+        version: link:../docs-agent
       '@mcp/provider-sdk':
         specifier: workspace:*
         version: link:../provider-sdk
@@ -465,7 +532,11 @@ importers:
 
   packages/company-contracts: {}
 
-  packages/db-drivers: {}
+  packages/db-drivers:
+    devDependencies:
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/docs-agent:
     dependencies:
@@ -490,9 +561,25 @@ importers:
       '@mcp/store':
         specifier: workspace:*
         version: link:../store
+    devDependencies:
+      '@mcp/company':
+        specifier: workspace:*
+        version: link:../company
+      '@mcp/provider-sdk':
+        specifier: workspace:*
+        version: link:../provider-sdk
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/indexer:
     dependencies:
+      '@aws-sdk/client-bedrock-agent-runtime':
+        specifier: ^3.1087.0
+        version: 3.1087.0
+      '@huggingface/transformers':
+        specifier: ^4.2.0
+        version: 4.2.0
       '@mcp/candidate-pipeline':
         specifier: workspace:*
         version: link:../candidate-pipeline
@@ -508,6 +595,13 @@ importers:
       '@mcp/store':
         specifier: workspace:*
         version: link:../store
+      web-tree-sitter:
+        specifier: ^0.24.7
+        version: 0.24.7
+    devDependencies:
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/orchestrator-host: {}
 
@@ -537,6 +631,10 @@ importers:
       '@mcp/store':
         specifier: workspace:*
         version: link:../store
+    devDependencies:
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/plugin-market-client: {}
 
@@ -637,6 +735,9 @@ importers:
       '@babel/types':
         specifier: ^7.29.7
         version: 7.29.7
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/session-storage:
     dependencies:
@@ -646,12 +747,23 @@ importers:
       '@mcp/provider-sdk':
         specifier: workspace:*
         version: link:../provider-sdk
+    devDependencies:
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/shared:
     dependencies:
       '@mcp/agent-runtime-contracts':
         specifier: workspace:*
         version: link:../agent-runtime-contracts
+      adm-zip:
+        specifier: ^0.5.17
+        version: 0.5.17
+    devDependencies:
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/store:
     dependencies:
@@ -667,6 +779,16 @@ importers:
       '@mcp/shared':
         specifier: workspace:*
         version: link:../shared
+      better-sqlite3:
+        specifier: ^12.11.1
+        version: 12.11.1
+    devDependencies:
+      '@mcp/services':
+        specifier: workspace:*
+        version: link:../services
+      vitest:
+        specifier: ^4.1.2
+        version: 4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
 
   packages/vault-crypto: {}
 
@@ -1442,10 +1564,6 @@ packages:
       '@modelcontextprotocol/sdk':
         optional: true
 
-  '@google/generative-ai@0.21.0':
-    resolution: {integrity: sha512-7XhUbtnlkSEZK15kN3t+tzIMxsbKm/dSkKBFalj+20NvPKe1kBY7mR2P7vuijEn+f06z5+A8bVGKO0v39cr6Wg==}
-    engines: {node: '>=18.0.0'}
-
   '@headlessui/tailwindcss@0.2.2':
     resolution: {integrity: sha512-xNe42KjdyA4kfUKLLPGzME9zkH7Q3rOZ5huFihWNWOQFxnItxPB3/67yBI8/qBfY8nwBRx5GHn4VprsoluVMGw==}
     engines: {node: '>=10'}
@@ -2034,19 +2152,6 @@ packages:
 
   '@radix-ui/react-arrow@1.1.11':
     resolution: {integrity: sha512-Kdil9BB1rIFC/khmf4hC35bn8701AJcizTU7G7cUbEbk5XqqbjDuHW60uUfKqO5WojjZcbAW51Q7P0hRmMLw8A==}
-    peerDependencies:
-      '@types/react': '*'
-      '@types/react-dom': '*'
-      react: ^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc
-      react-dom: ^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
-      '@types/react-dom':
-        optional: true
-
-  '@radix-ui/react-avatar@1.2.2':
-    resolution: {integrity: sha512-sST0qh8GzOB7besQ3tMLWLyngnRuSk0gc/Hm+667KYKQFCt6Y6ZXv25WlqM7dIDK54ULCh5+CHmk4LIolzfz+A==}
     peerDependencies:
       '@types/react': '*'
       '@types/react-dom': '*'
@@ -8215,8 +8320,6 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@google/generative-ai@0.21.0': {}
-
   '@headlessui/tailwindcss@0.2.2(tailwindcss@4.2.2)':
     dependencies:
       tailwindcss: 4.2.2
@@ -8750,19 +8853,6 @@ snapshots:
   '@radix-ui/react-arrow@1.1.11(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
     dependencies:
       '@radix-ui/react-primitive': 2.1.7(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      react: 19.2.5
-      react-dom: 19.2.5(react@19.2.5)
-    optionalDependencies:
-      '@types/react': 19.2.14
-      '@types/react-dom': 19.2.3(@types/react@19.2.14)
-
-  '@radix-ui/react-avatar@1.2.2(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)':
-    dependencies:
-      '@radix-ui/react-context': 1.2.0(@types/react@19.2.14)(react@19.2.5)
-      '@radix-ui/react-primitive': 2.1.7(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
-      '@radix-ui/react-use-callback-ref': 1.1.2(@types/react@19.2.14)(react@19.2.5)
-      '@radix-ui/react-use-is-hydrated': 0.1.1(@types/react@19.2.14)(react@19.2.5)
-      '@radix-ui/react-use-layout-effect': 1.1.2(@types/react@19.2.14)(react@19.2.5)
       react: 19.2.5
       react-dom: 19.2.5(react@19.2.5)
     optionalDependencies:
@@ -10200,6 +10290,14 @@ snapshots:
       magic-string: 0.30.21
     optionalDependencies:
       vite: 8.1.0(@types/node@22.19.17)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0)
+
+  '@vitest/mocker@4.1.4(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))':
+    dependencies:
+      '@vitest/spy': 4.1.4
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0)
 
   '@vitest/pretty-format@4.1.4':
     dependencies:
@@ -14445,6 +14543,21 @@ snapshots:
       tsx: 4.21.0
       yaml: 2.9.0
 
+  vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0):
+    dependencies:
+      lightningcss: 1.32.0
+      picomatch: 4.0.4
+      postcss: 8.5.15
+      rolldown: 1.1.3
+      tinyglobby: 0.2.17
+    optionalDependencies:
+      '@types/node': 24.13.2
+      esbuild: 0.28.1
+      fsevents: 2.3.3
+      jiti: 2.6.1
+      tsx: 4.21.0
+      yaml: 2.9.0
+
   vitest@4.1.4(@types/node@22.19.17)(vite@8.1.0(@types/node@22.19.17)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.4
@@ -14469,6 +14582,33 @@ snapshots:
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 22.19.17
+    transitivePeerDependencies:
+      - msw
+
+  vitest@4.1.4(@types/node@24.13.2)(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0)):
+    dependencies:
+      '@vitest/expect': 4.1.4
+      '@vitest/mocker': 4.1.4(vite@8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0))
+      '@vitest/pretty-format': 4.1.4
+      '@vitest/runner': 4.1.4
+      '@vitest/snapshot': 4.1.4
+      '@vitest/spy': 4.1.4
+      '@vitest/utils': 4.1.4
+      es-module-lexer: 2.0.0
+      expect-type: 1.3.0
+      magic-string: 0.30.21
+      obug: 2.1.1
+      pathe: 2.0.3
+      picomatch: 4.0.4
+      std-env: 4.1.0
+      tinybench: 2.9.0
+      tinyexec: 1.1.1
+      tinyglobby: 0.2.16
+      tinyrainbow: 3.1.0
+      vite: 8.1.0(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.6.1)(tsx@4.21.0)(yaml@2.9.0)
+      why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@types/node': 24.13.2
     transitivePeerDependencies:
       - msw
 

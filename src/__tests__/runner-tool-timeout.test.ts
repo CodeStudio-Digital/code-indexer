@@ -91,14 +91,15 @@ describe('runner — universal tool timeout', () => {
     expect(starts).toEqual(['call-1']);
     expect(results).toHaveLength(1);
     expect(results[0].isError).toBe(true);
-    expect(results[0].content).toMatch(/timed out after \d+s/);
+    expect(results[0].content).toContain('`hangs` exceeded 50ms');
     expect(res.reason).toBe('completed');
-    expect(res.transition).toBe('tool-timeout');
+    // A recovered tool error does not become the terminal run transition.
+    expect(res.transition).toBeNull();
   });
 
   it('explicit timeoutMs on the tool wins over the runner default', async () => {
     process.env.MCP_TOOL_HEARTBEAT_MS = '0';
-    let observedTimeoutSecs = 0;
+    let observedTimeoutMs: number | undefined;
     const hangingTool: CoderTool = {
       name: 'slow',
       description: '',
@@ -109,12 +110,11 @@ describe('runner — universal tool timeout', () => {
     };
     const runner = makeRunner([hangingTool], 'slow');
     runner.on('tool_call_result', (_id, _name, r) => {
-      const m = r.content.match(/timed out after (\d+)s/);
-      if (m) observedTimeoutSecs = Number(m[1]);
+      const m = r.content.match(/exceeded (\d+)ms/);
+      if (m) observedTimeoutMs = Number(m[1]);
     });
     await runner.run();
-    // 80ms rounds to 0s — we just care it's a small number, not the 30-min default.
-    expect(observedTimeoutSecs).toBeLessThan(60);
+    expect(observedTimeoutMs).toBe(80);
   });
 
   it('timeoutMs: Infinity opts out — runner does not race the handler', async () => {
@@ -173,19 +173,21 @@ describe('runner — tool_progress heartbeat', () => {
   });
 
   it('emits periodic tool_progress while a tool is in flight', async () => {
-    process.env.MCP_TOOL_HEARTBEAT_MS = '20';
+    vi.useFakeTimers();
     const slowTool: CoderTool = {
       name: 'slow-but-cooperative',
       description: '',
       source: 'native',
       parameters: { type: 'object', properties: {} },
-      timeoutMs: 500,
-      handler: () => new Promise((r) => setTimeout(() => r({ content: 'ok' }), 100)),
+      timeoutMs: 30_000,
+      handler: () => new Promise((r) => setTimeout(() => r({ content: 'ok' }), 25_000)),
     };
     const runner = makeRunner([slowTool], 'slow-but-cooperative');
     const { progress, results } = captureResults(runner);
-    await runner.run();
-    // 100ms run / 20ms interval ≈ 4-5 heartbeats (timing-sensitive — allow 2+).
+    const running = runner.run();
+    await vi.advanceTimersByTimeAsync(25_000);
+    await running;
+    // Advance the real policy interval deterministically without wall-clock waits.
     expect(progress.length).toBeGreaterThanOrEqual(2);
     // elapsedMs is monotonically non-decreasing.
     for (let i = 1; i < progress.length; i++) {
@@ -214,8 +216,7 @@ describe('runner — tool_progress heartbeat', () => {
     await runner.run();
     const withNote = progress.filter((p) => p.note !== undefined);
     expect(withNote).toHaveLength(1);
-    expect(withNote[0].note!.length).toBeLessThanOrEqual(201); // 200 chars + the ellipsis
-    expect(withNote[0].note!.endsWith('…')).toBe(true);
+    expect(withNote[0].note).toBe('x'.repeat(200) + '...');
   });
 
   it('suppresses heartbeat when tool has timeoutMs: Infinity', async () => {

@@ -28,7 +28,7 @@ interface FollowOutputOptions {
   resetKey?: string | null;
 }
 
-export interface FollowOutput {
+interface FollowOutput {
   /** True while the view is pinned to the newest content. */
   following: boolean;
   /** Re-engage follow and jump to the end (the floating affordance). */

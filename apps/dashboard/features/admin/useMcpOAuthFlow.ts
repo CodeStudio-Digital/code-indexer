@@ -4,7 +4,7 @@ import { fetchOAuthStatus, startOAuthAuthorize } from './mcp-servers-api.js';
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
-export interface OAuthFlowTexts {
+interface OAuthFlowTexts {
   /** Shown when the ephemeral loopback can't bind (port busy). */
   loopbackError: string;
   /** Shown when the web popup is blocked. */
@@ -19,7 +19,7 @@ interface Options {
   texts: OAuthFlowTexts;
 }
 
-export interface McpOAuthFlow {
+interface McpOAuthFlow {
   /** Begin authorization: opens the provider login and watches for completion. */
   authorize: (serverId: string) => Promise<void>;
   /** Stop watching + tear down the loopback (call on disconnect / dialog close). */

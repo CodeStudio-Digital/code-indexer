@@ -1,6 +1,6 @@
 import { MessageChannel } from 'node:worker_threads';
 import { expect, it, vi } from 'vitest';
-import { MessageBridge } from '../../../../packages/orchestrator-host/src/index.js';
+import { MessageBridge } from '@mcp/orchestrator-host';
 import { buildWorkerMemoryShims } from '../../workers/memory-shims.js';
 import { registerWorkerMemoryHandlers } from '../worker-memory-handlers.js';
 import { WorkerMemoryReads } from '../worker-memory-reads.js';

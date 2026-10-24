@@ -2,7 +2,7 @@ export type SelectableChangeGroup = 'staged' | 'unstaged' | 'untracked';
 
 export type ChangeSelectionState = 'none' | 'partial' | 'all';
 
-export interface SelectableChange {
+interface SelectableChange {
   path: string;
 }
 

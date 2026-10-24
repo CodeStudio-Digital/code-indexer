@@ -54,7 +54,7 @@ export interface OpenDiff {
   /** Unified diff text. */
   patch: string;
   /** Forwarded so the tab bar can pick an icon / sort. */
-  source: 'git-unstaged' | 'git-staged' | 'other';
+  source: 'git-unstaged' | 'git-staged' | 'git-stash' | 'other';
 }
 
 export interface OpenGitLog {
@@ -180,7 +180,7 @@ export interface EditorPaneState {
 }
 
 /** `null` ⇔ single pane. 'row' = side-by-side (vertical divider). 'column' = stacked. */
-export type SplitDir = 'row' | 'column' | null;
+type SplitDir = 'row' | 'column' | null;
 
 // Deterministic pane ids (no Math.random / Date.now): a module counter.
 let paneSeq = 0;
@@ -928,7 +928,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
 const LAYOUT_STORAGE_KEY = 'mcp-ide:workspace-layout';
 
-export interface WorkspaceLayout {
+interface WorkspaceLayout {
   fileTreeSize: number;
   editorSize: number;
   rightPaneSize: number;
@@ -944,7 +944,7 @@ const DEFAULT_LAYOUT: WorkspaceLayout = {
   bottomPanelSize: 30,
 };
 
-export function loadWorkspaceLayout(): WorkspaceLayout {
+function loadWorkspaceLayout(): WorkspaceLayout {
   if (typeof window === 'undefined') return DEFAULT_LAYOUT;
   try {
     const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
@@ -955,7 +955,7 @@ export function loadWorkspaceLayout(): WorkspaceLayout {
   }
 }
 
-export function saveWorkspaceLayout(layout: Partial<WorkspaceLayout>): void {
+function saveWorkspaceLayout(layout: Partial<WorkspaceLayout>): void {
   if (typeof window === 'undefined') return;
   try {
     const current = loadWorkspaceLayout();

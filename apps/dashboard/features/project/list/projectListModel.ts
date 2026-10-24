@@ -29,7 +29,7 @@ export function matchesProjectSearch(project: ProjectCardData, query: string): b
   ].some((value) => normalizeSearchText(value).includes(normalizedQuery));
 }
 
-export function matchesProjectFilter(
+function matchesProjectFilter(
   project: ProjectCardData,
   filter: ProjectListFilter,
 ): boolean {
@@ -37,7 +37,7 @@ export function matchesProjectFilter(
   return filter === 'indexed' ? !!project.last_indexed : !project.last_indexed;
 }
 
-export function sortProjectsByName(projects: ProjectCardData[]): ProjectCardData[] {
+function sortProjectsByName(projects: ProjectCardData[]): ProjectCardData[] {
   return [...projects].sort((left, right) =>
     projectNameCollator.compare(left.name, right.name),
   );

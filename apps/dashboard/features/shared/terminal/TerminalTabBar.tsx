@@ -19,7 +19,7 @@ export interface SpawnTargetOption {
   hint?: string;
 }
 
-export interface TerminalTabBarProps {
+interface TerminalTabBarProps {
   sessions: TerminalSession[];
   activeId: string | undefined;
   onSelect: (id: string) => void;

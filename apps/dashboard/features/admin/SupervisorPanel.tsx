@@ -1,3 +1,4 @@
+import type { JSX } from 'react';
 /**
  * SupervisorPanel — operational dashboard for the AgentSupervisor
  * (Sprint 4 Phase 3.3).
@@ -42,6 +43,7 @@ import {
   type IncidentRow,
   type StatusResponse,
   type SupervisorIncidentEnvelope,
+  type SupervisorStatus,
 } from './supervisor-api.js';
 
 const POLL_MS = 5_000;
@@ -63,7 +65,7 @@ function severityColor(kind: string): 'red' | 'orange' | 'yellow' | 'gray' {
   return 'gray';
 }
 
-export interface SupervisorPanelProps {
+interface SupervisorPanelProps {
   /**
    * When provided, filter the status snapshot + incidents query to
    * just this session. Used by the right-rail entry in
@@ -475,7 +477,7 @@ function EmptyIncidentsHint({ dashboard }: { dashboard?: boolean }): JSX.Element
 
 interface SessionStatusCardProps {
   sessionId: string;
-  status: import('./supervisor-api.js').SupervisorStatus | null;
+  status: SupervisorStatus | null;
   onReleaseQuarantine: (sessionId: string, role: string) => Promise<void>;
   onReleaseReadOnly: (sessionId: string) => Promise<void>;
 }

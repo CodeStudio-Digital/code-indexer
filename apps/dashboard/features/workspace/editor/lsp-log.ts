@@ -9,15 +9,15 @@
  * retorno ao Monaco; este logger só registra ao lado do return.
  */
 
-export type LspOp =
+type LspOp =
   | 'completion' | 'resolve' | 'hover' | 'definition'
   | 'references' | 'inline' | 'semanticTokens' | 'codeActions' | 'rename'
   | 'signatureHelp' | 'documentSymbols'
   | 'formatting' | 'organizeImports' | 'implementation';
 
-export type LspOutcome = 'ok' | 'threw' | 'empty' | 'timeout' | 'no-provider';
+type LspOutcome = 'ok' | 'threw' | 'empty' | 'timeout' | 'no-provider';
 
-export interface LspEvent {
+interface LspEvent {
   op: LspOp;
   file: string;
   lang: string;
@@ -40,7 +40,7 @@ interface WindowWithLog {
   __lspCounters?: Record<LspCounter, number>;
 }
 
-export type LspCounter = 'rangeCorrected' | 'resync' | 'staleSessionIgnored' | 'lruEviction';
+type LspCounter = 'rangeCorrected' | 'resync' | 'staleSessionIgnored' | 'lruEviction';
 
 export function incrementLspCounter(counter: LspCounter): void {
   const w = window as unknown as WindowWithLog;
@@ -54,7 +54,7 @@ function ring(): LspEvent[] {
   return w.__lspLog;
 }
 
-export function lspDebugEnabled(): boolean {
+function lspDebugEnabled(): boolean {
   try {
     const dev = Boolean((import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV);
     if (dev) return true;
@@ -85,7 +85,7 @@ export function logLsp(e: LspEvent): void {
 }
 
 /** Última fonte registrada para um arquivo (o tooltip do LanguageChip lê isto em dev). */
-export function lastCompletionSource(file: string): LspEvent['source'] | undefined {
+function lastCompletionSource(file: string): LspEvent['source'] | undefined {
   const buf = ring();
   for (let i = buf.length - 1; i >= 0; i--) {
     if (buf[i].op === 'completion' && buf[i].file === file) return buf[i].source;

@@ -9,7 +9,7 @@
  * Sessions are deleted when their project is deleted (ON DELETE CASCADE).
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

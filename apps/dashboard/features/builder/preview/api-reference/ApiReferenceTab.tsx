@@ -31,7 +31,7 @@ export interface ServiceOption {
   hostPort?: number;
 }
 
-export interface ApiReferenceTabProps {
+interface ApiReferenceTabProps {
   sessionId: string;
   snapshot: SandboxSnapshot | null;
   extraServices: ServiceOption[];

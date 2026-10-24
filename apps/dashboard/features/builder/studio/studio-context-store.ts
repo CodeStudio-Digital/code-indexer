@@ -113,7 +113,7 @@ export function consumeSelectionPrefix(sid: number): string {
   return sels.map(formatSelectedElement).join('');
 }
 
-export function formatSelectedElement(sel: SelectedElement): string {
+function formatSelectedElement(sel: SelectedElement): string {
   const classes = sel.classes.join(' ');
   // The universal (CDP) path supplies a source from framework dev metadata;
   // the inline builder path supplies `loc` from the data-mcp-loc stamp.
@@ -199,7 +199,7 @@ function escapeAttr(s: string): string {
 // The chat pane knows the master's live status; the auto-fix loop reads it
 // here so it never fires while the agent is mid-turn or awaiting input.
 const busyBySession = new Map<number, boolean>();
-export function setAgentBusy(sid: number, busy: boolean): void {
+function setAgentBusy(sid: number, busy: boolean): void {
   busyBySession.set(sid, busy);
 }
 export function isAgentBusy(sid: number): boolean {

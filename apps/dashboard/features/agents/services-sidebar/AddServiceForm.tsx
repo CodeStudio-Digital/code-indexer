@@ -22,7 +22,7 @@ import {
   type ProjectOption,
 } from './types.js';
 
-export interface AddServiceFormProps {
+interface AddServiceFormProps {
   sessionId: string;
   onCancel: () => void;
   onCreated: () => Promise<void>;

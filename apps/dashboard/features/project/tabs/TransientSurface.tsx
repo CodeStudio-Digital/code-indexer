@@ -1,7 +1,7 @@
 /**
  * Superfícies lazy do ProjectView (W4 decompose): abas realmente transitórias
- * seguem conditional-render (montam ao entrar, desmontam ao sair), enquanto o DB
- * client é chamado pelo keep-alive de TabContent. As pesadas
+ * seguem conditional-render (montam ao entrar, desmontam ao sair) no workbench.
+ * As pesadas
  * (charts/diff/drawio/http/xterm) seguem em chunks LAZY — fora do chunk inicial.
  */
 import { Suspense, lazy, useEffect, useState, type ComponentType } from 'react';
@@ -80,7 +80,7 @@ function TabSpinner() {
   );
 }
 
-export interface TransientSurfaceProps {
+interface TransientSurfaceProps {
   tab: ProjectTabId;
   projectId: number;
   projectName: string;
@@ -109,7 +109,7 @@ export function TransientSurface({ tab, projectId, projectName, onOpenFile, cont
   // Database client — DataGrip × phpMyAdmin. key={projectId} → remount per
   // project so a live connection session never bleeds across projects.
   if (tab === 'databases') {
-    return <Suspense fallback={<TabSpinner />}><DbClientTab key={projectId} projectId={projectId} projectName={projectName} /></Suspense>;
+    return <Suspense fallback={<TabSpinner />}><DbClientTab key={projectId} /></Suspense>;
   }
 
   if (tab === 'ssh') {

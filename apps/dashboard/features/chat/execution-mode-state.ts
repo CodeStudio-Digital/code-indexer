@@ -1,16 +1,9 @@
-import type {
-  CoderSession,
-  EnrichedProviderModel,
-  ExecutionMode,
-  ProviderOption,
-  SessionId,
-  SessionData,
-} from './types.js';
+import type { CoderSession, EnrichedProviderModel, ExecutionMode, ProviderOption, SessionId, SessionData } from './types.js';
 
 /** New conversations must opt into Ultra explicitly. */
 export const DEFAULT_NEW_EXECUTION_MODE: ExecutionMode = 'standard';
 
-export interface SerializedAsyncQueue {
+interface SerializedAsyncQueue {
   enqueue: (task: () => Promise<void>) => Promise<void>;
   wait: () => Promise<void>;
 }
@@ -38,7 +31,7 @@ function normalizedValue(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export function isLegacyUltraEffort(value: unknown): boolean {
+function isLegacyUltraEffort(value: unknown): boolean {
   return normalizedValue(value)?.toLowerCase() === 'ultra';
 }
 

@@ -20,7 +20,7 @@ export async function setToolGlobalDisabled(toolName: string, disabled: boolean)
   });
 }
 
-export async function bulkSetToolsDisabled(
+async function bulkSetToolsDisabled(
   tools: Array<{ name: string; disabled: boolean }>,
 ): Promise<void> {
   await fetch('/api/admin/tools/bulk-disabled', {

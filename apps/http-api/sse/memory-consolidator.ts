@@ -48,7 +48,7 @@ function num(env: string | undefined, fallback: number): number {
 }
 
 /** Merge/GC thresholds read from env, falling back to conservative defaults. */
-export function consolidatorOptionsFromEnv(): ConsolidatorOptions {
+function consolidatorOptionsFromEnv(): ConsolidatorOptions {
   return {
     mergeCosine: num(process.env.MCP_MEMORY_MERGE_COSINE, DEFAULT_CONSOLIDATOR_OPTIONS.mergeCosine),
     mergeTitleJaccard: num(process.env.MCP_MEMORY_MERGE_TITLE_JACCARD, DEFAULT_CONSOLIDATOR_OPTIONS.mergeTitleJaccard),
@@ -60,14 +60,14 @@ export function consolidatorOptionsFromEnv(): ConsolidatorOptions {
   };
 }
 
-export interface MemoryConsolidatorHandle {
+interface MemoryConsolidatorHandle {
   stop(): void;
   /** One pass; pass a projectId to consolidate just that project (manual/tests). */
   runOnce(onlyProjectId?: number): Promise<ConsolidationPassResult[]>;
   readonly intervalMs: number;
 }
 
-export interface StartMemoryConsolidatorArgs {
+interface StartMemoryConsolidatorArgs {
   db: CodeIndexDB;
   sessionStore: FsSessionStore;
   snapshotService: SnapshotService;

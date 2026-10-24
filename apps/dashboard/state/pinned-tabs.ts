@@ -125,7 +125,7 @@ export const usePinnedTabs = create<PinnedTabsStore>((set, get) => ({
 }));
 
 /** Plain snapshot for non-hook callers (context-menu builders). */
-export function pinnedTabsSnapshot(): Pin[] {
+function pinnedTabsSnapshot(): Pin[] {
   return usePinnedTabs.getState().pins;
 }
 

@@ -2,8 +2,8 @@
  * Migrations 188 + 189 — service health/transitions/logs + QA run progress.
  *
  * Pin invariants:
- *   - The FULL runner (CodeIndexDB boot) lands ≥ 189 and produces the new
- *     columns, tables and indexes.
+ *   - The historical schema at 189 contains the new columns, tables and indexes.
+ *   - The current full runner retires these session tables at the filesystem cutover.
  *   - On a trimmed PROJECT DB (company_sandbox_services / qa_test_runs are
  *     in CENTRAL_DROP_TABLES) the ALTERs no-op instead of crashing — the
  *     migration-175 convention (see project-db/trim/drop-list.ts).
@@ -16,7 +16,8 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import type DatabaseConstructor from 'better-sqlite3';
 import { CodeIndexDB } from '../../db.js';
-import { getSchemaVersion } from '../index.js';
+import { getSchemaVersion, MIGRATIONS } from '../index.js';
+import { initSchema } from '../../db/schema/index.js';
 import { serviceHealthTransitionsLogs188 } from '../188_service_health_transitions_logs.js';
 import { qaRunProgressAndErrorClass189 } from '../189_qa_run_progress_and_error_class.js';
 
@@ -34,17 +35,27 @@ function hasIndex(db: DB, index: string): boolean {
   return !!db.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`).get(index);
 }
 
-describe('migrations 188+189 — full runner on a fresh DB', () => {
+describe('migrations 188+189 — historical schema and current cutover', () => {
   let dir: string;
   let db: CodeIndexDB;
+  let historical: DB;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'mcp-mig-188-189-test-'));
     db = new CodeIndexDB(join(dir, 'test.db')); // constructor runs the full lineage
+    historical = new Database(':memory:');
+    initSchema(historical);
+    historical.exec('CREATE TABLE schema_version (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT DEFAULT CURRENT_TIMESTAMP)');
+    for (const migration of [...MIGRATIONS].sort((a, b) => a.version - b.version)) {
+      if (migration.version > 189) break;
+      migration.up(historical);
+      historical.prepare('INSERT INTO schema_version (version, name) VALUES (?, ?)').run(migration.version, migration.name);
+    }
   });
 
   afterEach(() => {
     try { db.close(); } catch { /* */ }
+    historical.close();
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
   });
 
@@ -53,7 +64,7 @@ describe('migrations 188+189 — full runner on a fresh DB', () => {
   });
 
   it('adds the health columns to company_sandbox_services (mig 188)', () => {
-    const cols = colNames(db.raw(), 'company_sandbox_services');
+    const cols = colNames(historical, 'company_sandbox_services');
     expect(cols).toContain('health');
     expect(cols).toContain('health_detail');
     expect(cols).toContain('last_health_at_ms');
@@ -61,23 +72,29 @@ describe('migrations 188+189 — full runner on a fresh DB', () => {
   });
 
   it('creates the transitions + logs tables with their indexes (mig 188)', () => {
-    expect(hasTable(db.raw(), 'company_service_transitions')).toBe(true);
-    expect(hasTable(db.raw(), 'company_service_logs')).toBe(true);
-    expect(hasIndex(db.raw(), 'idx_company_service_transitions_session')).toBe(true);
-    expect(hasIndex(db.raw(), 'idx_company_service_logs_session')).toBe(true);
-    expect(colNames(db.raw(), 'company_service_transitions')).toEqual(
+    expect(hasTable(historical, 'company_service_transitions')).toBe(true);
+    expect(hasTable(historical, 'company_service_logs')).toBe(true);
+    expect(hasIndex(historical, 'idx_company_service_transitions_session')).toBe(true);
+    expect(hasIndex(historical, 'idx_company_service_logs_session')).toBe(true);
+    expect(colNames(historical, 'company_service_transitions')).toEqual(
       ['id', 'session_id', 'service_id', 'kind', 'from_state', 'to_state', 'reason', 'actor', 'at_ms'],
     );
-    expect(colNames(db.raw(), 'company_service_logs')).toEqual(
+    expect(colNames(historical, 'company_service_logs')).toEqual(
       ['id', 'session_id', 'service_id', 'stream', 'line', 'at_ms'],
     );
   });
 
   it('adds the progress columns to qa_test_runs (mig 189)', () => {
-    const cols = colNames(db.raw(), 'qa_test_runs');
+    const cols = colNames(historical, 'qa_test_runs');
     expect(cols).toContain('error_class');
     expect(cols).toContain('last_event_at');
     expect(cols).toContain('plan_gate');
+  });
+
+  it('retires the historical session health and QA schema in the current database', () => {
+    for (const table of ['company_sandbox_services', 'company_service_transitions', 'company_service_logs', 'qa_test_runs']) {
+      expect(hasTable(db.raw(), table)).toBe(false);
+    }
   });
 });
 

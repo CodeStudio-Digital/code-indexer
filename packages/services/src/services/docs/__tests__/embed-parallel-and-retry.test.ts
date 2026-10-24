@@ -230,8 +230,14 @@ describe('retryEmbeddings — parallel + scope', () => {
     // This fake store predates the semantic ledger projection, so accepted
     // vectors are mirrored on chunks but are not invented as semantic_items.
     expect(h.store.listVectorIdsForSource(s.id)).toHaveLength(0);
-    const historicalRows = h.db.raw().prepare('SELECT COUNT(*) AS count FROM doc_chunk_vectors').get() as { count: number };
-    expect(historicalRows.count).toBe(0);
+    const historicalTable = h.db.raw().prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'doc_chunk_vectors'",
+    ).get();
+    expect(historicalTable).toBeUndefined();
+    const ledgerRows = h.db.raw().prepare(
+      'SELECT COUNT(*) AS count FROM semantic_items WHERE namespace = ?',
+    ).get(`docs:c${c.id}`) as { count: number };
+    expect(ledgerRows.count).toBe(0);
   });
 
   it('force=true clears accepted hash state before retrying', async () => {

@@ -1,9 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, ChevronRight, Copy } from 'lucide-react';
-import { Badge } from '../../components/ui/badge.js';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog.js';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs.js';
+
 import { useApi } from '../../hooks/useApi.js';
 import { copyText } from '../../lib/clipboard.js';
 import { cn, formatRelativeTime } from '../../lib/utils.js';
@@ -63,97 +61,9 @@ export interface SessionLike {
   last_turn_input_tokens?: number;
 }
 
-interface SessionDetailsModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  sessionId: string | null;
-  session: SessionLike | null;
-  stats: SessionStatsLike | null;
-}
-
 function useSessionInputs(sessionId: string | null, active: boolean) {
   const inputsUrl = active && sessionId ? `/coder/sessions/${sessionId}/inputs` : '';
   return useApi<SessionInputRow[]>(inputsUrl);
-}
-
-/**
- * Headless body of the session-details surface. Reused by the legacy
- * modal AND the right-rail `details` panel. `active` gates the fetches
- * when the panel is collapsed. Plans moved to their own rail panel;
- * this keeps Summary + Inputs.
- */
-export function SessionDetailsView({
-  sessionId,
-  session,
-  stats,
-  active,
-}: {
-  sessionId: string | null;
-  session: SessionLike | null;
-  stats: SessionStatsLike | null;
-  active: boolean;
-}) {
-  const { t } = useTranslation(['chat', 'common']);
-  const { data: inputs, loading: inputsLoading } = useSessionInputs(sessionId, active);
-  return (
-    <Tabs defaultValue="summary" className="flex-1 flex flex-col min-h-0">
-      {/* Compact tab strip tuned for the right-rail width: smaller text,
-          shorter row, no icons (the labels are short enough to read).
-          `overflow-x-auto` still keeps the row scrollable on very narrow
-          panels. `bg-transparent` + `rounded-none` + bottom border match
-          the chrome of the parent `PanelChrome`. */}
-      <TabsList className="w-full justify-start overflow-x-auto shrink-0 h-8 rounded-none border-b bg-transparent px-2 gap-0.5">
-        <TabsTrigger value="summary" className="h-7 px-2 text-[11px]">
-          {t('chat:details.summary')}
-        </TabsTrigger>
-        <TabsTrigger value="inputs" className="h-7 px-2 text-[11px] gap-1">
-          {t('chat:details.inputs')}
-          {inputs && inputs.length > 0 && (
-            <Badge variant="muted" className="h-3.5 text-[9px] px-1">
-              {inputs.length}
-            </Badge>
-          )}
-        </TabsTrigger>
-      </TabsList>
-
-      <TabsContent value="summary" className="flex-1 overflow-y-auto mt-0 px-3 py-3">
-        {session ? (
-          <SessionSummaryView session={session} stats={stats} />
-        ) : (
-          <div className="text-xs text-muted-foreground">{t('chat:details.noData')}</div>
-        )}
-      </TabsContent>
-
-      <TabsContent value="inputs" className="flex-1 overflow-y-auto mt-0 px-3 py-3">
-        <SessionInputsContent inputs={inputs} loading={inputsLoading} />
-      </TabsContent>
-    </Tabs>
-  );
-}
-
-export function SessionDetailsModal({
-  open,
-  onOpenChange,
-  sessionId,
-  session,
-  stats,
-}: SessionDetailsModalProps) {
-  const { t } = useTranslation(['chat']);
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl max-h-[80vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle>{t('chat:details.title')}</DialogTitle>
-        </DialogHeader>
-        <SessionDetailsView
-          sessionId={sessionId}
-          session={session}
-          stats={stats}
-          active={open}
-        />
-      </DialogContent>
-    </Dialog>
-  );
 }
 
 /** Format token counts compactly (e.g. 180k, 1.2M). */

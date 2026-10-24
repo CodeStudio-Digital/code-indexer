@@ -14,7 +14,7 @@ const DEFAULT_PROGRESS_SAMPLE_MS = 5_000;
 
 type Sample = { at: number; signature: string };
 
-export type WorkerLogCapturePolicy = (
+type WorkerLogCapturePolicy = (
   eventName: string,
   data: Record<string, unknown>,
   now?: number,

@@ -1,6 +1,6 @@
 /** Migration 234 — terminal delivery assessment + deterministic runtime incidents. */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

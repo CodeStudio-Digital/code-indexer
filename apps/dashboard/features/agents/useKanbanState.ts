@@ -20,7 +20,7 @@ import {
   selectKanban,
 } from '../../state/company/index.js';
 
-export interface UseKanbanStateResult {
+interface UseKanbanStateResult {
   cards: KanbanCardFull[];
   loading: boolean;
   error: string | null;

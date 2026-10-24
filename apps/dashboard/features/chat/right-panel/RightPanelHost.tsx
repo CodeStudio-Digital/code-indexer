@@ -11,18 +11,7 @@
  * position or partial state per panel, this is the place to add
  * mounting that respects an `mounted: Set<RightPanelId>` cache.
  */
-import {
-  Bell,
-  Bot,
-  BookOpen,
-  ChartNoAxesCombined,
-  ClipboardList,
-  Compass,
-  HardDrive,
-  ScrollText,
-  Settings,
-  Workflow,
-} from 'lucide-react';
+import { Bell, Bot, BookOpen, ChartNoAxesCombined, ClipboardList, Compass, HardDrive, ScrollText, Settings, Workflow } from 'lucide-react';
 import { lazy, memo, Suspense, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PanelChrome } from './PanelChrome.js';
@@ -90,19 +79,11 @@ import { WebviewWindow } from '../../workspace/jetbrains/tool-windows/WebviewWin
 import { pluginWindowIcon } from '../../workspace/plugin-icon.js';
 import type { ContribToolWindow } from '../../../state/contribution-registry.js';
 import type { RightPanelId } from './types.js';
-import type {
-  AgentChatPreviewConfig,
-  CoderSession,
-  CoderSessionStats,
-  SessionData,
-} from '../types.js';
-import type {
-  ActiveProcess,
-  TodoItem,
-} from '../../../hooks/agent-stream/types.js';
+import type { AgentChatPreviewConfig, CoderSession, CoderSessionStats, SessionData } from '../types.js';
+import type { ActiveProcess, TodoItem } from '../../../hooks/agent-stream/types.js';
 import { useAgentCurrentTurn } from '../../../hooks/useAgentStream.js';
 
-export interface RightPanelHostProps {
+interface RightPanelHostProps {
   activeId: RightPanelId;
   sessionId: string;
   session: CoderSession | null;

@@ -31,7 +31,7 @@ interface Args {
 }
 
 /** Absolute path for display/copy — remote paths already are absolute posix. */
-export function absPathOf(adapter: FsAdapter, item: FsItem): string {
+function absPathOf(adapter: FsAdapter, item: FsItem): string {
   if (adapter.kind === 'remote') return item.path;
   try {
     return adapter.toLocalAbs(item.path);

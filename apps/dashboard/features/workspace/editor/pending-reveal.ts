@@ -8,7 +8,7 @@
  * tab-switch unmount/remount dance without threading props through the
  * workspace layout.
  */
-export interface PendingReveal {
+interface PendingReveal {
   line: number;
   column: number;
 }

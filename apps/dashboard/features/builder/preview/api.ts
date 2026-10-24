@@ -6,7 +6,7 @@ export interface TreeEntry {
   size: number | null;
 }
 
-export interface TreeResponse {
+interface TreeResponse {
   path: string;
   entries: TreeEntry[];
 }
@@ -34,7 +34,7 @@ export interface GitStatusResponse {
   files: GitFileStatus[];
 }
 
-export interface GitDiffResponse {
+interface GitDiffResponse {
   diff: string;
   truncated: boolean;
 }

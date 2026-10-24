@@ -13,7 +13,7 @@ export interface ScaffoldSseStream {
  * Structural envelope the pump accepts — `ScaffoldStreamEvent` (projects)
  * and `DsStudioStreamEvent` (DS Studio, richer `done`) are both assignable.
  */
-export interface ScaffoldSseEvent {
+interface ScaffoldSseEvent {
   event: string;
   data: unknown;
 }

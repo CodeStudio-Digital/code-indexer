@@ -20,7 +20,7 @@ import { registerPluginFrame, resolveFrame, unregisterPluginFrame } from './webv
 // Frame identity lives in webview-frame-registry; re-exported so existing
 // importers (WebviewWindow) keep a single import surface.
 export { registerPluginFrame, unregisterPluginFrame };
-export type { PluginFrameInfo } from './webview-frame-registry.js';
+
 
 const READ_ONLY = new Set<string>([
   'plugins.list',

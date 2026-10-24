@@ -19,7 +19,7 @@ import {
 import { evaluateKill } from '../../perf/census/kill-guard.js';
 import { executeKill, type KillMode } from '../../perf/census/kill-executor.js';
 
-export type ProcessRoutesDeps = ProcessSnapshotSources;
+type ProcessRoutesDeps = ProcessSnapshotSources;
 
 const DEFAULT_INTERVAL_MS = 2_000;
 

@@ -7,7 +7,7 @@ interface SqlToken {
   value: string;
 }
 
-export interface SqlResultEditability {
+interface SqlResultEditability {
   /** The statement maps each result row to the currently opened table. */
   singleTable: boolean;
   /** Every table column is present, so FK navigation has all required values. */

@@ -2,7 +2,9 @@ import { cpSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
 import { dirname, join } from 'node:path';
 import { isUnityProjectRoot } from '@mcp/shared/utils/project-ignore.js';
-import { binaryAssetFor, JDTLS_LOMBOK_RELPATH, type LspDynamicSpawnContext, type LspSpawnCommand } from './server-registry.js';
+import { binaryAssetFor } from './server-spawn.js';
+import { JDTLS_LOMBOK_RELPATH } from './lsp-server-constants.js';
+import type { LspDynamicSpawnContext, LspSpawnCommand } from './lsp-server-types.js';
 import { resolveCsharpWorkspace } from './csharp-workspace.js';
 
 function requireRuntime(ctx: LspDynamicSpawnContext): { command: string; env?: Record<string, string> } {

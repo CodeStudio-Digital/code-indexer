@@ -54,12 +54,15 @@ describe('httpReadinessProbe', () => {
 
 describe('LocalProcessManager', () => {
   let tmpRoot: string;
+  let managers: LocalProcessManager[];
 
   beforeEach(() => {
     tmpRoot = mkdtempSync(join(tmpdir(), 'mcp-lpm-'));
+    managers = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.all(managers.map((manager) => manager.killAll('test-teardown')));
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
@@ -79,6 +82,7 @@ describe('LocalProcessManager', () => {
 
     const allocator = new PortAllocator({ min: 45_300, max: 45_310, cooldownMs: 0 });
     const mgr = new LocalProcessManager({ allocator });
+    managers.push(mgr);
     const events: SandboxEvent[] = [];
     const unsub = mgr.subscribe((e) => events.push(e));
 
@@ -87,7 +91,7 @@ describe('LocalProcessManager', () => {
       cwd: tmpRoot,
       manifestKind: 'node',
       program: 'node',
-      args: ['server.js'],
+      args: [serverJs],
       env: {},
       rationale: 'test',
       synthSource: 'fallback',
@@ -95,7 +99,7 @@ describe('LocalProcessManager', () => {
     });
 
     expect(result.pid).toBeGreaterThan(0);
-    expect(result.previewUrl).toBe('/preview/test-1/');
+    expect(result.previewUrl).toBe(`http://127.0.0.1:${result.hostPort}/`);
     expect(result.hostPort).toBeGreaterThanOrEqual(45_300);
     expect(result.hostPort).toBeLessThanOrEqual(45_310);
 
@@ -113,6 +117,7 @@ describe('LocalProcessManager', () => {
     // Stop it cleanly.
     await mgr.stop('test-1', 'test-teardown');
     expect(mgr.get('test-1')).toBeUndefined();
+    expect(() => process.kill(result.pid, 0)).toThrow();
     expect(events.some((e) => e.kind === 'destroyed')).toBe(true);
 
     // Port returned to pool (cooldown=0 so we can re-acquire).
@@ -139,6 +144,7 @@ describe('LocalProcessManager', () => {
 
     const allocator = new PortAllocator({ min: 45_320, max: 45_325, cooldownMs: 0 });
     const mgr = new LocalProcessManager({ allocator });
+    managers.push(mgr);
 
     await expect(
       mgr.start({
@@ -146,7 +152,7 @@ describe('LocalProcessManager', () => {
         cwd: tmpRoot,
         manifestKind: 'node',
         program: 'node',
-        args: ['server.js'],
+        args: [serverJs],
         env: {},
         rationale: 'hardcoded-port',
         synthSource: 'fallback',
@@ -174,13 +180,14 @@ describe('LocalProcessManager', () => {
 
     const allocator = new PortAllocator({ min: 45_340, max: 45_345, cooldownMs: 0 });
     const mgr = new LocalProcessManager({ allocator });
+    managers.push(mgr);
 
     await mgr.start({
       sessionId: 'dup',
       cwd: tmpRoot,
       manifestKind: 'node',
       program: 'node',
-      args: ['server.js'],
+      args: [serverJs],
       env: {},
       rationale: 't',
       synthSource: 'fallback',
@@ -193,7 +200,7 @@ describe('LocalProcessManager', () => {
         cwd: tmpRoot,
         manifestKind: 'node',
         program: 'node',
-        args: ['server.js'],
+        args: [serverJs],
         env: {},
         rationale: 't',
         synthSource: 'fallback',

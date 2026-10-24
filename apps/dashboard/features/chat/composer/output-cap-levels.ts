@@ -9,9 +9,9 @@
  */
 export type OutputCapLevel = 'economic' | 'medium' | 'high' | 'extra' | 'max' | 'ultra';
 
-export const DEFAULT_OUTPUT_CAP_LEVEL: OutputCapLevel = 'economic';
+const DEFAULT_OUTPUT_CAP_LEVEL: OutputCapLevel = 'economic';
 
-export interface OutputCapLevelMeta {
+interface OutputCapLevelMeta {
   key: OutputCapLevel;
   /** i18n key in the `chat` namespace. */
   labelKey: string;

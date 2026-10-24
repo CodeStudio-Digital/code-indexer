@@ -4,7 +4,7 @@
  * DB is opened (the module still loads @mcp/store transitively, so this suite
  * needs the better-sqlite3 ABI built for the test runner — `pnpm node:rebuild`).
  */
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type {
   SkillDefinition,
   SkillListFilter,
@@ -30,11 +30,6 @@ function fakeEnumerate(names: string[]): (dbPath: string) => { tools: any[]; det
   });
 }
 
-const ENV_KEYS = ['CODER_PREFLIGHT_EXT_CATALOG_MAX', 'CODER_PREFLIGHT_SKILLS_MAX'] as const;
-afterEach(() => {
-  for (const k of ENV_KEYS) delete process.env[k];
-});
-
 describe('buildPreflightToolCatalog', () => {
   it('appends external tools after native, sorted by name', () => {
     const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate(['ext_b__y', 'ext_a__x']));
@@ -47,15 +42,15 @@ describe('buildPreflightToolCatalog', () => {
     expect(out.map((t) => t.name)).toContain('ext_a__x');
   });
 
-  it('respects CODER_PREFLIGHT_EXT_CATALOG_MAX', () => {
-    process.env.CODER_PREFLIGHT_EXT_CATALOG_MAX = '1';
-    const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate(['ext_a__x', 'ext_b__y']));
-    expect(out.filter((t) => t.name.startsWith('ext_'))).toHaveLength(1);
+  it('caps sorted external tools at 40 without counting native tools', () => {
+    const names = Array.from({ length: 43 }, (_, i) => `ext_${String(i).padStart(2, '0')}`);
+    const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate([...names].reverse()));
+    expect(out.slice(0, NATIVE.length)).toEqual(NATIVE);
+    expect(out.slice(NATIVE.length).map((tool) => tool.name)).toEqual(names.slice(0, 40));
   });
 
-  it('honors 0 as show-none (hides all external tools)', () => {
-    process.env.CODER_PREFLIGHT_EXT_CATALOG_MAX = '0';
-    const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate(['ext_a__x', 'ext_b__y']));
+  it('retains native tools when no external tools are available', () => {
+    const out = buildPreflightToolCatalog('db', NATIVE, fakeEnumerate([]));
     expect(out).toEqual(NATIVE);
     expect(out.some((t) => t.name.startsWith('ext_'))).toBe(false);
   });
@@ -129,21 +124,16 @@ describe('buildPreflightSkillCatalog', () => {
     });
   });
 
-  it('respects CODER_PREFLIGHT_SKILLS_MAX', () => {
-    process.env.CODER_PREFLIGHT_SKILLS_MAX = '1';
+  it('caps active skill suggestions at 30', () => {
     const out = buildPreflightSkillCatalog(
-      fakeStore([
-        { id: 'a', description: 'x' },
-        { id: 'b', description: 'y' },
-      ]),
+      fakeStore(Array.from({ length: 34 }, (_, i) => ({ id: `skill-${i}`, description: 'skill' }))),
       7,
     );
-    expect(out).toHaveLength(1);
+    expect(out).toHaveLength(30);
   });
 
-  it('honors 0 as show-none (disables skill suggestions)', () => {
-    process.env.CODER_PREFLIGHT_SKILLS_MAX = '0';
-    expect(buildPreflightSkillCatalog(fakeStore([{ id: 'a', description: 'x' }]), 7)).toEqual([]);
+  it('disables suggestions when the session explicitly selects no skills', () => {
+    expect(buildPreflightSkillCatalog(fakeStore([{ id: 'a', description: 'x' }]), 7, [])).toEqual([]);
   });
 
   it('uses the filesystem active-skill projection instead of session SQLite overrides', () => {

@@ -7,7 +7,7 @@ import { Button } from '../../components/ui/button.js';
 import { useApi } from '../../hooks/useApi.js';
 import { Markdown } from '../chat/messages/Markdown.js';
 import { SessionStateBanner } from '../chat/SessionStateBanner.js';
-import type { CoderMessageRow } from '@mcp/code-agent';
+import type { CoderTranscriptRow as CoderMessageRow } from '@mcp/api-bus';
 
 interface SessionData {
   session: {
@@ -197,7 +197,7 @@ function BlockView({ block }: { block: ContentBlock }) {
     return (
       <div className="my-1 px-2 py-1 rounded bg-muted/50 font-mono text-[10px]">
         <span className="text-muted-foreground">tool:</span> {block.name}
-        {block.input && (
+        {block.input != null && (
           <details className="mt-0.5">
             <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
               input

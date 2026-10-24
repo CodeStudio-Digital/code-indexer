@@ -29,16 +29,16 @@ import {
 } from '../_helpers.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 
-export type CompanyDocOrigin = 'sandbox' | 'drive_mirror';
+type CompanyDocOrigin = 'sandbox' | 'drive_mirror';
 
-export interface CompanyDocEntry {
+interface CompanyDocEntry {
   path: string;
   origin: CompanyDocOrigin;
   /** Mirror rows carry the drive's updated_at; sandbox reads have none. */
   mtime: string | null;
 }
 
-export interface CompanyDocContent {
+interface CompanyDocContent {
   content: string;
   origin: CompanyDocOrigin;
   mtime: string | null;
@@ -112,7 +112,7 @@ function listMirrorDocs(deps: ServerDeps, sessionId: CompanySessionId, serviceId
  * same path (the container copy is the live one); mirror-only entries
  * keep the docs browsable after a sandbox destroy/restart.
  */
-export async function listCompanyDocs(
+async function listCompanyDocs(
   deps: ServerDeps,
   sessionId: CompanySessionId,
   serviceId: string | null,

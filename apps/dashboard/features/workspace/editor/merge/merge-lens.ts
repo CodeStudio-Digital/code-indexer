@@ -11,7 +11,7 @@ import type { Choice } from './merge-decorations.js';
 
 export type LensAction = 'ours' | 'theirs' | 'both' | 'reject';
 
-export interface MergeLensActions {
+interface MergeLensActions {
   /** Unresolved-aware list of conflict lenses to render (live ranges). */
   conflicts(): { id: string; line: number; choice: Choice }[];
   labels: { ours: string; theirs: string; both: string; reject: string };
@@ -25,13 +25,12 @@ let fire: (() => void) | null = null;
 function ensure(monaco: typeof MonacoNs): void {
   if (registered) return;
   registered = true;
-  const emitter = new monaco.Emitter<void>();
-  fire = () => emitter.fire();
+  const emitter = new monaco.Emitter<MonacoNs.languages.CodeLensProvider>();
   const cmdId = 'mcp.merge.lensAction';
   monaco.editor.registerCommand(cmdId, (_acc, uri: string, id: string, action: LensAction) => {
     byUri.get(uri)?.run(id, action);
   });
-  monaco.languages.registerCodeLensProvider('*', {
+  const provider: MonacoNs.languages.CodeLensProvider = {
     onDidChange: emitter.event,
     provideCodeLenses: (model) => {
       const actions = byUri.get(model.uri.toString());
@@ -51,7 +50,9 @@ function ensure(monaco: typeof MonacoNs): void {
       });
       return { lenses, dispose() { /* */ } };
     },
-  });
+  };
+  fire = () => emitter.fire(provider);
+  monaco.languages.registerCodeLensProvider('*', provider);
 }
 
 export function attachMergeLens(

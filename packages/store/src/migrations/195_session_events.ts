@@ -13,7 +13,7 @@
  * No FK to `coder_sessions`: the trail must survive session-row cleanup.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

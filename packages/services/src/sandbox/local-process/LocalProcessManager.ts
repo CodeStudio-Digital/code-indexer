@@ -39,7 +39,7 @@ import type {
   LocalProjectSynthSource,
   LocalProjectStatus,
 } from '@mcp/store/company-local-project-store.js';
-import { killProcessTree } from '@mcp/shared/utils/process-tree.js';
+import { stopLocalChild } from './stop-child.js';
 
 // ─────────────────────────────────────────────────────────── store wiring
 
@@ -329,27 +329,7 @@ export class LocalProcessManager {
       this.emit({ kind: 'destroying', sandboxId: sessionId, reason });
     }
 
-    if (child && !child.killed) {
-      const pid = child.pid;
-      // Signal the whole tree while the parent relationship still exists.
-      killProcessTree(pid, 'SIGTERM');
-      await new Promise<void>((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          resolve();
-        };
-        const timer = setTimeout(() => {
-          killProcessTree(pid, 'SIGKILL');
-          finish();
-        }, 5_000);
-        child.once('exit', () => {
-          clearTimeout(timer);
-          finish();
-        });
-      });
-    }
+    if (child) await stopLocalChild(child);
 
     this.children.delete(sessionId);
     if (live) {

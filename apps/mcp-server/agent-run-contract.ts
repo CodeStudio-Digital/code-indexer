@@ -16,7 +16,7 @@ export interface StartMcpAgentRunInput {
   reasoningEffort?: string;
 }
 
-export interface McpAgentSessionCreatePayload {
+interface McpAgentSessionCreatePayload {
   project_id: number;
   title: string;
   provider: string;

@@ -38,7 +38,7 @@ const AppearancePane = lazy(() => import('./panes/AppearancePane.js').then((modu
 const EditorThemePane = lazy(() => import('./panes/EditorThemePane.js').then((module) => ({ default: module.EditorThemePane })));
 const KeymapPane = lazy(() => import('../../search-everywhere/KeymapDialog.js').then((module) => ({ default: module.KeymapPane })));
 
-export type SettingsSection =
+type SettingsSection =
   | 'general'
   | 'search'
   | 'node'
@@ -138,7 +138,11 @@ export function ProjectSettingsModal({
     [initialProject.id, onSaved],
   );
 
-  const navGroups = useMemo(() => [
+  const navGroups = useMemo<Array<{
+    id: string;
+    label: string;
+    items: Array<{ id: SettingsSection; label: string; Icon: typeof Settings2 }>;
+  }>>(() => [
     {
       id: 'project',
       label: t('settings.group.project'),

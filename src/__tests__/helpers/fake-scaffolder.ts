@@ -14,7 +14,7 @@ import type {
   ScaffoldContext,
 } from '@mcp/services/sandbox/scaffolders/scaffolder-port.js';
 
-export interface FakeScaffolderCall {
+interface FakeScaffolderCall {
   sandboxId: string;
   containerId: string;
   workdir: string;

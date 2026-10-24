@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@mcp/services/providers/factory.js', () => ({
-  createChatProviderAsync: mocks.createProvider,
+  createCoderProvider: mocks.createProvider,
 }));
 
 vi.mock('../../../../sse/coderWorkerPoolSingleton.js', () => ({

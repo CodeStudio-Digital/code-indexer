@@ -21,7 +21,7 @@
 import { enterInFlight, exitInFlight, noteExit } from './freeze-log.js';
 import { recordPersistentSlowCall } from './persistent-diagnostics.js';
 
-export interface SlowCallRow {
+interface SlowCallRow {
   channel: string;
   count: number;
   totalMs: number;

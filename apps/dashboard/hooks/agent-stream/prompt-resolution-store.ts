@@ -124,7 +124,7 @@ export function setPromptDraft(id: string, value: unknown): void {
   evictOldest(drafts);
 }
 
-export function clearPromptDraft(id: string): void {
+function clearPromptDraft(id: string): void {
   drafts.delete(idKey(id));
 }
 

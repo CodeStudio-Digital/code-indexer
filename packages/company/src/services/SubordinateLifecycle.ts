@@ -19,7 +19,7 @@
  *   - IIdleController → fire on subordinate count changes
  */
 
-import type { CoderAttachment, RunCoderHandle } from '@mcp/code-agent/index.js';
+import type { CoderAttachment, RunCoderHandle } from '@mcp/code-agent/index/types.js';
 import { RetryPolicy } from '@mcp/company/RetryPolicy.js';
 import { ConcurrencyPolicy } from '@mcp/company/ConcurrencyPolicy.js';
 import {

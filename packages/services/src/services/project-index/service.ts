@@ -1,235 +1,15 @@
-import { isAbsolute, join, relative } from 'node:path';
-import { stat } from 'node:fs/promises';
-import type { CodeIndexDB } from '@mcp/store/db.js';
-import { projectIndexIgnorePatterns } from '@mcp/shared/utils/index-ignore.js';
+
+
 import { isUnityProjectRoot } from '@mcp/shared/utils/project-ignore.js';
-import { FileWatcherService, type WatcherFileEvent } from '../watcher.js';
-import { GitMetaWatcher, type GitMetaEvent } from '../git-meta-watcher.js';
-import { KeyedMutex } from './project-mutex.js';
-import { ProjectIndexStatusStore } from './status-store.js';
-import { DirtyQueue } from './dirty-queue.js';
-import {
-  readProjectIndexSettings,
-  type ActiveIndexRun,
-  type DirtyEvent,
-  type FsEvent,
-  type ProjectIndexSettings,
-  type ProjectIndexStatus,
-  type StructuralExecutor,
-  type StructuralProgressFrame,
-} from './types.js';
-import {
-  isStructurallyReady,
-  waitForStructuralReadiness,
-  type StructuralReadinessResult,
-} from './structural-readiness.js';
 
-export type EnsureFreshReason = 'open' | 'scaffold' | 'session' | 'manual' | 'branch' | 'workspace' | 'poll';
+import { type ActiveIndexRun, type DirtyEvent, type ProjectIndexSettings, type ProjectIndexStatus, type StructuralProgressFrame } from './types.js';
+import { isStructurallyReady, waitForStructuralReadiness, type StructuralReadinessResult } from './structural-readiness.js';
+import { type EnsureFreshReason, type SemanticCatchupHooks, DRAIN_BATCH, PROGRESS_MIN_INTERVAL_MS, LARGE_PROJECT_FILE_COUNT, envDelay, yieldToEventLoop, msg } from './service-support.js';
+import { ProjectIndexWatchers } from './service-watchers.js';
+export type { EnsureFreshReason, SemanticCatchupHooks } from './service-support.js';
 
-export interface SemanticCatchupHooks {
-  noteDelta(
-    projectId: number,
-    events: readonly DirtyEvent[],
-    previousItemKeys?: readonly string[],
-  ): void;
-  ensureProject(projectId: number): Promise<void>;
-  /** Open-project lifecycle hand-off after an integral structural baseline exists. */
-  projectReady?(projectId: number): void | Promise<void>;
-  /** Final view/lease release; semantic backfill may pause after its current batch. */
-  projectInactive?(projectId: number): void | Promise<void>;
-}
-
-const DRAIN_BATCH = 200;
-const PROGRESS_MIN_INTERVAL_MS = 150;
-const LARGE_PROJECT_FILE_COUNT = 5_000;
-
-function envDelay(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined || raw.trim() === '') return fallback;
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
-}
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
-}
-
-function msg(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
-/** Chokidar absolute path → index-form relative path; null when outside the root (or cross-drive). */
-function toRelPath(root: string, absPath: string): string | null {
-  const rel = relative(root, absPath);
-  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return null;
-  return rel.replace(/\\/g, '/');
-}
-
-/**
- * IntelliJ-style auto indexing: "project opened" triggers an idempotent
- * structural run; a chokidar watcher + dirty queue keep symbols/FTS fresh in
- * real time; everything per-project serializes on one mutex (structural run ×
- * incremental drain × manual full index). Metadata reads are intentionally
- * pure; explicit view activation and session/manual events schedule work.
- * `ensureFresh` stays fire-and-forget and never awaits on its callers.
- */
-export class ProjectIndexService {
-  private mutex = new KeyedMutex<number>();
-  private dirty = new DirtyQueue();
-  private status: ProjectIndexStatusStore;
-  private running = new Set<number>();
-  private runReason = new Map<number, EnsureFreshReason>();
-  private draining = new Set<number>();
-  /** One stat-first reconciliation per open lifecycle, regardless of turns. */
-  private reconciledLifecycle = new Set<number>();
-  /** A branch switch received during a run collapses into one follow-up pass. */
-  private queuedReconcile = new Map<number, 'branch' | 'workspace'>();
-  private lastProgressAt = new Map<number, number>();
-  /** Deferred-open timers (MCP_INDEX_OPEN_DELAY_MS) — cancelled when a run starts. */
-  private pendingOpen = new Map<number, ReturnType<typeof setTimeout>>();
-  /** View-activation timers are separate so unmount cannot cancel session work. */
-  private pendingActivation = new Map<number, ReturnType<typeof setTimeout>>();
-  /** Active ProjectView instances; multiple windows can show one project. */
-  private activations = new Map<number, Set<string>>();
-  /** Deferred heavy working-tree watcher start (MCP_WATCH_OPEN_DELAY_MS). */
-  private fileWatchOpenTimers = new Map<number, ReturnType<typeof setTimeout>>();
-  /** Idle stop timers for recursive file watchers after the UI unsubscribes. */
-  private fileWatchIdleTimers = new Map<number, ReturnType<typeof setTimeout>>();
-  /** MRU-first list of watched projects (LRU eviction beyond the cap). */
-  private watchOrder: number[] = [];
-  /** UI fs-events subscribers (live tree / tab reload), per project. */
-  private fsListeners = new Map<number, Set<(events: FsEvent[]) => void>>();
-  /** UI git-meta subscribers (branch chip / git window refresh), per project. */
-  private gitMetaListeners = new Map<number, Set<(event: GitMetaEvent) => void>>();
-  private disposed = false;
-  private semanticCatchup: SemanticCatchupHooks | null = null;
-  private semanticLifecycleActive = new Set<number>();
-  /** Open-document paths per project (DI from the LSP document store). */
-  private openPathsProvider: ((projectId: number) => string[]) | null = null;
-  /** Over-budget freshness fallback: one shared mtime-poll timer. */
-  private fallbackPollTimer: ReturnType<typeof setInterval> | null = null;
-  /** projectId → relPath → last observed mtime (fallback poll baseline). */
-  private fallbackMtimes = new Map<number, Map<string, number | null>>();
-  private fallbackReconcileAt = new Map<number, number>();
-  private fallbackPollRunning = false;
-  /** Nested foreground filesystem operations per project (Git stage/commit). */
-  private interactivePriorityDepth = new Map<number, number>();
-
-  constructor(
-    private db: CodeIndexDB,
-    private executor: StructuralExecutor,
-    private watcher: FileWatcherService = new FileWatcherService(),
-    private settings: () => ProjectIndexSettings = readProjectIndexSettings,
-    private gitMetaWatcher: GitMetaWatcher = new GitMetaWatcher(),
-  ) {
-    this.status = new ProjectIndexStatusStore(db);
-    this.startFallbackPoll();
-  }
-
-  /** Late-bound upgrade: in-process fallback → indexer worker client. */
-  setExecutor(executor: StructuralExecutor): void {
-    for (const projectId of this.interactivePriorityDepth.keys()) {
-      this.setInteractivePriority(projectId, false);
-    }
-    this.executor = executor;
-    for (const projectId of this.interactivePriorityDepth.keys()) {
-      this.setInteractivePriority(projectId, true);
-    }
-  }
-
-  /**
-   * Over-budget freshness fallback (the counterpart of the watch-budget guard):
-   * projects whose tree exceeds MCP_WATCH_MAX_FILES get NO chokidar handle, so
-   * external edits to the files the user actually has open would go stale until
-   * the next reconcile. With a provider wired (LSP document store), a light
-   * mtime poll over those open files feeds markDirty — bounded work (open docs
-   * only), regardless of how huge the asset tree is.
-   */
-  setOpenPathsProvider(fn: ((projectId: number) => string[]) | null): void {
-    this.openPathsProvider = fn;
-  }
-
-  private startFallbackPoll(): void {
-    if (this.disposed || this.fallbackPollTimer) return;
-    const interval = envDelay('MCP_WATCH_FALLBACK_POLL_MS', 3_000);
-    if (interval <= 0) return;
-    const timer = setInterval(() => {
-      void this.pollSkippedProjects().catch((error) =>
-        console.warn(`[project-index] fallback freshness check failed: ${msg(error)}`));
-    }, interval);
-    timer.unref?.();
-    this.fallbackPollTimer = timer;
-  }
-
-  /** Bounded open-file checks plus periodic worker reconciliation for skipped trees. */
-  private async pollSkippedProjects(): Promise<void> {
-    if (this.disposed || this.fallbackPollRunning) return;
-    const watcher = this.watcher as FileWatcherService & { isSkipped?: (id: number) => boolean };
-    if (!watcher.isSkipped) return;
-    this.fallbackPollRunning = true;
-    try {
-      const settings = this.settings();
-      const reconcileMs = Math.max(10_000, envDelay('MCP_WATCH_FALLBACK_RECONCILE_MS', 60_000));
-      let scheduledReconcile = false;
-      for (const projectId of this.activations.keys()) {
-        if (!watcher.isSkipped(projectId)) continue;
-        const project = this.db.getProject(projectId);
-        if (!project?.root_path) continue;
-        // Closed files, creations and deletions also need an authoritative scan.
-        // One worker pass at a time; yield to foreground operations and lifecycle scans.
-        const last = this.fallbackReconcileAt.get(projectId);
-        if (last === undefined) this.fallbackReconcileAt.set(projectId, Date.now());
-        else if (settings.autoIndex && !scheduledReconcile && this.running.size === 0
-          && this.draining.size === 0 && this.interactivePriorityDepth.size === 0
-          && !this.pendingOpen.has(projectId) && !this.pendingActivation.has(projectId)
-          && Date.now() - last >= reconcileMs) {
-          this.fallbackReconcileAt.set(projectId, Date.now());
-          this.startStructuralRun(projectId, settings, false, 'poll');
-          scheduledReconcile = true;
-        }
-        let paths: string[];
-        try {
-          paths = this.openPathsProvider?.(projectId).slice(0, 64) ?? [];
-        } catch {
-          continue;
-        }
-        let seen = this.fallbackMtimes.get(projectId);
-        if (!seen) {
-          seen = new Map();
-          this.fallbackMtimes.set(projectId, seen);
-        }
-        const dirty: DirtyEvent[] = [];
-        const currentPaths = new Set(paths.map((raw) => raw.replace(/\\/g, '/')));
-        for (const old of seen.keys()) if (!currentPaths.has(old)) seen.delete(old);
-        for (const raw of paths) {
-          if (this.disposed || !this.activations.has(projectId)) return;
-          const rel = raw.replace(/\\/g, '/');
-          const abs = join(project.root_path, rel);
-          if (!toRelPath(project.root_path, abs)) continue;
-          const st = await stat(abs).catch((error: NodeJS.ErrnoException) => {
-            if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return null;
-            return undefined; // A transient access failure is not a deletion.
-          });
-          if (st === undefined) continue;
-          const mtime = st?.isFile() ? Math.trunc(st.mtimeMs) : null;
-          const prev = seen.get(rel);
-          if (prev === undefined) {
-            // First sighting = baseline only — the open buffer is current.
-            seen.set(rel, mtime);
-            continue;
-          }
-          if (mtime === null && prev !== null) {
-            seen.set(rel, null);
-            dirty.push({ path: rel, kind: 'delete' });
-          } else if (mtime !== prev) {
-            seen.set(rel, mtime);
-            dirty.push({ path: rel, kind: 'upsert' });
-          }
-        }
-        if (dirty.length > 0) this.markDirty(projectId, dirty);
-      }
-    } finally { this.fallbackPollRunning = false; }
-  }
+/** Coordinates structural indexing and semantic catch-up for active projects. */
+export class ProjectIndexService extends ProjectIndexWatchers {
 
   setSemanticCatchup(hooks: SemanticCatchupHooks | null): void {
     this.semanticCatchup = hooks;
@@ -427,7 +207,7 @@ export class ProjectIndexService {
   }
 
   /** Kick the locked structural run + drain. Cancels any deferred-open timer. */
-  private startStructuralRun(
+  protected startStructuralRun(
     projectId: number,
     s: ProjectIndexSettings,
     manual: boolean,
@@ -507,236 +287,6 @@ export class ProjectIndexService {
     this.scheduleDrain(projectId);
   }
 
-  /** Live filesystem events for the UI. Subscribing arms the watcher. */
-  subscribeFsEvents(projectId: number, fn: (events: FsEvent[]) => void): () => void {
-    let set = this.fsListeners.get(projectId);
-    if (!set) {
-      set = new Set();
-      this.fsListeners.set(projectId, set);
-    }
-    set.add(fn);
-    const idle = this.fileWatchIdleTimers.get(projectId);
-    if (idle) {
-      clearTimeout(idle);
-      this.fileWatchIdleTimers.delete(projectId);
-    }
-    this.ensureFileWatching(projectId, this.settings().watchOpenDelayMs);
-    return () => {
-      set!.delete(fn);
-      if (set!.size === 0) {
-        this.fsListeners.delete(projectId);
-        this.scheduleFileWatcherStop(projectId);
-      }
-    };
-  }
-
-  /** Manual publication for mutations the watcher can't see fast (mkdir). */
-  publishFsEvents(projectId: number, events: FsEvent[]): void {
-    if (events.length === 0) return;
-    const set = this.fsListeners.get(projectId);
-    if (!set) return;
-    for (const fn of set) {
-      try { fn(events); } catch { /* UI listeners never break indexing */ }
-    }
-  }
-
-  /** Live git-metadata events for the UI (branch chip, git window). Subscribing arms the watcher. */
-  subscribeGitMeta(projectId: number, fn: (event: GitMetaEvent) => void): () => void {
-    let set = this.gitMetaListeners.get(projectId);
-    if (!set) {
-      set = new Set();
-      this.gitMetaListeners.set(projectId, set);
-    }
-    set.add(fn);
-    this.ensureGitMetaWatching(projectId);
-    // Seed this subscriber with the current branch (changed:[]) so the UI can
-    // distinguish a genuine switch (→ toast) from its first frame (→ just sync).
-    const project = this.db.getProject(projectId);
-    if (project?.root_path) {
-      const seed = this.gitMetaWatcher.readCurrent(project.root_path);
-      if (seed) { try { fn(seed); } catch { /* ignore */ } }
-    }
-    return () => {
-      set!.delete(fn);
-      if (set!.size === 0) {
-        this.gitMetaListeners.delete(projectId);
-        if (!this.shouldKeepWatcher(projectId)) this.scheduleFileWatcherStop(projectId);
-      }
-    };
-  }
-
-  private publishGitMeta(projectId: number, event: GitMetaEvent): void {
-    const set = this.gitMetaListeners.get(projectId);
-    if (!set) return;
-    for (const fn of set) {
-      try { fn(event); } catch { /* UI listeners never break the watcher */ }
-    }
-  }
-
-  /** Branch switch (HEAD changed) → explicit re-index; any git-dir change → UI refresh. */
-  private onGitMetaChange(projectId: number, event: GitMetaEvent): void {
-    this.publishGitMeta(projectId, event);
-    // HEAD change ⇒ one coalesced stat-first reconciliation. If the lifecycle
-    // pass is already running, one follow-up is queued; repeated HEAD events
-    // during that branch pass are ignored while watcher deltas keep flowing.
-    if (event.changed.includes('head')) this.ensureFresh(projectId, 'branch');
-  }
-
-  private touchWatchOrder(projectId: number, s: ProjectIndexSettings): void {
-    this.watchOrder = [projectId, ...this.watchOrder.filter((id) => id !== projectId)];
-    while (this.watchOrder.length > s.maxWatchedProjects) {
-      const candidate = [...this.watchOrder]
-        .reverse()
-        .find((id) => id !== projectId && !this.shouldKeepWatcher(id));
-      // The cap is deliberately soft while every watched project is active.
-      // Evicting an active project used to delete its activation ownership and
-      // cancel its pending baseline; correctness wins over the handle target.
-      if (candidate == null) break;
-      this.watchOrder = this.watchOrder.filter((id) => id !== candidate);
-      void this.stopIdleWatcherHandles(candidate);
-    }
-  }
-
-  private shouldKeepWatcher(projectId: number): boolean {
-    return (this.activations.get(projectId)?.size ?? 0) > 0
-      || (this.fsListeners.get(projectId)?.size ?? 0) > 0
-      || (this.gitMetaListeners.get(projectId)?.size ?? 0) > 0
-      || this.running.has(projectId)
-      || this.pendingOpen.has(projectId)
-      || this.pendingActivation.has(projectId);
-  }
-
-  private ensureGitMetaWatching(projectId: number): void {
-    if (this.disposed) return;
-    const s = this.settings();
-    if (!s.autoWatch && !s.autoIndex) return;
-    this.touchWatchOrder(projectId, s);
-    if (this.gitMetaWatcher.isWatching(projectId)) return;
-    const project = this.db.getProject(projectId);
-    if (!project?.root_path) return;
-    this.gitMetaWatcher.startWatching(projectId, project.root_path, {
-      onChange: (event) => this.onGitMetaChange(projectId, event),
-    });
-  }
-
-  private ensureFileWatching(projectId: number, delayMs: number, lifecycle = false): void {
-    if (this.disposed) return;
-    const s = this.settings();
-    if (!s.autoWatch || this.watcher.isWatching(projectId)) return;
-    this.touchWatchOrder(projectId, s);
-    if (this.fileWatchOpenTimers.has(projectId)) return;
-    if (delayMs <= 0) {
-      this.startFileWatchingNow(projectId, lifecycle);
-      return;
-    }
-    const timer = setTimeout(() => {
-      this.fileWatchOpenTimers.delete(projectId);
-      if (this.disposed || !this.shouldKeepWatcher(projectId) || this.watcher.isWatching(projectId)) return;
-      this.startFileWatchingNow(projectId, lifecycle);
-    }, delayMs);
-    timer.unref?.();
-    this.fileWatchOpenTimers.set(projectId, timer);
-  }
-
-  private startFileWatchingNow(projectId: number, lifecycle = false): void {
-    if (this.disposed || this.watcher.isWatching(projectId)) return;
-    const s = this.settings();
-    if (!s.autoWatch || (!lifecycle && !this.shouldKeepWatcher(projectId))) return;
-    this.touchWatchOrder(projectId, s);
-    const project = this.db.getProject(projectId);
-    if (!project?.root_path) return;
-    const root = project.root_path;
-    this.watcher.startWatching(
-      projectId,
-      {
-        rootPath: root,
-        debounce: s.watchDebounceMs,
-        ignorePatterns: projectIndexIgnorePatterns(project),
-        maxWatchedFiles: s.watchMaxFiles,
-      },
-      { onFileChanged: (events) => this.onWatcherEvents(projectId, root, events) },
-    );
-    this.status.setWatcher(projectId, true);
-  }
-
-  private scheduleFileWatcherStop(projectId: number): void {
-    const existing = this.fileWatchIdleTimers.get(projectId);
-    if (existing) clearTimeout(existing);
-    const pendingOpen = this.fileWatchOpenTimers.get(projectId);
-    if (pendingOpen) {
-      clearTimeout(pendingOpen);
-      this.fileWatchOpenTimers.delete(projectId);
-    }
-    const idleMs = this.settings().watchIdleMs;
-    if (idleMs <= 0) {
-      if (!this.shouldKeepWatcher(projectId)) void this.stopIdleWatcherHandles(projectId);
-      return;
-    }
-    const timer = setTimeout(() => {
-      this.fileWatchIdleTimers.delete(projectId);
-      if (!this.shouldKeepWatcher(projectId)) void this.stopIdleWatcherHandles(projectId);
-    }, idleMs);
-    timer.unref?.();
-    this.fileWatchIdleTimers.set(projectId, timer);
-  }
-
-  private async stopFileWatching(projectId: number): Promise<void> {
-    const openTimer = this.fileWatchOpenTimers.get(projectId);
-    if (openTimer) {
-      clearTimeout(openTimer);
-      this.fileWatchOpenTimers.delete(projectId);
-    }
-    const idleTimer = this.fileWatchIdleTimers.get(projectId);
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      this.fileWatchIdleTimers.delete(projectId);
-    }
-    await this.watcher.stopWatching(projectId);
-    this.status.setWatcher(projectId, false);
-  }
-
-  private async stopIdleWatcherHandles(projectId: number): Promise<void> {
-    if (this.shouldKeepWatcher(projectId)) return;
-    this.watchOrder = this.watchOrder.filter((id) => id !== projectId);
-    await this.stopFileWatching(projectId);
-    await this.gitMetaWatcher.stopWatching(projectId);
-  }
-
-  async stopWatching(projectId: number): Promise<void> {
-    const wasSemanticallyActive = this.semanticLifecycleActive.delete(projectId);
-    this.activations.delete(projectId);
-    this.reconciledLifecycle.delete(projectId);
-    this.queuedReconcile.delete(projectId);
-    this.fallbackMtimes.delete(projectId);
-    this.fallbackReconcileAt.delete(projectId);
-    const pending = this.pendingOpen.get(projectId);
-    if (pending) {
-      clearTimeout(pending);
-      this.pendingOpen.delete(projectId);
-      this.status.setScheduledRun(projectId, undefined);
-    }
-    const activation = this.pendingActivation.get(projectId);
-    if (activation) {
-      clearTimeout(activation);
-      this.pendingActivation.delete(projectId);
-      this.status.setScheduledRun(projectId, undefined);
-    }
-    this.watchOrder = this.watchOrder.filter((id) => id !== projectId);
-    await this.stopFileWatching(projectId);
-    await this.gitMetaWatcher.stopWatching(projectId);
-    this.status.setWatcher(projectId, false);
-    if (wasSemanticallyActive) this.notifyProjectInactive(projectId);
-  }
-
-  restartFileWatching(projectId: number): void {
-    if (this.disposed || !this.shouldKeepWatcher(projectId)) return;
-    void this.stopFileWatching(projectId)
-      .then(() => {
-        if (!this.disposed && this.shouldKeepWatcher(projectId)) this.startFileWatchingNow(projectId, true);
-      })
-      .catch((err) => console.warn(`[project-index] failed to restart watcher for project ${projectId}: ${msg(err)}`));
-  }
-
   getStatus(projectId: number): ProjectIndexStatus {
     return {
       ...this.status.get(projectId),
@@ -808,34 +358,9 @@ export class ProjectIndexService {
     });
   }
 
-  async dispose(): Promise<void> {
-    this.disposed = true;
-    for (const projectId of this.interactivePriorityDepth.keys()) {
-      this.setInteractivePriority(projectId, false);
-    }
-    this.interactivePriorityDepth.clear();
-    if (this.fallbackPollTimer) {
-      clearInterval(this.fallbackPollTimer);
-      this.fallbackPollTimer = null;
-    }
-    this.fallbackMtimes.clear();
-    this.fallbackReconcileAt.clear();
-    for (const t of this.pendingOpen.values()) clearTimeout(t);
-    for (const t of this.pendingActivation.values()) clearTimeout(t);
-    for (const t of this.fileWatchOpenTimers.values()) clearTimeout(t);
-    for (const t of this.fileWatchIdleTimers.values()) clearTimeout(t);
-    this.pendingOpen.clear();
-    this.pendingActivation.clear();
-    this.activations.clear();
-    this.fileWatchOpenTimers.clear();
-    this.fileWatchIdleTimers.clear();
-    await this.watcher.stopAll();
-    await this.gitMetaWatcher.stopAll();
-  }
-
   // ─── Internals ────────────────────────────────────────────────────
 
-  private async runStructural(projectId: number, s: ProjectIndexSettings, manual = false): Promise<boolean> {
+  protected async runStructural(projectId: number, s: ProjectIndexSettings, manual = false): Promise<boolean> {
     this.status.setPhase(projectId, 'scanning');
     const result = await this.executor.runStructuralIndex(projectId, {
       maxFiles: s.maxFiles,
@@ -859,7 +384,7 @@ export class ProjectIndexService {
     return true;
   }
 
-  private setInteractivePriority(projectId: number, busy: boolean): void {
+  protected setInteractivePriority(projectId: number, busy: boolean): void {
     try {
       this.executor.setInteractivePriority?.(projectId, busy);
     } catch (error) {
@@ -870,22 +395,7 @@ export class ProjectIndexService {
     }
   }
 
-  private onWatcherEvents(projectId: number, rootPath: string, events: WatcherFileEvent[]): void {
-    const dirty: DirtyEvent[] = [];
-    const dirEvents: FsEvent[] = [];
-    for (const e of events) {
-      const rel = toRelPath(rootPath, e.path);
-      if (!rel) continue;
-      if (e.isDir) dirEvents.push({ path: rel, kind: e.kind, isDir: true });
-      else dirty.push({ path: rel, kind: e.kind });
-    }
-    // Dirs go straight to the UI stream (the indexer ignores them);
-    // files flow through markDirty, which publishes + drains.
-    this.publishFsEvents(projectId, dirEvents);
-    this.markDirty(projectId, dirty);
-  }
-
-  private publishStructuralProgress(projectId: number, p: StructuralProgressFrame): void {
+  protected publishStructuralProgress(projectId: number, p: StructuralProgressFrame): void {
     const now = Date.now();
     const last = this.lastProgressAt.get(projectId) ?? 0;
     // A final frame (current reached a known total) always flushes; otherwise
@@ -899,58 +409,7 @@ export class ProjectIndexService {
     else this.status.setProgress(projectId, p.current, p.total);
   }
 
-  private async waitForFileWatcherReady(projectId: number): Promise<void> {
-    if (!this.settings().autoWatch) return;
-    this.startFileWatchingNow(projectId, true);
-    const watcher = this.watcher as FileWatcherService & {
-      waitUntilReady?: (id: number) => Promise<void>;
-    };
-    if (!watcher.waitUntilReady) return;
-    const timeoutMs = envDelay('MCP_WATCH_READY_TIMEOUT_MS', 30_000);
-    let timedOut = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    await Promise.race([
-      watcher.waitUntilReady(projectId),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(() => {
-          timedOut = true;
-          resolve();
-        }, timeoutMs);
-      }),
-    ]);
-    if (timeout) clearTimeout(timeout);
-    if (timedOut) {
-      console.warn(`[project-index] watcher ready barrier timed out for project ${projectId}; reconciling with watcher gap protection degraded`);
-    }
-  }
-
-  private async flushWatcherEvents(projectId: number): Promise<void> {
-    const watcher = this.watcher as FileWatcherService & {
-      flushPending?: (id: number) => Promise<void>;
-    };
-    await watcher.flushPending?.(projectId);
-  }
-
-  /**
-   * Bulk-op suppression: discard the watcher's buffered burst AND the queued
-   * per-file drain work — both are superseded by the stat-first reconcile that
-   * the bulk reason (branch/workspace) is about to run. Clearing the dirty
-   * queue also makes an in-flight drain loop exit at its next takeBatch.
-   */
-  private suppressBulkBurst(projectId: number): void {
-    const watcher = this.watcher as FileWatcherService & { suspend?: (id: number) => void };
-    watcher.suspend?.(projectId);
-    this.dirty.clear(projectId);
-    this.status.setDirtyPending(projectId, 0);
-  }
-
-  /** End bulk-op suppression (no-op when not suspended). */
-  private resumeWatcherEvents(projectId: number): void {
-    const watcher = this.watcher as FileWatcherService & { resume?: (id: number) => void };
-    watcher.resume?.(projectId);
-  }
-
-  private async drainDirtyLocked(projectId: number): Promise<void> {
+  protected async drainDirtyLocked(projectId: number): Promise<void> {
     while (this.dirty.size(projectId) > 0) {
       const batch = this.dirty.takeBatch(projectId, DRAIN_BATCH);
       if (batch.total === 0) break;
@@ -980,7 +439,7 @@ export class ProjectIndexService {
     }
   }
 
-  private notifyProjectReady(projectId: number): void {
+  protected notifyProjectReady(projectId: number): void {
     if (!this.semanticCatchup?.projectReady || this.semanticLifecycleActive.has(projectId)) return;
     this.semanticLifecycleActive.add(projectId);
     void Promise.resolve(this.semanticCatchup.projectReady(projectId)).catch((error) => {
@@ -989,12 +448,12 @@ export class ProjectIndexService {
     });
   }
 
-  private notifyProjectInactive(projectId: number): void {
+  protected notifyProjectInactive(projectId: number): void {
     void Promise.resolve(this.semanticCatchup?.projectInactive?.(projectId)).catch((error) =>
       console.warn(`[project-index] semantic lifecycle deactivation failed for ${projectId}: ${msg(error)}`));
   }
 
-  private scheduleDrain(projectId: number): void {
+  protected scheduleDrain(projectId: number): void {
     if (this.disposed || this.running.has(projectId) || this.draining.has(projectId) || this.dirty.size(projectId) === 0) return;
     this.draining.add(projectId);
     void this.mutex

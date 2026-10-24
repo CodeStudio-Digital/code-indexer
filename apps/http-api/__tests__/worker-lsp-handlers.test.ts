@@ -2,7 +2,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import type { ApiContext } from '@mcp/api-bus';
 import { registerWorkerLspHandlers, setWorkerLspDeps } from '../sse/worker-lsp-handlers.js';
 import { installWorkerLspShim } from '../workers/lsp-shim.js';
-import { getGlobalAgentLspBackend, setGlobalAgentLspBackend } from '../../../packages/code-agent/src/lsp/agent-lsp-backend.js';
+import { getGlobalAgentLspBackend, setGlobalAgentLspBackend } from '@mcp/code-agent/lsp/agent-lsp-backend.js';
 
 function bridge() {
   const handlers = new Map<string, (payload: unknown) => Promise<unknown>>();

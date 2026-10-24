@@ -43,7 +43,7 @@ export interface ChangeTrackerDeps {
   onCommit(range: StageRange, message: string): void;
 }
 
-export interface ChangeTracker {
+interface ChangeTracker {
   setBaseline(content: string): void;
   dispose(): void;
 }

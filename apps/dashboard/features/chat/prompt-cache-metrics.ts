@@ -1,4 +1,4 @@
-export interface PromptCacheUsage {
+interface PromptCacheUsage {
   provider: string | null | undefined;
   inputTokens: number;
   cacheReadTokens: number;
@@ -6,7 +6,7 @@ export interface PromptCacheUsage {
 }
 
 /** Providers whose usage splits the prompt into fresh/read/write slices. */
-export function usesSplitPromptCacheAccounting(provider: string | null | undefined): boolean {
+function usesSplitPromptCacheAccounting(provider: string | null | undefined): boolean {
   return provider === 'anthropic' || provider === 'claude-code' || provider === 'bedrock';
 }
 

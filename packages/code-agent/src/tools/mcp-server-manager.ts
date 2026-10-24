@@ -1,3 +1,9 @@
+import type { ExternalMcpContent } from './mcp-content-types.js';
+import { mcpServerConfigurationKey } from './mcp-transport.js';
+import type { McpConnectionState, ServerConnection } from './mcp-connection-types.js';
+export type { McpConnectionState, ServerConnection } from './mcp-connection-types.js';
+import { terminateSession, createTransport } from './mcp-transport.js';
+import { listToolsFromConnection } from './mcp-catalog-listing.js';
 /**
  * McpServerManager — manages connections to N external MCP servers and
  * aggregates their tools into CoderTool[] with `ext_<server_id>__` prefix.
@@ -5,212 +11,24 @@
  * Lifecycle: instantiate → connectAll() → listAllTools() → closeAll().
  * Used inside runCoder() alongside the internal McpToolBridge.
  */
-import { createHash } from 'node:crypto';
+
 import { awaitMcpConnection } from './mcp-connection-wait.js';
-import { fetchWithMcpDispatch, McpDispatchRejected, withMcpWireDispatch } from './mcp-wire-dispatch.js';
+import { McpDispatchRejected, withMcpWireDispatch } from './mcp-wire-dispatch.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { ResultSchema, ToolSchema } from '@modelcontextprotocol/sdk/types.js';
+
 import type { McpServerConfig } from '@mcp/store/mcp-server-store.js';
 import type { CoderTool, ToolResult, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import type { ContentBlock } from '@mcp/code-agent/core/messages.js';
 import { CORE_TIER_NAMES, type ToolTier } from '@mcp/code-agent/tools/tiers.js';
 import type { ResolveMcpBearer } from '@mcp/services/mcp-client/auth/use-cases/resolve-mcp-bearer.js';
-import { mcpAuthClientErrorMessage } from '@mcp/services/mcp-client/auth/domain/errors.js';
+
 import { sanitizeUntrustedCapabilityMetadata } from '@mcp/code-agent/core/capability-catalog.js';
-
-/** Per-server connection state. */
-export type McpConnectionState = 'connected' | 'disconnected' | 'error';
-
-interface ServerConnection {
-  client: Client;
-  transport: Transport;
-  config: McpServerConfig;
-  state: McpConnectionState;
-  error?: string;
-  /** Kept only for stdio servers, so their child pid stays discoverable. */
-  stdio?: StdioClientTransport;
-  /**
-   * The server returned at least one malformed tool definition. Once detected,
-   * bypass the SDK's all-or-nothing list validator for this connection and
-   * validate each tool independently.
-   */
-  lenientToolListing?: boolean;
-  /** Avoid repeating the same malformed-tool warning on every health check. */
-  reportedInvalidToolSignature?: string;
-}
 
 /** Connect timeout per server (ms). */
 const CONNECT_TIMEOUT_MS = 10_000;
-
-/** Upper bound for the DELETE that ends a streamable HTTP session; cleanup never waits longer. */
-const TERMINATE_SESSION_TIMEOUT_MS = 2_000;
-
-/**
- * The SDK's close() only aborts requests. Without the DELETE the server keeps the
- * session until its own idle timeout, so frequent reconnects fill its session limit
- * (the Unity broker answered 503 for hours on 2026-10-08).
- */
-async function terminateSession(transport: Transport): Promise<void> {
-  if (!(transport instanceof StreamableHTTPClientTransport)) return;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const elapsed = new Promise<void>(resolve => {
-    timer = setTimeout(resolve, TERMINATE_SESSION_TIMEOUT_MS);
-    timer.unref();
-  });
-  try { await Promise.race([transport.terminateSession(), elapsed]); }
-  catch { /* Best effort: an unreachable server reclaims the session by its idle timeout. */ }
-  finally { clearTimeout(timer); }
-}
-
-type ListedTool = Awaited<ReturnType<Client['listTools']>>['tools'][number];
-
-interface ExternalMcpContent {
-  type?: string;
-  text?: string;
-  data?: string;
-  mimeType?: string;
-  uri?: string;
-  name?: string;
-  resource?: {
-    uri?: string;
-    mimeType?: string;
-    text?: string;
-    blob?: string;
-  };
-}
-
-interface ValidationIssueLike {
-  path?: unknown;
-  message?: unknown;
-}
-
-/**
- * The MCP SDK validates `tools/list` as one Zod object. One malformed tool
- * therefore rejects every valid sibling before callers can isolate it.
- */
-function isToolListValidationError(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  const issues = (error as { issues?: unknown }).issues;
-  return Array.isArray(issues) && issues.some((issue) => {
-    const path = (issue as ValidationIssueLike | null)?.path;
-    return Array.isArray(path) && path[0] === 'tools';
-  });
-}
-
-function rawToolName(value: unknown, index: number): string {
-  if (value && typeof value === 'object') {
-    const name = (value as { name?: unknown }).name;
-    if (typeof name === 'string' && name.trim()) return name;
-  }
-  return `#${index}`;
-}
-
-function firstValidationMessage(issues: readonly ValidationIssueLike[]): string {
-  for (const issue of issues) {
-    if (typeof issue.message === 'string' && issue.message.trim()) return issue.message;
-  }
-  return 'invalid MCP tool definition';
-}
-
-/**
- * Build auth headers from config. Async because OAuth requires a resolver
- * that may refresh the access token from a remote AS.
- *
- * Returns empty object when auth_type=none OR when OAuth has no tokens
- * yet — connection then proceeds unauthenticated and the server's 401
- * prompts the user to connect via the dashboard.
- */
-async function buildAuthHeaders(
-  config: McpServerConfig,
-  resolver: ResolveMcpBearer | null,
-): Promise<Record<string, string>> {
-  if (config.auth_type === 'oauth2') {
-    if (!resolver) return {};
-    const result = await resolver.execute(config.id);
-    if (!result.ok) {
-      console.warn(
-        `[mcp-ext] OAuth bearer unavailable for "${config.id}": ${mcpAuthClientErrorMessage(result.error)}`,
-      );
-      return {};
-    }
-    return { Authorization: `Bearer ${result.value}` };
-  }
-
-  if (!config.auth_token) return {};
-  switch (config.auth_type) {
-    case 'bearer':
-      return { Authorization: `Bearer ${config.auth_token}` };
-    case 'api_key': {
-      // Default header name is X-API-Key, but can be overridden via config.headers
-      const headerName =
-        (config.config as Record<string, unknown>).api_key_header_name as string | undefined ??
-        'X-API-Key';
-      return { [headerName]: config.auth_token };
-    }
-    default:
-      return {};
-  }
-}
-
-/**
- * Create the appropriate transport for a server config. Async because
- * auth header resolution (OAuth) may require remote calls.
- */
-async function createTransport(config: McpServerConfig, resolver: ResolveMcpBearer | null): Promise<Transport> {
-  switch (config.transport) {
-    case 'stdio': {
-      if (!config.command) throw new Error(`stdio server "${config.id}" requires a command`);
-      return new StdioClientTransport({
-        command: config.command,
-        args: config.args,
-        env: { ...process.env, ...config.env } as Record<string, string>,
-      });
-    }
-    case 'sse': {
-      if (!config.url) throw new Error(`sse server "${config.id}" requires a url`);
-      const authHeaders = await buildAuthHeaders(config, resolver);
-      const extraHeaders = (config.config as Record<string, unknown>).headers as
-        | Record<string, string>
-        | undefined ?? {};
-      const headers = { ...extraHeaders, ...authHeaders };
-      const hasHeaders = Object.keys(headers).length > 0;
-      // SSE transport needs headers on both the EventSource (GET) and POST requests.
-      // eventSourceInit.fetch wraps the SSE GET; requestInit covers recurring POSTs.
-      const opts: Record<string, unknown> = { fetch: fetchWithMcpDispatch };
-      if (hasHeaders) {
-        opts.requestInit = { headers };
-        opts.eventSourceInit = {
-          fetch: (url: string | URL, init: Record<string, unknown>) =>
-            globalThis.fetch(url, {
-              ...(init as RequestInit),
-              headers: { ...(init?.headers as Record<string, string> ?? {}), ...headers },
-            }),
-        };
-      }
-      return new SSEClientTransport(new URL(config.url), opts as never);
-    }
-    case 'streamable_http': {
-      if (!config.url) throw new Error(`streamable_http server "${config.id}" requires a url`);
-      const authHeaders = await buildAuthHeaders(config, resolver);
-      const extraHeaders = (config.config as Record<string, unknown>).headers as
-        | Record<string, string>
-        | undefined ?? {};
-      const headers = { ...extraHeaders, ...authHeaders };
-      const hasHeaders = Object.keys(headers).length > 0;
-      return new StreamableHTTPClientTransport(new URL(config.url), {
-        fetch: fetchWithMcpDispatch,
-        requestInit: hasHeaders ? { headers } : undefined,
-      });
-    }
-    default:
-      throw new Error(`Unsupported transport "${config.transport}" for server "${config.id}"`);
-  }
-}
 
 export class McpServerManager {
   private connections = new Map<string, ServerConnection>();
@@ -318,7 +136,7 @@ export class McpServerManager {
       if (conn.state !== 'connected') continue;
 
       try {
-        const listed = await this.listToolsFromConnection(serverId, conn);
+        const listed = await listToolsFromConnection(serverId, conn);
         const sorted = [...listed].sort((a, b) => a.name.localeCompare(b.name));
 
         this.toolCountCache.set(serverId, sorted.length);
@@ -378,59 +196,6 @@ export class McpServerManager {
   async refreshAll(configs: McpServerConfig[]): Promise<void> {
     await this.closeAll();
     await this.connectAll(configs);
-  }
-
-  /**
-   * Keep the SDK's strict path for conforming servers so its output/task
-   * metadata cache remains populated. If that path proves the server has a
-   * malformed tool definition, fetch the same result through the SDK's loose
-   * base result schema and validate each definition independently.
-   */
-  private async listToolsFromConnection(
-    serverId: string,
-    conn: ServerConnection,
-  ): Promise<ListedTool[]> {
-    if (!conn.lenientToolListing) {
-      try {
-        return (await conn.client.listTools()).tools;
-      } catch (error) {
-        if (!isToolListValidationError(error)) throw error;
-        conn.lenientToolListing = true;
-        console.warn(
-          `[mcp-ext] server "${serverId}" returned a malformed tools/list catalogue; ` +
-            'switching this connection to per-tool validation',
-        );
-      }
-    }
-
-    const raw = await conn.client.request({ method: 'tools/list' }, ResultSchema);
-    if (!Array.isArray(raw.tools)) {
-      throw new Error(`External MCP server "${serverId}" returned tools/list without a tools array`);
-    }
-
-    const valid: ListedTool[] = [];
-    const invalid: string[] = [];
-    for (let index = 0; index < raw.tools.length; index++) {
-      const candidate = raw.tools[index];
-      const parsed = ToolSchema.safeParse(candidate);
-      if (parsed.success) {
-        valid.push(parsed.data);
-        continue;
-      }
-      invalid.push(
-        `${rawToolName(candidate, index)} (${firstValidationMessage(parsed.error.issues)})`,
-      );
-    }
-
-    const signature = invalid.join('|');
-    if (invalid.length > 0 && signature !== conn.reportedInvalidToolSignature) {
-      conn.reportedInvalidToolSignature = signature;
-      console.warn(
-        `[mcp-ext] server "${serverId}" skipped ${invalid.length} invalid tool definition(s): ` +
-          invalid.join(', '),
-      );
-    }
-    return valid;
   }
 
   /** Reconnect only before dispatch. A lost response never authorizes a replay. */
@@ -718,6 +483,4 @@ export class McpServerManager {
 }
 
 /** Bind handlers to the complete persisted configuration, without exposing credentials. */
-export function mcpServerConfigurationKey(config: McpServerConfig): string {
-  return createHash('sha256').update(JSON.stringify(config)).digest('hex');
-}
+export { mcpServerConfigurationKey } from './mcp-transport.js';

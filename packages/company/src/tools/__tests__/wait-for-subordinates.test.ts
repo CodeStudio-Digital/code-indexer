@@ -10,7 +10,7 @@
  * This file pins the tool's OWN return-shape contract.
  */
 import { describe, it, expect } from 'vitest';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import { buildMasterTools, summarizeSubordinates } from '@mcp/company/tools/master-tools.js';
 
 const FRONTEND_RUN_ID = '00000000-0000-4000-8000-000000000001';

@@ -14,12 +14,12 @@ export interface SecureTokenStore {
   isHardwareBacked(): boolean;
 }
 
-export interface SafeStorageLike {
+interface SafeStorageLike {
   isEncryptionAvailable(): boolean;
   encryptString(plain: string): Buffer;
   decryptString(buf: Buffer): string;
 }
-export interface FsLike {
+interface FsLike {
   readFile(path: string): Promise<Buffer>;
   writeFile(path: string, data: Buffer): Promise<void>;
   rm(path: string): Promise<void>;

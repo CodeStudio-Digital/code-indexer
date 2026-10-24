@@ -12,7 +12,7 @@
  */
 
 export type PackageManagerKey = 'node' | 'python' | 'java';
-export type PackageManagers = Partial<Record<PackageManagerKey, string>>;
+type PackageManagers = Partial<Record<PackageManagerKey, string>>;
 
 const KEYS: readonly PackageManagerKey[] = ['node', 'python', 'java'];
 

@@ -1,5 +1,5 @@
 import type { Database as DB } from 'better-sqlite3';
-import { listDefinitions as listProviderDefinitions } from '@mcp/services/providers/registry.js';
+import { listProviderSeedDefinitions as listProviderDefinitions } from '@mcp/services/providers/seed-catalog.js';
 import * as providers from './providers.js';
 
 type SeedBuiltin = {

@@ -8,7 +8,7 @@ import type {
   RuntimeEventEnvelope,
   RuntimeLogKind,
   RuntimeSessionId,
-} from './runtime-event-log.js';
+} from './runtime-event-types.js';
 
 export interface PersistableRuntimeEvent {
   event: RuntimeEventEnvelope;
@@ -39,7 +39,7 @@ export interface PersistedRuntimeEventPage {
   totalCount: number | null;
 }
 
-export interface PersistedRuntimeEventPageOptions {
+interface PersistedRuntimeEventPageOptions {
   cursor?: string;
   limit: number;
   order?: 'asc' | 'desc';

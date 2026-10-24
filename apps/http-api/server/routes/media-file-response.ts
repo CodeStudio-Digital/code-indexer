@@ -114,7 +114,7 @@ export function prepareProjectPreviewCss(source: string, previewRootHref: string
   return rewritten;
 }
 
-export interface ByteRange {
+interface ByteRange {
   start: number;
   end: number;
 }

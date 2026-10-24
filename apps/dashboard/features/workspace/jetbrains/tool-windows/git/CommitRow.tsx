@@ -1,3 +1,5 @@
+import type { Commit } from './commit-types.js';
+export type { Commit } from './commit-types.js';
 /**
  * One commit row — shared by the History tab (narrow panel) and the
  * branch Log surface (content area, with selection + side preview).
@@ -21,17 +23,8 @@ import { cn } from '../../../../../lib/utils.js';
 import { parseDbDate } from '../../../../../lib/datetime.js';
 import { GitGraphCell, type GitGraphRow } from './git-graph.js';
 
-export interface Commit {
-  sha: string;
-  shortSha: string;
-  author: string;
-  date: string;
-  subject: string;
-  parents?: string[];
-  refs?: string[];
-}
 
-export interface CommitRowProps {
+interface CommitRowProps {
   commit: Commit;
   onCherryPick: () => void;
   onRevert: () => void;

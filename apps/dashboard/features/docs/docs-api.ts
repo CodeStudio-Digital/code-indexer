@@ -68,7 +68,7 @@ export interface DocSource {
 
 export type DocPerformanceProfile = 'economy' | 'balanced' | 'maximum' | 'custom';
 
-export interface DocCrawlConfig {
+interface DocCrawlConfig {
   enabled?: boolean;
   max_pages?: number;
   max_depth?: number;
@@ -111,7 +111,7 @@ export interface DocCrawlConfig {
   browser_seed_only?: boolean;
 }
 
-export interface DocIngestEstimate {
+interface DocIngestEstimate {
   pages_to_fetch: number;
   pages_likely_accepted: number;
   estimated_chunks: number;
@@ -173,7 +173,7 @@ export async function createCollection(input: {
 }
 
 /** Outcome of removing corpus rows and their local sqlite-vec entries. */
-export interface DocDeleteResult {
+interface DocDeleteResult {
   ok: boolean;
   vectors_deleted: number;
 }
@@ -288,7 +288,7 @@ export async function retrySourceEmbeddingsStream(
   return consumeEventStream(r, callbacks);
 }
 
-export async function retryCollectionEmbeddingsStream(
+async function retryCollectionEmbeddingsStream(
   collectionId: number,
   callbacks: {
     onStart?: (p: unknown) => void;
@@ -305,7 +305,7 @@ export async function retryCollectionEmbeddingsStream(
   return consumeEventStream(r, callbacks);
 }
 
-export async function addUrlSource(
+async function addUrlSource(
   collectionId: number,
   input: { url: string; title?: string; doc_type?: DocType; crawl?: DocCrawlConfig; defer_indexing?: boolean },
 ): Promise<DocSource> {
@@ -375,7 +375,7 @@ export async function indexPdfStream(
  * Config para source tipo `'folder'` (migration 103). Espelha o tipo
  * server-side `DocFolderConfig`.
  */
-export interface DocFolderConfig {
+interface DocFolderConfig {
   /** Default `**\/*.{html,htm,md,markdown,pdf,txt}`. */
   include_glob?: string | null;
   /** Default exclui `node_modules`, `.git`, `dist`, `build`, etc. */
@@ -478,13 +478,13 @@ export interface DocIngestRun {
   error_message: string | null;
 }
 
-export async function listSourceRuns(sourceId: number): Promise<DocIngestRun[]> {
+async function listSourceRuns(sourceId: number): Promise<DocIngestRun[]> {
   return jsonFetch(`/api/docs/sources/${sourceId}/runs`);
 }
 
 // ─── Dry-run ────────────────────────────────────────────────────────
 
-export async function dryRunUrl(input: {
+async function dryRunUrl(input: {
   url: string;
   crawl?: DocCrawlConfig;
 }): Promise<DocIngestEstimate> {
@@ -495,7 +495,7 @@ export async function dryRunUrl(input: {
   });
 }
 
-export async function dryRunPdf(file: File): Promise<DocIngestEstimate> {
+async function dryRunPdf(file: File): Promise<DocIngestEstimate> {
   const form = new FormData();
   form.append('file', file);
   const r = await fetch('/api/docs/sources/dry-run/pdf', {

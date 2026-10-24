@@ -1,3 +1,5 @@
+import type { DupCallEntry } from '../guards/dup-call-entry.js';
+export type { DupCallEntry } from '../guards/dup-call-entry.js';
 /**
  * Behavior Tree types — declarative states, events, nodes, and run context.
  *
@@ -55,12 +57,6 @@ export type BehaviorEvent =
 
 export type BehaviorEventKind = BehaviorEvent['kind'];
 
-/** Entry in the tuple-hash dedup table (Kimi-style anti-loop). */
-export interface DupCallEntry {
-  count: number;
-  firstTurn: number;
-  lastUseId: string;
-}
 
 /**
  * Mutable state seen by every node. Replaces the dozens of private fields

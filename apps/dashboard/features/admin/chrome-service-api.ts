@@ -29,7 +29,7 @@ export interface ChromeServiceState {
   protocolVersion?: string;
 }
 
-export interface ChromeServicePatch {
+interface ChromeServicePatch {
   enabled?: boolean;
   image?: string;
   host_port?: number;

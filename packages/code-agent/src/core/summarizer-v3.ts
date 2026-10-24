@@ -6,7 +6,7 @@ import { overlayLiveStateV3 } from '@mcp/session-storage/compaction/summary-over
 import { renderResumeV3, separatePreviousResumeV3 } from '@mcp/session-storage/compaction/summary-format.js';
 export { type CompactionChapterV3, type CompactionResumeV3, type CompactionSummaryMetricsV3, type CompactionSummaryV3, type CompactionLiveStateV3, type SummarizeSpanV3Input, type SummarizeSpanV3Options } from '@mcp/session-storage/compaction/summary-types.js';
 export { COMPACTION_SUMMARY_V3_VERSION, COMPACTION_SUMMARY_TIMEOUT_MS, COMPACTION_SUMMARY_MAX_CHARS, COMPACTION_SUMMARY_MAX_TOKENS } from '@mcp/session-storage/compaction/summary-limits.js';
-export { separatePreviousResumeV3, renderResumeV3, renderChapterV3, renderSummaryV3 } from '@mcp/session-storage/compaction/summary-format.js';
+export { separatePreviousResumeV3, renderResumeV3, renderChapterV3 } from '@mcp/session-storage/compaction/summary-format.js';
 export { formatSpanForPromptV3 } from '@mcp/session-storage/compaction/summary-sampling.js';
 export { capCompactionSummaryV3, parseCompactionSummaryV3, isCompactionSummaryV3 } from '@mcp/session-storage/compaction/summary-codec.js';
 export { overlayLiveStateV3 } from '@mcp/session-storage/compaction/summary-overlay.js';

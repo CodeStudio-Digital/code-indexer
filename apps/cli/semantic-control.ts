@@ -13,7 +13,7 @@ import { loadConfig, type IndexerConfig } from '@mcp/shared/utils/config.js';
 
 type FetchLike = typeof fetch;
 
-export interface LocalServerResult {
+interface LocalServerResult {
   reached: boolean;
   ok: boolean;
   status: number | null;
@@ -21,7 +21,7 @@ export interface LocalServerResult {
   error: string | null;
 }
 
-export interface SemanticWakeResult {
+interface SemanticWakeResult {
   job: SemanticJobRow | null;
   skipped: 'disabled' | null;
   server: LocalServerResult | null;

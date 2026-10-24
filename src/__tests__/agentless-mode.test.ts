@@ -39,27 +39,16 @@ describe('Agentless pipeline hint — env gated', () => {
     expect(prompt).not.toContain('Pipeline mode (procedural)');
   });
 
-  it('includes the pipeline hint when CODER_AGENTLESS_MODE=1', () => {
+  it('ignores the retired CODER_AGENTLESS_MODE=1 switch', () => {
     process.env.CODER_AGENTLESS_MODE = '1';
     const prompt = buildSystemPrompt(ctx());
-    expect(prompt).toContain('Pipeline mode (procedural)');
-    expect(prompt).toContain('Localize');
-    expect(prompt).toContain('Plan');
-    expect(prompt).toContain('Patch');
-    expect(prompt).toContain('Verify');
+    expect(prompt).not.toContain('Pipeline mode (procedural)');
+    expect(prompt).toContain('# Operating contract');
   });
 
-  it('places the pipeline hint AFTER the base body (cache-stable prefix)', () => {
+  it('keeps the complete prompt stable across retired environment settings', () => {
+    const baseline = buildSystemPrompt(ctx());
     process.env.CODER_AGENTLESS_MODE = '1';
-    const prompt = buildSystemPrompt(ctx());
-    // The base body comes from prompts/base.txt and includes "Project:" or
-    // similar boilerplate. Whatever the exact opener, the pipeline hint
-    // must come AFTER it so toggling the env on/off doesn't move the cache
-    // prefix.
-    const pipelineIdx = prompt.indexOf('Pipeline mode (procedural)');
-    const interactionIdx = prompt.indexOf('Interactive tools');
-    expect(pipelineIdx).toBeGreaterThan(0);
-    expect(interactionIdx).toBeGreaterThan(0);
-    expect(pipelineIdx).toBeGreaterThan(interactionIdx);
+    expect(buildSystemPrompt(ctx())).toBe(baseline);
   });
 });

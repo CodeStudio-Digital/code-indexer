@@ -9,7 +9,13 @@
  *   - The session-wide circuit breaker emits `recovery_aborted` when the
  *     per-kind cap is exceeded (R1).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { resolveRuntimePolicyV1 } from '@mcp/agent-runtime-host';
+
+vi.mock('@mcp/code-agent/core/runner/provider-retry.js', async (load) => ({
+  ...(await load<typeof import('@mcp/code-agent/core/runner/provider-retry.js')>()),
+  backoffDelayMs: () => 0,
+}));
 import { CoderRunner } from '@mcp/code-agent/core/runner.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import type { ChatProvider, ChatRequest } from '@mcp/code-agent/providers/adapter.js';
@@ -41,9 +47,10 @@ class FlakyProvider implements ChatProvider {
   }
 }
 
-function makeRunner(provider: ChatProvider): CoderRunner {
+function makeRunner(provider: ChatProvider, runRetryCap = 30): CoderRunner {
   return new CoderRunner({
     provider,
+    runtimePolicy: resolveRuntimePolicyV1({ request: { revision: 'test', values: { provider: { transientRetriesPerRun: runRetryCap } } } }),
     registry: new ToolRegistry(),
     systemPrompt: 'sys',
     toolContext: { cwd: '/tmp', projectName: 'test' },
@@ -53,9 +60,7 @@ function makeRunner(provider: ChatProvider): CoderRunner {
 
 describe('PR-2 R5 — transient retry with exp+jitter (no fallback chain)', () => {
   it('recovers within the same turn after 2 transient 429s', async () => {
-    process.env.CODER_TRANSIENT_RETRY_INITIAL_MS = '1';
-    process.env.CODER_TRANSIENT_RETRY_MAX_MS = '5';
-    process.env.CODER_TRANSIENT_RETRY_JITTER = '0';
+
     const provider = new FlakyProvider(2, 429);
     const runner = makeRunner(provider);
     const result = await runner.run();
@@ -64,9 +69,7 @@ describe('PR-2 R5 — transient retry with exp+jitter (no fallback chain)', () =
   }, 5000);
 
   it('recovers from 5xx the same way as 429', async () => {
-    process.env.CODER_TRANSIENT_RETRY_INITIAL_MS = '1';
-    process.env.CODER_TRANSIENT_RETRY_MAX_MS = '5';
-    process.env.CODER_TRANSIENT_RETRY_JITTER = '0';
+
     const provider = new FlakyProvider(2, 503);
     const runner = makeRunner(provider);
     const result = await runner.run();
@@ -74,19 +77,15 @@ describe('PR-2 R5 — transient retry with exp+jitter (no fallback chain)', () =
     expect(provider.attempts).toBe(3);
   }, 5000);
 
-  it('falls through to error when retries exhausted with no fallback configured', async () => {
-    process.env.CODER_TRANSIENT_RETRY_INITIAL_MS = '1';
-    process.env.CODER_TRANSIENT_RETRY_MAX_MS = '5';
-    process.env.CODER_TRANSIENT_RETRY_JITTER = '0';
-    process.env.CODER_TRANSIENT_RETRY_MAX_PER_TURN = '3';
-    // 4 failures > 3 retries per turn AND no fallback chain → reason='error'.
+  it('stops at the per-turn retry cap with no fallback configured', async () => {
+
+    // The fourth failure exceeds the fixed three-retry turn budget.
     const provider = new FlakyProvider(4, 429);
     const runner = makeRunner(provider);
     const result = await runner.run();
-    expect(result.reason).toBe('error');
+    expect(result.reason).toBe('recovery_capped');
     // 1 initial + 3 retries = 4 attempts.
     expect(provider.attempts).toBe(4);
-    delete process.env.CODER_TRANSIENT_RETRY_MAX_PER_TURN;
   }, 5000);
 
   it('does not retry permanent Claude Code extra-usage exhaustion', async () => {
@@ -99,20 +98,16 @@ describe('PR-2 R5 — transient retry with exp+jitter (no fallback chain)', () =
     const result = await runner.run();
 
     expect(result.reason).toBe('error');
-    expect(result.transition).toBeNull();
+    expect(result.transition).toBe('provider-400-retry');
     expect(provider.attempts).toBe(1);
   });
 });
 
 describe('PR-2 R1 — session-wide circuit breaker', () => {
   it('emits recovery_aborted when transient retries exceed session cap', async () => {
-    process.env.CODER_TRANSIENT_RETRY_INITIAL_MS = '1';
-    process.env.CODER_TRANSIENT_RETRY_MAX_MS = '5';
-    process.env.CODER_TRANSIENT_RETRY_JITTER = '0';
-    process.env.CODER_TRANSIENT_RETRY_MAX_PER_TURN = '3';
-    process.env.CODER_RECOVERY_TRANSIENT_MAX = '2';
+
     const provider = new FlakyProvider(10, 429);
-    const runner = makeRunner(provider);
+    const runner = makeRunner(provider, 2);
     const aborts: Array<{ kind: string; attempts: number; cap: number }> = [];
     runner.on('recovery_aborted', (p) => aborts.push({ kind: p.kind, attempts: p.attempts, cap: p.cap }));
     const result = await runner.run();
@@ -121,32 +116,22 @@ describe('PR-2 R1 — session-wide circuit breaker', () => {
     expect(aborts[0].kind).toBe('provider-transient-retry');
     expect(aborts[0].cap).toBe(2);
     expect(aborts[0].attempts).toBeGreaterThan(2);
-    delete process.env.CODER_TRANSIENT_RETRY_MAX_PER_TURN;
-    delete process.env.CODER_RECOVERY_TRANSIENT_MAX;
+
   }, 5000);
 
-  it('emits recovery_aborted with kind=provider-400-retry when 400 cap is zero', async () => {
-    // cap=0 means "no 400 retries allowed at all" → first 400 trips the
-    // circuit breaker. The realistic cap (default 3) only fires across
-    // multi-turn sessions with recurring 400s; in a single-turn unit test
-    // we set it to 0 to exercise the abort branch deterministically.
-    process.env.CODER_RECOVERY_400_MAX = '0';
+  it('does not retry a non-retryable 400 or report a cap failure', async () => {
     const provider = new FlakyProvider(10, 400, 'illegal message sequence');
     const runner = makeRunner(provider);
-    const aborts: Array<{ kind: string; attempts: number; cap: number }> = [];
-    runner.on('recovery_aborted', (p) => aborts.push({ kind: p.kind, attempts: p.attempts, cap: p.cap }));
+    const aborts = vi.fn();
+    runner.on('recovery_aborted', aborts);
     const result = await runner.run();
-    // PR-4: cap-blown abort surfaces as the more-specific 'recovery_capped'
-    // (was 'error' before). Existing consumers branching only on 'completed'
-    // are unaffected.
-    expect(result.reason).toBe('recovery_capped');
-    const abort = aborts.find((a) => a.kind === 'provider-400-retry');
-    expect(abort).toBeDefined();
-    expect(abort!.cap).toBe(0);
-    delete process.env.CODER_RECOVERY_400_MAX;
-  }, 5000);
+    expect(result.reason).toBe('error');
+    expect(result.transition).toBe('provider-400-retry');
+    expect(provider.attempts).toBe(1);
+    expect(aborts).not.toHaveBeenCalled();
+  });
 
-  it('emits recovery_aborted with kind=provider-401-refresh when 401 cap is zero', async () => {
+  it('emits recovery_aborted when the fixed 401 refresh cap is exceeded', async () => {
     process.env.CODER_RECOVERY_401_MAX = '0';
     const provider = new FlakyProvider(10, 401, 'token expired');
     const runner = new CoderRunner({
@@ -163,11 +148,11 @@ describe('PR-2 R1 — session-wide circuit breaker', () => {
         return p;
       },
     });
-    const aborts: Array<{ kind: string }> = [];
-    runner.on('recovery_aborted', (p) => aborts.push({ kind: p.kind }));
+    const aborts: Array<{ kind: string; cap: number; attempts: number }> = [];
+    runner.on('recovery_aborted', (p) => aborts.push({ kind: p.kind, cap: p.cap, attempts: p.attempts }));
     const result = await runner.run();
     expect(result.reason).toBe('recovery_capped');
-    expect(aborts.find((a) => a.kind === 'provider-401-refresh')).toBeDefined();
+    expect(aborts.find((a) => a.kind === 'provider-401-refresh')).toMatchObject({ cap: 2, attempts: 3 });
     delete process.env.CODER_RECOVERY_401_MAX;
   }, 5000);
 });

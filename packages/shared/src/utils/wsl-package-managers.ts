@@ -10,8 +10,8 @@
  */
 
 export type WslPackageManagerKey = 'node' | 'python' | 'java';
-export type WslDistroManagers = Partial<Record<WslPackageManagerKey, string>>;
-export type WslPackageManagers = Record<string, WslDistroManagers>;
+type WslDistroManagers = Partial<Record<WslPackageManagerKey, string>>;
+type WslPackageManagers = Record<string, WslDistroManagers>;
 
 const KEYS: readonly WslPackageManagerKey[] = ['node', 'python', 'java'];
 

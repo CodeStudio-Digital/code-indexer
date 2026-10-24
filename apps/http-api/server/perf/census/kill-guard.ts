@@ -11,7 +11,7 @@
  * disagree about what is allowed.
  */
 
-export type KillDenyCode =
+type KillDenyCode =
   | 'invalid_pid'
   | 'main_process_protected'
   | 'caller_renderer_protected'
@@ -29,7 +29,7 @@ export interface KillContext {
   dashboardPids: ReadonlySet<number>;
 }
 
-export type KillVerdict =
+type KillVerdict =
   | { ok: true }
   | { ok: false; code: KillDenyCode; status: 400 | 403 };
 

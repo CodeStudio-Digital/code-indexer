@@ -29,7 +29,7 @@ export interface AppTeamRoleConfig {
   fallbackModels: AppTeamModelRef[];
 }
 
-export interface AppTeamConfigView {
+interface AppTeamConfigView {
   company_session_id: CompanySessionId | null;
   status: 'idle' | 'running' | 'paused' | 'completed' | 'error';
   operational_rules: string;

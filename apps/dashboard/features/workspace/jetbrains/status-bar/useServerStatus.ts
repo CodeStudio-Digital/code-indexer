@@ -13,7 +13,7 @@ import { useEffect, useState } from 'react';
 import { apiCall, apiStream, electronApi } from '../../../../lib/api-client.js';
 import type { LspServerStatus, LspServerStatusFrame } from '@mcp/api-bus';
 
-export type { LspServerStatus };
+
 
 export function useServerStatus(
   projectId: number,

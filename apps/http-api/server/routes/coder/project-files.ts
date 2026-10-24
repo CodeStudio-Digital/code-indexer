@@ -6,14 +6,14 @@ import {
   shouldIgnoreProjectPath,
 } from '@mcp/shared/utils/project-ignore.js';
 
-export interface ProjectTreeEntry {
+interface ProjectTreeEntry {
   name: string;
   path: string;
   type: 'file' | 'dir';
   size: number | null;
 }
 
-export interface ProjectSearchResult {
+interface ProjectSearchResult {
   path: string;
   type: 'file' | 'dir';
 }

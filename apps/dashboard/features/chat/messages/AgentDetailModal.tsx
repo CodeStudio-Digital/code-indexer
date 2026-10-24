@@ -12,7 +12,7 @@ import {
 import { cn } from '../../../lib/utils.js';
 import { Markdown } from './Markdown.js';
 import { parsePersistedAgentsGroup } from './agents-group-parser.js';
-import type { AgentsGroupResultSource } from './AgentsGroupBlock.js';
+import type { AgentsGroupResultSource } from './agents-group-result-source.js';
 
 interface AgentDetailModalProps {
   agent: ParallelAgent;

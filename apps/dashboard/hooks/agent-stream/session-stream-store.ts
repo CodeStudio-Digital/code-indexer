@@ -158,7 +158,7 @@ export const updateAgentSession: UpdateSession = (sessionId, patch) => {
   for (const removedId of removed) notifySession(removedId);
 };
 
-export interface AgentStreamCursor {
+interface AgentStreamCursor {
   seq: number;
   busId?: string;
 }
@@ -171,8 +171,8 @@ export function readAgentStreamCursor(sessionId: SessionId): AgentStreamCursor {
     : { seq: -1 };
 }
 
-export type AgentStreamConsumerId = symbol;
-export type AgentStreamStartKind = 'attach' | 'command';
+type AgentStreamConsumerId = symbol;
+type AgentStreamStartKind = 'attach' | 'command';
 
 interface ActiveStream {
   token: symbol;

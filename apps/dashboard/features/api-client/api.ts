@@ -5,10 +5,7 @@
  * mapping is required.
  */
 import { apiBaseUrl } from '../../lib/api-client.js';
-import type {
-  ApiBodyKind, ApiCollection, ApiEnvironment, ApiRequest, SendResponse,
-  RunReport, ApiRegressionRun, ImportResult, ApiRequestHistory,
-} from './types.js';
+import type { ApiCollection, ApiEnvironment, ApiRequest, SendResponse, RunReport, ApiRegressionRun, ImportResult, ApiRequestHistory } from './types.js';
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${apiBaseUrl()}${path}`, {
@@ -108,5 +105,3 @@ export const runCollection = (p: number, cid: number, opts: { envId?: number; in
   req<RunReport>(`${root(p)}/collections/${cid}/run`, j(opts));
 export const listRuns = (p: number, cid: number) =>
   req<{ runs: ApiRegressionRun[] }>(`${root(p)}/collections/${cid}/runs`).then((r) => r.runs);
-
-export type { ApiBodyKind };

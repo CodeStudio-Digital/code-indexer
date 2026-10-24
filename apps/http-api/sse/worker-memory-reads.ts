@@ -1,4 +1,4 @@
-import { abortableRead } from '../../../packages/shared/src/utils/abortable.js';
+import { abortableRead } from '@mcp/shared/utils/abortable.js';
 
 /** Per-worker authority for explicit reads. Keep occupied slots until the
  * underlying operation settles, even when a non-cancellable adapter is late. */

@@ -7,7 +7,7 @@
  * covering identity index turns that join into one bounded lookup per chunk.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

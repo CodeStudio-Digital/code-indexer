@@ -17,7 +17,7 @@ export interface TreeEntry {
 }
 
 interface TreeNodeDTO extends TreeEntry { children?: TreeNodeDTO[] }
-export interface FsEventDTO { path: string; kind: 'upsert' | 'delete'; isDir: boolean }
+interface FsEventDTO { path: string; kind: 'upsert' | 'delete'; isDir: boolean }
 
 const PERSIST_PREFIX = 'mcp-ide:file-tree:';
 // 200 dirs expandidos já é um power-user extremo; com a fila bounded e a

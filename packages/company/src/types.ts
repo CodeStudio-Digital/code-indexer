@@ -24,7 +24,7 @@ export * from '@mcp/company-contracts';
  * company orchestrator. Stored on ToolContext so tools can access it.
  */
 export interface CompanyContext {
-  orchestrator: import('@mcp/company/orchestrator.js').CompanyOrchestrator;
+  orchestrator: import('@mcp/company/orchestrator-port.js').CompanyOrchestratorPort;
   companySessionId: string;
   /** Product capability hosted by the persistent Company lifecycle. */
   runtimeKind?: import('@mcp/company-contracts').CompanyRuntimeKind;

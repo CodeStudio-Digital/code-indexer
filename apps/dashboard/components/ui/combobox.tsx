@@ -13,7 +13,7 @@ export interface ComboboxOption {
   description?: string;
 }
 
-export interface ComboboxProps {
+interface ComboboxProps {
   value: string;
   onChange: (value: string) => void;
   options: ComboboxOption[];

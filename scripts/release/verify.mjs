@@ -7,7 +7,8 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { checkAsarClosure } from './asar-closure.mjs';
 
@@ -27,11 +28,24 @@ function electronBinary(root) {
 export function runSmokeProbes(root, resourcesDir) {
   const binary = electronBinary(root);
   const harness = path.join(root, 'scripts/release/smoke.cjs');
-  const result = spawnSync(binary, [harness, resourcesDir], {
-    cwd: root,
-    encoding: 'utf8',
-    timeout: 180000,
-  });
+  const profile = mkdtempSync(path.join(tmpdir(), 'codestudio-release-smoke-'));
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  let result;
+  try {
+    result = spawnSync(binary, [harness, resourcesDir, `--user-data-dir=${profile}`], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 180000,
+      env,
+    });
+  } finally {
+    // Only the unique profile created for this probe can be removed.
+    if (path.dirname(profile) === path.resolve(tmpdir())
+      && path.basename(profile).startsWith('codestudio-release-smoke-')) {
+      rmSync(profile, { recursive: true, force: true, maxRetries: 3 });
+    }
+  }
   const line = (result.stdout || '')
     .split('\n')
     .find((l) => l.startsWith('SMOKE_RESULT:'));

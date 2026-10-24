@@ -75,6 +75,3 @@ export function renderChapterV3(summary: CompactionSummaryV3 | CompactionChapter
   section('Resolved issues', chapter.resolved_issues.map((item) => `- ${item}`).join('\n'));
   return lines.join('\n');
 }
-
-/** Alias used by callers migrating from renderSummaryV2. */
-export const renderSummaryV3 = renderResumeV3;

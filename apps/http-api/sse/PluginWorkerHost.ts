@@ -11,26 +11,26 @@ import { Worker } from 'node:worker_threads';
 import { resolveWorkerFile } from './workerFileResolution.js';
 import type { PluginToolResult } from '@mcp/plugin-sdk';
 
-export interface PluginBundleRef {
+interface PluginBundleRef {
   namespace: string;
   file: string;
 }
 
-export type HostInvoke = (
+type HostInvoke = (
   method: string,
   payload: unknown,
   namespace: string,
   cwd: string,
 ) => Promise<unknown>;
 
-export interface PluginWorkerHostOpts {
+interface PluginWorkerHostOpts {
   bundles: PluginBundleRef[];
   /** Whitelisted, read-only host surface a plugin handler may call. */
   hostInvoke?: HostInvoke;
 }
 
 /** Per-invocation project context (handed to the handler's ctx in the worker). */
-export interface InvokeContext {
+interface InvokeContext {
   projectName: string | null;
   cwd: string;
 }

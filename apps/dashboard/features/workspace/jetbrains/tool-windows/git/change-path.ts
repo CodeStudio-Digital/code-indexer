@@ -1,4 +1,4 @@
-export interface ChangePathParts {
+interface ChangePathParts {
   name: string;
   directory: string;
 }

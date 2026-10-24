@@ -1,3 +1,5 @@
+import type { LspInstallProgress } from './install-progress.js';
+export type { LspInstallProgress } from './install-progress.js';
 /**
  * On-demand LSP server installation into
  * `<dataDir>/lsp-servers/<id>@<version>/`. Dispatches on install.kind:
@@ -25,11 +27,6 @@ import {
   type LspServerDef,
 } from './server-registry.js';
 
-export type LspInstallProgress =
-  | { phase: 'start'; serverId: string; version: string; targetDir: string }
-  | { phase: 'log'; line: string }
-  | { phase: 'done'; installDir: string }
-  | { phase: 'error'; message: string };
 
 export interface InstalledServerInfo {
   id: string;

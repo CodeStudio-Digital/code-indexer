@@ -38,7 +38,8 @@ export function kanbanRecomputeFingerprint(
   cards: ReadonlyArray<Partial<KanbanCardFull>> | null | undefined,
 ): string {
   if (!Array.isArray(cards)) return '';
-  return cards
+  const validCards: ReadonlyArray<Partial<KanbanCardFull>> = cards;
+  return validCards
     .map((c) => {
       const agents = Array.isArray(c.agents)
         ? c.agents.filter((a) => a && !a.unassigned_at).map((a) => a.role).sort().join(',')

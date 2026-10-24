@@ -24,7 +24,7 @@ export function writeMicDeviceId(deviceId: string | null): void {
   } catch { /* quota / private mode */ }
 }
 
-export interface MicDevice {
+interface MicDevice {
   deviceId: string;
   label: string;
 }

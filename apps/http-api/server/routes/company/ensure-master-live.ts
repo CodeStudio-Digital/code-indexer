@@ -32,7 +32,7 @@ import { resolveEffectiveMasterRuntime } from '@mcp/company/services/subordinate
 import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 
-export interface EnsureMasterOpts {
+interface EnsureMasterOpts {
   /** Delivered to the master as a continuation (the answer / message / plan verdict). */
   message: string;
   attachments?: Parameters<CompanyOrchestrator['startMaster']>[0]['attachments'];
@@ -40,7 +40,7 @@ export interface EnsureMasterOpts {
   thinking?: boolean;
 }
 
-export type EnsureMasterResult =
+type EnsureMasterResult =
   | { orchestrator: WorkerBackedOrchestrator; resumed: boolean }
   | {
       error: string;

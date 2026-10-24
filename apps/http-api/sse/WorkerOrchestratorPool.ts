@@ -105,7 +105,7 @@ export function resolveCompanyRpcTimeoutMs(path: readonly string[]): number {
     : DEFAULT_COMPANY_RPC_TIMEOUT_MS;
 }
 
-export interface WorkerOrchestratorPoolOpts {
+interface WorkerOrchestratorPoolOpts {
   /** Absolute path Node spawns — built `.js` in prod, dev bootstrap `.mjs` in dev. */
   workerFile: string;
   /** Extra execArgv (currently unused; reserved for future loader tweaks). */

@@ -68,7 +68,7 @@ describe('post-cut mixed SQLite stores', () => {
 
   it('keeps the project investigation ledger independent from session identity', async () => {
     const root = join(process.cwd(), 'packages', 'store', 'src');
-    for (const file of ['semantic-store.ts', join('db', 'maintenance.ts')]) {
+    for (const file of ['semantic-mutation-fences.ts', join('db', 'maintenance.ts')]) {
       const source = await readFile(join(root, file), 'utf8');
       expect(source).toContain('coder_investigations');
       expect(source, `${file} coupled the project ledger to a session column`)

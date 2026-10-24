@@ -9,7 +9,7 @@ import * as docsApi from './docs-studio-api.js';
 import type { ApiCollection, ApiDocPage, ApiRequest } from '../types.js';
 import type { DocModel } from '../doc-shell/types.js';
 
-export interface DocsStudioState {
+interface DocsStudioState {
   collections: ApiCollection[];
   activeCollectionId: number | null;
   collection: ApiCollection | null;

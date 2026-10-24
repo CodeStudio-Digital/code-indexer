@@ -26,7 +26,7 @@ export interface AdminSkill {
   updated_at: string;
 }
 
-export interface SkillUsageStats {
+interface SkillUsageStats {
   total_invocations: number;
   last_used: string | null;
 }
@@ -196,7 +196,7 @@ export async function installSkillFromLocal(opts: {
   return j as InstallFromGithubResult;
 }
 
-export async function fetchSkillUsage(id: string): Promise<SkillUsageStats> {
+async function fetchSkillUsage(id: string): Promise<SkillUsageStats> {
   const r = await fetch(`/api/admin/skills/${id}/usage`);
   return (await r.json()) as SkillUsageStats;
 }

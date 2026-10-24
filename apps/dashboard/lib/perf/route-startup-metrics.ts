@@ -119,7 +119,7 @@ function perfNow(): number {
 }
 
 function safeNumber(value: number | undefined): number | undefined {
-  return Number.isFinite(value) ? Math.round(value) : undefined;
+  return typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : undefined;
 }
 
 function rounded(value: number): number {
@@ -239,7 +239,7 @@ function newSample(projectId: number, tab?: string, startTimeMs = perfNow()): Mu
   return sample;
 }
 
-export function ensureRouteStartupMetrics(): void {
+function ensureRouteStartupMetrics(): void {
   if (started || typeof window === 'undefined' || typeof PerformanceObserver === 'undefined') {
     return;
   }
@@ -369,7 +369,7 @@ export function acquireRouteMetricsCollection(): () => void {
 }
 
 /** Disconnect the route-startup PerformanceObservers (best-effort). */
-export function stopRouteStartupMetrics(): void {
+function stopRouteStartupMetrics(): void {
   for (const observer of activeObservers) {
     try {
       observer.disconnect();
@@ -381,7 +381,7 @@ export function stopRouteStartupMetrics(): void {
   started = false;
 }
 
-export function isRouteMetricsCollecting(): boolean {
+function isRouteMetricsCollecting(): boolean {
   return collectionEnabled;
 }
 
@@ -400,7 +400,7 @@ function addVital(
   return row;
 }
 
-export function startInitialProjectRouteFromLocation(): void {
+function startInitialProjectRouteFromLocation(): void {
   if (typeof window === 'undefined') {
     return;
   }
@@ -486,7 +486,7 @@ export function markRouteEvent(name: string, meta: RouteMetricMeta = {}): void {
   );
 }
 
-export function markRouteEventOnce(key: string, name: string, meta: RouteMetricMeta = {}): void {
+function markRouteEventOnce(key: string, name: string, meta: RouteMetricMeta = {}): void {
   const sample = routeSampleFor(meta.projectId);
   if (!sample) {
     return;
@@ -580,7 +580,7 @@ export function startRouteSpan(name: string, meta: RouteMetricMeta = {}): (doneM
   };
 }
 
-export function recordRouteSpan(
+function recordRouteSpan(
   name: string,
   durationMs: number,
   meta: RouteMetricMeta = {},

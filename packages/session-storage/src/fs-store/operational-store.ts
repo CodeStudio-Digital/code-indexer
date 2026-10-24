@@ -460,44 +460,4 @@ export type FsOperationalSessionApi = Pick<
   >
 >;
 
-export function installOperationalSessionApi(
-  target: object,
-  operations: FsOperationalSessionStore,
-): void {
-  const prototype = Object.getPrototypeOf(operations) as object;
-  for (const name of Object.getOwnPropertyNames(prototype)) {
-    if (name === 'constructor') continue;
-    const method = operations[name as keyof FsOperationalSessionStore];
-    if (typeof method === 'function') {
-      Object.defineProperty(target, name, {
-        configurable: false,
-        enumerable: false,
-        writable: false,
-        value: method.bind(operations),
-      });
-    }
-  }
-  for (const name of Object.getOwnPropertyNames(operations)) {
-    if (
-      [
-        'advanced',
-        'goals',
-        'planning',
-        'tasks',
-        'taskRuns',
-        'drive',
-        'tools',
-        'groups',
-        'filesystemRoots',
-      ].includes(name)
-    ) {
-      continue;
-    }
-    Object.defineProperty(target, name, {
-      configurable: false,
-      enumerable: false,
-      writable: false,
-      value: operations[name as keyof FsOperationalSessionStore],
-    });
-  }
-}
+export { installOperationalSessionApi } from './operational-api-install.js';

@@ -23,7 +23,7 @@ interface EventCursorPayload {
   totalCount: number | null;
 }
 
-export interface SessionWorkbenchEventPageSource {
+interface SessionWorkbenchEventPageSource {
   listPage(
     sessionId: SessionId,
     input: { cursor?: string; limit: number },
@@ -145,7 +145,7 @@ function duration(data: Record<string, unknown>): number | null {
   return null;
 }
 
-export function projectSessionWorkbenchEvent(
+function projectSessionWorkbenchEvent(
   sessionId: SessionId,
   source: PersistedRuntimeEventRecord,
 ): SessionWorkbenchEvent {

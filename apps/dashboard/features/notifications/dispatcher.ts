@@ -21,7 +21,7 @@ interface SettingsResponse {
   items?: Array<{ key?: string; value?: string | null; default?: string | null }>;
 }
 
-export interface RouteVisibilitySnapshot {
+interface RouteVisibilitySnapshot {
   pathname: string;
   search?: string;
   visibilityState?: DocumentVisibilityState | 'visible' | 'hidden' | 'prerender' | 'unloaded';
@@ -51,13 +51,13 @@ export function buildNotificationKey(event: AppNotificationEvent): string {
   ].join(':');
 }
 
-export function resetNotificationRuntimeForTests(): void {
+function resetNotificationRuntimeForTests(): void {
   memoryDedupe.clear();
   settingsCache = null;
   nativeSupportCache = null;
 }
 
-export function isNotificationRouteVisible(target: NotificationRouteTarget): boolean {
+function isNotificationRouteVisible(target: NotificationRouteTarget): boolean {
   if (typeof window === 'undefined' || typeof document === 'undefined') return false;
   return isNotificationRouteVisibleForLocation(target, {
     pathname: window.location.pathname,
@@ -126,7 +126,7 @@ export async function emitAppNotification(event: AppNotificationEvent): Promise<
   const bridge = window.electronAPI;
   const canUseNative = !!bridge?.showNotification && await resolveNativeNotificationSupport(bridge);
   if (canUseNative) {
-    bridge.showNotification(payload);
+    bridge?.showNotification?.(payload);
     return;
   }
 
@@ -137,7 +137,7 @@ type NotificationSource = (emit: typeof emitAppNotification) => void | (() => vo
 
 const registeredSources = new Map<string, () => void>();
 
-export function registerNotificationSource(name: string, source: NotificationSource): () => void {
+function registerNotificationSource(name: string, source: NotificationSource): () => void {
   registeredSources.get(name)?.();
   const cleanup = source(emitAppNotification);
   const dispose = typeof cleanup === 'function' ? cleanup : () => undefined;

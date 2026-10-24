@@ -1,3 +1,4 @@
+import { EMPTY, PLAN_SCHEMA, UPSERT_SCHEMA } from './app-workflow-schemas.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CoderTool, ToolContext } from "@mcp/code-agent/core/tool.js";
@@ -5,33 +6,20 @@ import type { JsonSchema } from "@mcp/provider-sdk";
 import { err, ok } from "@mcp/agent-runtime-host/tool-result.js";
 import { auditAppPlan } from '@mcp/app-studio/plan/fitness.js';
 import { appWorkspaceFingerprint } from '@mcp/app-studio/plan/evidence.js';
-import { APP_PLAN_SCHEMA } from '@mcp/app-studio/plan/schema.js';
-import {
-  formatAppPlanValidationIssues,
-  parseAppPlan,
-  validateAppPlan,
-  type AppFitnessReport,
-  type AppPlanV1,
-} from '@mcp/app-studio/plan/types.js';
+
+import { formatAppPlanValidationIssues, parseAppPlan, validateAppPlan, type AppFitnessReport } from '@mcp/app-studio/plan/types.js';
 import { nextMigrationFilename, normalizeMigrationSlug, validateAppMigrationSql } from '@mcp/app-studio/database/migration.js';
 import { replaceAppSeedFile, validateAppSeedSql } from '@mcp/app-studio/database/seed.js';
 import { listSqlMigrations, runWorkspaceScript, summarizeOutput } from '@mcp/app-studio/verification/workspace-checks.js';
 import { readDbStatus } from '@mcp/app-studio/status-files.js';
 import { findLocalD1File } from '@mcp/app-studio/local-db.js';
 import { getDatabaseProvisioner } from '@mcp/services/app-studio/index.js';
-import type {
-  AppStudioSession,
-  AppStudioStore,
-  AppStudioWorkItem,
-  AppStudioWorkItemKind,
-} from '@mcp/store/app-studio-store.js';
+import type { AppStudioSession, AppStudioStore, AppStudioWorkItem, AppStudioWorkItemKind } from '@mcp/store/app-studio-store.js';
 import type { AppToolBinding } from './binding.js';
 import { getAppStudioStore } from './store-binding.js';
 import { appResult } from './model-output.js';
 import { ensureAppStudioDbConnection, getAppStudioDbClientStore } from './db-client-bridge.js';
 import { dispatchReadyAppWork, type AppCompanyDispatchHost } from './company-dispatch.js';
-
-const EMPTY: JsonSchema = { type: 'object', properties: {}, additionalProperties: false };
 
 function resolveHostPath(_path: '.', ctx: ToolContext):
   | { kind: 'ok'; path: string }
@@ -136,17 +124,6 @@ export function appGetPlan(binding: AppToolBinding): CoderTool {
   };
 }
 
-const PLAN_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    plan: { ...APP_PLAN_SCHEMA, description: 'Complete AppPlanV1 document.' },
-    expected_revision_number: { type: 'integer', minimum: 1 },
-    reason: { type: 'string' },
-  },
-  required: ['plan', 'reason'],
-  additionalProperties: false,
-};
-
 export function appUpdatePlan(binding: AppToolBinding): CoderTool {
   return {
     name: 'app_update_plan',
@@ -176,20 +153,6 @@ export function appUpdatePlan(binding: AppToolBinding): CoderTool {
     },
   };
 }
-
-const UPSERT_SCHEMA: JsonSchema = {
-  type: 'object',
-  properties: {
-    items: { type: 'array', minItems: 1, items: { type: 'object', properties: {
-      id: { type: 'string' }, slice_id: { type: ['string', 'null'] }, title: { type: 'string' }, outcome: { type: 'string' },
-      kind: { type: 'string', enum: ['research', 'plan', 'contract', 'implement', 'verify', 'release', 'change'] },
-      owner_role: { type: 'string' }, priority: { type: 'integer' }, sort_order: { type: 'integer' },
-      depends_on: { type: 'array', items: { type: 'string' } }, source_ids: { type: 'array', items: { type: 'string' } },
-      acceptance: { type: 'array', items: { type: 'string' } }, file_scope: { type: 'array', items: { type: 'string' } },
-    }, required: ['id', 'title', 'kind', 'owner_role', 'source_ids', 'acceptance'], additionalProperties: false } },
-  },
-  required: ['items'], additionalProperties: false,
-};
 
 export function appUpsertWorkItems(binding: AppToolBinding): CoderTool {
   return {

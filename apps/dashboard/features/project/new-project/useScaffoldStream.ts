@@ -16,7 +16,7 @@ import { ExponentialBackoff } from '@mcp/shared/sse/BackoffStrategy.js';
 import { apiBaseUrl } from '../../../lib/api-client.js';
 import type { TemplateId } from './templates.js';
 
-export interface ScaffoldStartBody {
+interface ScaffoldStartBody {
   template: TemplateId;
   name: string;
   description?: string;

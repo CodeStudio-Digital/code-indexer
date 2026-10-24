@@ -19,13 +19,13 @@ import {
 import type { PreviewRunnerBridge as RunnerBridge } from '@mcp/services/preview/contracts.js';
 export type { PreviewRunnerBridge as RunnerBridge, PreviewRunnerTask as ResolverRunnerTask } from '@mcp/services/preview/contracts.js';
 
-export interface ResolvedDevUrl {
+interface ResolvedDevUrl {
   url: string;
   /** Set only when THIS call started the server — the lifecycle stops it. */
   ownedTaskId?: string;
 }
 
-export interface DetectedRunnerLite {
+interface DetectedRunnerLite {
   id?: string;
   label: string;
   command: string;
@@ -49,7 +49,7 @@ const REUSE_POLL_MS = 10_000;
 const BOOT_POLL_MS = 45_000;
 const POLL_INTERVAL_MS = 400;
 
-export interface ResolveDevUrlOptions {
+interface ResolveDevUrlOptions {
   /** Override poll timeouts (tests). */
   reusePollMs?: number;
   bootPollMs?: number;

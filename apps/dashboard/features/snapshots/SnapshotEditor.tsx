@@ -33,7 +33,7 @@ import type { Snapshot } from './snapshot-types.js';
 /** Pin = boost retrieval salience; unpin returns to the default mid-weight. */
 const PIN_IMPORTANCE = 0.95;
 const UNPIN_IMPORTANCE = 0.5;
-export const PIN_THRESHOLD = 0.9;
+const PIN_THRESHOLD = 0.9;
 
 type EditorTab = 'snapshots' | 'memory';
 

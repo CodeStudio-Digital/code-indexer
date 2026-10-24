@@ -7,8 +7,8 @@ import {
   type AgentId,
 } from '@mcp/code-agent/agents/index.js';
 
-export const CUSTOM_AGENTS_SETTING_KEY = 'coder_custom_agents_v1';
-export const CUSTOM_AGENT_PREFIX = 'custom:' as const;
+const CUSTOM_AGENTS_SETTING_KEY = 'coder_custom_agents_v1';
+const CUSTOM_AGENT_PREFIX = 'custom:' as const;
 
 export type CustomAgentSelectionId = `${typeof CUSTOM_AGENT_PREFIX}${string}`;
 export type AgentSelectionId = AgentId | CustomAgentSelectionId;

@@ -93,7 +93,7 @@ export async function dismissSuggestion(id: number): Promise<void> {
   await jsonOrThrow(response);
 }
 
-export async function deleteSuggestion(id: number): Promise<void> {
+async function deleteSuggestion(id: number): Promise<void> {
   const response = await fetch(`/api/docs-agent/suggestions/${id}`, { method: 'DELETE' });
   await jsonOrThrow(response);
 }

@@ -47,13 +47,13 @@ function readMode(): AutoFixMode {
   }
 }
 
-export interface PendingFix {
+interface PendingFix {
   /** Problem the staged prompt targets (label for the chip, raw for send). */
   problem: Problem;
   stagedAt: number;
 }
 
-export interface AutoFixOptions {
+interface AutoFixOptions {
   /**
    * Reload the preview so errors that still exist re-emit fresh (run-end
    * revalidation). Without it, run-end suspects simply never fire.

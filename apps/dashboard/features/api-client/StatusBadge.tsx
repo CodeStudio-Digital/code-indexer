@@ -5,7 +5,7 @@
  */
 import { cn } from '../../lib/utils.js';
 
-export function statusClass(s: number | null): string {
+function statusClass(s: number | null): string {
   if (s == null) return 'text-red-500 bg-red-500/10';
   if (s < 300) return 'text-emerald-500 bg-emerald-500/10';
   if (s < 400) return 'text-blue-500 bg-blue-500/10';

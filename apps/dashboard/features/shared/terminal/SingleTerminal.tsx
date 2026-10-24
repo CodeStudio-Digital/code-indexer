@@ -14,7 +14,7 @@ import { apiCall, apiStream } from '../../../lib/api-client.js';
 import { useIsDark } from '../../builder/preview/files/viewer/useIsDark.js';
 import { findTerminalPathMatches } from './terminal-links.js';
 
-export interface SingleTerminalProps {
+interface SingleTerminalProps {
   terminalId: string;
   /** Notified when the underlying PTY process exits (user typed `exit`). */
   onProcessExited: () => void;

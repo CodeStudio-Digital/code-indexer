@@ -24,7 +24,7 @@ import type { AddModelInput } from './AddModelForm.js';
 import type { AdminModel, AdminProvider, TestResult } from '../types.js';
 import { providerVisual } from './provider-icons.js';
 
-export interface ProviderModalProps {
+interface ProviderModalProps {
   /** When non-null, the dialog is open and renders this provider. */
   provider: AdminProvider | null;
   allProviders: AdminProvider[];
@@ -123,4 +123,3 @@ export function ProviderModal({ provider, onClose, ...rest }: ProviderModalProps
 }
 
 // Re-export for convenience.
-export { providerVisual };

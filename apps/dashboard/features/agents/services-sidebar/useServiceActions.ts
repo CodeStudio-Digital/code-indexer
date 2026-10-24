@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { confirm, prompt } from '../../../components/ui/prompt-dialog.js';
 import { KNOWN_STACKS, type ServiceRow } from './types.js';
 
-export interface UseServiceActionsParams {
+interface UseServiceActionsParams {
   sessionId: string;
   services: ServiceRow[];
   reload: () => Promise<void>;

@@ -126,8 +126,6 @@ export async function createCoderProvider(
 }
 
 // ─── Back-compat re-exports ──────────────────────────────────────
-// Existing coder call sites use createChatProviderAsync.
-export const createChatProviderAsync = createCoderProvider;
 
 
 export {

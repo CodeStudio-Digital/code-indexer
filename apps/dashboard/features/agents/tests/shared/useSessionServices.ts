@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 
 const POLL_INTERVAL_MS = 8_000;
 
-export interface SessionService {
+interface SessionService {
   service_id: string;
   name: string;
   stack: string;
@@ -23,7 +23,7 @@ export interface SessionService {
   preview_url: string | null;
 }
 
-export interface UseSessionServicesResult {
+interface UseSessionServicesResult {
   services: SessionService[];
   loading: boolean;
   error: string | null;

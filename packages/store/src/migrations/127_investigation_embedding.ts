@@ -10,7 +10,7 @@
  * runtime now rebuilds investigation vectors in each project's vectors.db.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

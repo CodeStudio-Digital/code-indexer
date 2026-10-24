@@ -115,7 +115,7 @@ describe('KimiCodeChatProvider stream handler', () => {
     expect(args.stream).toBe(true);
     expect(args.stream_options).toEqual({ include_usage: true });
     expect(args.prompt_cache_key).toBe(`coder-session-${SESSION_ID}`);
-    expect(args.thinking).toEqual({ type: 'enabled' });
+    expect(args.thinking).toEqual({ type: 'enabled', keep: 'all' });
     const tools = args.tools as Array<{ function: { parameters: Record<string, unknown> } }>;
     expect(tools[0].function.parameters.type).toBe('object');
     expect((tools[0].function.parameters.properties as Record<string, { type?: string }>).tier.type).toBe('string');
@@ -128,7 +128,7 @@ describe('KimiCodeChatProvider stream handler', () => {
     );
     await collect(provider, { ...baseReq, thinking: false });
     const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
-    expect(args.thinking).toEqual({ type: 'enabled' });
+    expect(args.thinking).toEqual({ type: 'enabled', keep: 'all' });
   });
 
   // Per-request `thinking` wins over the admin global `thinkingMode`. The
@@ -155,7 +155,7 @@ describe('KimiCodeChatProvider stream handler', () => {
     await collect(provider, { ...baseReq, thinking: true });
 
     const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
-    expect(args.thinking).toEqual({ type: 'enabled' });
+    expect(args.thinking).toEqual({ type: 'enabled', keep: 'all' });
   });
 
   it('per-request thinking=false overrides admin thinkingMode=enabled', async () => {
@@ -201,7 +201,7 @@ describe('KimiCodeChatProvider stream handler', () => {
     await collect(provider, { ...baseReq });
 
     const args = createSpy(provider).mock.calls[0][0] as Record<string, unknown>;
-    expect(args.thinking).toEqual({ type: 'enabled' });
+    expect(args.thinking).toEqual({ type: 'enabled', keep: 'all' });
   });
 
   it('admin thinkingMode=disabled is honored when the request is silent', async () => {

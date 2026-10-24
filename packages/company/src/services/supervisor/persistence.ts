@@ -23,7 +23,7 @@
  * heartbeat after restart is `ghost_running` — the process holding
  * that run is gone. Supervisor flips it to `TERMINAL` + emits incident.
  */
-import type { AgentSupervisionRecord } from './heartbeat-tracker.js';
+import type { AgentSupervisionRecord } from './supervision-record.js';
 import type { SupervisionState } from './state-machine.js';
 
 /**

@@ -229,7 +229,7 @@ export function addBusEventSink(bus: CoderRunBus, sink: (ev: BufferedEvent) => v
  * without guarding every site (`emitWorkerLog(pool.getBus(id), ...)` is
  * the common pattern and `getBus` returns null when no run is active).
  */
-export interface WorkerLogPayload {
+interface WorkerLogPayload {
   ts: number;
   level: 'info' | 'warn' | 'error' | 'debug';
   category:
@@ -339,7 +339,7 @@ export function subscribe(
  * Reconnects with a cursor (`since >= 0`) NEVER trim — the client's
  * (busId, hwm) dedup depends on the contiguous cursor replay.
  */
-export const REPLAY_STATE_KINDS = new Set<string>([
+const REPLAY_STATE_KINDS = new Set<string>([
   // TRANSCRIPT-bearing kinds (incident 2026-07-20: dropping these erased the
   // live run's completed turns from the UI — the client rebuilds turns it
   // hasn't refetched from these events, not only from the GET). The real

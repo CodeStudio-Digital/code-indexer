@@ -11,9 +11,9 @@
  */
 import type { DragEvent } from 'react';
 
-export const TAB_MIME = 'application/x-mcp-tab';
+const TAB_MIME = 'application/x-mcp-tab';
 
-export interface TabDragPayload {
+interface TabDragPayload {
   path: string;
   fromPaneId: string;
 }

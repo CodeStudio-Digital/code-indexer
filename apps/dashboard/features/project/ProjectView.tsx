@@ -80,7 +80,6 @@ import { LocalHistoryDialog } from '../workspace/local-history/LocalHistoryDialo
 import { BOTTOM_BUILTIN_TAB_IDS } from '../workspace/BottomPanel.js';
 import { projectSurface } from './tabs-config.js';
 import { ProjectWorkbench } from './ProjectWorkbench.js';
-export type { ProjectTabId } from './tabs-config.js';
 
 interface ProjectViewProps {
   projectId: number;
@@ -120,7 +119,7 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
       const tab = ws.openFiles.find(
         (f) => (f.kind === undefined || f.kind === 'file') && f.path === e.path && f.projectId === projectId,
       );
-      if (!tab || tab.kind === 'diff' || tab.kind === 'git-log' || tab.kind === 'git-stash') continue;
+      if (!tab || (tab.kind !== undefined && tab.kind !== 'file')) continue;
       if (e.kind === 'delete' || tab.dirty) {
         ws.markExternallyChanged(projectId, e.path);
         continue;
@@ -446,11 +445,11 @@ export function ProjectView({ projectId, projectName, initialSessionId }: Projec
         target: action.scope === 'editor' ? 'editor' as const : 'project' as const,
         defaultKeys: action.shortcut ? { intellij: [action.shortcut], vscode: [action.shortcut] } : undefined,
         allowInInputs: true,
-        run: () => runPluginEditorAction(
+        run: async () => { await runPluginEditorAction(
           action,
           projectId,
           pluginEditorContextFromEditor(getActiveEditor(), projectId, activeFilePath ?? undefined, activeLanguageId),
-        ),
+        ); },
       })),
     );
   }, [activeFilePath, contribEditorActions, projectId]);

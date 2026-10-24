@@ -30,7 +30,7 @@ interface RegionFrame {
   dpr: number;
 }
 
-export interface UniversalInspect {
+interface UniversalInspect {
   /** Electron + a resolved dev URL → the window/inspect affordances are usable. */
   canInspect: boolean;
   /** The CDP preview window is currently open (selection or navigate mode). */

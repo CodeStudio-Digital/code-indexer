@@ -13,7 +13,7 @@ export async function saveDiagramXml(projectId: number, path: string, xml: strin
 }
 
 /** Derive the image path: `diagrams/x.drawio` → `diagrams/x.svg` | `.png`. */
-export function exportImagePath(drawioPath: string, format: DrawioExportFormat): string {
+function exportImagePath(drawioPath: string, format: DrawioExportFormat): string {
   return `${drawioPath.replace(/\.drawio$/i, '')}.${format}`;
 }
 

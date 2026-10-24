@@ -18,7 +18,7 @@ import {
   type RoleSkills,
   type SandboxBinding,
 } from '@mcp/company/types.js';
-import type { RoleConfig } from '@mcp/company/services/MasterLifecycle.js';
+import type { RoleConfig } from './role-config.js';
 import type { SessionContext } from '@mcp/company/services/SessionContext.js';
 import { readOperationalRules } from '@mcp/company/services/master/config-loader.js';
 import { buildAppStudioMasterRuntimeBlock } from '@mcp/company/tools/app-studio/runtime-prompt.js';

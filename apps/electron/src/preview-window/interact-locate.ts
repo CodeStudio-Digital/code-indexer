@@ -5,8 +5,8 @@
  */
 import type { PreviewWindow } from './cdp.js';
 
-export type LocateMode = 'coords' | 'focus' | 'fill';
-export interface LocateResult {
+type LocateMode = 'coords' | 'focus' | 'fill';
+interface LocateResult {
   found?: boolean;
   x?: number;
   y?: number;

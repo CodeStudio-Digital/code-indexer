@@ -35,7 +35,7 @@ describe('project semantic API', () => {
 
   it('opening the surface only reads status and never starts indexing', async () => {
     const payload = status();
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(payload), {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(payload), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }));
@@ -103,7 +103,7 @@ describe('project semantic API', () => {
         rerankerApplied: true,
       },
     };
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(payload), {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(payload), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }));

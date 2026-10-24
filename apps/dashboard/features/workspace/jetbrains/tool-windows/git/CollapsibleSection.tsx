@@ -71,7 +71,7 @@ export function CollapsibleSectionHeader({
   );
 }
 
-export function CollapsibleSection({
+function CollapsibleSection({
   title,
   open,
   onToggle,

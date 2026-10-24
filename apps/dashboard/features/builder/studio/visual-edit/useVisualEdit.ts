@@ -34,7 +34,7 @@ interface VisualEditResponse {
   fileHash: string;
 }
 
-export interface UseVisualEditOptions {
+interface UseVisualEditOptions {
   /** Post a message into the preview iframe (origin-checked by the caller). */
   postToPreview: (msg: ParentToPreviewMessage) => void;
   /** Preview origin — inbound `message` events are filtered against it. */

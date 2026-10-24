@@ -9,7 +9,7 @@ import type { JsonSchema } from "@mcp/provider-sdk";
 import type { ToolResult } from "@mcp/agent-runtime-host/tool-result.js";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
 import { okStructured } from '@mcp/code-agent/core/model-output.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import { attachmentsToBlocks } from '@mcp/code-agent/core/messages.js';
 import { buildReviewSubordinateTool, type MasterReviewDeps } from '@mcp/company/tools/review-subordinate.js';
 import { approveSubordinatePlansTool } from '@mcp/company/tools/approve-subordinates-batch.js';

@@ -21,7 +21,7 @@ export class GlobalWorkspaceError extends Error {
   }
 }
 
-export interface CreateGlobalInput {
+interface CreateGlobalInput {
   title: string;
   provider: string;
   model: string;

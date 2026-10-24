@@ -24,12 +24,12 @@ const DISK_FALLBACK_IGNORE = [
   '**/*.map',
 ];
 
-export interface DiskScanSource {
+interface DiskScanSource {
   rootPath: string;
   prefix: string;
 }
 
-export interface DiskScanResult {
+interface DiskScanResult {
   paths: string[];
   totalMatches: number;
   truncated: boolean;

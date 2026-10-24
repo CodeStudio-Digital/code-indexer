@@ -1,7 +1,10 @@
 import { readBoundedJsonResponse } from '@mcp/shared/utils/bounded-json-response.js';
-import type { ToolContext } from './context.js';
+export interface AgentRunHttpContext {
+  config: { dashboard: { port: number } };
+  signal?: AbortSignal;
+}
 
-export function agentRunBaseUrl(ctx: ToolContext): string {
+export function agentRunBaseUrl(ctx: AgentRunHttpContext): string {
   return `http://127.0.0.1:${ctx.config.dashboard.port}`;
 }
 
@@ -16,7 +19,7 @@ export function agentReadSignal(signal?: AbortSignal): AbortSignal {
 
 /** Bound response bytes as well as header/body time. No request signal is
  * retained by the shared run manager across independent MCP calls. */
-export async function jsonRequest<T>(ctx: ToolContext, path: string, init?: RequestInit,
+export async function jsonRequest<T>(ctx: AgentRunHttpContext, path: string, init?: RequestInit,
   transport: typeof fetch = fetch): Promise<T> {
   const signal = agentReadSignal(init?.signal ?? undefined);
   signal.throwIfAborted();

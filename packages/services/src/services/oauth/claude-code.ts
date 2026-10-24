@@ -81,7 +81,6 @@ export const CLAUDE_CODE_ALL_SCOPES = [
   'org:create_api_key',
   ...CLAUDE_CODE_AI_SCOPES,
 ];
-export const CLAUDE_CODE_DEFAULT_SCOPES = CLAUDE_CODE_AI_SCOPES;
 
 // Email/SSO login can consume several minutes before Claude returns to the
 // authorization page. Keep the loopback/PKCE state alive long enough for the

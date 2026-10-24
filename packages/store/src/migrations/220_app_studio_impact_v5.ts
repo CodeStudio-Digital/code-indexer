@@ -3,7 +3,7 @@
  * phases. The active runtime only reads the canonical `affected_phases` shape.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 type Phase = 'define' | 'blueprint' | 'build' | 'deliver';

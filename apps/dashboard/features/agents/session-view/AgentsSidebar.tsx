@@ -1,3 +1,4 @@
+import type { UseProvidersResult } from '../../../hooks/useProviders.js';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Activity, Bot, Check, Crown, Folder, GitBranch, Plus, ScrollText, Server, Trash2, Users } from 'lucide-react';
@@ -22,10 +23,6 @@ import type {
   SessionProject,
 } from './types.js';
 
-interface ProviderOption {
-  id: string;
-  label: string;
-}
 
 interface AgentsSidebarProps {
   sessionId: string;
@@ -36,8 +33,8 @@ interface AgentsSidebarProps {
   persistedAgentRuns: PersistedAgentRun[];
   subordinates: AgentStreamState[];
   stream: ReturnType<typeof useCompanyStream>;
-  providerOptions: ProviderOption[];
-  getModelsForProvider: (provider: string) => Array<{ id: string; name: string; mode?: string }>;
+  providerOptions: UseProvidersResult['providerOptions'];
+  getModelsForProvider: UseProvidersResult['getModelsForProvider'];
   getDefaultModel: (provider: string) => string;
   refetch: () => void;
   onOpenAgentRun: (agentRunId: string, role: string, status: string) => void;

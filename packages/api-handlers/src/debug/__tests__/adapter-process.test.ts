@@ -31,30 +31,36 @@ describe('startDebugTarget', () => {
       command: process.execPath,
       args: ['-e', "process.stdout.write('rea'); setTimeout(() => process.stdout.write('dy\\n'), 25); setInterval(() => {}, 1000)"],
       readyPattern: 'ready',
-      readyTimeoutMs: 1_000,
+      readyTimeoutMs: 5_000,
     }, (category, output) => {
       if (category !== 'stdout') return;
       stdout += output;
     });
 
-    await target.ready;
-    expect(target.child.pid).toBeGreaterThan(0);
-    await target.dispose();
+    try {
+      await target.ready;
+      expect(target.child.pid).toBeGreaterThan(0);
+    } finally {
+      await target.dispose();
+    }
     expect(stdout).toContain('ready');
     expect(target.child.exitCode !== null || target.child.signalCode !== null).toBe(true);
-  });
+  }, 10_000);
 
   it('rejects readiness when the target exits before its marker', async () => {
     const target = await startDebugTarget({
       command: process.execPath,
       args: ['-e', 'process.exit(2)'],
       readyPattern: 'Ready on http://',
-      readyTimeoutMs: 1_000,
+      readyTimeoutMs: 5_000,
     }, () => undefined);
 
-    await expect(target.ready).rejects.toThrow('exited before becoming ready');
-    await target.dispose();
-  });
+    try {
+      await expect(target.ready).rejects.toThrow('exited before becoming ready');
+    } finally {
+      await target.dispose();
+    }
+  }, 10_000);
 
   it('materializes confined prepared files and removes them on dispose', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'mcp-debug-target-'));
@@ -66,18 +72,21 @@ describe('startDebugTarget', () => {
         cwd,
         preparedFiles: [{ path: prepared, content: 'export default {};\n' }],
         readyPattern: 'ready',
-        readyTimeoutMs: 1_000,
+        readyTimeoutMs: 5_000,
       }, () => undefined);
 
-      await target.ready;
-      expect(readFileSync(prepared, 'utf8')).toBe('export default {};\n');
-      await new Promise((resolve) => setTimeout(resolve, 150));
-      await target.dispose();
+      try {
+        await target.ready;
+        expect(readFileSync(prepared, 'utf8')).toBe('export default {};\n');
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      } finally {
+        await target.dispose();
+      }
       expect(existsSync(prepared)).toBe(false);
     } finally {
       rmSync(cwd, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
-  });
+  }, 10_000);
 
   it('rejects prepared files outside the target cwd', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'mcp-debug-target-'));

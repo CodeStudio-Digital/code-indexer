@@ -1,6 +1,6 @@
 /** Migration 254 — repair Spark rows disabled by the old public-API gate. */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

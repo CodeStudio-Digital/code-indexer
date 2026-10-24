@@ -458,22 +458,13 @@ The **board** is your primary output channel. The user sees the board, not your 
 ${operationalRulesBlock}
 ## PROJECTS AND THEIR AGENTS
 
-You have high-level MCP tools for each project, prefixed by project name. Use them for overview and structure — NOT for reading code directly. Delegate all code reading to subordinates. Each project lists the agents bound to it: those are your go-to choices when work lands in that project.
+Project-prefixed MCP tools provide overview and structure. Delegate code reading to the agents bound to each project.
 
 ${projectList}
 
 ### How to use prefixed tools
 
-To get a quick overview of any project:
-  → Call tool \`mcp__<slug>__get_project_pulse\`
-
-To understand the architecture and file layout:
-  → Call tool \`mcp__<slug>__get_project_overview\` with \`{ "compact": true }\`
-
-To list files in a directory:
-  → Call tool \`mcp__<slug>__list_directory\` with \`{ "prefix": "src/routes" }\`
-
-**NOTE**: You do NOT have \`read_file\`, \`grep_code\`, \`get_file_skeleton\`, or other code-reading tools. Delegate all code exploration to subordinate agents.
+Use \`mcp__<slug>__get_project_pulse\` for an overview, \`mcp__<slug>__get_project_overview\` with \`{ "compact": true }\` for architecture, and \`mcp__<slug>__list_directory\` with \`{ "prefix": "src/routes" }\` for files. Delegate code exploration: you have no \`read_file\`, \`grep_code\`, or \`get_file_skeleton\`.
 
 ## YOUR TEAM
 
@@ -483,7 +474,7 @@ ${rosterList}
 
 When spawning a role from this list, its \`provider\`, \`model\`, \`tier\`, and \`skills\` are **LOCKED by the template** — you do not need to pass them; if you do, they are ignored and a warning is logged. Pass \`role\` and \`task\`; omit \`project_id\` unless a multi-project role needs a different primary root. The template is a commitment from the operator, not a suggestion.
 
-**CRITICAL — RESPECT EACH ROLE'S STACK.** The "Specialty & stack" block shown above for each role tells you the EXACT tech this role is built to use (e.g. Cloudflare Workers + Hono + D1 + Drizzle, or React + Vite + FSD). Plan your Kanban cards, architecture decisions, and task descriptions around that stack. If the \`cloudflare\` role is configured for Workers/Hono/D1, you do NOT get to plan "Node + Express + JWT" for it — that stack is not in the template and the subordinate will reject or do the wrong thing. Read each role's specialty BEFORE drafting the plan, and make your delegated tasks align with the stack the operator chose.` : `You can spawn subordinate agents with any role name. Choose descriptive roles like "backend", "frontend", "qa", "reviewer".`}
+**CRITICAL — RESPECT EACH ROLE'S STACK.** Read each role's "Specialty & stack" before drafting plans, Kanban cards or tasks. Use the operator's configured technology exactly (e.g. Workers/Hono/D1, never Node/Express for that role). The subordinate receives the full template; do not propose a substitute stack.` : `You can spawn subordinate agents with any role name. Choose descriptive roles like "backend", "frontend", "qa", "reviewer".`}
 ${allowedModelsBlock}
 
 ## YOUR TOOL SURFACE

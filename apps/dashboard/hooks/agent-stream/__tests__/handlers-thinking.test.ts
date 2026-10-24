@@ -5,7 +5,7 @@ import type { StreamBlock, UpdateSession } from '../types.js';
 function setup() {
   const blocks: StreamBlock[] = [];
   const handlers = createEventHandlers({
-    sid: 1,
+    sid: '00000000-0000-4000-8000-000000000001',
     blocks,
     toolIndex: new Map(),
     flush: vi.fn(),

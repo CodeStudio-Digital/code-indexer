@@ -79,7 +79,7 @@ export function clearProviderActivities(blocks: StreamBlock[]): boolean {
   return changed;
 }
 
-export function kindFromOperation(value: unknown): StreamActivityKind {
+function kindFromOperation(value: unknown): StreamActivityKind {
   if (value === 'provider' || value === 'tool' || value === 'spawn_agent' || value === 'subagent' || value === 'task') {
     return value;
   }
@@ -155,7 +155,7 @@ export interface ToolProgressPayload {
 
 /** Activity kind inferred from a tool_progress id/name (provider.chat,
  *  subagent:, execute_tasks → their own kinds; else generic operation). */
-export function activityKindFromToolProgress(id: string, name: string): StreamActivityKind {
+function activityKindFromToolProgress(id: string, name: string): StreamActivityKind {
   if (name === 'provider.chat' || id.startsWith('provider-chat:') || id.startsWith('pre-think:')) return 'provider';
   if (name.startsWith('subagent:')) return 'subagent';
   if (name === 'execute_tasks') return 'task';
@@ -177,7 +177,7 @@ export function activityPatchFromToolProgress(d: ToolProgressPayload): ActivityP
   };
 }
 
-export function statusFromOperation(value: unknown): StreamActivityStatus {
+function statusFromOperation(value: unknown): StreamActivityStatus {
   if (value === 'completed' || value === 'failed' || value === 'timed_out' || value === 'aborted') return value;
   return 'running';
 }

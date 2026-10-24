@@ -23,7 +23,7 @@
 import type { CoderTool } from "@mcp/code-agent/core/tool.js";
 import type { JsonSchema } from "@mcp/provider-sdk";
 import { ok, err } from "@mcp/agent-runtime-host/tool-result.js";
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import type { IQaTestRunStore } from '@mcp/services/qa/store/interfaces.js';
 import type { QaRunTrigger } from '@mcp/services/qa/types.js';
 import { assertUuid } from '@mcp/session-storage';

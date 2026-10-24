@@ -39,11 +39,9 @@ export const updateDocPage = (p: number, cid: number, pid: number, body: { title
   req<{ ok: true }>(`${root(p)}/collections/${cid}/doc-pages/${pid}`, patch(body));
 export const deleteDocPage = (p: number, cid: number, pid: number) =>
   req<{ ok: true }>(`${root(p)}/collections/${cid}/doc-pages/${pid}`, { method: 'DELETE' });
-export const reorderDocPages = (p: number, cid: number, orderedIds: number[]) =>
-  req<{ ok: true }>(`${root(p)}/collections/${cid}/doc-pages/reorder`, j({ orderedIds }));
 
 // ─── Saved examples ──────────────────────────────────────────────────────
-export interface ExampleCapture {
+interface ExampleCapture {
   name: string;
   req: { method: string; url: string; headers?: Record<string, string>; body?: string | null; bodyKind?: string };
   resp: { status: number | null; statusText: string | null; headers?: Record<string, string>; body?: string | null; contentType?: string | null; size?: number | null };

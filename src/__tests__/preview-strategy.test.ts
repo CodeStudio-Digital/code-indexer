@@ -24,8 +24,8 @@ describe('PreviewStrategy', () => {
   });
 
   describe('inferPreviewStrategy', () => {
-    it('returns proxy-prefix for owned mounts with default image', () => {
-      expect(inferPreviewStrategy({ stack: 'react-ts', mountKind: 'owned' })).toBe('proxy-prefix');
+    it('returns port-direct for owned mounts with default image', () => {
+      expect(inferPreviewStrategy({ stack: 'react-ts', mountKind: 'owned' })).toBe('port-direct');
     });
 
     it('returns port-direct for external mounts', () => {
@@ -44,8 +44,8 @@ describe('PreviewStrategy', () => {
       ).toBe('port-direct');
     });
 
-    it('defaults to proxy-prefix when no signals are present', () => {
-      expect(inferPreviewStrategy({})).toBe('proxy-prefix');
+    it('defaults to port-direct when no signals are present', () => {
+      expect(inferPreviewStrategy({})).toBe('port-direct');
     });
 
     it('is stable for repeated inputs', () => {

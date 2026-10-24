@@ -35,11 +35,9 @@ describe('buildSystemPrompt per-provider preambles', () => {
   it('still contains the shared body regardless of family', () => {
     for (const f of families) {
       const p = buildSystemPrompt({ ...base, providerFamily: f });
-      expect(p).toContain('MCP Code Indexer');
-      expect(p).toContain('get_project_pulse');
-      // `base` sets no sessionDrive → memorySection renders the no-Session-Drive
-      // `# Memory` block (migration 181 renamed the former "# Long-term memory").
-      expect(p).toContain('PROJECT MEMORY');
+      expect(p).toContain('You work inside CodeStudio');
+      expect(p).toContain('# Operating contract');
+      expect(p).toContain('Project root: /tmp/acme');
     }
   });
 

@@ -24,7 +24,7 @@ export interface LedgerEntry {
   detail?: string;
 }
 
-export type LedgerEstimator = () =>
+type LedgerEstimator = () =>
   | Omit<LedgerEntry, 'name'>
   | null
   | Promise<Omit<LedgerEntry, 'name'> | null>;

@@ -12,7 +12,7 @@
  * Both columns are nullable so the schema is a no-op for non-Codex sessions.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

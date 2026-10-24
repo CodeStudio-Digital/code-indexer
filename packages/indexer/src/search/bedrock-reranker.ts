@@ -46,8 +46,7 @@ export class BedrockReranker implements RerankerService {
   private async client(): Promise<{ client: RerankClient; sdk: BedrockAgentSdk }> {
     if (!this.clientPromise) {
       this.clientPromise = (async () => {
-        const moduleName = '@aws-sdk/client-bedrock-agent-runtime';
-        const sdk = await import(/* @vite-ignore */ moduleName) as unknown as BedrockAgentSdk;
+        const sdk = await import(/* @vite-ignore */ '@aws-sdk/client-bedrock-agent-runtime') as unknown as BedrockAgentSdk;
         return {
           sdk,
           client: new sdk.BedrockAgentRuntimeClient({

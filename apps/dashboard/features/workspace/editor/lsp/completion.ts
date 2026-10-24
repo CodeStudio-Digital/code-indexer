@@ -52,11 +52,10 @@ export function registerCompletionProviders(
     };
   };
 
-  // CAUSA-RAIZ DO P2 (autocomplete não abria): `monaco.languages.CompletionItemInsertTextRules`
-  // é `undefined` no runtime deste bundle (const enum não exportado como objeto). Acessar
-  // `.InsertAsSnippet` LANÇAVA dentro do map → o provider devolvia [] → popup vazio para
-  // QUALQUER completion com item de snippet (método/função). Fallback ao literal (4).
-  const SNIPPET_RULE = (monaco.languages.CompletionItemInsertTextRules?.InsertAsSnippet ?? 4) as MonacoNs.languages.CompletionItemInsertTextRules;
+  // Monaco names this enum in the singular. Preserve the numeric fallback for
+  // lightweight test adapters that omit the runtime enum object.
+  const SNIPPET_RULE: MonacoNs.languages.CompletionItemInsertTextRule =
+    monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet ?? 4;
 
   const wordRange = (model: MonacoNs.editor.ITextModel, position: MonacoNs.Position): MonacoNs.IRange => {
     const word = model.getWordUntilPosition(position);

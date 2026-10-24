@@ -1,5 +1,5 @@
 /** Windows backend options for node-pty when it runs inside Electron. */
-export interface WindowsPtyBackendOptions {
+interface WindowsPtyBackendOptions {
   useConpty?: boolean;
   useConptyDll?: boolean;
 }

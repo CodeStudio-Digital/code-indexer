@@ -17,7 +17,7 @@
  * and (via the shared schema lineage) on every per-project DB when opened.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

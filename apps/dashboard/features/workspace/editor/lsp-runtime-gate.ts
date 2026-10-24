@@ -1,6 +1,6 @@
 import type { LspServerStatus } from '@mcp/api-bus';
 
-export interface LspRuntimeGate {
+interface LspRuntimeGate {
   kind: 'node' | 'java' | 'dotnet';
   label: string;
   reason?: string;

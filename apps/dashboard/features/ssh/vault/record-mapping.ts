@@ -51,12 +51,12 @@ export interface VaultIdentityRecord {
 }
 
 /** Portable cross-device references, resolved by the caller (see vault-sync-core). */
-export interface HostRefResolvers {
+interface HostRefResolvers {
   identityMap: Record<string, string>;
   jumpDocFor: (jumpId: number) => string | undefined;
 }
 
-export interface HostToRecordOptions {
+interface HostToRecordOptions {
   /** Personal feed carries portable refs; the team feed omits them. */
   refs?: HostRefResolvers;
   /**

@@ -21,7 +21,7 @@
 import type { KanbanCardFull } from '@mcp/company/types.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 import type { CompanyRecommendFn } from './recommend-shim.js';
-import type { SchedulerSpawn } from './CompanyScheduler.js';
+import type { SchedulerSpawn } from './spawn-port.js';
 
 /** Matches the LAST `[role-hint: @some-role]` marker in a comment body. */
 const ROLE_HINT_RE = /\[role-hint:\s*@([A-Za-z0-9_-]+)\s*\]/;

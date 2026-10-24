@@ -5,7 +5,7 @@
  */
 const STYLE_ID = 'mcp-plugin-theme';
 
-export function applyPluginTheme(
+function applyPluginTheme(
   tokens: Record<string, string>,
   appearance: 'dark' | 'light',
 ): void {
@@ -23,7 +23,7 @@ export function applyPluginTheme(
   document.documentElement.classList.toggle('dark', appearance === 'dark');
 }
 
-export function clearPluginTheme(): void {
+function clearPluginTheme(): void {
   if (typeof document === 'undefined') return;
   document.getElementById(STYLE_ID)?.remove();
 }

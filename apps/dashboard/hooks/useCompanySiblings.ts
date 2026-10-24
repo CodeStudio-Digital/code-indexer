@@ -23,7 +23,7 @@ import {
 } from '../features/agents/routing.js';
 import { DEFAULT_TAB_FOR_ZONE, type Zone } from '../features/agents/zones/types.js';
 
-export interface SubSessionsState {
+interface SubSessionsState {
   parent: CompanySession | null;
   children: CompanySession[];
   loading: boolean;

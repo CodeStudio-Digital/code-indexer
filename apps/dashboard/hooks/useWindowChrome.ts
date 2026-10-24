@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
  * no-op fallback for the browser/web build where `window.electronAPI` is
  * undefined (controls hide, drag is inert, the bar never dims).
  */
-export interface WindowChrome {
+interface WindowChrome {
   /** `'win32' | 'darwin' | 'linux'` in Electron, `'web'` in the browser. */
   platform: NodeJS.Platform | 'web';
   /** True only inside the Electron renderer (controls are wired). */

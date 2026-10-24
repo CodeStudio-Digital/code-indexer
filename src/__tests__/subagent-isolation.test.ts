@@ -90,33 +90,32 @@ describe('PR-6 R24 — session-scoped hooks suppressed for subagents', () => {
 describe('PR-6 R23 — buildSubagentLoopFraming exports a discipline block', () => {
   it('contains persistence framing without the active-context pointer', () => {
     const block = buildSubagentLoopFraming();
-    expect(block).toContain('# Agent loop (subagent)');
-    expect(block).toContain('carry it through end-to-end');
-    expect(block).toContain('# Do not re-read what you already have');
+    expect(block).toContain('# Subagent contract');
+    expect(block).toContain('implementation delivers the scoped change plus verification');
+    expect(block).toContain('Reuse content already in context');
     // Active context is NOT mentioned — subagents don't get that injection.
     expect(block).not.toContain('<active-context>');
     expect(block).not.toContain('# Active context');
   });
 
-  it('warns specifically about slice-resolver snap behaviour (PR-5 alignment)', () => {
+  it('bounds delegation and preserves the investigation scope', () => {
     const block = buildSubagentLoopFraming();
-    expect(block).toContain('Reads snap to the enclosing symbol');
-    expect(block).toContain('around_line');
+    expect(block).toContain('An investigation returns evidence and citations without edits');
+    expect(block).toContain('Do not spawn children');
   });
 
-  it('mentions the runner-level refusal contract', () => {
+  it('directs recovery through supported tool discovery', () => {
     const block = buildSubagentLoopFraming();
-    expect(block).toContain('refuses identical-content tool results');
+    expect(block).toContain('use `find_tools` instead of guessing names');
   });
 });
 
 describe('PR-6 R23 — agentLoopV2 propagation type contract', () => {
-  it('SubagentParent accepts agentLoopV2 (compile-time check)', async () => {
-    const { runSubagent } = await import('@mcp/code-agent/tools/implement-subagent.js');
+  it('SubagentParent accepts agentLoopV2 (compile-time check)', () => {
+    type RunSubagent = typeof import('@mcp/code-agent/tools/implement-subagent.js')['runSubagent'];
     // Type-check only — we never invoke this.
     void (async () => {
-      void runSubagent;
-      const parent: Parameters<typeof runSubagent>[0] = {
+      const parent: Parameters<RunSubagent>[0] = {
         provider: new TextOnlyProvider(),
         tools: [],
         ctx: { cwd: '/tmp', projectName: 'test' },

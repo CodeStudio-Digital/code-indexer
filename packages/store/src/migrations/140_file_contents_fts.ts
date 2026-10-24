@@ -15,7 +15,7 @@
  * coverage sweep repopulates it (see repairFileContentsFts / sweep).
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 import { createFileContentsFts } from '../db/schema/content-fts.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { MessageBridge } from '../../../packages/orchestrator-host/src/index.js';
-import { abortableRead } from '../../../packages/shared/src/utils/abortable.js';
+import type { MessageBridge } from '@mcp/orchestrator-host';
+import { abortableRead } from '@mcp/shared/utils/abortable.js';
 
 /** Read cancellation has no mutation/retry semantics. Its id is scoped to the
  * owning worker bridge and never cancels writes or another worker's query. */

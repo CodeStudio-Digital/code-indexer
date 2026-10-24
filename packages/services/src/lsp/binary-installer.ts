@@ -17,7 +17,7 @@ import { chmodSync, copyFileSync, createWriteStream, existsSync, mkdirSync, read
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { gunzipSync } from 'node:zlib';
-import type { LspInstallProgress } from './server-installer.js';
+import type { LspInstallProgress } from './install-progress.js';
 import { binaryAssetFor, type LspBinaryAsset, type LspServerDef } from './server-registry.js';
 
 const execFileAsync = promisify(execFile);

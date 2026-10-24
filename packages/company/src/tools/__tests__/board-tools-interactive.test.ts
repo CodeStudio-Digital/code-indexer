@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
-import type { CompanyOrchestrator } from '@mcp/company/orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '@mcp/company/orchestrator-port.js';
 import { buildBoardTools } from '../board-tools.js';
 
 function postTool(orchestrator: CompanyOrchestrator) {

@@ -14,6 +14,7 @@ import {
 } from '../diagram-store.js';
 
 /** Module state is process-global; each test uses a fresh session-id range. */
+const sessionId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 let nextBase = 1_000;
 beforeEach(() => {
   nextBase += 1_000;
@@ -21,7 +22,7 @@ beforeEach(() => {
 
 describe('diagram store residency', () => {
   it('keeps the most recent sessions and drops the oldest past the cap', () => {
-    const ids = Array.from({ length: 10 }, (_, i) => nextBase + i);
+    const ids = Array.from({ length: 10 }, (_, i) => sessionId(nextBase + i));
     for (const id of ids) setDiagramXml(id, `d-${id}.drawio`, `<mxGraph id="${id}"/>`);
 
     // 10 written, 8 resident: the two least-recently-written are gone.
@@ -33,39 +34,39 @@ describe('diagram store residency', () => {
   });
 
   it('re-writing a session refreshes its recency instead of aging out', () => {
-    const ids = Array.from({ length: 8 }, (_, i) => nextBase + i);
+    const ids = Array.from({ length: 8 }, (_, i) => sessionId(nextBase + i));
     for (const id of ids) setDiagramXml(id, 'a.drawio', `<mxGraph id="${id}"/>`);
 
     // Touch the oldest, then push two new sessions past the cap.
     setDiagramXml(ids[0], 'a.drawio', '<mxGraph id="refreshed"/>');
-    setDiagramXml(nextBase + 100, 'b.drawio', '<mxGraph/>');
-    setDiagramXml(nextBase + 101, 'c.drawio', '<mxGraph/>');
+    setDiagramXml(sessionId(nextBase + 100), 'b.drawio', '<mxGraph/>');
+    setDiagramXml(sessionId(nextBase + 101), 'c.drawio', '<mxGraph/>');
 
     expect(getDiagram(ids[0])?.xml).toBe('<mxGraph id="refreshed"/>');
     expect(getDiagram(ids[1])).toBeNull(); // aged out in its place
   });
 
   it('never evicts a session that still has subscribers', () => {
-    const watched = nextBase;
+    const watched = sessionId(nextBase);
     setDiagramXml(watched, 'watched.drawio', '<mxGraph id="watched"/>');
     const unsubscribe = subscribeDiagram(watched, () => undefined);
 
     // Flood well past the cap; the watched panel is on screen and must survive.
     for (let i = 1; i <= 20; i++) {
-      setDiagramXml(nextBase + i, `d${i}.drawio`, '<mxGraph/>');
+      setDiagramXml(sessionId(nextBase + i), `d${i}.drawio`, '<mxGraph/>');
     }
     expect(getDiagram(watched)?.xml).toBe('<mxGraph id="watched"/>');
 
     // Once the panel closes it becomes evictable like any other idle entry.
     unsubscribe();
     for (let i = 21; i <= 40; i++) {
-      setDiagramXml(nextBase + i, `d${i}.drawio`, '<mxGraph/>');
+      setDiagramXml(sessionId(nextBase + i), `d${i}.drawio`, '<mxGraph/>');
     }
     expect(getDiagram(watched)).toBeNull();
   });
 
   it('still notifies subscribers on write', () => {
-    const id = nextBase;
+    const id = sessionId(nextBase);
     const seen = vi.fn();
     const unsubscribe = subscribeDiagram(id, seen);
     setDiagramXml(id, 'x.drawio', '<mxGraph/>');

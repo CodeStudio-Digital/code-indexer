@@ -8,7 +8,7 @@ import { isProjectInSession } from './auth.js';
 import { resolveProjectPath, type ResolvedProjectPath } from './paths.js';
 import type { CompanySessionId } from '@mcp/session-storage';
 
-export interface GuardedRequest {
+interface GuardedRequest {
   sessionId: CompanySessionId;
   projectId: number;
   relPath: string;

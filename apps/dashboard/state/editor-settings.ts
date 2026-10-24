@@ -91,7 +91,7 @@ export const useEditorSettingsStore = create<EditorSettingsState>()(
         const pending = inflightConfig.get(key);
         if (pending) return pending;
         const request = (async () => {
-          const result = await apiCall('editor.resolveConfig', { projectId, file });
+          const result = await apiCall<ConfigResult>('editor.resolveConfig', { projectId, file });
           set((state) => ({ configs: { ...state.configs, [key]: result } }));
         })().finally(() => inflightConfig.delete(key));
         inflightConfig.set(key, request);
@@ -137,5 +137,3 @@ export function useEffectiveEditorSettings(projectId: number, file: string): { s
     sources: config?.sources ?? [],
   }), [config, global, project]);
 }
-
-export { DEFAULT_EDITOR_SETTINGS };

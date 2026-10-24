@@ -143,7 +143,7 @@ export async function listCheckpoints(
   return listBuilderCheckpointFiles(deps.sessionStore, projectId);
 }
 
-export interface CreateCheckpointInput {
+interface CreateCheckpointInput {
   label: string;
   kind: Extract<BuilderCheckpointKind, 'visual' | 'manual'>;
   session_id?: string;
@@ -178,7 +178,7 @@ export async function createCheckpointNow(
   return { ok: true, checkpoint: created.checkpoint };
 }
 
-export interface RestoreResult {
+interface RestoreResult {
   ok: true;
   restored: BuilderCheckpoint;
   preRestore: BuilderCheckpoint | null;
@@ -268,7 +268,7 @@ export async function restoreCheckpoint(
   };
 }
 
-export interface CheckpointDiffResult {
+interface CheckpointDiffResult {
   ok: true;
   patch: string;
   truncated: boolean;

@@ -16,7 +16,7 @@
  * message shapes and old rows can be re-derived from result_text if needed.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

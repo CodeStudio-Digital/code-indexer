@@ -158,7 +158,7 @@ describe('discoverOpenrouter', () => {
         default_max_tokens: 64000,
         can_reason: true,
         supports_attachments: true,
-        supported_reasoning_levels: ['minimal', 'low', 'medium', 'high'],
+        supported_reasoning_levels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
         input_modalities: ['text', 'image'],
         source: 'live',
       });

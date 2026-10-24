@@ -15,7 +15,7 @@ import { ChevronDown } from 'lucide-react';
 import { Badge } from '../../../components/ui/badge.js';
 import { cn } from '../../../lib/utils.js';
 
-export interface SidebarSectionProps {
+interface SidebarSectionProps {
   /** Stable key used for the localStorage open/closed flag. */
   storageKey: string;
   icon: LucideIcon;

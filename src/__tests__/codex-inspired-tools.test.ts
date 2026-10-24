@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { askUser } from '@mcp/code-agent/tools/interaction.js';
 import { viewImage } from '@mcp/code-agent/tools/view-image.js';
-import { goalTools, _resetGoalForKey, _resetCreateBurstForKey } from '@mcp/code-agent/tools/goal.js';
+import { goalTools, _resetGoalForKey } from '@mcp/code-agent/tools/goal.js';
 import type { ToolContext } from '@mcp/code-agent/core/tool.js';
 
 const createGoal = goalTools.find((t) => t.name === 'create_goal')!;
@@ -200,19 +200,18 @@ describe('goal — create / get / update', () => {
     expect(g.content).toContain('Migrate auth to OAuth2');
   });
 
-  it('refuses a redundant create while a goal is in_progress (no silent supersede)', async () => {
-    // create_goal now stays visible the whole run (prompt-cache prefix
-    // stability), so the handler — not the tool surface — enforces the
-    // loop guard: a second create while in_progress is REFUSED, and the
-    // original goal is left untouched rather than auto-superseded.
+  it('acknowledges a redundant create without replacing the active objective', async () => {
+    // A repeated call succeeds idempotently; the original objective and
+    // its creation timestamp remain unchanged until an explicit transition.
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
-    _resetCreateBurstForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'first' }, ctx(runner));
+    const original = await getGoal.handler({}, ctx(runner));
     const r = await createGoal.handler({ goal: 'second' }, ctx(runner));
-    expect(r.isError).toBe(true);
+    expect(r.isError).toBeFalsy();
     expect(r.content).toContain('already in_progress');
     const g = await getGoal.handler({}, ctx(runner));
+    expect(g.content).toBe(original.content);
     expect(g.content).toContain('Goal: first');
     expect(g.content).toContain('in_progress');
   });
@@ -220,7 +219,6 @@ describe('goal — create / get / update', () => {
   it('allows a pivot only after the active goal is completed first', async () => {
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
-    _resetCreateBurstForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
     await updateGoal.handler({ status: 'complete' }, ctx(runner));
     const r = await createGoal.handler({ goal: 'phase 2' }, ctx(runner));
@@ -251,20 +249,21 @@ describe('goal — create / get / update', () => {
     expect(r.content).toContain('No goal set');
   });
 
-  it('refuses double-complete', async () => {
+  it('acknowledges repeated completion without replacing its original note', async () => {
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'x' }, ctx(runner));
-    await updateGoal.handler({ status: 'complete' }, ctx(runner));
-    const r = await updateGoal.handler({ status: 'complete' }, ctx(runner));
-    expect(r.isError).toBe(true);
+    await updateGoal.handler({ status: 'complete', note: 'verified result' }, ctx(runner));
+    const original = await getGoal.handler({}, ctx(runner));
+    const r = await updateGoal.handler({ status: 'complete', note: 'replacement note' }, ctx(runner));
+    expect(r.isError).toBeFalsy();
     expect(r.content).toContain('already complete');
+    expect((await getGoal.handler({}, ctx(runner))).content).toBe(original.content);
   });
 
   it('allows a new create after complete (reset cycle)', async () => {
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
-    _resetCreateBurstForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'a' }, ctx(runner));
     await updateGoal.handler({ status: 'complete' }, ctx(runner));
     const c2 = await createGoal.handler({ goal: 'b' }, ctx(runner));
@@ -274,10 +273,9 @@ describe('goal — create / get / update', () => {
     expect(g.content).toContain('in_progress');
   });
 
-  it('does not share the redundant-create burst quota across completed objectives', async () => {
+  it('allows successive objectives after each prior objective completes', async () => {
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
-    _resetCreateBurstForKey(runner as unknown as object);
     const r1 = await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
     await updateGoal.handler({ status: 'complete' }, ctx(runner));
     const r2 = await createGoal.handler({ goal: 'phase 2' }, ctx(runner));
@@ -291,50 +289,48 @@ describe('goal — create / get / update', () => {
     expect(r4.isError).toBeFalsy();
   });
 
-  it('escalates repeated create_goal calls against the same active objective', async () => {
+  it('keeps repeated creates idempotent for the same active objective', async () => {
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
-    _resetCreateBurstForKey(runner as unknown as object);
     await createGoal.handler({ goal: 'active objective' }, ctx(runner));
+    const original = await getGoal.handler({}, ctx(runner));
     await createGoal.handler({ goal: 'rewrite 1' }, ctx(runner));
     await createGoal.handler({ goal: 'rewrite 2' }, ctx(runner));
     await createGoal.handler({ goal: 'rewrite 3' }, ctx(runner));
     const repeated = await createGoal.handler({ goal: 'rewrite 4' }, ctx(runner));
-    expect(repeated.isError).toBe(true);
-    expect(repeated.content).toContain('same active goal');
-    expect(repeated.content).toContain('stuck-loop');
+    expect(repeated.isError).toBeFalsy();
+    expect(repeated.content).toContain('already in_progress');
+    expect((await getGoal.handler({}, ctx(runner))).content).toBe(original.content);
   });
 
   it('returns a quiet success message — no in-result nudge that would re-prime the model', async () => {
     // The earlier "DO NOT call create_goal again" tail was paradoxically
     // reinforcing the loop by keeping the tool name in the model's context.
-    // The loop guard now lives in the handler (in_progress rejection +
-    // bumpCreateBurst), so the success body is intentionally minimal.
+    // Repeated calls preserve the current objective, so the success body
+    // needs no warning or escalation instruction.
     const runner = new FakeRunner();
     _resetGoalForKey(runner as unknown as object);
-    _resetCreateBurstForKey(runner as unknown as object);
     const r1 = await createGoal.handler({ goal: 'phase 1' }, ctx(runner));
     expect(r1.isError).toBeFalsy();
     expect(r1.content).not.toContain('DO NOT call create_goal');
     expect(r1.content).toContain('Goal set');
   });
 
-  it('different runners have independent burst counters', async () => {
+  it('different runners retain independent objectives after repeated creates', async () => {
     const r1 = new FakeRunner();
     const r2 = new FakeRunner();
     _resetGoalForKey(r1 as unknown as object);
     _resetGoalForKey(r2 as unknown as object);
-    _resetCreateBurstForKey(r1 as unknown as object);
-    _resetCreateBurstForKey(r2 as unknown as object);
-    // Burn r1's quota.
+    // Repeated calls cannot overwrite r1 or affect r2's objective.
     await createGoal.handler({ goal: 'a1' }, ctx(r1));
     await createGoal.handler({ goal: 'a2' }, ctx(r1));
     await createGoal.handler({ goal: 'a3' }, ctx(r1));
     await createGoal.handler({ goal: 'a4' }, ctx(r1));
     const a5 = await createGoal.handler({ goal: 'a5' }, ctx(r1));
-    expect(a5.isError).toBe(true);
-    // r2 still has full quota.
+    expect(a5.isError).toBeFalsy();
     const b1 = await createGoal.handler({ goal: 'b1' }, ctx(r2));
     expect(b1.isError).toBeFalsy();
+    expect((await getGoal.handler({}, ctx(r1))).content).toContain('Goal: a1');
+    expect((await getGoal.handler({}, ctx(r2))).content).toContain('Goal: b1');
   });
 });

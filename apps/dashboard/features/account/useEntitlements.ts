@@ -22,7 +22,7 @@ function readCache(): Entitlements | null {
   }
 }
 
-export type CloudFeature = keyof Entitlements['features'];
+type CloudFeature = keyof Entitlements['features'];
 
 export function useEntitlements(): {
   entitlements: Entitlements | null;

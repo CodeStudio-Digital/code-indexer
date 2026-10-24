@@ -95,7 +95,7 @@ export function GoalCallBlock({ call }: GoalCallBlockProps) {
         <StatusIcon className={cn('h-3.5 w-3.5', statusColor, call.status === 'running' && 'animate-spin')} />
         {call.durationMs !== undefined && (
           <span className="ml-auto shrink-0 tabular-nums text-muted-foreground/70">
-            {call.durationMs}ms
+            {t('messages.durationMs', { duration: call.durationMs })}
           </span>
         )}
       </div>

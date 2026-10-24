@@ -1,8 +1,7 @@
-import { UNIVERSAL_INSPECTOR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-inspector-source.js';
-import { REACT_DETECT_SOURCE } from '@mcp/services/sandbox/builder/inspector/react-detect-source.js';
-import { UNIVERSAL_TOOLBAR_SOURCE } from '@mcp/services/sandbox/builder/inspector/universal-toolbar-source.js';
-import { REGION_HELPERS_SOURCE } from '@mcp/services/sandbox/builder/inspector/region-runtime.js';
-import type { PreviewInvoke } from '@mcp/code-agent/tools/preview/index.js';
+import {
+  UNIVERSAL_INSPECTOR_SOURCE, REACT_DETECT_SOURCE, UNIVERSAL_TOOLBAR_SOURCE, REGION_HELPERS_SOURCE,
+} from '@mcp/services/preview/inspector-assets.js';
+import type { PreviewInvoke } from '@mcp/code-agent/tools/preview/contracts.js';
 import type { PreviewWindow } from './cdp.js';
 import { VIEWPORT_PRESETS, applyViewport } from './viewport.js';
 

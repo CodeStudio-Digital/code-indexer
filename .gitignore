@@ -20,16 +20,11 @@ dist/
 
 .gradle/
 
-data/
-!apps/dashboard/features/agents/zones/data/
-!apps/dashboard/features/agents/zones/data/DataZone.tsx
-!apps/dashboard/features/db-client/data/
-!apps/dashboard/features/db-client/data/**
-!apps/dashboard/features/app-studio/data/
-apps/dashboard/features/app-studio/data/*
-!apps/dashboard/features/app-studio/data/DataPanel.tsx
-!apps/dashboard/features/app-studio/data/TableSheetDialog.tsx
-!apps/dashboard/features/app-studio/data/useAppData.ts
+# Runtime data lives at the workspace root. Source directories named data
+# must remain visible to both Git and import-graph tooling.
+/data/
+# Retired local prototype; the current App Studio data UI is tracked.
+/apps/dashboard/features/app-studio/data/TableCard.tsx
 .tmp/
 .reference/
 
@@ -50,8 +45,6 @@ worker-market/.deploy.*
 .codex-tmp/
 debug.log
 
-# Rust agent runtime build output
-
 # Unity throwaway validation/test harness projects (disposable; the real plugin
 # lives in extensions/unity-scene-analyzer).
 UnityValidationAssetModeler/
@@ -59,15 +52,15 @@ UnityValidationAssetModeler2/
 UnityValidationAssetModeler3/
 ValidationUnitySceneAnalyzer*/
 
-# Unity per-project generated artifacts (Library/Temp/Logs/UserSettings/etc.)
-# Keep this even if a Unity project is ever tracked inside this repo.
-[Ll]ibrary/
-[Tt]emp/
-[Oo]bj/
-[Bb]uild/
-[Bb]uilds/
-[Ll]ogs/
-[Uu]ser[Ss]ettings/
+# Root Unity generated artifacts. Disposable nested Unity projects and the
+# preserved extension are ignored above/below as complete directories.
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
 *.csproj
 *.unityproj
 *.sln
@@ -96,7 +89,7 @@ telemetry_query.js
 telemetry_query.mjs
 
 # Orphan empty worker scaffold (only node_modules present)
-worker/
+/worker/
 
 # Cloud trees are owned by codestudio-cloud and archived outside this repository.
 apps/account-portal/

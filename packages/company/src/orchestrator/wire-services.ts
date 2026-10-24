@@ -35,7 +35,7 @@ import {
 import { CompanyDriveStore } from '../services/CompanyDriveStore.js';
 import { CompanyEventBus } from '../services/CompanyEventBus.js';
 import { createAutonomyProvider, type AutonomyProvider } from '../services/autonomy/autonomy-provider.js';
-import type { CompanyOrchestrator } from '../orchestrator.js';
+import type { CompanyOrchestratorPort as CompanyOrchestrator } from '../orchestrator-port.js';
 import { CompanySessionFiles } from '../services/CompanySessionFiles.js';
 import { consumeAutoContinueSignals } from './auto-continue-signals.js';
 

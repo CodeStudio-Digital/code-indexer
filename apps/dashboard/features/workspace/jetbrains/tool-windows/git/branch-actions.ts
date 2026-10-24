@@ -8,9 +8,9 @@
 import type { GitRunResult, GitStashEntry } from '@mcp/api-bus';
 import { apiCall } from '../../../../../lib/api-client.js';
 
-export type CheckoutBlocker = 'tracked' | 'untracked';
+type CheckoutBlocker = 'tracked' | 'untracked';
 
-export interface CheckoutBranchResult {
+interface CheckoutBranchResult {
   name: string;
   preservedLocalChanges: boolean;
   restoreConflicts: boolean;

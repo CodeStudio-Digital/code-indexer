@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, isAbsolute, relative, resolve } from 'node:path';
 import { Readable } from 'node:stream';
-import { drawioVendorDir } from '../../../http-api/server/routes/drawio-static.js';
+import { drawioVendorDir } from '@mcp/shared/assets/drawio-vendor.js';
 import { decodeDiagramImage, type DiagramRenderer, type DiagramRenderRequest } from '@mcp/code-agent/tools/diagram/render-port.js';
 import { DIAGRAM_RENDER_DOCUMENT } from './document.js';
 

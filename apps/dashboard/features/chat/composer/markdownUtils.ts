@@ -9,14 +9,14 @@ export interface TextEditResult {
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-export function getLineRange(text: string, pos: number) {
+function getLineRange(text: string, pos: number) {
   let lineStart = text.lastIndexOf('\n', pos - 1) + 1;
   let lineEnd = text.indexOf('\n', pos);
   if (lineEnd === -1) lineEnd = text.length;
   return { lineStart, lineEnd, lineText: text.slice(lineStart, lineEnd) };
 }
 
-export function getSelectedLines(text: string, selStart: number, selEnd: number) {
+function getSelectedLines(text: string, selStart: number, selEnd: number) {
   const lines: { lineStart: number; lineEnd: number; lineText: string }[] = [];
   let lineStart = text.lastIndexOf('\n', selStart - 1) + 1;
   while (lineStart <= selEnd) {
@@ -31,7 +31,7 @@ export function getSelectedLines(text: string, selStart: number, selEnd: number)
 
 // ── Inline wrapping ────────────────────────────────────────────────────
 
-export function wrapSelection(
+function wrapSelection(
   text: string,
   selStart: number,
   selEnd: number,
@@ -108,7 +108,7 @@ export function toggleInlineCode(text: string, s: number, e: number) {
 
 // ── Block-level prefix ─────────────────────────────────────────────────
 
-export function toggleLinePrefix(
+function toggleLinePrefix(
   text: string,
   selStart: number,
   selEnd: number,

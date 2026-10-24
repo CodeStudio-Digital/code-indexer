@@ -1,4 +1,4 @@
-export type QaTranslate = (key: string, options?: Record<string, unknown>) => string;
+type QaTranslate = (key: string, options?: Record<string, unknown>) => string;
 
 export function summariseRunI18n(
   t: QaTranslate,

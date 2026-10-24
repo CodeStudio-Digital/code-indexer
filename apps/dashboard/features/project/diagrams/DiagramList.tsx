@@ -9,7 +9,7 @@ import { Plus, Search, Workflow } from 'lucide-react';
 import { apiCall } from '../../../lib/api-client.js';
 import { cn } from '../../../lib/utils.js';
 
-export interface DiagramFile {
+interface DiagramFile {
   path: string;
   name: string;
   dir: string;

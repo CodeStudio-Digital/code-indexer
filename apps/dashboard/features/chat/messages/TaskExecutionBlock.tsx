@@ -207,11 +207,11 @@ export function parseExecuteTasksResult(content: string): TaskRunState | null {
     const match = section.match(/^###\s+(.+?)\s+(?:—|-)\s+(.+?)\s+\[([^\]]+)\]\s*\n([\s\S]*)$/);
     if (!match) continue;
     const meta = parseMeta(match[3]);
-    const kind = normalizeKind(meta.kind ?? meta.positional[0]);
-    const status = normalizeStatus(meta.status ?? meta.positional[1]);
-    const wave = readInt(meta.wave) ?? i + 1;
-    const tools = readInt(meta.tools) ?? 0;
-    const tokens = readInt(meta.tokens) ?? 0;
+    const kind = normalizeKind(meta.named.kind ?? meta.positional[0]);
+    const status = normalizeStatus(meta.named.status ?? meta.positional[1]);
+    const wave = readInt(meta.named.wave) ?? i + 1;
+    const tools = readInt(meta.named.tools) ?? 0;
+    const tokens = readInt(meta.named.tokens) ?? 0;
     const summary = match[4].trim();
     tasks.push({
       id: match[1].trim(),
@@ -247,13 +247,13 @@ export function parseExecuteTasksResult(content: string): TaskRunState | null {
   };
 }
 
-function parseMeta(raw: string): Record<string, string> & { positional: string[] } {
-  const meta: Record<string, string> & { positional: string[] } = { positional: [] };
+function parseMeta(raw: string): { named: Record<string, string>; positional: string[] } {
+  const meta: { named: Record<string, string>; positional: string[] } = { named: {}, positional: [] };
   for (const part of raw.split(',')) {
     const trimmed = part.trim();
     const eq = trimmed.indexOf('=');
     if (eq > 0) {
-      meta[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+      meta.named[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
     } else if (trimmed) {
       meta.positional.push(trimmed);
     }

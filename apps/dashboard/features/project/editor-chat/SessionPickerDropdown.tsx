@@ -42,7 +42,7 @@ interface Props {
   onDelete?: (id: string) => Promise<void> | void;
   onRename?: (id: string, currentTitle: string) => Promise<void> | void;
   onDuplicate?: (id: string) => Promise<unknown> | void;
-  onMoveToGroup?: (id: string, groupId: number | null) => Promise<void> | void;
+  onMoveToGroup?: (id: string, groupId: string | null) => Promise<void> | void;
 }
 
 interface SessionSection {
@@ -200,7 +200,7 @@ function SessionRow({
   onDelete?: (id: string) => Promise<void> | void;
   onRename?: (id: string, currentTitle: string) => Promise<void> | void;
   onDuplicate?: (id: string) => Promise<unknown> | void;
-  onMoveToGroup?: (id: string, groupId: number | null) => Promise<void> | void;
+  onMoveToGroup?: (id: string, groupId: string | null) => Promise<void> | void;
 }) {
   const { t } = useTranslation(['chat', 'common']);
   const hasActions = Boolean(onFavorite || onArchive || onDelete || onRename || onDuplicate || onMoveToGroup);
@@ -360,7 +360,7 @@ function SessionActionsMenu({
   onDelete?: (id: string) => Promise<void> | void;
   onRename?: (id: string, currentTitle: string) => Promise<void> | void;
   onDuplicate?: (id: string) => Promise<unknown> | void;
-  onMoveToGroup?: (id: string, groupId: number | null) => Promise<void> | void;
+  onMoveToGroup?: (id: string, groupId: string | null) => Promise<void> | void;
 }) {
   const { t } = useTranslation(['chat', 'common']);
   return (

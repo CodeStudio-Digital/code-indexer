@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 export type DocOrigin = 'sandbox' | 'drive_mirror';
 
-export interface DocEntry {
+interface DocEntry {
   path: string;
   origin: DocOrigin;
   mtime: string | null;
@@ -69,7 +69,7 @@ export function useDocsList(sessionId: string, service: string | null): {
   return { entries, loading, reload: () => setNonce((n) => n + 1) };
 }
 
-export interface DocBody {
+interface DocBody {
   body: string;
   origin: DocOrigin | null;
   mtime: string | null;
@@ -125,7 +125,7 @@ export function useDocBody(sessionId: string, service: string | null, path: stri
   return state;
 }
 
-export type RagState = 'unknown' | 'not_indexed' | 'indexing' | 'indexed' | 'error';
+type RagState = 'unknown' | 'not_indexed' | 'indexing' | 'indexed' | 'error';
 
 /**
  * RAG status + trigger for the SELECTED doc. Optimistic: `index()`

@@ -104,6 +104,6 @@ export function buildWindowsCensusCommand(intervalMs: number): string {
 }
 
 /** Exposed for the smoke test that runs the script for real. */
-export function windowsCensusScript(intervalMs: number): string {
+function windowsCensusScript(intervalMs: number): string {
   return Buffer.from(buildWindowsCensusCommand(intervalMs), 'base64').toString('utf16le');
 }

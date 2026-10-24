@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -183,9 +183,10 @@ function scanStaticTranslationReferences(file: string): TranslationReference[] {
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node)) {
       if (ts.isIdentifier(node.expression)) {
+        const callName = node.expression.text;
         const binding = bindings
           .filter(({ name, scope }) => (
-            name === node.expression.text &&
+            name === callName &&
             scope.getStart(sf) <= node.getStart(sf) &&
             scope.end >= node.end
           ))
@@ -229,7 +230,7 @@ const protectedDashboardFiles = [
   'apps/dashboard/features/onboarding/OnboardingWizard.tsx',
   'apps/dashboard/features/project/tabs/FilesTab.tsx',
   'apps/dashboard/features/snapshots/SnapshotDiffViewer.tsx',
-  'apps/dashboard/features/snapshots/SnapshotsPanel.tsx',
+  'apps/dashboard/features/snapshots/snapshots-panel-view.tsx',
   'apps/dashboard/features/snapshots/diff/DiffRow.tsx',
   'apps/dashboard/features/snapshots/diff/ReviewComment.tsx',
   'apps/dashboard/features/workspace/jetbrains/tool-windows/GitWindow.tsx',
@@ -280,6 +281,8 @@ function walkDashboardSource(dir = dashboardRoot, out: string[] = []): string[] 
   for (const entry of readdirSync(dir)) {
     if (['node_modules', 'dist', '.vite'].includes(entry)) continue;
     const path = join(dir, entry);
+    // The synthetic renderer benchmark is test input, not a product surface.
+    if (relative(dashboardRoot, path).replace(/\\/g, '/') === 'performance/renderer/fixture.tsx') continue;
     const stat = statSync(path);
     if (stat.isDirectory()) {
       if (relative(dashboardRoot, path).replace(/\\/g, '/') === 'i18n/__tests__') continue;
@@ -430,7 +433,15 @@ function helperLiterals(html: string): string[] {
 describe('plugin webview i18n', () => {
   it('keeps bundled plugin UI HTML initialized without static English copy', () => {
     const failures: string[] = [];
-    for (const file of walk(resolve(repoRoot, 'extensions'))) {
+    // Only source UI owned by a plugin belongs to this catalog. Backup trees,
+    // installed SDKs and generated bundles are not additional plugin sources.
+    const extensionsRoot = resolve(repoRoot, 'extensions');
+    const pluginUiFiles = readdirSync(extensionsRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(extensionsRoot, entry.name))
+      .filter((root) => existsSync(join(root, 'plugin.json')) && existsSync(join(root, 'ui')))
+      .flatMap((root) => walk(join(root, 'ui')));
+    for (const file of pluginUiFiles) {
       const rel = relative(repoRoot, file).replace(/\\/g, '/');
       if (!rel.includes('/ui/')) continue;
       const beforeScript = readFileSync(file, 'utf8').split(/<script\b/i)[0] ?? '';

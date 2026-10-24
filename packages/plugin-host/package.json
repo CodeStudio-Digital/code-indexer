@@ -8,13 +8,16 @@
     "./*": "./src/*"
   },
   "dependencies": {
-    "@mcp/shared": "workspace:*",
-    "@mcp/store": "workspace:*",
+    "@mcp/agent-runtime-host": "workspace:*",
     "@mcp/code-agent": "workspace:*",
-    "@mcp/provider-sdk": "workspace:*",
-    "@mcp/provider-engine": "workspace:*",
-    "@mcp/plugin-sdk": "workspace:*",
     "@mcp/plugin-market-client": "workspace:*",
-    "@mcp/agent-runtime-host": "workspace:*"
+    "@mcp/plugin-sdk": "workspace:*",
+    "@mcp/provider-engine": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*",
+    "@mcp/shared": "workspace:*",
+    "@mcp/store": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.2"
   }
 }

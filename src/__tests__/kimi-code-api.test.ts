@@ -51,7 +51,7 @@ describe('Kimi Code API-token connection', () => {
     expect(store.listModels('kimi-code')[0]).toMatchObject({
       model_id: 'k3',
       supported_reasoning_levels: ['low', 'high', 'max'],
-      default_reasoning_level: 'max',
+      default_reasoning_level: 'high',
     });
   });
 

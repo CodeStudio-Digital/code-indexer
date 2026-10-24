@@ -96,7 +96,7 @@ export function chunkArchivedConversation(
   return chunks;
 }
 
-export interface RebuildConversationChaptersResult {
+interface RebuildConversationChaptersResult {
   ok: true;
   scope: 'archived' | 'visible' | 'all';
   chunks: number;

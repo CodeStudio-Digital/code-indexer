@@ -8,10 +8,16 @@
     "./*": "./src/*"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-agent-runtime": "^3.1087.0",
+    "@huggingface/transformers": "^4.2.0",
+    "@mcp/candidate-pipeline": "workspace:*",
+    "@mcp/provider-sdk": "workspace:*",
+    "@mcp/services": "workspace:*",
     "@mcp/shared": "workspace:*",
     "@mcp/store": "workspace:*",
-    "@mcp/services": "workspace:*",
-    "@mcp/provider-sdk": "workspace:*",
-    "@mcp/candidate-pipeline": "workspace:*"
+    "web-tree-sitter": "^0.24.7"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.2"
   }
 }

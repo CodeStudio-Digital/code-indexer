@@ -10,7 +10,7 @@ import { resolveProject } from '../utils.js';
  * `const project = resolveProject(db, args.project_name as string)`
  * that previously appeared in 27+ tool handlers.
  */
-export type ProjectToolHandler = (
+type ProjectToolHandler = (
   args: Record<string, unknown>,
   ctx: ToolContext,
   project: Project,
@@ -49,7 +49,7 @@ export function normalizeFilePath(filePath: string, projectRoot?: string): strin
  * the scattered `const asJson = args.format === 'json'; if (asJson) { ... }`
  * branching that existed in 7+ tools.
  */
-export function formatOutput<T>(
+function formatOutput<T>(
   args: Record<string, unknown>,
   data: T,
   renderText: (data: T) => string,

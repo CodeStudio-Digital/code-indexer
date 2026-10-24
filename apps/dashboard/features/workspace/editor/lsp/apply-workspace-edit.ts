@@ -15,6 +15,7 @@
  */
 
 import type * as MonacoNs from 'monaco-editor';
+import type { OpenFile } from '../../../../state/workspace.js';
 
 export interface EditPosition { line: number; column: number }
 
@@ -23,7 +24,7 @@ export interface ContentEdit {
   newText: string;
 }
 
-export interface ProjectWorkspaceEdit {
+interface ProjectWorkspaceEdit {
   changes: Record<string, ContentEdit[]>;
 }
 
@@ -95,7 +96,7 @@ export async function applyWorkspaceEditToClosedFiles(
 
   for (const [rel, edits] of byFile) {
     const tab = useWorkspaceStore.getState().openFiles.find(
-      (f) => (f.kind === undefined || f.kind === 'file') && f.projectId === projectId && f.path === rel,
+      (f): f is OpenFile => (f.kind === undefined || f.kind === 'file') && f.projectId === projectId && f.path === rel,
     );
     // Buffer não salvo sem model vivo — nunca sobrescrever o trabalho do usuário.
     if (tab?.dirty) { skipped.push(rel); continue; }

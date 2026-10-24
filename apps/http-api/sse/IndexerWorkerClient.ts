@@ -13,7 +13,7 @@ import type {
 } from '@mcp/services/services/project-index/index.js';
 import { resolveWorkerFile } from './workerFileResolution.js';
 
-export interface IndexerWorkerClientOpts {
+interface IndexerWorkerClientOpts {
   dbPath: string;
   ignorePatterns?: string[];
   maxFileSizeKB?: number;
@@ -236,7 +236,7 @@ export class IndexerWorkerClient implements StructuralExecutor {
  * module-level counter (readable by the admin perf surface) + a prominent log
  * make "is this happening in production?" answerable instead of a silent warn.
  */
-export const indexerFallbackStats = {
+const indexerFallbackStats = {
   count: 0,
   lastOp: '',
   lastError: '',

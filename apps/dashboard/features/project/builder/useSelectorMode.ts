@@ -29,7 +29,7 @@ function read(projectId: number): SelectorMode {
 }
 
 /** Resolve 'auto' against the detected framework. */
-export function effectiveSelectorMode(mode: SelectorMode, framework: PreviewFramework): EffectiveSelectorMode {
+function effectiveSelectorMode(mode: SelectorMode, framework: PreviewFramework): EffectiveSelectorMode {
   if (mode === 'react' || mode === 'universal') return mode;
   return framework === 'react' || framework === 'next' ? 'react' : 'universal';
 }

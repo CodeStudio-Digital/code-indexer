@@ -1,6 +1,7 @@
-import { afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createProjectGitHandlers } from '../index.js';
@@ -8,12 +9,15 @@ import type { ManagedGitClient } from '@mcp/shared/git/managed-git.js';
 
 const dirs: string[] = [];
 
-afterAll(() => {
-  for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
+afterAll(async () => {
+  for (const dir of dirs) await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 function git(cwd: string, ...args: string[]): string {
-  const result = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
+  const result = spawnSync('git', ['-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`, '-c', 'core.fsmonitor=false', ...args], {
+    cwd, encoding: 'utf8', windowsHide: true, timeout: 30_000,
+  });
+  if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(result.stderr || `git ${args.join(' ')} failed`);
   return result.stdout.trim();
 }
@@ -59,9 +63,14 @@ function handlers(root: string, managedGit?: ManagedGitClient) {
   } as never);
 }
 
-describe('reviewed project push', () => {
+// These integration scenarios perform dozens of real local Git processes.
+// Windows process startup can take several seconds under the full suite; the
+// RPC assertions are unchanged, and fixture creation gets its own deadline.
+describe('reviewed project push', { timeout: 60_000 }, () => {
+  let fixture: ReturnType<typeof setup>;
+  beforeEach(() => { fixture = setup(); }, 60_000);
   it('previews commits and tags, exposes commit contents, then publishes the reviewed refs', async () => {
-    const { root, remote } = setup();
+    const { root, remote } = fixture;
     const api = handlers(root);
 
     const preview = await api.pushPreview({ projectId: 1 }, {} as never);
@@ -101,7 +110,7 @@ describe('reviewed project push', () => {
   });
 
   it('rejects confirmation when the branch changed after the preview', async () => {
-    const { root } = setup();
+    const { root } = fixture;
     const api = handlers(root);
     const preview = await api.pushPreview({ projectId: 1 }, {} as never);
     writeFileSync(join(root, 'after-preview.txt'), 'new tip\n');
@@ -118,7 +127,7 @@ describe('reviewed project push', () => {
   });
 
   it('rebases onto a newer remote branch and retries the reviewed push', async () => {
-    const { root, remote } = setup();
+    const { root, remote } = fixture;
     const remoteHead = advanceRemote(remote, 'remote.txt', 'remote work\n');
     const api = handlers(root);
     const preview = await api.pushPreview({ projectId: 1 }, {} as never);
@@ -138,7 +147,7 @@ describe('reviewed project push', () => {
   });
 
   it('stops before push and requests conflict resolution when automatic rebase conflicts', async () => {
-    const { root, remote } = setup();
+    const { root, remote } = fixture;
     advanceRemote(remote, 'tracked.txt', 'base\nremote version\n');
     const api = handlers(root);
     const preview = await api.pushPreview({ projectId: 1 }, {} as never);
@@ -157,7 +166,7 @@ describe('reviewed project push', () => {
   });
 
   it('caps a large commit-file preview and marks it as truncated', async () => {
-    const { root } = setup();
+    const { root } = fixture;
     const api = handlers(root);
     writeFileSync(join(root, 'large.txt'), `${'changed line\n'.repeat(50_000)}`);
     git(root, 'add', 'large.txt');
@@ -170,7 +179,7 @@ describe('reviewed project push', () => {
   });
 
   it('uses the managed broker only after explicit selection and never rewrites the project remote', async () => {
-    const { root } = setup();
+    const { root } = fixture;
     const githubRemote = 'git@github.com:CodeStudio-Digital/code-indexer.git';
     git(root, 'remote', 'set-url', '--push', 'origin', githubRemote);
     const calls: string[][] = [];
@@ -218,7 +227,7 @@ describe('reviewed project push', () => {
   });
 
   it('creates a pull request through the managed identity port', async () => {
-    const { root } = setup();
+    const { root } = fixture;
     const githubRemote = 'https://github.com/CodeStudio-Digital/code-indexer.git';
     git(root, 'remote', 'set-url', '--push', 'origin', githubRemote);
     const createPullRequest = vi.fn(async () => ({
@@ -257,7 +266,7 @@ describe('reviewed project push', () => {
   });
 
   it('refuses managed push for Git LFS without falling back to project credentials', async () => {
-    const { root } = setup();
+    const { root } = fixture;
     git(root, 'remote', 'set-url', '--push', 'origin', 'https://github.com/CodeStudio-Digital/code-indexer.git');
     writeFileSync(join(root, '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
     git(root, 'add', '.gitattributes');

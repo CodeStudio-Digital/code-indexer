@@ -51,7 +51,7 @@ function ownedModel(model: MonacoNs.editor.ITextModel, projectId: number): { rel
   return { rel: parsed.relPath };
 }
 
-export interface DocumentSync extends MonacoNs.IDisposable {
+interface DocumentSync extends MonacoNs.IDisposable {
   /** Attach (including restored pre-existing models), drain changes and await delivery. */
   ensureSynced(model: MonacoNs.editor.ITextModel): Promise<void>;
   /** Backward-compatible path drain for provider modules migrated incrementally. */

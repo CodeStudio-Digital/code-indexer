@@ -10,7 +10,7 @@
  * de hoje. Mirrors migration 155 (idempotent column add).
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

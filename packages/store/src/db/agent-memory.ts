@@ -1,73 +1,13 @@
-import type {
-  AgentMemoryRow,
-  AgentMemoryScope,
-  AgentMemoryType,
-} from '@mcp/shared/types.js';
+export { listMemoryIndex } from './agent-memory-ranking.js';
+import { captureReferencedFiles } from './agent-memory-references.js';
+export { getStaleReferencedFiles, getStaleBatch } from './agent-memory-references.js';
+import { slugify, normalizeScopeProject, BATCH_IDS, clamp01 } from './agent-memory-values.js';
+export { slugify } from './agent-memory-values.js';
+import type { CreateAgentMemoryData, AgentMemoryIndexEntry, AgentMemoryEvent, AgentMemoryStats } from './agent-memory-types.js';
+export type { CreateAgentMemoryData, AgentMemoryIndexEntry, AgentMemoryEvent, AgentMemoryStats } from './agent-memory-types.js';
+import type { AgentMemoryRow, AgentMemoryScope } from '@mcp/shared/types.js';
 import type { DB } from './types.js';
 import { buildFtsMatch } from './fts-query.js';
-
-/**
- * Dedicated Agent Memory store (migration 181) — durable single-fact memory the
- * agent writes for future sessions, SEPARATE from snapshots.
- *
- * Logical immutability: rows are never edited in place as the source of truth.
- * `replace` archives the old live row and creates a fresh one in ONE
- * transaction (archive + create + supersede link). The unique partial index
- * `(scope, project_id, name) WHERE archived_at IS NULL` guarantees one live row
- * per identity while allowing archive + recreate-same-name.
- */
-
-export interface CreateAgentMemoryData {
-  scope?: AgentMemoryScope;
-  projectId?: number;
-  /** kebab-case slug; callers normally pass a title and let {@link slugify} run. */
-  name: string;
-  description?: string;
-  type?: AgentMemoryType;
-  content: string;
-  source?: string;
-  sourceSnapshotId?: number | null;
-  importance?: number;
-  referencedFiles?: string[];
-  /** Sync intent; ignored (forced 0) for local scope. */
-  sync?: boolean;
-}
-
-export interface AgentMemoryIndexEntry {
-  id: number;
-  name: string;
-  description: string;
-  type: string;
-  source: string;
-  scope: string;
-  importance: number;
-  created_at: string;
-  last_accessed_at: string | null;
-  excerpt?: string;
-}
-
-export interface AgentMemoryEvent {
-  eventType: string;
-  scope?: string | null;
-  projectId?: number | null;
-  memoryId?: number | null;
-  kept?: number | null;
-  dropped?: number | null;
-  queryHash?: string | null;
-  meta?: Record<string, unknown> | null;
-}
-
-/** Normalize a free-form title into a stable kebab-case slug (3-6 words). */
-export function slugify(title: string): string {
-  const base = title
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '') // strip accents
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-  const words = base.split('-').filter(Boolean).slice(0, 6);
-  return words.join('-') || 'memory';
-}
 
 /** Resolve a non-colliding live slug: name, name-2, name-3, … */
 function resolveLiveSlug(
@@ -85,50 +25,6 @@ function resolveLiveSlug(
     if (!exists.get(scope, projectId, candidate)) return candidate;
   }
   return `${desired}-${Date.now()}`;
-}
-
-function normalizeScopeProject(scope: AgentMemoryScope, projectId: number): number {
-  // user-scope memory always lives on the reserved project 0 (mirrors snapshots
-  // user-memory). local/project keep their real project id.
-  return scope === 'user' ? 0 : projectId;
-}
-
-/** A referenced file captured WITH the content hash at memory-creation time, so
- *  the retriever can flag staleness (file changed or vanished since). */
-interface ReferencedFileSnapshot {
-  path: string;
-  /** content_hash at creation; null when the path wasn't in the file index. */
-  hash: string | null;
-}
-
-/** False-stale guard: a project with NO rows in `files` (never indexed, or a
- *  trimmed per-project DB) cannot be judged — every lookup would miss and mark
- *  EVERYTHING stale (unfair 0.5 score discount + risky GC input). */
-function projectHasFileIndex(db: DB, projectId: number): boolean {
-  try {
-    return db.prepare('SELECT 1 FROM files WHERE project_id = ? LIMIT 1').get(projectId) != null;
-  } catch {
-    return false; // files table absent → not judgeable
-  }
-}
-
-/** Resolve current file hashes for the referenced paths (best-effort). */
-function captureReferencedFiles(
-  db: DB,
-  projectId: number,
-  paths: string[],
-): ReferencedFileSnapshot[] {
-  const stmt = db.prepare('SELECT content_hash FROM files WHERE project_id = ? AND path = ?');
-  return paths.map((p) => {
-    let hash: string | null = null;
-    try {
-      const row = stmt.get(projectId, p) as { content_hash?: string } | undefined;
-      hash = row?.content_hash ?? null;
-    } catch {
-      /* files table absent on a trimmed per-project DB — store path only */
-    }
-    return { path: p, hash };
-  });
 }
 
 export function create(db: DB, data: CreateAgentMemoryData): AgentMemoryRow {
@@ -164,148 +60,6 @@ export function create(db: DB, data: CreateAgentMemoryData): AgentMemoryRow {
   return db
     .prepare('SELECT * FROM agent_memory WHERE id = ?')
     .get(result.lastInsertRowid) as AgentMemoryRow;
-}
-
-/**
- * Return the referenced files that have CHANGED or VANISHED since the memory was
- * created (current content_hash differs from the captured one). Powers the
- * retriever's stale note. Empty when the memory has no referenced files or all
- * still match.
- */
-export function getStaleReferencedFiles(db: DB, id: number): string[] {
-  const row = db.prepare('SELECT project_id, referenced_files FROM agent_memory WHERE id = ?')
-    .get(id) as { project_id: number; referenced_files: string | null } | undefined;
-  if (!row?.referenced_files) return [];
-  if (!projectHasFileIndex(db, row.project_id)) return [];
-  let refs: ReferencedFileSnapshot[];
-  try {
-    const parsed = JSON.parse(row.referenced_files);
-    if (!Array.isArray(parsed)) return [];
-    // Tolerate the legacy plain-string[] shape (no baseline hash → never stale).
-    refs = parsed.map((r) => (typeof r === 'string' ? { path: r, hash: null } : r));
-  } catch {
-    return [];
-  }
-  const stmt = db.prepare('SELECT content_hash FROM files WHERE project_id = ? AND path = ?');
-  const stale: string[] = [];
-  for (const ref of refs) {
-    if (ref.hash == null) continue; // no baseline hash → cannot judge; skip
-    let current: string | null = null;
-    try {
-      const f = stmt.get(row.project_id, ref.path) as { content_hash?: string } | undefined;
-      current = f?.content_hash ?? null;
-    } catch {
-      continue;
-    }
-    if (current === null || current !== ref.hash) stale.push(ref.path);
-  }
-  return stale;
-}
-
-/**
- * Batched staleness for the retriever: id → {stale paths, total referenced}.
- * `total` counts only paths captured WITH a baseline hash (the only ones we can
- * judge); `stale` is the subset whose current content_hash differs or vanished.
- */
-export function getStaleBatch(
-  db: DB,
-  ids: number[],
-): Map<number, { stale: string[]; total: number }> {
-  const map = new Map<number, { stale: string[]; total: number }>();
-  if (ids.length === 0) return map;
-  // Was 1 + N statements per memory (one row lookup, then one `files` lookup per
-  // referenced path). On a recall that is hundreds of synchronous queries on the
-  // Electron main thread. Now: one row batch, then one `files` batch per project.
-  const indexedCache = new Map<number, boolean>();
-  const indexed = (pid: number): boolean => {
-    let v = indexedCache.get(pid);
-    if (v === undefined) { v = projectHasFileIndex(db, pid); indexedCache.set(pid, v); }
-    return v;
-  };
-
-  const rows = new Map<number, { project_id: number; referenced_files: string | null }>();
-  for (let i = 0; i < ids.length; i += BATCH_IDS) {
-    const chunk = ids.slice(i, i + BATCH_IDS);
-    const batch = db
-      .prepare(
-        `SELECT id, project_id, referenced_files
-           FROM agent_memory
-          WHERE id IN (${chunk.map(() => '?').join(',')})`,
-      )
-      .all(...chunk) as Array<{ id: number; project_id: number; referenced_files: string | null }>;
-    for (const r of batch) rows.set(r.id, { project_id: r.project_id, referenced_files: r.referenced_files });
-  }
-
-  // Pass 1 — parse, and collect the paths each project needs looked up.
-  const pending = new Map<number, { projectId: number; refs: ReferencedFileSnapshot[] }>();
-  const wantedByProject = new Map<number, Set<string>>();
-  for (const id of ids) {
-    const row = rows.get(id);
-    if (!row?.referenced_files || !indexed(row.project_id)) {
-      map.set(id, { stale: [], total: 0 });
-      continue;
-    }
-    let refs: ReferencedFileSnapshot[];
-    try {
-      const parsed = JSON.parse(row.referenced_files);
-      if (!Array.isArray(parsed)) {
-        map.set(id, { stale: [], total: 0 });
-        continue;
-      }
-      refs = parsed.map((r) => (typeof r === 'string' ? { path: r, hash: null } : r));
-    } catch {
-      map.set(id, { stale: [], total: 0 });
-      continue;
-    }
-    const withBaseline = refs.filter((r) => r.hash != null);
-    pending.set(id, { projectId: row.project_id, refs: withBaseline });
-    let wanted = wantedByProject.get(row.project_id);
-    if (!wanted) { wanted = new Set(); wantedByProject.set(row.project_id, wanted); }
-    for (const ref of withBaseline) wanted.add(ref.path);
-  }
-
-  // Pass 2 — one batched hash lookup per project.
-  const hashesByProject = new Map<number, Map<string, string | null>>();
-  for (const [projectId, wanted] of wantedByProject) {
-    const found = new Map<string, string | null>();
-    const paths = [...wanted];
-    for (let i = 0; i < paths.length; i += BATCH_IDS) {
-      const chunk = paths.slice(i, i + BATCH_IDS);
-      try {
-        const batch = db
-          .prepare(
-            `SELECT path, content_hash
-               FROM files
-              WHERE project_id = ? AND path IN (${chunk.map(() => '?').join(',')})`,
-          )
-          .all(projectId, ...chunk) as Array<{ path: string; content_hash?: string }>;
-        for (const f of batch) found.set(f.path, f.content_hash ?? null);
-      } catch {
-        // Per-project table trouble: leave this chunk unknown. Matches the old
-        // per-path `catch { continue }`, which skipped rather than marking stale.
-        for (const p of chunk) found.set(p, undefined as unknown as string | null);
-      }
-    }
-    hashesByProject.set(projectId, found);
-  }
-
-  // Pass 3 — compare.
-  for (const [id, { projectId, refs }] of pending) {
-    const hashes = hashesByProject.get(projectId);
-    const stale: string[] = [];
-    for (const ref of refs) {
-      if (!hashes || !hashes.has(ref.path)) {
-        // Not present in `files` at all → the path vanished from the index.
-        stale.push(ref.path);
-        continue;
-      }
-      const current = hashes.get(ref.path);
-      if (current === undefined) continue; // Lookup failed; cannot judge.
-      if (current === null || current !== ref.hash) stale.push(ref.path);
-    }
-    map.set(id, { stale, total: refs.length });
-  }
-  return map;
 }
 
 /** Cheap metadata-only importance bump (corroboration) — NOT a content change,
@@ -395,9 +149,6 @@ export function getById(db: DB, id: number): AgentMemoryRow | undefined {
     | undefined;
 }
 
-/** Chunk size for the IN(...) hydration below; keeps the statement cache small. */
-const BATCH_IDS = 100;
-
 /**
  * Hydrate many memories in one statement per chunk.
  *
@@ -480,111 +231,6 @@ export function listForSemanticIndex(
      WHERE scope = ? AND project_id = ? AND archived_at IS NULL
      ORDER BY id`,
   ).all(scope, pid) as AgentMemoryRow[];
-}
-
-/** Type weight for the turn-1 index ranking — the memory kinds that make the
- *  agent adhere to user preferences / project style outrank loose notes when
- *  competing for the ~1200-char index budget. (Mirrors the retriever's
- *  CATEGORY_WEIGHT in services/memory/scoring.ts — kept local: store cannot
- *  import services.) */
-const INDEX_TYPE_WEIGHT: Record<string, number> = {
-  preference: 1.0, convention: 0.9, gotcha: 0.8, decision: 0.75,
-  procedure: 0.7, architecture: 0.55, pattern: 0.5, external_pointer: 0.4, note: 0.25,
-};
-
-/** Explicit/user-authored memory is durable intent. Automatic session
- * distillation is useful evidence, but it must not outrank a slightly older
- * canonical decision merely because it was generated recently. */
-const INDEX_SOURCE_WEIGHT: Record<string, number> = {
-  user: 1.1,
-  agent: 1,
-  'migrated-snapshot': 0.85,
-  distill: 0.65,
-  session: 0.65,
-};
-
-function memoryTitleTokens(value: string): Set<string> {
-  return new Set(
-    value
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .filter((token) => token.length > 2),
-  );
-}
-
-function nearDuplicateTitle(a: string, b: string): boolean {
-  const left = memoryTitleTokens(a);
-  const right = memoryTitleTokens(b);
-  if (left.size === 0 || right.size === 0) return false;
-  let shared = 0;
-  for (const token of left) if (right.has(token)) shared += 1;
-  if (shared < 2) return false;
-  const union = left.size + right.size - shared;
-  return union > 0 && shared / union >= 0.5;
-}
-
-/**
- * Logical-frontmatter index for `recall_memory(mode:'list')` and the turn-1
- * memory index. Ranked by importance × 30-day recency decay × type weight.
- * Does NOT mark access (listing a title is not using the memory).
- */
-export function listMemoryIndex(
-  db: DB,
-  scope: AgentMemoryScope,
-  projectId: number,
-  limit = 12,
-  type?: AgentMemoryType,
-): AgentMemoryIndexEntry[] {
-  const pid = normalizeScopeProject(scope, projectId);
-  const typeClause = type ? 'AND type = ?' : '';
-  const params: unknown[] = [scope, pid];
-  if (type) params.push(type);
-  const rows = db
-    .prepare(
-      `SELECT id, name, description, type, source, scope, importance, created_at, last_accessed_at,
-              substr(content, 1, 200) AS excerpt
-       FROM agent_memory
-       WHERE scope = ? AND project_id = ? AND archived_at IS NULL ${typeClause}
-       ORDER BY importance DESC LIMIT 100`,
-    )
-    .all(...params) as Array<{
-    id: number; name: string; description: string; type: string; source: string; scope: string;
-    importance: number; created_at: string; last_accessed_at: string | null; excerpt: string | null;
-  }>;
-  const now = Date.now();
-  const HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
-  const scored = rows.map((r) => {
-    const ts = Date.parse(`${(r.last_accessed_at ?? r.created_at).replace(' ', 'T')}Z`);
-    const age = Number.isNaN(ts) ? HALF_LIFE_MS : Math.max(0, now - ts);
-    const typeBoost = 0.5 + 0.5 * (INDEX_TYPE_WEIGHT[r.type] ?? 0.5);
-    const sourceBoost = INDEX_SOURCE_WEIGHT[r.source] ?? 0.8;
-    return {
-      r,
-      score: (r.importance ?? 0.5) * Math.pow(0.5, age / HALF_LIFE_MS) * typeBoost * sourceBoost,
-    };
-  });
-  scored.sort((a, b) => b.score - a.score);
-  const diverse: typeof scored = [];
-  for (const candidate of scored) {
-    // Explicit facts can share title words while describing different decisions.
-    // Only automatic distillation is eligible for lossy title diversification.
-    if (diverse.some(({ r }) => (['session', 'distill'].includes(r.source) || ['session', 'distill'].includes(candidate.r.source))
-      && nearDuplicateTitle(r.name, candidate.r.name))) continue;
-    diverse.push(candidate);
-    if (diverse.length >= Math.max(1, limit)) break;
-  }
-  return diverse.map(({ r }) => ({
-    id: r.id,
-    name: r.name,
-    description: r.description,
-    type: r.type,
-    source: r.source,
-    scope: r.scope,
-    importance: r.importance ?? 0.5,
-    created_at: r.created_at,
-    last_accessed_at: r.last_accessed_at,
-    excerpt: r.excerpt ?? undefined,
-  }));
 }
 
 /**
@@ -707,19 +353,6 @@ export function pruneEvents(db: DB, maxAgeDays = 30, maxRows = 50_000): number {
   return removed;
 }
 
-export interface AgentMemoryStats {
-  /** Live (non-archived) project-scope memories (optionally for one project). */
-  liveProject: number;
-  /** Live global user-scope memories. */
-  liveUser: number;
-  /** Telemetry event counts by type (remember/recall/forget/selector/…). */
-  events: Record<string, number>;
-  /** Recall events that injected ≥1 memory — the "actually used" signal. */
-  recallHits: number;
-  /** Recall events that returned nothing (cold/irrelevant store). */
-  recallEmpty: number;
-}
-
 /**
  * Aggregate health stats for the memory dashboard / a "prove it left dormancy"
  * check. Optionally scoped to one project (user-scope counts stay global).
@@ -758,9 +391,4 @@ export function getStats(db: DB, projectId?: number): AgentMemoryStats {
     )
     .get(...(projectId != null ? [projectId] : [])) as { hits: number; empty: number };
   return { liveProject, liveUser, events, recallHits: recall.hits, recallEmpty: recall.empty };
-}
-
-function clamp01(n: number): number {
-  if (Number.isNaN(n)) return 0.5;
-  return Math.max(0, Math.min(1, n));
 }

@@ -14,7 +14,7 @@
  */
 import type { PipelineCandidate, PipelineQuery } from '@mcp/candidate-pipeline';
 import type { SubordinateDisableContext, SubordinateDisableRule } from './disable-rules.js';
-import type { RoleContextPayload } from './role-context-hydrator.js';
+import type { RoleContextPayload } from './role-context-payload.js';
 
 export interface RoleDescriptor {
   /** Stable role name within the template (`frontend`, `qa`, `backend`, …). */

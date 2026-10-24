@@ -110,7 +110,7 @@ export const subscribeNowFast = (listener: Listener) => subscribeLane(fastLane, 
 /** Last published 1 Hz stamp — stable between ticks. */
 export const readNow = () => slowLane.now;
 /** Last published 4 Hz stamp — stable between ticks. */
-export const readNowFast = () => fastLane.now;
+const readNowFast = () => fastLane.now;
 
 // A disabled subscriber still has to hand React a *stable* snapshot, otherwise
 // every parent render would look like a store change. This frozen module-init
@@ -136,7 +136,7 @@ export function useNow(enabled = true): number {
 }
 
 /** Same contract as `useNow`, refreshed 4×/s for sub-second readouts. */
-export function useNowFast(enabled = true): number {
+function useNowFast(enabled = true): number {
   return useSyncExternalStore(
     enabled ? subscribeNowFast : subscribeNever,
     enabled ? readNowFast : getDisabled,

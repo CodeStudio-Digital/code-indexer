@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export interface ProjectTreeEntry {
+interface ProjectTreeEntry {
   name: string;
   path: string;
   type: 'file' | 'dir';

@@ -3,7 +3,7 @@ import { CompanySessionFiles } from '@mcp/company/services/CompanySessionFiles.j
 import type { CompanySessionId } from '@mcp/session-storage';
 import type { CompanySessionRuntimeContext } from '../sse/WorkerOrchestratorPool.js';
 
-export interface CompanyRuntimeProject {
+interface CompanyRuntimeProject {
   id: number;
   root_path: string;
   is_synthetic?: number | boolean;

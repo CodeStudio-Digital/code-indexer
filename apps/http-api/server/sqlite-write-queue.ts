@@ -1,4 +1,4 @@
-export interface SqliteWriteQueueOptions {
+interface SqliteWriteQueueOptions {
   label?: string;
   maxPending?: number;
   maxWaitMs?: number;

@@ -12,7 +12,7 @@
  */
 import { PLUGIN_UI_KIT_CSS } from './plugin-ui-kit/index.js';
 
-export const PLUGIN_IFRAME_RUNTIME = `(function () {
+const PLUGIN_IFRAME_RUNTIME = `(function () {
   var seq = 0;
   var pending = {};
   var streams = {};
@@ -137,7 +137,7 @@ export const PLUGIN_IFRAME_RUNTIME = `(function () {
 })();`;
 
 /** Build the <head> injection (context + theme + shim) prepended to a plugin's HTML. */
-export function buildIframeInjection(
+function buildIframeInjection(
   context: { namespace: string; projectId?: number; locale?: string },
   themeTokens: Record<string, string>,
 ): string {
@@ -165,7 +165,7 @@ function escapeHtmlAttribute(value: string): string {
  * cannot be rewritten accidentally. External scripts remain governed by the
  * normal source allowlist.
  */
-export function applyInlineScriptNonce(html: string, scriptNonce?: string): string {
+function applyInlineScriptNonce(html: string, scriptNonce?: string): string {
   if (!scriptNonce) return html;
   const escapedNonce = escapeHtmlAttribute(scriptNonce);
   const openScript = /<script\b([^>]*)>/gi;

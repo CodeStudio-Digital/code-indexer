@@ -13,7 +13,7 @@
  * when the latest row for the same `(session_id, kind)` differs.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

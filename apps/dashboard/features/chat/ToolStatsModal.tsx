@@ -15,7 +15,7 @@
  */
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, BarChart3, RefreshCw, Scissors, X } from 'lucide-react';
+import { AlertCircle, RefreshCw, Scissors } from 'lucide-react';
 import { Button } from '../../components/ui/button.js';
 import { Badge } from '../../components/ui/badge.js';
 
@@ -82,12 +82,6 @@ function formatChars(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
   return String(n);
-}
-
-interface ToolStatsModalProps {
-  sessionId: string;
-  open: boolean;
-  onClose: () => void;
 }
 
 /**
@@ -411,35 +405,6 @@ export function ToolStatsView({
               </>
             )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Modal wrapper around `ToolStatsView` — kept for places that prefer a
- * blocking overlay over a sidebar panel.
- */
-export function ToolStatsModal({ sessionId, open, onClose }: ToolStatsModalProps) {
-  const { t } = useTranslation('chat');
-  if (!open) return null;
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        className="bg-card border rounded-lg shadow-lg w-full max-w-3xl max-h-[85vh] flex flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 border-b px-4 py-3">
-          <BarChart3 className="h-4 w-4 text-muted-foreground" />
-          <h2 className="text-sm font-semibold flex-1">{t('toolStats.modalTitle', { id: sessionId })}</h2>
-          <Button size="sm" variant="ghost" onClick={onClose} title={t('toolStats.close')}>
-            <X className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-        <ToolStatsView sessionId={sessionId} active={open} />
       </div>
     </div>
   );

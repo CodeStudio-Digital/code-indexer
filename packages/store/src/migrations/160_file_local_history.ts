@@ -13,7 +13,7 @@
  * existentes. Capturado por packages/api-handlers/src/files/local-history.ts.
  */
 import type DatabaseConstructor from 'better-sqlite3';
-import type { Migration } from './index.js';
+import type { Migration } from './types.js';
 
 type DB = InstanceType<typeof DatabaseConstructor>;
 

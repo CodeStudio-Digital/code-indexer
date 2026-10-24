@@ -71,7 +71,10 @@ it('pages live directory entries without a full listing or file reads', async ()
 });
 
 it('returns JSON for an empty directory and closes a partially consumed iterator', async () => {
-  expect(JSON.parse((await diagramListTool.handler({ format: 'json' }, ctx)).content).names).toEqual([]);
+  const empty = await diagramListTool.handler({ format: 'json' }, ctx);
+  expect(empty.contentFormat).toBe('json');
+  expect(JSON.parse(empty.content)).toEqual(empty.structuredData);
+  expect(empty.structuredData).toMatchObject({ names: [] });
   const port = new LocalFilesystemAdapter(); let closed = false, visited = 0;
   vi.spyOn(port, 'iterateDirectory').mockImplementation(async function* () {
     try { for (let i = 0; i < 10000; i++) { visited++; yield { name: `${i}.drawio`, isFile: () => true, isDirectory: () => false }; } }

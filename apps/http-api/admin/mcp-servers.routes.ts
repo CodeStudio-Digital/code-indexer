@@ -13,7 +13,7 @@ import { loadConfig } from '@mcp/shared/utils/config.js';
 import type { ToolMeta } from '@mcp/code-agent/tools/tiers.js';
 import { getGlobalMcpExternalPool } from '../sse/McpExternalPool.js';
 
-export interface ExternalToolInfo {
+interface ExternalToolInfo {
   name: string;
   description: string;
   serverId: string;

@@ -1,13 +1,13 @@
 import type * as MonacoNs from 'monaco-editor';
 import type { DebugSourceBreakpoint } from '@mcp/api-bus';
 
-export interface DebugBreakpointGutterItem extends DebugSourceBreakpoint {
+interface DebugBreakpointGutterItem extends DebugSourceBreakpoint {
   actualLine?: number;
   verified?: boolean;
   verificationMessage?: string;
 }
 
-export interface DebugBreakpointGutterOptions {
+interface DebugBreakpointGutterOptions {
   breakpoints: DebugBreakpointGutterItem[];
   onToggle(line: number): void;
   onMoved(breakpoints: DebugSourceBreakpoint[]): void;

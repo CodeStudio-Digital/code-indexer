@@ -14,7 +14,7 @@ import type { QaRun, QaTestResultWithUrls } from '../shared/types.js';
 
 const POLL_INTERVAL_MS = 2_000;
 
-export interface UseLiveRunResult {
+interface UseLiveRunResult {
   run: QaRun | null;
   results: QaTestResultWithUrls[];
   loading: boolean;

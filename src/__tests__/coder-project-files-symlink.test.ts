@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   existsSync,
+  lstatSync,
+  unlinkSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -36,7 +38,11 @@ describe('coder project files over virtual workspace links', () => {
   });
 
   afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
+    // Break only the junctions created by this fixture before walking its tree.
+    for (const link of [join(targetA, 'src', 'back-to-union'), join(unionDir, 'poa-backend'), join(unionDir, 'poa-intranet-angular')]) {
+      if (lstatSync(link, { throwIfNoEntry: false })?.isSymbolicLink()) unlinkSync(link);
+    }
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it('lists linked projects as top-level folders and expands through them', async () => {

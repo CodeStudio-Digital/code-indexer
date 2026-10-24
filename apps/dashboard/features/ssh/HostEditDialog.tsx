@@ -28,7 +28,7 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '.
 import { createHost, patchHost, encryptSecret, testConnection, generateKey, sshHostKey } from './api.js';
 import type { SshAuthMethod, SshHost } from './types.js';
 
-export interface HostEditDialogProps {
+interface HostEditDialogProps {
   projectId: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;

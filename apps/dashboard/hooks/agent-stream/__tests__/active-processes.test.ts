@@ -40,7 +40,7 @@ describe('active process state', () => {
     const processes = [
       { id: 'tool:1', source: 'tool', kind: 'tool', label: 'read_file', background: false },
       { id: 'agent:g:0', source: 'agent', kind: 'subagent', label: 'Scout', background: true },
-    ].reduce((state, patch) => upsertActiveProcess(state, patch as Parameters<typeof upsertActiveProcess>[1], 1_000), []);
+    ].reduce<ReturnType<typeof upsertActiveProcess>>((state, patch) => upsertActiveProcess(state, patch as Parameters<typeof upsertActiveProcess>[1], 1_000), []);
 
     expect(retainBackgroundProcesses(processes).map((process) => process.id)).toEqual(['agent:g:0']);
   });

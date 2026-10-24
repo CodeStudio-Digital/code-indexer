@@ -6,7 +6,7 @@ export interface SqlTableReference {
   alias?: string;
 }
 
-export interface SqlDiagnostic {
+interface SqlDiagnostic {
   start: number;
   end: number;
   severity: 'warning' | 'error';

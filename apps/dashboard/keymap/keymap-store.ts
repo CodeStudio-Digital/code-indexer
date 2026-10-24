@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware';
 import { listCommands, type CommandSpec } from './commands.js';
 
 export type KeymapPreset = 'intellij' | 'vscode';
-export type KeymapOverrides = Record<string, string[]>;
+type KeymapOverrides = Record<string, string[]>;
 
 interface KeymapState {
   preset: KeymapPreset;
@@ -74,7 +74,7 @@ export function effectiveBindings(cmd: CommandSpec, preset: KeymapPreset, overri
   return cmd.defaultKeys?.[preset] ?? [];
 }
 
-export function effectiveBindingsById(commandId: string, preset: KeymapPreset, overrides: KeymapOverrides): string[] {
+function effectiveBindingsById(commandId: string, preset: KeymapPreset, overrides: KeymapOverrides): string[] {
   const command = listCommands().find((item) => item.id === commandId);
   return command ? effectiveBindings(command, preset, overrides) : (overrides[commandId] ?? []);
 }

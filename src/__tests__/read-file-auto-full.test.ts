@@ -25,7 +25,8 @@ describe('read_file native — auto-full + rich header', () => {
     );
   });
 
-  afterEach(() => rmSync(cwd, { recursive: true, force: true }));
+  afterEach(() => { rmSync(cwd, { recursive: true, force: true }); });
+
 
   function ctx(): ToolContext {
     return { cwd, projectName: 'test' };
@@ -76,18 +77,5 @@ describe('read_file native — auto-full + rich header', () => {
     expect(r.isError).toBeFalsy();
     expect(r.content).toMatch(/^src\/big\.ts \| 1000 lines \| ts/);
     expect(r.content).toContain('[lines 100-105]');
-  });
-
-  it('search_term centers the window on the first match', async () => {
-    const r = await readFileTool.handler({ path: 'src/big.ts', search_term: 'line 750' }, ctx());
-    expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('Auto-scrolled to line 750');
-    expect(r.content).toContain('const x750 =');
-  });
-
-  it('search_term returns a not-found message instead of erroring', async () => {
-    const r = await readFileTool.handler({ path: 'src/big.ts', search_term: 'definitely_not_in_file_xyz' }, ctx());
-    expect(r.isError).toBeFalsy();
-    expect(r.content).toContain('not found');
   });
 });

@@ -11,14 +11,29 @@
  * `apiClient` falls back to `fetch` against the Hono routes.
  */
 
-import type { Api } from './index.js';
+import type { SerializableAsyncIterator } from '@mcp/shared/utils/serializable-stream.js';
 
 export interface ElectronAPI {
   /** Per-launch packaged CSP nonce used only for sandboxed plugin scripts. */
   rendererCspNonce?: string | null;
 
-  /** Full backend RPC surface — same shape Hono mounts at /api/*. */
-  api: Api;
+  /** Preload exposes RPC functions; it does not expose a nested API proxy. */
+  invoke(methodPath: string, payload: unknown, requestId?: string): Promise<unknown>;
+  cancelInvoke?(requestId: string): void;
+  openStream<T = unknown>(methodPath: string, payload: unknown): SerializableAsyncIterator<T>;
+  isStreamingPath(methodPath: string): boolean;
+  openDuplexStream?(channel: string, payload: unknown): { port: MessagePort; ready: Promise<void> };
+  openFiles?(): Promise<string[]>;
+  saveFile?(defaultName?: string): Promise<string | null>;
+  oauthLoopbackStart?(): Promise<{ ok: boolean; port?: number; error?: string }>;
+  oauthLoopbackStop?(): void;
+  openInNewWindow?(route: string, title?: string): Promise<{ ok: boolean; windowId?: number; error?: string }>;
+  windowRegistry?: {
+    setActiveProject(projectId: number): void;
+    listOpenProjects(): Promise<Array<{ windowId: number; projectId: number; focused: boolean }>>;
+    focusProject(projectId: number): Promise<{ ok: boolean; windowId?: number }>;
+    onOpenProjectsChanged(callback: (list: Array<{ windowId: number; projectId: number; focused: boolean }>) => void): () => void;
+  };
 
   /** Native folder picker — used in the Onboarding wizard + ProjectSwitcher. */
   openDirectory(): Promise<string | null>;

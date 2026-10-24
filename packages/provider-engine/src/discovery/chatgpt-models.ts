@@ -21,7 +21,7 @@ import {
 } from '@mcp/services/services/oauth/openai.js';
 import { resolveChatGPTCreds } from '@mcp/services/providers/shared/oauth.js';
 import { nativeReasoningLevel, nativeReasoningLevels, type ProviderSpec } from '@mcp/provider-sdk';
-import type { DiscoveryResult } from './index.js';
+import type { DiscoveryResult } from './types.js';
 
 const REQUEST_TIMEOUT_MS = 5_000;
 
