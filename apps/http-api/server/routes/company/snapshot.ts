@@ -18,6 +18,7 @@ import {
 } from '../_helpers.js';
 import { SessionSnapshotService, type FileSummary } from '@mcp/services/services/session-snapshots.js';
 import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
+import { mountToolSnapshotRoutes } from '../coder/tool-snapshot.js';
 import { isMutationOutcomeUnknownError } from '@mcp/orchestrator-host';
 import {
   asCompanySessionId,
@@ -51,6 +52,7 @@ async function listCoderSessionIdsForCompany(
 export function mountCompanySnapshotRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
   const snapshotStore = sessionStore;
+  mountToolSnapshotRoutes(app, snapshotStore, id => listCoderSessionIdsForCompany(sessionStore, id));
   const service = new SessionSnapshotService(snapshotStore, async (kind, sessionId) => {
     if (kind !== 'coder') return null;
     const s = await sessionStore.getSession(sessionId);

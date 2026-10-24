@@ -23,6 +23,7 @@ export interface DiffRowHandlers {
   onExpand: (side: 'before' | 'after') => void;
   onUpdateComment: OnUpdateComment;
   busy: boolean;
+  readOnly?: boolean;
 }
 
 function DiffRowImpl({ row, handlers }: { row: DiffRowModel; handlers: DiffRowHandlers }) {
@@ -40,9 +41,9 @@ function DiffRowImpl({ row, handlers }: { row: DiffRowModel; handlers: DiffRowHa
           <div className="flex items-center gap-1.5">
             <span className="text-emerald-700 dark:text-emerald-400">+{h.addedCount}</span>
             <span className="text-rose-700 dark:text-rose-400">-{h.removedCount}</span>
-            <Button size="icon" variant="ghost" className="h-6 w-6" disabled={busy} onClick={() => handlers.onCommentClick(h.fingerprint)} title={t('snapshotDiff.commentHunk')}>
+            {!handlers.readOnly && <Button size="icon" variant="ghost" className="h-6 w-6" disabled={busy} onClick={() => handlers.onCommentClick(h.fingerprint)} title={t('snapshotDiff.commentHunk')}>
               <MessageSquarePlus className="h-3.5 w-3.5" />
-            </Button>
+            </Button>}
             {h.decision === 'kept' && <Badge variant="outline" className="text-[9px]">{t('snapshotDiff.kept')}</Badge>}
             {h.decision === 'reverted' && <Badge variant="outline" className="text-[9px]">{t('snapshotDiff.reverted')}</Badge>}
           </div>
@@ -81,7 +82,7 @@ function DiffRowImpl({ row, handlers }: { row: DiffRowModel; handlers: DiffRowHa
           <span className="select-none text-muted-foreground w-12 text-right pr-2 flex-none">{lineLabel(line)}</span>
           <span className="select-none text-muted-foreground w-3 flex-none">{prefix}</span>
           <span className="pr-8">{line.content || ' '}</span>
-          <button
+          {!handlers.readOnly && <button
             type="button"
             disabled={busy}
             onClick={() => handlers.onCommentClick(row.hunk.fingerprint, line)}
@@ -89,11 +90,12 @@ function DiffRowImpl({ row, handlers }: { row: DiffRowModel; handlers: DiffRowHa
             title={t('snapshotDiff.commentLine')}
           >
             <MessageSquarePlus className="h-3.5 w-3.5" />
-          </button>
+          </button>}
         </div>
       );
     }
     case 'footer':
+      if (handlers.readOnly) return null;
       return (
         <div className="flex items-center justify-end gap-1 px-3 py-1.5 bg-muted/20 border-y">
           <Button size="sm" variant="ghost" onClick={() => handlers.onAccept(row.hunk.fingerprint)} disabled={busy} className="h-7 text-xs">

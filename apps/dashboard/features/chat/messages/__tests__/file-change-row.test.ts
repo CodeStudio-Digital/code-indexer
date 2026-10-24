@@ -30,7 +30,7 @@ function summary(addedLines: number, removedLines: number, filePath = 'src/examp
 describe('FileChangeRow', () => {
   beforeAll(bootstrapTestI18n);
 
-  it('shows the live session snapshot when the tool card has no round snapshot', () => {
+  it('never substitutes cumulative changes for an unavailable edit snapshot', () => {
     const file = summary(12, 3);
     const html = renderToStaticMarkup(createElement(
       SnapshotFilesProvider,
@@ -38,23 +38,25 @@ describe('FileChangeRow', () => {
       createElement(FileChangeRow, { file: { path: file.filePath, op: 'edit' } }),
     ));
 
-    expect(html).toContain('+12');
-    expect(html).toContain('−3');
-    expect(html).not.toContain('>–<');
+    expect(html).not.toContain('+12');
+    expect(html).not.toContain('−3');
+    expect(html).toContain('>–<');
   });
 
-  it('resolves an absolute Windows tool path to the project-relative baseline', () => {
+  it('uses the captured invocation even when the global baseline has newer edits', () => {
     const file = summary(12, 3, 'scripts/cluster-cli.mjs');
     const html = renderToStaticMarkup(createElement(
       SnapshotFilesProvider,
       { actions: null, files: new Map([[file.filePath, file]]) },
       createElement(FileChangeRow, {
         file: { path: 'D:\\proj\\scripts\\cluster-cli.mjs', op: 'edit' },
+        toolSnapshot: { ...summary(2, 1, file.filePath), toolUseId: 'edit-one', fileIndex: 0, existedAfter: true },
       }),
     ));
 
-    expect(html).toContain('+12');
-    expect(html).toContain('−3');
+    expect(html).toContain('+2');
+    expect(html).toContain('−1');
+    expect(html).not.toContain('+12');
     expect(html).not.toContain('>–<');
   });
 

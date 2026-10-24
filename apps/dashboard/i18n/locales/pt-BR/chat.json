@@ -543,6 +543,7 @@
   "messages.undoTurnConfirm": "Desfazer mudanças",
   "messages.roundSnapshotUnavailable": "O diff exato por rodada não está disponível para alterações registradas antes desta atualização. O snapshot global continua disponível.",
   "messages.snapshotUntrackedFile": "Sem baseline de snapshot para este arquivo, então não há diff para mostrar. Arquivos escritos fora da raiz do projeto não são rastreados.",
+  "messages.editSnapshotUnavailable": "O snapshot desta edição não está disponível. As alterações acumuladas aparecem no resumo da sessão.",
   "messages.snapshotAmbiguousPath": "Vários arquivos rastreados terminam com este caminho — melhor não mostrar diff nenhum do que o do arquivo errado.",
   "rollbackConfirmTitle": "Voltar para esta mensagem?",
   "rollbackConfirmDescription": "Isto apaga permanentemente esta mensagem e tudo que veio depois, e a carrega de volta no campo de texto para editar. Não dá para desfazer.",

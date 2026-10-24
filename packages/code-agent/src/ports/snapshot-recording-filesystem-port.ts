@@ -33,6 +33,7 @@ import {
   type SessionSnapshotStorePort,
 } from '@mcp/services/services/session-snapshot-port.js';
 import { newSessionId, type SessionId } from '@mcp/session-storage';
+import { currentSnapshotInvocation } from './snapshot-invocation.js';
 
 const MAX_BASELINE_BYTES = 4 * 1024 * 1024;
 
@@ -63,6 +64,7 @@ export interface SnapshotRecorderDeps {
 }
 
 export interface PreparedSnapshotMutation {
+  toolUseId?: string;
   globalBaselineId: string;
   operationId: string;
   roundMessageId: number | null;
@@ -180,12 +182,13 @@ export class SnapshotRecorder {
     const afterHash = info.binaryAfter ? createHash('md5').update(info.binaryAfter).digest('hex') : hashContent(info.expectedAfter);
     const { baseline } = await this.deps.store.recordBaselineAndEdit(create, {
       turn_number: this.deps.getTurn?.() ?? null,
-      tool_name: info.tool,
+      tool_name: currentSnapshotInvocation()?.toolName ?? info.tool,
       content_after_hash: afterHash,
       was_delete: info.isDelete,
       operation_id: operationId,
     });
     return {
+      toolUseId: currentSnapshotInvocation()?.toolUseId,
       globalBaselineId: baseline.id,
       operationId,
       roundMessageId: this.deps.getRoundMessageId?.() ?? null,
@@ -202,6 +205,17 @@ export class SnapshotRecorder {
   /** Commit the round envelope only after the filesystem mutation succeeded. */
   async complete(prepared: PreparedSnapshotMutation | null): Promise<void> {
     if (!prepared) return;
+    if (prepared.toolUseId) {
+      await this.deps.store.recordToolSnapshotMutation?.({
+        session_kind: this.deps.sessionKind, session_id: this.deps.sessionId,
+        tool_use_id: prepared.toolUseId, round_message_id: prepared.roundMessageId,
+        global_baseline_id: prepared.globalBaselineId, project_id: prepared.projectId,
+        file_path: prepared.filePath, content_before: prepared.contentBefore,
+        existed_before: prepared.existedBefore, content_after: prepared.contentAfter,
+        existed_after: prepared.existedAfter, oversized: prepared.oversized,
+        operation_id: `${prepared.operationId}:tool`,
+      });
+    }
     let roundSnapshotId: string | null = null;
     if (prepared.roundMessageId != null) {
       const round = await this.deps.store.recordRoundSnapshotMutation({

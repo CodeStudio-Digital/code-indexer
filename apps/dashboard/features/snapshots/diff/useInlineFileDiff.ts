@@ -13,7 +13,8 @@ import {
   revertHunk,
   revertRoundHunk,
 } from '../api.js';
-import type { SessionScope, SnapshotFileDiff } from '../types.js';
+import type { SessionScope, SnapshotFileDiff, ToolSnapshotFileSummary } from '../types.js';
+import { fetchToolFileDiff } from '../tool-api.js';
 import type { DiffRowHandlers } from './DiffRow.js';
 import type { SnapshotActions } from '../../chat/messages/snapshot-files-context.js';
 
@@ -33,6 +34,7 @@ export function useInlineFileDiff(
   roundMessageId?: number,
   globalBaselineId?: string,
   onMutated?: () => void,
+  toolSnapshot?: Pick<ToolSnapshotFileSummary, 'toolUseId' | 'fileIndex'>,
 ): Result {
   const [diff, setDiff] = useState<SnapshotFileDiff | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,13 +42,17 @@ export function useInlineFileDiff(
   const [ctxBefore, setCtxBefore] = useState(3);
   const [ctxAfter, setCtxAfter] = useState(3);
   const token = useRef(0);
+  const toolUseId = toolSnapshot?.toolUseId;
+  const fileIndex = toolSnapshot?.fileIndex;
 
   const load = useCallback(async () => {
     const t = ++token.current;
     setLoading(true);
     try {
       const options = { context: 3, contextBefore: ctxBefore, contextAfter: ctxAfter };
-      const r = roundMessageId == null
+      const r = toolUseId != null && fileIndex != null
+        ? await fetchToolFileDiff(scope, sessionId, toolUseId, fileIndex, ctxBefore, ctxAfter)
+        : roundMessageId == null
         ? await fetchFileDiff(scope, sessionId, baselineId, options)
         : await fetchRoundFileDiff(scope, sessionId, roundMessageId, baselineId, options);
       if (t === token.current) setDiff(r);
@@ -55,14 +61,16 @@ export function useInlineFileDiff(
     } finally {
       if (t === token.current) setLoading(false);
     }
-  }, [scope, sessionId, baselineId, roundMessageId, ctxBefore, ctxAfter]);
+  }, [scope, sessionId, baselineId, roundMessageId, toolUseId, fileIndex, ctxBefore, ctxAfter]);
 
   useEffect(() => {
     void load();
+    return () => { token.current++; };
   }, [load, refreshKey]);
 
   const mutate = useCallback(
     (fn: () => Promise<unknown>) => {
+      if (toolUseId != null) return;
       setBusy(true);
       void fn()
         .catch(() => {})
@@ -73,7 +81,7 @@ export function useInlineFileDiff(
           onMutated?.();
         });
     },
-    [load, actions, onMutated],
+    [load, actions, onMutated, toolUseId],
   );
 
   const handlers = useMemo<DiffRowHandlers>(
@@ -89,8 +97,9 @@ export function useInlineFileDiff(
       onCommentClick: () => actions?.openSnapshots(globalBaselineId ?? baselineId),
       onUpdateComment: () => {},
       busy,
+      readOnly: toolUseId != null,
     }),
-    [mutate, scope, sessionId, baselineId, roundMessageId, globalBaselineId, actions, busy],
+    [mutate, scope, sessionId, baselineId, roundMessageId, globalBaselineId, actions, busy, toolUseId],
   );
 
   return { diff, loading, handlers };

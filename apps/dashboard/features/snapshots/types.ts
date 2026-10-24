@@ -40,6 +40,12 @@ export interface RoundSnapshotFileSummary extends SnapshotFileSummary {
   projectId: number | null;
 }
 
+export interface ToolSnapshotFileSummary extends SnapshotFileSummary {
+  toolUseId: string;
+  fileIndex: number;
+  existedAfter: boolean;
+}
+
 export interface SnapshotHunk {
   fingerprint: string;
   oldStart: number;

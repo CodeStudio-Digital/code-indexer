@@ -9,7 +9,7 @@ import { Loader2 } from 'lucide-react';
 import type { ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { ToolApprovalCard, type ToolApprovalVerdict } from './ToolApprovalCard.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
-import { FileChangeRow } from './FileChangeRow.js';
+import { ToolFileChanges } from './ToolFileChanges.js';
 import { filesFromEditToolCall } from './edit-tools.js';
 
 export function FileEditBlock({
@@ -41,12 +41,7 @@ export function FileEditBlock({
           <ToolApprovalCard approvals={call.approvals} onRespond={onToolApproval} />
         </div>
       )}
-      {refs.map((ref) => (
-        // The tool row shows the live session baseline immediately. The
-        // completed-round summary below the response remains the authoritative
-        // frozen diff for undo/review actions.
-        <FileChangeRow key={`${ref.path}:${ref.op}`} file={ref} />
-      ))}
+      <ToolFileChanges toolUseId={call.id} ready={call.status === 'done'} files={refs} />
       {running && (
         <div className="flex items-center gap-1.5 px-1 text-[11px] text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />

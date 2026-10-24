@@ -4,6 +4,7 @@ export const criticalPaths = [
   'packages/code-agent/src/core/__tests__/permission-gate',
   'packages/code-agent/src/core/__tests__/vision-context.test.ts',
   'packages/code-agent/src/core/__tests__/tool-extra-user-messages.test.ts',
+  'packages/code-agent/src/ports/__tests__/tool-snapshot-history.test.ts',
   'packages/code-agent/src/sessions/fs-store/__tests__/bundle-tool-output-store.test.ts',
   'packages/code-agent/src/sessions/fs-store/__tests__/fs-session-store-crud.test.ts',
   'packages/code-agent/src/sessions/fs-store/__tests__/fs-session-store-conversation.test.ts',

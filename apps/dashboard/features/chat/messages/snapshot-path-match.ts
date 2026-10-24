@@ -14,7 +14,7 @@
  * genuinely indistinguishable and the wrong file's diff is worse than none.
  */
 
-export type SnapshotPathMatch<T> =
+type SnapshotPathMatch<T> =
   /** Resolved: `exact` hit a key as-is, `suffix` matched a project-relative tail. */
   | { file: T; reason: 'exact' | 'suffix' }
   /** Unresolved: nothing matched, or several keys did and we refuse to guess. */

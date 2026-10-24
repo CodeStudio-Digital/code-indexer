@@ -32,10 +32,12 @@ import {
 } from '@mcp/services/services/snapshot-review-context.js';
 import { buildSessionIntent } from '@mcp/code-agent/sessions/session-intent.js';
 import { mountSnapshotReviewRoutes } from '../snapshot-review-routes.js';
+import { mountToolSnapshotRoutes } from './tool-snapshot.js';
 
 export function mountCoderSnapshotRoutes(app: Hono, deps: ServerDeps): void {
   const { sessionStore, db } = deps;
   const snapshotStore = sessionStore;
+  mountToolSnapshotRoutes(app, snapshotStore);
   const service = new SessionSnapshotService(snapshotStore, async (kind, sessionId, projectId) => {
     if (kind !== 'coder') return null;
     const s = await sessionStore.getSession(sessionId);

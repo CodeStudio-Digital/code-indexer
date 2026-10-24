@@ -1,19 +1,20 @@
 /**
  * One file row shared by `FileEditBlock` and `TurnFilesSummary`: A/M/D badge +
  * path + `+added/−removed` + a chevron that expands the inline diff.
- * Completed-round callers pass the immutable round snapshot; live/tool rows
- * use the current session baseline until that frozen envelope is available.
+ * Callers supply an immutable tool or round snapshot. Missing historical data
+ * must never fall back to a cumulative session diff.
  */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight } from 'lucide-react';
 import { cn } from '../../../lib/utils.js';
 import { InlineDiff } from '../../snapshots/diff/InlineDiff.js';
-import { useSnapshotActions, useSnapshotFileMatch, statusKind } from './snapshot-files-context.js';
+import { useSnapshotActions, statusKind } from './snapshot-files-context.js';
 import type { EditFileRef, FileEditOp } from './edit-tools.js';
 import type {
   RoundSnapshotFileSummary,
   RoundSnapshotReviewFinding,
+  ToolSnapshotFileSummary,
 } from '../../snapshots/types.js';
 
 const STATUS_STYLES: Record<'A' | 'M' | 'D', string> = {
@@ -31,12 +32,14 @@ function opToKind(op: FileEditOp): 'A' | 'M' | 'D' {
 export function FileChangeRow({
   file,
   snapshot,
+  toolSnapshot,
   roundMessageId,
   reviewFindings = [],
   onRoundMutated,
 }: {
   file: EditFileRef;
   snapshot?: RoundSnapshotFileSummary;
+  toolSnapshot?: ToolSnapshotFileSummary;
   roundMessageId?: number;
   reviewFindings?: RoundSnapshotReviewFinding[];
   onRoundMutated?: () => void;
@@ -44,23 +47,14 @@ export function FileChangeRow({
   const { t } = useTranslation('chat');
   const [open, setOpen] = useState(false);
   const actions = useSnapshotActions();
-  // A completed turn supplies its immutable round snapshot. Individual edit
-  // cards do not have that envelope yet, so keep them useful with the live
-  // session baseline instead of rendering permanent `--` placeholders.
-  const match = useSnapshotFileMatch(file.path);
-  const summary = snapshot ?? match.file;
+  const summary = toolSnapshot ?? snapshot;
 
-  const kind = summary ? statusKind(summary) : opToKind(file.op);
+  const kind = toolSnapshot ? opToKind(file.op) : summary ? statusKind(summary) : opToKind(file.op);
   const baselineId = summary?.baselineId;
   const canExpand = baselineId != null && actions != null;
-  // Without a baseline the row is a dead `–`; say why. `ambiguous` means several
-  // tracked files share this tail, `missing` usually means the write landed
-  // outside the project root, where nothing is snapshotted at all.
   const placeholderHint = summary
     ? undefined
-    : t(match.reason === 'ambiguous'
-      ? 'messages.snapshotAmbiguousPath'
-      : 'messages.snapshotUntrackedFile');
+    : t('messages.editSnapshotUnavailable');
 
   return (
     <div className="rounded-md border border-border/60 bg-card/40 overflow-hidden">
@@ -102,6 +96,7 @@ export function FileChangeRow({
             baselineId={baselineId}
             roundMessageId={snapshot ? (roundMessageId ?? snapshot.roundMessageId) : undefined}
             globalBaselineId={snapshot?.globalBaselineId}
+            toolSnapshot={toolSnapshot}
             reviewFindings={reviewFindings}
             onMutated={onRoundMutated}
             refreshKey={summary?.lastEditedAt}

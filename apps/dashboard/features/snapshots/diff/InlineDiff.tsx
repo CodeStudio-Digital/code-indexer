@@ -16,6 +16,7 @@ import type {
   SessionScope,
   SnapshotFileDiff,
   SnapshotReviewComment,
+  ToolSnapshotFileSummary,
 } from '../types.js';
 
 const NO_COMMENTS: SnapshotReviewComment[] = [];
@@ -35,6 +36,7 @@ export function InlineDiff({
   reviewFindings = [],
   onMutated,
   refreshKey,
+  toolSnapshot,
 }: {
   scope: SessionScope;
   sessionId: string;
@@ -44,6 +46,7 @@ export function InlineDiff({
   reviewFindings?: RoundSnapshotReviewFinding[];
   onMutated?: () => void;
   refreshKey?: string | number;
+  toolSnapshot?: Pick<ToolSnapshotFileSummary, 'toolUseId' | 'fileIndex'>;
 }) {
   const { t } = useTranslation('chat');
   const actions = useSnapshotActions();
@@ -56,6 +59,7 @@ export function InlineDiff({
     roundMessageId,
     globalBaselineId,
     onMutated,
+    toolSnapshot,
   );
   const contextualComments = useMemo<SnapshotReviewComment[]>(
     () => reviewFindings.map((finding) => ({
@@ -81,6 +85,7 @@ export function InlineDiff({
     diff ?? EMPTY_DIFF,
     contextualComments.length > 0 ? contextualComments : NO_COMMENTS,
   );
+  const visibleRows = useMemo(() => toolSnapshot ? rows.filter(row => row.kind !== 'footer') : rows, [rows, toolSnapshot]);
 
   if (loading && !diff) {
     return (
@@ -96,11 +101,11 @@ export function InlineDiff({
     return (
       <div className="mt-1 flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-2.5 py-2 text-[11px] text-muted-foreground">
         <span>
-          {tooLarge
+          {!diff ? t('messages.editSnapshotUnavailable') : tooLarge
             ? t('messages.fileTooLargeOpenSnapshot')
             : t('messages.noRemainingChanges')}
         </span>
-        {actions && actions.showToolbar !== false && (
+        {!toolSnapshot && actions && actions.showToolbar !== false && (
           <Button
             size="sm"
             variant="ghost"
@@ -116,7 +121,7 @@ export function InlineDiff({
 
   return (
     <div className="mt-1 flex flex-col max-h-[45vh] min-h-[5rem] rounded-md border overflow-hidden">
-      <DiffRowsView rows={rows} maxContentChars={maxContentChars} handlers={handlers} />
+      <DiffRowsView rows={visibleRows} maxContentChars={maxContentChars} handlers={handlers} />
     </div>
   );
 }

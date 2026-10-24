@@ -12,6 +12,7 @@ import {
 import { FsSessionReviewRepository } from './review-repository.js';
 import { FsSessionDirectory } from './session-directory.js';
 import { FsSessionSnapshotRepository } from './snapshot-repository.js';
+import { FsToolSnapshotRepository } from './tool-snapshot-repository.js';
 
 export interface FsSnapshotReviewApi
   extends SessionSnapshotStorePort<SessionId, string>,
@@ -50,6 +51,7 @@ export function installSnapshotReviewApi(
   );
   const evidence = new FsReviewEvidenceRepository(directory, snapshots);
   installMethods(target, snapshots);
+  installMethods(target, new FsToolSnapshotRepository(directory, entities));
   installMethods(target, reviews);
   installMethods(target, evidence);
 }

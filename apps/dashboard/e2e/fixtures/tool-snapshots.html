@@ -1,0 +1,36 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Edit history regression</title></head>
+<body><div id="root"></div><script type="module">
+import React, {useMemo, useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {FileEditBlock} from '/features/chat/messages/FileEditBlock.tsx';
+import {TurnFilesSummary} from '/features/chat/messages/TurnFilesSummary.tsx';
+import {SnapshotFilesProvider} from '/features/chat/messages/snapshot-files-context.tsx';
+import {SnapshotsPanel} from '/features/snapshots/SnapshotsPanel.tsx';
+import {DialogProvider} from '/components/ui/dialog-provider.tsx';
+import {TooltipProvider} from '/components/ui/tooltip.tsx';
+import {Dialog, DialogContent, DialogTitle, DialogDescription} from '/components/ui/dialog.tsx';
+import {i18nReady} from '/i18n/index.ts';
+import '/index.css';
+const h=React.createElement;
+const file={baselineId:'baseline',filePath:'src/example.ts',status:'active',existedBefore:true,oversized:false,
+  firstSeenAt:'2026-10-24T00:00:00Z',lastEditedAt:'2026-10-24T00:01:00Z',closedAt:null,
+  hunkCount:1,pendingHunks:1,addedLines:3,removedLines:1,resolved:false};
+function Fixture(){
+  const [later,setLater]=useState(false),[running,setRunning]=useState(true),[selected,setSelected]=useState(null);
+  window.snapshotFixture={finish:()=>setRunning(false),later:()=>setLater(true)};
+  const actions=useMemo(()=>({scope:'coder',sessionId:'fixture',refresh:()=>{},openSnapshots:id=>setSelected(id)}),[]);
+  const files=new Map([[file.filePath,{...file,addedLines:later?99:3}]]);
+  const call=id=>({id,name:'edit_file',input:{path:'src/example.ts',old_string:'before',new_string:'after'},
+    status:running?'running':'done',result:running?undefined:{content:'edited'}});
+  return h(SnapshotFilesProvider,{actions,files},h('main',{className:'mx-auto max-w-3xl p-6 space-y-4'},
+    h('p',null,'Primeira edição'),h('section',{'data-testid':'first'},h(FileEditBlock,{call:call('first')})),
+    h('p',null,'Segunda edição do mesmo arquivo'),h('section',{'data-testid':'second'},h(FileEditBlock,{call:call('second')})),
+    h('section',{'data-testid':'legacy'},h(FileEditBlock,{call:{...call('legacy'),status:'done'}})),
+    h('section',{'data-testid':'summary'},h(TurnFilesSummary,{paths:[{path:file.filePath,op:'edit'}],roundMessageId:1})),
+    h(Dialog,{open:selected!==null,onOpenChange:open=>!open&&setSelected(null)},h(DialogContent,{className:'max-w-5xl h-[80vh] flex flex-col'},
+      h(DialogTitle,null,'Alterações acumuladas'),h(DialogDescription,null,'Snapshot da sessão'),
+      h(SnapshotsPanel,{scope:'coder',sessionId:'fixture',initialBaselineId:selected,dialogMode:true})))));
+}
+await i18nReady;
+createRoot(document.getElementById('root')).render(h(DialogProvider,null,h(TooltipProvider,null,h(Fixture))));
+</script></body></html>

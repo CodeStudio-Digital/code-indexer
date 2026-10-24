@@ -543,6 +543,7 @@
   "messages.undoTurnConfirm": "Undo changes",
   "messages.roundSnapshotUnavailable": "Exact per-round diff is unavailable for changes recorded before this update. The global snapshot remains available.",
   "messages.snapshotUntrackedFile": "No snapshot baseline for this file, so there is no diff to show. Files written outside the project root aren't tracked.",
+  "messages.editSnapshotUnavailable": "The snapshot for this edit is not available. Cumulative changes are shown in the session summary.",
   "messages.snapshotAmbiguousPath": "Several tracked files end with this path — showing no diff rather than the wrong file's.",
   "rollbackConfirmTitle": "Roll back to this message?",
   "rollbackConfirmDescription": "This permanently deletes this message and everything after it, and loads it back into the composer to edit. This can't be undone.",

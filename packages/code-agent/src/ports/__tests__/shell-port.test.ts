@@ -112,14 +112,16 @@ describe('bounded shell output', () => {
 
     const result = await adapter.spawn(process.execPath, ['-e', parentScript], {
       cwd: process.cwd(),
-      timeoutMs: 500,
+      // Allow the real interpreter to start before testing descendant cleanup.
+      timeoutMs: 3_000,
       maxOutputBytes: 1_024,
     });
     const descendantPid = Number(result.stdout.trim());
 
     expect(result.timedOut).toBe(true);
     expect(descendantPid).toBeGreaterThan(0);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(() => process.kill(descendantPid, 0)).toThrow();
+    await expect.poll(() => {
+      try { process.kill(descendantPid, 0); return true; } catch { return false; }
+    }, { timeout: 5_000 }).toBe(false);
   });
 });

@@ -12,6 +12,7 @@ import { defaultLocalFilesystemPort } from '@mcp/code-agent/ports/filesystem-por
 import { defaultLocalShellPort } from '@mcp/code-agent/ports/shell-port.js';
 import { toolSettlementNotifier } from './tool-settlement.js';
 import { asAbortSignal } from './abort-signal.js';
+import { runWithSnapshotInvocation } from '../ports/snapshot-invocation.js';
 import {
   mutationFencedFilesystemPort,
   mutationFencedShellPort,
@@ -205,7 +206,7 @@ export class ToolRegistry {
           )
         : await tool.handler(finalArgs, invocationContext);
       };
-      const result = await invoke();
+      const result = await runWithSnapshotInvocation({ toolUseId: ctx.currentToolUseId, toolName: name }, invoke);
       notify(result);
       if (result.effectOutcome === 'unknown') ctx.toolCallLedger?.markOutcomeUnknown(name);
       if (ctx.toolCallLedger?.outcomeUnknownTool && result.effectOutcome !== 'unknown') {

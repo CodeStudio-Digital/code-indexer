@@ -14,7 +14,11 @@ import { viewVideo } from '../../tools/view-video.js';
 import type { ToolContext } from '../tool.js';
 
 const roots: string[] = [];
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
+const cleanup: Array<() => Promise<void>> = [];
+afterEach(async () => {
+  for (const close of cleanup.splice(0).reverse()) await close();
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 3 });
+});
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'vision-context-')); roots.push(root);
   const projectRoot = join(root, 'project'); await mkdir(projectRoot);
@@ -25,7 +29,9 @@ async function fixture() {
   const store = FsSessionStore.fromRoots(options);
   const session = await store.createSession({ project_id: 7, title: 'vision', provider: 'test', model: 'test' });
   const media = new BundleToolOutputStore(store, session.id);
-  const ctx = { cwd: projectRoot, projectName: 'Project', toolOutputStore: media } as ToolContext;
+  const abort = new AbortController();
+  cleanup.push(async () => { abort.abort(); await media.drain(); await store.close(); });
+  const ctx = { cwd: projectRoot, projectName: 'Project', toolOutputStore: media, signal: abort.signal } as ToolContext;
   const png = await sharp({ create: { width: 120, height: 80, channels: 3, background: '#d12345' } }).png().toBuffer();
   return { root, projectRoot, options, store, session, media, ctx, png };
 }
@@ -72,7 +78,7 @@ it('extracts chosen video frames locally, with no external provider request', as
   const f = await fixture();
   const require = createRequire(import.meta.url);
   const ffmpeg = require('ffmpeg-static') as string;
-  execFileSync(ffmpeg, ['-nostdin', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=64x48:d=1', '-y', join(f.projectRoot, 'clip.mp4')], { windowsHide: true });
+  execFileSync(ffmpeg, ['-nostdin', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=64x48:d=1', '-threads', '1', '-y', join(f.projectRoot, 'clip.mp4')], { windowsHide: true, timeout: 10_000 });
   const result = await viewVideo.handler({ path: 'clip.mp4', timestamps: [0, 0.5] }, f.ctx);
   expect(result.isError).toBeFalsy(); expect(result.extraUserBlocks).toHaveLength(2);
   const history = toolExtraUserMessages([{ name: 'view_video', ...result }]);
@@ -80,4 +86,4 @@ it('extracts chosen video frames locally, with no external provider request', as
   expect(f.media.listImages().length).toBeGreaterThan(0);
   expect((await viewVideo.handler({ path: 'clip.mp4', timestamps: [99] }, f.ctx)).isError).toBe(true);
   await f.media.drain(); await f.store.close();
-});
+}, 75_000); // Three real extractions each have a 20s deadline, plus fixture creation.

@@ -391,6 +391,14 @@ function collectApplicationMetadataRefs(
     } else if (record.kind === 'round_snapshot') {
       collectNullableArtifactRef(data, 'content_before', `${source}.data`, references);
       collectNullableArtifactRef(data, 'content_after', `${source}.data`, references);
+    } else if (record.kind === 'tool_snapshot') {
+      if (!Array.isArray(data.files)) throw new ArtifactRecoveryCorruptionError(`Invalid tool snapshot files in ${source}`);
+      data.files.forEach((file, index) => {
+        const location = `${source}.data.files[${index}]`;
+        const entry = requireObject(file, location);
+        collectNullableArtifactRef(entry, 'content_before', location, references);
+        collectNullableArtifactRef(entry, 'content_after', location, references);
+      });
     } else if (record.kind === 'review_run') {
       collectNullableArtifactRef(data, 'raw_response', `${source}.data`, references);
     }

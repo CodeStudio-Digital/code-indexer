@@ -167,6 +167,9 @@ export interface SessionSnapshotStorePort<
   SessionKey extends string = string,
   RecordId extends string = string,
 > {
+  /** Exact per-invocation history; older stores may not have captured it. */
+  recordToolSnapshotMutation?(input: ToolSnapshotMutation<SessionKey, RecordId>): Awaitable<void>;
+  listToolSnapshots?(kind: SessionKind, sessionId: SessionKey, toolUseId: string): Awaitable<ToolSnapshotRow<SessionKey, RecordId>[]>;
   getActiveBaseline(
     kind: SessionKind,
     sessionId: SessionKey,
@@ -231,6 +234,15 @@ export interface SessionSnapshotStorePort<
     sessionId: SessionKey,
   ): Awaitable<RecordId[]>;
 }
+
+export type ToolSnapshotMutation<SessionKey extends string = string, RecordId extends string = string> =
+  Omit<RecordRoundSnapshotMutationInput<SessionKey, RecordId>, 'round_message_id'> & {
+    tool_use_id: string;
+    round_message_id: number | null;
+  };
+
+export type ToolSnapshotRow<SessionKey extends string = string, RecordId extends string = string> =
+  ToolSnapshotMutation<SessionKey, RecordId> & { first_seen_at: string; last_edited_at: string };
 
 export type SnapshotReviewSource = 'manual' | 'auto';
 export type SnapshotReviewRunStatus = 'running' | 'completed' | 'error';
