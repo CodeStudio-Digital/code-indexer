@@ -1,7 +1,6 @@
 import type { MessageBridge } from '@mcp/orchestrator-host';
 import { getDiagramRenderer, type DiagramRenderRequest } from '@mcp/code-agent/tools/diagram/render-port.js';
-import { nativeApplicationTarget, type WorkerApplicationOwnerResolver } from './native-application-owner.js';
-import type { WorkerPreviewOwner } from './worker-preview-calls.js';
+import type { WorkerApplicationOwner, WorkerApplicationOwnerResolver } from './worker-application-owner.js';
 
 /** Rendering has no project effects. Physical image creation remains in the
  * worker's fenced filesystem port after the renderer returns and closes. */
@@ -13,11 +12,11 @@ export function registerWorkerDiagramRender(bridge: MessageBridge, getOwner: Wor
     const backend = getDiagramRenderer();
     if (closed || !backend || typeof request?.requestId !== 'string' || request.requestId.length > 128 || calls.has(request.requestId) || calls.size >= 2) throw new Error('Diagram renderer unavailable or saturated');
     const controller = new AbortController();
-    let admittedOwner: WorkerPreviewOwner | undefined;
+    let admittedOwner: WorkerApplicationOwner | undefined;
     const timer = setInterval(() => { try { admittedOwner?.assertOwner(); } catch (error) { controller.abort(error); } }, 100);
     timer.unref();
     const done = Promise.resolve().then(async () => {
-      const owner = await getOwner(request.runId, false, nativeApplicationTarget(request)); owner.assertOwner();
+      const owner = await getOwner(request.runId); owner.assertOwner();
       admittedOwner = owner;
       if (closed) throw new Error('Diagram worker closed');
       const signal = AbortSignal.any([owner.signal, controller.signal]); signal.throwIfAborted();

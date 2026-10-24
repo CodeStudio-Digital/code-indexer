@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { err, ok, unknownToolOutcome, type ToolContext, type ToolResult } from '../core/tool.js';
 
 export async function invokeOwnedProjectIndex(input: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-  if (!ctx.ports?.projectIndex) return err('Native indexing requires the current application owner.');
+  if (!ctx.ports?.projectIndex) return err('Indexing requires the current application owner.');
   if (typeof input.project_path !== 'string' || !input.project_path.trim() || input.project_path.length > 32768
     || input.project_path.includes('\0') || (input.rebuild_semantic != null && typeof input.rebuild_semantic !== 'boolean')) {
     return err('Invalid project indexing arguments');

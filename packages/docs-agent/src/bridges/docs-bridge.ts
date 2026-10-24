@@ -142,14 +142,6 @@ export const docsDeepResearchTool: CoderTool = {
       ? Math.min(6, Math.max(1, Math.floor(rawMaxTurns)))
       : undefined;
 
-    if (ctx.runtimeGeneration === 'rust_v1') {
-      const port = ctx.ports?.docsResearch;
-      if (!port || port.runtimeGeneration !== 'rust_v1'
-        || port.ownerAgentRunId !== ctx.controlPlaneParentAgentRunId) {
-        return err('Native documentation research requires its admitted tree owner; legacy research fallback is forbidden.');
-      }
-      return port.research({ query, collections: collections.length ? collections : undefined, maxTurns }, ctx);
-    }
     const bridge = getGlobalDocsResearcher();
     if (!bridge) {
       return err('docs_deep_research is not configured: no DocsResearchBridge installed. Use rag_search_docs as a fallback (single-shot search).');

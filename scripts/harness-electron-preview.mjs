@@ -1,5 +1,5 @@
 // Real preview tools + Electron CDP, using an isolated profile and loopback-only page.
-// This exercises the host implementation; it does not certify native scheduler admission.
+// Exercises the host preview implementation through Electron.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
@@ -18,7 +18,7 @@ await mkdir(output, { recursive: true });
 const isolated = await mkdtemp(join(tmpdir(), 'codestudio-preview-'));
 const env = { ...process.env };
 for (const name of Object.keys(env)) {
-  if (/^(MCP_|CODER_|CODESTUDIO_NATIVE_CODER_DEV$|CODESTUDIO_NATIVE_MCP_STDIO_DEV$|CODESTUDIO_RUNTIME_COHORT_GUARD$|ELECTRON_RUN_AS_NODE$)/.test(name)
+  if (/^(MCP_|CODER_|ELECTRON_RUN_AS_NODE$)/.test(name)
     || /(?:API_KEY|ACCESS_TOKEN)$/.test(name)) delete env[name];
 }
 Object.assign(env, {
@@ -62,7 +62,7 @@ async function hashFile(path) {
 }
 const report = {
   schemaVersion: 1, startedAt: new Date().toISOString(), executablePath, isolated,
-  packaged: !unpackaged, scope: '22 first-party preview handlers through real Electron main/CDP; isolated loopback fixture; no provider or native admission',
+  packaged: !unpackaged, scope: '22 first-party preview handlers through real Electron main/CDP; isolated loopback fixture; no provider calls',
   candidateSha256: await hashFile(unpackaged ? join(repo, 'dist/apps/electron/main.js') : join(dirname(executablePath), 'resources/app.asar')),
   errors: [],
 };

@@ -1,5 +1,7 @@
 # 06 — Bake-off de motores open source
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Status:** Codex B2 físico completo; B3 comparativo pendente
 > **Branch:** `codex/oss-agent-bakeoff`
 > **Baseline:** `7e79171d4c9a98397d3f47d9437d890e9316dc1d`

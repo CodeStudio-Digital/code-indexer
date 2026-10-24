@@ -1,5 +1,7 @@
 # 02 — Spec de configuração do runtime
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Status:** proposta normativa para aprovação  
 > **Requisitos:** `CFG-*`
 

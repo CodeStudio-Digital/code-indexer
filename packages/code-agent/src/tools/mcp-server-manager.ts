@@ -5,7 +5,6 @@
  * Lifecycle: instantiate → connectAll() → listAllTools() → closeAll().
  * Used inside runCoder() alongside the internal McpToolBridge.
  */
-import type { McpStdioTransportFactory, OwnedMcpStdioTransport } from './mcp-stdio-factory.js';
 import { createHash } from 'node:crypto';
 import { awaitMcpConnection } from './mcp-connection-wait.js';
 import { fetchWithMcpDispatch, McpDispatchRejected, withMcpWireDispatch } from './mcp-wire-dispatch.js';
@@ -34,7 +33,7 @@ interface ServerConnection {
   state: McpConnectionState;
   error?: string;
   /** Kept only for stdio servers, so their child pid stays discoverable. */
-  stdio?: StdioClientTransport | OwnedMcpStdioTransport;
+  stdio?: StdioClientTransport;
   /**
    * The server returned at least one malformed tool definition. Once detected,
    * bypass the SDK's all-or-nothing list validator for this connection and
@@ -162,10 +161,9 @@ async function buildAuthHeaders(
  * Create the appropriate transport for a server config. Async because
  * auth header resolution (OAuth) may require remote calls.
  */
-async function createTransport(config: McpServerConfig, resolver: ResolveMcpBearer | null, stdioFactory?: McpStdioTransportFactory): Promise<Transport> {
+async function createTransport(config: McpServerConfig, resolver: ResolveMcpBearer | null): Promise<Transport> {
   switch (config.transport) {
     case 'stdio': {
-      if (stdioFactory) return stdioFactory(config);
       if (!config.command) throw new Error(`stdio server "${config.id}" requires a command`);
       return new StdioClientTransport({
         command: config.command,
@@ -227,8 +225,7 @@ export class McpServerManager {
    *                        servers attempt to connect unauthenticated and
    *                        the dashboard guides re-auth on failure.
    */
-  constructor(private readonly bearerResolver: ResolveMcpBearer | null = null,
-    private readonly stdioFactory?: McpStdioTransportFactory) {}
+  constructor(private readonly bearerResolver: ResolveMcpBearer | null = null) {}
 
   /**
    * Connect to all provided server configs in parallel, with per-server timeout.
@@ -282,7 +279,7 @@ export class McpServerManager {
       signal.throwIfAborted();
       const cleanupFailure = this.cleanupFailures.get(config.id);
       if (cleanupFailure) throw cleanupFailure;
-      transport = await awaitMcpConnection<Transport>(createTransport(config, this.bearerResolver, this.stdioFactory).then(async transport => {
+      transport = await awaitMcpConnection<Transport>(createTransport(config, this.bearerResolver).then(async transport => {
         if (signal.aborted) { await this.closeTransport(config.id, transport); signal.throwIfAborted(); }
         return transport;
       }), signal);
@@ -293,8 +290,8 @@ export class McpServerManager {
       signal.throwIfAborted();
       if (this.connecting.get(config.id) !== attempt) throw new Error('External MCP connection superseded');
       this.connections.set(config.id, { client, transport, config, state: 'connected',
-        stdio: transport instanceof StdioClientTransport || ('processTreeContained' in transport && transport.processTreeContained === true)
-          ? transport as StdioClientTransport | OwnedMcpStdioTransport : undefined });
+        stdio: transport instanceof StdioClientTransport
+          ? transport as StdioClientTransport : undefined });
       console.log('[mcp-ext] server "' + config.id + '" connected (' + config.transport + ')');
     } catch (error) {
       if (client && transport && this.connecting.get(config.id) === attempt && !signal.aborted) {
@@ -612,11 +609,6 @@ export class McpServerManager {
    * OS pids of stdio-transport servers, for the task manager's process tree.
    * Remote transports (SSE/HTTP) have no local process and are skipped.
    */
-  isStdioContained(serverId: string): boolean {
-    const transport = this.connections.get(serverId)?.stdio;
-    return !!transport && 'processTreeContained' in transport && transport.processTreeContained === true;
-  }
-
   listStdioProcesses(): Array<{ serverId: string; name: string; pid: number }> {
     const out: Array<{ serverId: string; name: string; pid: number }> = [];
     for (const [id, conn] of this.connections) {

@@ -150,7 +150,6 @@ describe('runSubagent context inheritance', () => {
     const overlayByRoot = new Map();
     const ports = { fs: { kind: 'fs-port' }, shell: { kind: 'shell-port' } } as unknown as ToolContext['ports'];
     const runtimeEnv = { env: { PHP_VERSION: '8.3' } } as unknown as ToolContext['runtimeEnv'];
-    const workspaceRuntimeScope = { invoke: vi.fn<NonNullable<ToolContext['workspaceRuntimeScope']>['invoke']>(async (_tool, operation) => operation()) };
     const globalWorkspace: NonNullable<ToolContext['globalWorkspace']> = {
       sessionTitle: 'Global abc',
       primaryRootPath: '/repo/backend',
@@ -181,7 +180,6 @@ describe('runSubagent context inheritance', () => {
       projectId: 11,
       projectIndexed: true,
       runtimeEnv,
-      workspaceRuntimeScope,
       ports,
       sessionId,
     } as ToolContext;
@@ -211,8 +209,6 @@ describe('runSubagent context inheritance', () => {
     expect(seenContext?.projectId).toBe(11);
     expect(seenContext?.projectIndexed).toBe(true);
     expect(seenContext?.runtimeEnv).toBe(runtimeEnv);
-    expect(seenContext?.workspaceRuntimeScope).toBe(workspaceRuntimeScope);
-    expect(workspaceRuntimeScope.invoke).toHaveBeenCalledOnce();
     expect(seenContext?.ports).toBe(ports);
     expect(seenContext?.sessionId).toBe(sessionId);
   });

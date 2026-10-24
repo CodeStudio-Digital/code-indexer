@@ -1,5 +1,7 @@
 # 07 — Resultados do bake-off de motores OSS
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Data:** 2026-08-05
 > **Worktree:** `D:\MCP-worktrees\oss-agent-bakeoff`
 > **Branch:** `codex/oss-agent-bakeoff`

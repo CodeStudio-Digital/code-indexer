@@ -1,70 +1,48 @@
 # Agent Runtime Host
 
-Fronteira neutra entre o control plane TypeScript e as gerações de runtime.
-Este package não importa nem reexporta implementações do agente legado ou do
-runner Rust.
+Infraestrutura TypeScript compartilhada para execução, política e resultados
+dos agentes. A aplicação fornece o worker e os ports de persistência; este
+package organiza o ciclo de vida de cada tentativa e a API usada pelas
+superfícies do produto.
 
 ## Módulos
 
-- `facade/`: API estável consumida pelas superfícies do produto, handles leves
-  e ports de persistência/execução.
-- `router/`: decisão fail-closed e durável da geração usada por cada attempt.
-- `ipc/`: framing e canais bounded, com ownership, replay e deadlines
-  vinculados à attempt.
-- `driver/`: lifecycle e o `RustHostAttemptCoordinator` single-use. Em
-  `test|shadow`, ele espera a barreira durável
-  `LaunchAccepted → Spawned → Containment`, liga o `ActivationAuthoritySeal`,
-  abre control somente depois dos fatos e ACKs e conduz
-  `AgentHello → Prepare → Prepared → durable grant → Activate → Ack → Active`.
-- `adapters/`: composição interna `test|shadow` entre fatos duráveis e um owner
-  de endpoint protegido. Ela liga reservation, resource group, runtime,
-  provenance, endpoint, connection, deadline e peer esperado antes de entregar
-  o transporte ao driver. Control e Data têm owners nominais distintos; Data
-  faz bind single-use e hidrata snapshots/artifacts diretamente da fonte
-  filesystem por chunks bounded antes do receipt de `Prepared`. Cleanup
-  precisa retornar `closed` ou transferir ownership a um reaper nativo.
-  `NativeHostAttemptBridgeRequest` produz o request Protobuf single-use
-  consumido pelo core Rust e zera os bytes exatos após settlement.
-- `native/`: loader do addon a partir do pacote verificado, contrato ABI
-  Node-API 8, transferência single-use do request para o owner Rust, adaptação
-  `Duplex` bounded e composition root Control/Data sem reopen.
-- `errors.ts`: erros tipados compartilhados pelas duas fronteiras.
-- `index.ts`: único ponto público de composição.
+- `src/facade/`: `AgentRuntimeFacade`, handles de execução e ports do control
+  plane. Inicia ou retoma execuções, encaminha cancelamentos e respostas a
+  interações, consulta snapshots e acompanha eventos.
+- `src/facade/LegacyAgentRuntimeAdapter.ts`: adapta o launcher e a lease do
+  worker TypeScript fornecidos pelo produto. Provider, credenciais, permissões
+  e eventos de transporte continuam sob responsabilidade do worker.
+- `src/router/`: registra a rota de uma tentativa antes do launch e rejeita
+  conflitos com uma rota já persistida. A única geração suportada é
+  `legacy_ts`, com preferência `legacy_required`; os nomes são identificadores
+  de compatibilidade do contrato existente.
+- `src/runtime-policy/`: resolve e valida camadas de configuração, produz
+  snapshots e registra a origem dos valores e o digest da política resolvida.
+- `src/tool-result.ts`: contratos de resultados, erros, limites de saída e
+  decisões dos guards. Exportado pelo subpath
+  `@mcp/agent-runtime-host/tool-result.js`.
+- `src/errors.ts`: erros tipados da fachada e do roteamento.
+- `src/index.ts`: exports públicos de fachada, roteamento e política.
 
-`ipc/`, `driver/` e `adapters/` não são exportados pelo package root. JavaScript
-somente consome owners opacos já autenticados; não transforma PID, path ou
-token em prova física. O core `agent-host-bridge` cria esses owners e consulta
-o peer no mesmo HANDLE/FD; `agent-host-bridge-napi` já os mantém in-process,
-com I/O bounded, cancelamento compartilhado e cleanup explícito, e o loader só
-aceita seu artefato hasheado. O adapter já transfere os dois canais ao
-framing/driver existente e o teste integrado chega a `Active` com hidratação
-Data. O supervisor Rust já possui bootstrap/Hello/Shutdown process-real e reap
-físico. O launcher/owner Node-API do Host agora liga o package verificado ao
-Named Pipe management e ao Job do supervisor; um teste process-real comprova
-Ready, Hello, Shutdown/ACK, exit 0 e reap cooperativo. Produção ainda requer
-comprovar o percurso completo até Active com supervisor e runner empacotados.
-Projectors, Provider Gateway e Tool Host
-entram em diretórios
-próprios sem mover autoridade de persistência para o runtime. O coordinator
-permanece interno até existirem o E2E físico, loop multi-launch, crash recovery,
-rehydration durável, reaper nativo e dispatch atômico de efeitos em produção.
+## Contratos de execução
 
-## Regras
+A fachada valida a identidade e a validade da tentativa preparada antes de
+entregá-la ao adapter. A rota é persistida de forma idempotente; uma tentativa
+não pode receber outra rota depois do commit. Falhas de preparação e launch
+são registradas pelos ports do control plane.
 
-- A rota é persistida atomicamente antes de qualquer launch.
-- Uma attempt nunca troca de geração após a rota ser persistida.
-- `rust_required` falha fechado; não faz fallback silencioso.
-- `AgentRunHandle.dispose()` libera só o handle local e não cancela o run.
-- `Prepared` só nasce de receipt ligado ao inbound fisicamente committed.
-- A hidratação Data é streaming e bounded; fonte, token, chunks e transport
-  são single-use e falham fechados sob cancelamento, deadline ou hash
-  divergente.
-- Autoridade ativa só é instalada após ACK correlacionado ao
-  `ActivateAttempt`, com o deadline novamente verificado.
-- O `ActivationAuthoritySeal` atravessa supervisor e bootstrap; o activation
-  nonce bruto permanece no Host até o `ActivateAttempt`.
-- PID/UID recebido como dado JavaScript nunca autentica um endpoint. Probe,
-  fechamento e reabertura do canal também não preservam identidade física.
-- Arquivos produtivos devem permanecer abaixo de 250 linhas.
-- Novas referências ao source tree de `packages/code-agent` são bloqueadas pelo
-  gate de arquitetura do repositório.
+`AgentRunHandle.dispose()` libera apenas o handle local. Cancelar a execução
+exige `cancel()`, que registra a solicitação antes de encaminhá-la ao adapter.
+A persistência de sessões é implementada por
+[`packages/session-storage`](../session-storage/src/file-session-repository.ts).
+
+O package não contém IPC binário, Protobuf, addon, supervisor ou runner Rust.
+O histórico da retirada está no
+[registro de remoção](../../docs/architecture/runtime-retirement.md).
+
+## Validação
+
+Na raiz do repositório, execute `pnpm agent:host:test` para os testes dos
+contratos e do host, e `pnpm typecheck` para conferir sua integração com os
+consumidores TypeScript.

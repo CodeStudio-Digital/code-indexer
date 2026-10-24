@@ -1,5 +1,7 @@
 # 11 — P3 local: ToolRegistry atrás de HostCapability
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Snapshot:** 2026-08-05
 > **Estado:** bridge de código e corpus local aprovados; gate P3 físico pendente
 > **Runtime ativo:** inalterado

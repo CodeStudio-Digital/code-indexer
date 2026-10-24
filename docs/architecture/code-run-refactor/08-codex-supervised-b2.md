@@ -1,5 +1,7 @@
 # 08 — Codex B2 sob supervisor
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Status:** B2 físico completo; matriz 9/9 e soak limitado 100 + 5 aprovados
 > **Data:** 2026-08-05
 > **Branch:** `codex/oss-agent-bakeoff`

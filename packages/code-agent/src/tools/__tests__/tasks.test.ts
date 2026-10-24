@@ -5,6 +5,7 @@ import {
   cancelTasks,
   deleteTasks,
   listTasks,
+  submitTasks,
   updateTask,
   validateTasksInput,
 } from '../tasks.js';
@@ -161,6 +162,33 @@ describe('task id generation', () => {
 });
 
 describe('task list tools', () => {
+  it('blocks repeated submissions per runner before posting another review', async () => {
+    const stateRef: { state: TasksState | null } = { state: null };
+    let posted = 0;
+    const ctx = toolContext(stateRef);
+    Object.assign(ctx.runner!, {
+      emit: () => { posted += 1; },
+      waitForUserInput: async () => JSON.stringify({ approved: false }),
+    });
+    const proposal = { summary: 'Current tasks', tasks: [task(), task({ id: 'tsk_second', title: 'Second task' })] };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      expect((await submitTasks.handler(proposal, ctx)).isError).toBeFalsy();
+    }
+    const persisted = stateRef.state;
+    const blocked = await submitTasks.handler(proposal, ctx);
+    expect(blocked.isError).toBe(true);
+    expect(blocked.content).toContain('submit_tasks called 4 times');
+    expect(posted).toBe(3);
+    expect(stateRef.state).toBe(persisted);
+
+    const independent = toolContext({ state: null });
+    Object.assign(independent.runner!, { waitForUserInput: async () => JSON.stringify({ approved: false }) });
+    expect((await submitTasks.handler(proposal, independent)).isError).toBeFalsy();
+    expect((await submitTasks.handler({ ...proposal, summary: 'Revised tasks' }, ctx)).isError).toBeFalsy();
+    expect(posted).toBe(4);
+  });
+
   it('lists generated ids for the current task state', async () => {
     const stateRef: { state: TasksState | null } = {
       state: {

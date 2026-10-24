@@ -1,6 +1,5 @@
 import { AgentRuntimeHostError } from '../errors.js';
 import type {
-  RuntimeEligibilityDecision,
   RuntimeIneligibilityReason,
   RuntimeIneligibilityReasonCode,
   RuntimeRouteRecord,
@@ -8,7 +7,7 @@ import type {
 } from './types.js';
 
 const INELIGIBILITY_CODES: ReadonlySet<RuntimeIneligibilityReasonCode> = new Set([
-  'rust_disabled',
+  'runtime_unavailable',
   'invalid_eligibility_input',
   'surface_unsupported',
   'platform_unsupported',
@@ -48,20 +47,8 @@ function isValidReason(reason: unknown): reason is RuntimeIneligibilityReason {
     && nonEmpty(candidate.dimension);
 }
 
-function invalidEligibilityDecision(): RuntimeEligibilityDecision {
-  return {
-    eligible: false,
-    reasons: [{
-      code: 'eligibility_result_invalid',
-      dimension: 'eligibility',
-    }],
-  };
-}
-
 export function validateRouteRequest(request: RuntimeRouteRequest): void {
-  const validPreference = request.preference === 'legacy_required'
-    || request.preference === 'rust_preferred'
-    || request.preference === 'rust_required';
+  const validPreference = request.preference === 'legacy_required';
   const values = [
     request.sessionId,
     request.agentRunId,
@@ -95,37 +82,10 @@ export function validateRouteRequest(request: RuntimeRouteRequest): void {
   }
 }
 
-export function normalizeEligibilityDecision(
-  value: unknown,
-): RuntimeEligibilityDecision {
-  if (!value || typeof value !== 'object') {
-    return invalidEligibilityDecision();
-  }
-  const decision = value as Partial<RuntimeEligibilityDecision>;
-  if (typeof decision.eligible !== 'boolean' || !Array.isArray(decision.reasons)) {
-    return invalidEligibilityDecision();
-  }
-  if (!decision.reasons.every(isValidReason)) {
-    return invalidEligibilityDecision();
-  }
-  if (decision.eligible !== (decision.reasons.length === 0)) {
-    return invalidEligibilityDecision();
-  }
-  return {
-    eligible: decision.eligible,
-    reasons: [...decision.reasons],
-  };
-}
-
 export function validateStoredRoute(record: RuntimeRouteRecord): void {
-  const validGeneration = record.runtimeGeneration === 'legacy_ts'
-    || record.runtimeGeneration === 'rust_v1';
-  const validPreference = record.preference === 'legacy_required'
-    || record.preference === 'rust_preferred'
-    || record.preference === 'rust_required';
-  const validReason = record.selectionReasonCode === 'legacy_required'
-    || record.selectionReasonCode === 'rust_eligible'
-    || record.selectionReasonCode === 'rust_ineligible';
+  const validGeneration = record.runtimeGeneration === 'legacy_ts';
+  const validPreference = record.preference === 'legacy_required';
+  const validReason = record.selectionReasonCode === 'legacy_required';
   const requiredStrings = [
     record.sessionId,
     record.agentRunId,
@@ -148,25 +108,10 @@ export function validateStoredRoute(record: RuntimeRouteRecord): void {
     && record.capabilityIds.every(nonEmpty)
     && Array.isArray(record.ineligibilityReasons)
     && record.ineligibilityReasons.every(isValidReason);
-  const consistentDecision =
-    (
-      record.runtimeGeneration === 'rust_v1'
-      && record.preference !== 'legacy_required'
-      && record.selectionReasonCode === 'rust_eligible'
-      && record.ineligibilityReasons.length === 0
-    )
-    || (
-      record.runtimeGeneration === 'legacy_ts'
-      && record.preference === 'legacy_required'
-      && record.selectionReasonCode === 'legacy_required'
-      && record.ineligibilityReasons.length === 0
-    )
-    || (
-      record.runtimeGeneration === 'legacy_ts'
-      && record.preference === 'rust_preferred'
-      && record.selectionReasonCode === 'rust_ineligible'
-      && record.ineligibilityReasons.length > 0
-    );
+  const consistentDecision = record.runtimeGeneration === 'legacy_ts'
+    && record.preference === 'legacy_required'
+    && record.selectionReasonCode === 'legacy_required'
+    && record.ineligibilityReasons.length === 0;
   if (
     record.schemaVersion !== 1
     || !validGeneration

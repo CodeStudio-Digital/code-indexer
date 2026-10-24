@@ -195,13 +195,6 @@ export async function executeWorkflow(
         pathScopeMode: a.profile.pathScopeMode,
         limits: agentLimits[i],
         signal: controllers[i].signal,
-        ...(ctx.runtimeGeneration === 'rust_v1' ? { onNativeAdmission: async (reference: string) => {
-          if (parentSessionId == null) throw new Error('Native workflow has no session checkpoint owner');
-          await assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
-          ready[i].nativeTranscriptRef = reference;
-          await persist(deps, ctx, record);
-          await assertWorkflowRunLease(parentSessionId, record.id, deps.sessionStore);
-        } } : {}),
       }));
 
       const unregisters: Array<() => void> = [];
@@ -290,7 +283,6 @@ export async function executeWorkflow(
         }
         step.toolCallCount = result.toolCallCount;
         step.usage = result.usage;
-        step.nativeTranscriptRef = result.nativeTranscriptRef ?? step.nativeTranscriptRef;
         emitStepUpdate(ctx, record, step);
       }
       await persist(deps, ctx, record);

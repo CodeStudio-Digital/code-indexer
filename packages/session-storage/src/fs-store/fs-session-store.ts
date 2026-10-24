@@ -11,7 +11,7 @@ import {
   type TrashedSessionEntry,
   type TrashResult,
 } from '@mcp/session-storage';
-import { FsConversationReader, type FsConversationProjectionLoader } from './conversation-reader.js';
+import { FsConversationReader } from './conversation-reader.js';
 import { FsConversationWriter } from './conversation-writer.js';
 import { installExternalImportApi, type FsExternalImportApi } from './external-import-repository.js';
 import { FsSessionDirectory, type FsSessionDirectoryOptions } from './session-directory.js';
@@ -87,9 +87,7 @@ export class FsSessionStore {
     this.#toolOutputs = new FsToolOutputReader(this.#directory);
     const entities = new FsSessionEntityFiles(this.#directory);
     installOrchestrationSubagentApi(this, this.#directory, entities);
-    installOperationalSessionApi(this, new FsOperationalSessionStore(this.#directory,
-      async id => (await this.#reader.projectionLoader?.(id, { kind: 'stats', boundary: 0 }))?.nativeGoal,
-      async id => (await this.#reader.projectionLoader?.(id, { kind: 'stats', boundary: 0 }))?.nativeTasks));
+    installOperationalSessionApi(this, new FsOperationalSessionStore(this.#directory));
     installHistoryMetricsApi(this, this.#directory, this.#reader);
     installSnapshotReviewApi(this, this.#directory);
     installSessionOperationsApi(this, this.#directory);
@@ -114,11 +112,6 @@ export class FsSessionStore {
 
   /** Lazily prime the in-memory catalog without forcing a rescan per caller. */
   ensureCatalog(): Promise<void> { return this.#directory.ensureCatalog(); }
-
-  setConversationProjectionLoader(loader: FsConversationProjectionLoader): void {
-    if (this.#reader.projectionLoader) throw new Error('Conversation projection loader is already installed');
-    this.#reader.projectionLoader = loader;
-  }
 
   async getSessionLocation(
     id: SessionId | string,

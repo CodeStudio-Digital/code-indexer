@@ -1,11 +1,8 @@
-import { create, toBinary } from '@bufbuild/protobuf';
 import { describe, expect, it } from 'vitest';
 import {
-  agentV1Runtime,
   type AgentRunAttempt,
   type AgentRunAttemptId,
   type AgentRunId,
-  type AgentRunSpec,
   type ResolvedAgentRun,
   type SessionCommandId,
   type SessionId,
@@ -23,15 +20,15 @@ import {
   type CanonicalAgentEvent,
   type EventCursor,
   type InteractionResponse,
-  type PreparedAgentAttempt,
+  type PreparedLegacyAgentAttempt,
   type ResumeAgentCommand,
-  type RuntimeEligibilityPort,
   type RuntimeRouteCommit,
   type RuntimeRouteRecord,
   type RuntimeRouteStorePort,
   type StartAgentCommand,
 } from '../index.js';
-import { semanticSha256 } from '../ipc/semantic-hash.js';
+import { legacyPreparationDigest } from '../facade/legacy-prepared-validation.js';
+import type { CoderAttemptPreparationV1 } from '@mcp/agent-runtime-contracts';
 
 const sessionId =
   '11111111-1111-4111-8111-111111111111' as SessionId;
@@ -41,28 +38,6 @@ const agentRunId =
   '33333333-3333-4333-8333-333333333333' as AgentRunId;
 const attemptId =
   '44444444-4444-4444-8444-444444444444' as AgentRunAttemptId;
-
-function spec(): AgentRunSpec {
-  return {
-    schemaVersion: 1,
-    sessionId,
-    commandId,
-    spawnDepth: 0,
-    role: 'coder',
-    agentDefinitionId: 'coder.default',
-    task: { text: 'Inspect the workspace' },
-    requestedCapabilityProfile: 'coder.default',
-    requestedEnvironment: {
-      kind: 'worktree',
-      projectId: 'project:1',
-      access: 'exclusive_write',
-      retention: 'retain_on_failure',
-    },
-    waitMode: 'foreground',
-    budget: { maxWallMs: 60_000 },
-    idempotencyKey: 'start:1',
-  };
-}
 
 function run(): ResolvedAgentRun {
   return {
@@ -107,119 +82,49 @@ function attempt(): AgentRunAttempt {
   };
 }
 
-function prepared(
-  preference: PreparedAgentAttempt['routing']['preference'] = 'rust_required',
-): PreparedAgentAttempt {
+function prepared(): PreparedLegacyAgentAttempt {
   const authority = {
-    sessionId,
-    commandId,
-    agentRunId,
-    attemptId,
-    executorOwnerId: 'host:1',
-    fencingEpoch: 1n,
-    correlationId: '55555555-5555-4555-8555-555555555555',
-    rootAgentRunId: agentRunId,
-    leaseExpiresAtUnixMs: 1_784_894_460_000n,
-    deadlineAtUnixMs: 1_784_894_520_000n,
+    sessionId, commandId, agentRunId, attemptId, executorOwnerId: 'host:1', fencingEpoch: 1n,
+    correlationId: '55555555-5555-4555-8555-555555555555', rootAgentRunId: agentRunId,
+    leaseExpiresAtUnixMs: BigInt(Date.parse(attempt().executorLease.expiresAt)),
+    deadlineAtUnixMs: BigInt(Date.parse('2026-07-24T12:02:00.000Z')),
   };
-  const snapshot = (name: string) => ({
-    ref: `${name}:1`,
-    version: 1n,
-    contentSha256: new Uint8Array(32).fill(1),
-    origin: 'control-plane',
-    schemaId: name,
-    schemaVersion: 1,
-  });
-  const wireSpec = create(agentV1Runtime.ResolvedAttemptSpecSchema, {
-    schemaVersion: 1,
-    specVersion: 1n,
-    identity: {
-      sessionId,
-      commandId,
-      agentRunId,
-      attemptId,
-      executorOwnerId: authority.executorOwnerId,
-      fencingEpoch: authority.fencingEpoch,
-      correlationId: authority.correlationId,
-      rootAgentRunId: authority.rootAgentRunId,
+  const capabilityHash = legacyPreparationDigest([]);
+  const preparation: CoderAttemptPreparationV1 = {
+    schemaVersion: 1, sessionId, agentRunId, runnerRunId: 'worker-run', provider: 'openai', model: 'gpt-5',
+    agentDefinitionId: 'coder.default', systemPromptSha256: 'a'.repeat(64), capabilityProfile: 'coder.default',
+    capabilityDescriptors: [], capabilitySet: {
+      ref: 'capset:' + capabilityHash, hash: capabilityHash, catalogVersion: 'catalog-v1', agentRunId,
+      registered: [], visible: [], eligible: [], disabled: [],
+      providerDescriptorsRef: 'provider:1', promptSummaryRef: 'prompt:1', resolvedAt: '2026-07-24T12:00:00.000Z',
     },
-    ordinal: 1,
-    trigger: agentV1Runtime.AttemptTrigger.INITIAL,
-    spawnDepth: 0,
-    role: 'coder',
-    agentDefinitionId: 'coder.default',
-    task: { body: { case: 'inlineUtf8', value: 'Inspect the workspace' } },
-    providerBinding: {
-      effectiveProvider: 'openai',
-      effectiveModel: 'gpt-5',
-    },
-    waitMode: agentV1Runtime.AgentRunWaitMode.FOREGROUND,
-    runTreeBudget: { maxWallMs: 60_000n },
-    verifierPolicySnapshot: snapshot('verifier-policy'),
-    capabilitySetSnapshot: snapshot('capability-set'),
-    environmentSnapshot: snapshot('environment'),
-    workspaceLeaseSnapshot: snapshot('workspace-lease'),
-    workspaceLeaseFencingEpoch: 1n,
-    policySnapshot: snapshot('policy'),
-    presetSnapshot: snapshot('preset'),
-    resourceBudget: {
-      softMemoryBytes: 256n * 1024n * 1024n,
-      hardMemoryBytes: 512n * 1024n * 1024n,
-      cpuTimeMs: 60_000n,
-      maxWallMs: 120_000n,
-      maxProcesses: 16,
-      maxThreads: 32,
-      maxOpenHandles: 256,
-      maxHotTranscriptBytes: 8n * 1024n * 1024n,
-      maxIpcFrames: 256,
-      maxIpcBytes: 16n * 1024n * 1024n,
-      maxSpoolBytes: 64n * 1024n * 1024n,
-      maxArtifactBytes: 16n * 1024n * 1024n,
-      maxConcurrentTools: 4,
-      maxBlockingTasks: 2,
-      cancelGraceMs: 2_000n,
-    },
-    deadlineAtUnixMs: authority.deadlineAtUnixMs,
-    agentDefinitionSnapshot: snapshot('agent-definition'),
-  });
-  const expectedSpecSha256 = semanticSha256({
-    schemaId: 'codestudio.agent.v1.ResolvedAttemptSpec',
-    schemaVersion: wireSpec.schemaVersion,
-    canonicalBytes: toBinary(agentV1Runtime.ResolvedAttemptSpecSchema, wireSpec),
-  });
+    environment: { kind: 'worktree', cwd: 'D:/owned' },
+    policy: { permissionMode: 'default', planMode: false, specMode: false },
+  };
+  const preparationRef = 'events/attempt-preparations/66666666-6666-4666-8666-666666666666.json';
+  const preparationSha256 = legacyPreparationDigest(preparation);
   return {
-    spec: spec(),
-    run: run(),
-    attempt: attempt(),
-    authority,
-    wireSpec,
-    expectedSpecSha256,
-    routing: {
-      sessionId,
-      agentRunId,
-      attemptId,
-      preference,
-      cohort: 'internal',
-      eligibility: {
-        surface: 'coder.interactive',
-        platform: 'win32-x64',
-        environmentKind: 'worktree',
-        provider: 'openai',
-        capabilityProfile: 'coder.default',
-        capabilityCatalogVersion: 'catalog-v1',
-        capabilityIds: ['fs.read'],
-        engineVersion: 'agentd-v1',
-        runtimeBuildId: 'agentd-v1.0.0+build.7',
-        runtimeBinarySha256: 'a'.repeat(64),
-        protocolVersion: '1.0',
-        requiredContainmentLevel: 'hard_aggregate',
-      },
+    run: { ...run(), effectivePreset: preparation.agentDefinitionId,
+      capabilitySetRef: preparation.capabilitySet.ref,
+      environmentId: ('environment:' + legacyPreparationDigest(preparation.environment)) as never,
+      policySnapshotRef: preparationRef + '#policy', presetResolutionRef: preparationRef + '#agentDefinitionId',
+    },
+    attempt: attempt(), authority, preparation,
+    admission: { schemaVersion: 1, sessionId, agentRunId, attemptId, executorOwnerId: authority.executorOwnerId,
+      fencingEpoch: 1, runtimeGeneration: 'legacy_ts', preparationSha256, preparationRef },
+    expectedSpecSha256: Buffer.from(preparationSha256, 'hex'),
+    routing: { sessionId, agentRunId, attemptId, preference: 'legacy_required', cohort: 'internal',
+      eligibility: { surface: 'coder.interactive', platform: 'win32-x64', environmentKind: 'worktree',
+        provider: 'openai', capabilityProfile: preparation.capabilityProfile,
+        capabilityCatalogVersion: preparation.capabilitySet.catalogVersion, capabilityIds: [],
+        engineVersion: 'coder-worker-v1', runtimeBuildId: 'worker-build:1', runtimeBinarySha256: 'a'.repeat(64),
+        protocolVersion: 'coder-attempt-admission-v1', requiredContainmentLevel: 'monitored' },
     },
   };
 }
 
 function startCommand(
-  preference: StartAgentCommand['payload']['runtimePreference'] = 'rust_required',
+  preference: StartAgentCommand['payload']['runtimePreference'] = 'legacy_required',
 ): StartAgentCommand {
   return {
     schemaVersion: 1,
@@ -235,7 +140,7 @@ function startCommand(
     requestedAt: '2026-07-24T12:00:00.000Z',
     correlationId: '55555555-5555-4555-8555-555555555555' as never,
     payload: {
-      spec: spec(),
+      admittedPreparationRef: prepared().admission.preparationRef,
       surface: 'coder.interactive',
       runtimePreference: preference,
     },
@@ -266,21 +171,21 @@ class TestControlPlane implements AgentControlPlanePort {
   readonly snapshot: AgentRunSnapshot = {
     run: run(),
     activeAttempt: attempt(),
-    runtimeGeneration: 'rust_v1',
+    runtimeGeneration: 'legacy_ts',
     lastGlobalSeq: 7,
   };
 
   constructor(
-    private readonly preparedAttempt: PreparedAgentAttempt,
+    private readonly preparedAttempt: PreparedLegacyAgentAttempt,
     private readonly log: string[],
   ) {}
 
-  async prepareStart(): Promise<PreparedAgentAttempt> {
+  async prepareStart(): Promise<PreparedLegacyAgentAttempt> {
     this.log.push('control.prepareStart');
     return this.preparedAttempt;
   }
 
-  async prepareResume(): Promise<PreparedAgentAttempt> {
+  async prepareResume(): Promise<PreparedLegacyAgentAttempt> {
     this.log.push('control.prepareResume');
     return this.preparedAttempt;
   }
@@ -291,14 +196,14 @@ class TestControlPlane implements AgentControlPlanePort {
   }
 
   async commitCancelRequest(
-    _authority: PreparedAgentAttempt['authority'],
+    _authority: PreparedLegacyAgentAttempt['authority'],
     _reason: CancelReason,
   ): Promise<void> {
     this.log.push('control.cancel');
   }
 
   async resolveInteraction(
-    _authority: PreparedAgentAttempt['authority'],
+    _authority: PreparedLegacyAgentAttempt['authority'],
     interactionId: string,
     _response: InteractionResponse,
   ): Promise<void> {
@@ -341,40 +246,26 @@ class TestAdapter implements AgentRuntimeAdapterPort {
 }
 
 function buildFacade(options?: {
-  preference?: PreparedAgentAttempt['routing']['preference'];
-  eligible?: boolean;
   adapters?: AgentRuntimeAdapterPort[];
 }) {
   const log: string[] = [];
-  const preference = options?.preference ?? 'rust_required';
-  const preparedAttempt = prepared(preference);
+  const preparedAttempt = prepared();
   const store = new TestRouteStore(log);
-  const eligibility: RuntimeEligibilityPort = {
-    evaluate: async () => options?.eligible === false
-      ? {
-          eligible: false,
-          reasons: [{ code: 'rust_disabled', dimension: 'runtime' }],
-        }
-      : { eligible: true, reasons: [] },
-  };
   const router = new RuntimeRouter(
     store,
-    eligibility,
     { now: () => new Date('2026-07-24T12:00:00.000Z') },
   );
   const controlPlane = new TestControlPlane(preparedAttempt, log);
-  const rustAdapter = new TestAdapter('rust_v1', log);
   const legacyAdapter = new TestAdapter('legacy_ts', log);
   const facade = new AgentRuntimeFacade({
     controlPlane,
     router,
-    runtimeAdapters: options?.adapters ?? [rustAdapter, legacyAdapter],
+    runtimeAdapters: options?.adapters ?? [legacyAdapter],
     clock: { now: () => new Date('2026-07-24T12:00:00.000Z') },
   });
   return {
     facade,
     controlPlane,
-    rustAdapter,
     legacyAdapter,
     store,
     log,
@@ -391,12 +282,12 @@ describe('AgentRuntimeFacade', () => {
     expect(handle).toMatchObject({
       agentRunId,
       attemptId,
-      runtimeGeneration: 'rust_v1',
+      runtimeGeneration: 'legacy_ts',
     });
     expect(context.log).toEqual([
       'control.prepareStart',
       'route.commit',
-      'rust_v1.launch',
+      'legacy_ts.launch',
     ]);
   });
 
@@ -407,9 +298,8 @@ describe('AgentRuntimeFacade', () => {
 
     await handle.cancel({ code: 'user_cancelled' });
 
-    expect(context.log).toEqual(['control.cancel', 'rust_v1.cancel']);
-    expect(context.rustAdapter.cancelCount).toBe(1);
-    expect(context.legacyAdapter.cancelCount).toBe(0);
+    expect(context.log).toEqual(['control.cancel', 'legacy_ts.cancel']);
+    expect(context.legacyAdapter.cancelCount).toBe(1);
   });
 
   it('routes host-owned snapshots, events, and interactions without a runner object', async () => {
@@ -444,44 +334,19 @@ describe('AgentRuntimeFacade', () => {
         code: 'handle_disposed',
       }),
     );
-    expect(context.rustAdapter.cancelCount).toBe(0);
+    expect(context.legacyAdapter.cancelCount).toBe(0);
     expect(context.log).toEqual([]);
   });
 
-  it('records a routing failure and never launches legacy for rust_required', async () => {
-    const context = buildFacade({ eligible: false });
-
-    await expect(context.facade.start(startCommand())).rejects.toMatchObject({
-      code: 'runtime_ineligible',
-    });
-
-    expect(context.rustAdapter.launchCount).toBe(0);
+  it('records an invalid routing request without committing or launching', async () => {
+    const context = buildFacade();
+    context.controlPlane['preparedAttempt'].routing.eligibility.runtimeBinarySha256 = 'invalid';
+    await expect(context.facade.start(startCommand())).rejects.toMatchObject({ code: 'invalid_routing_request' });
     expect(context.legacyAdapter.launchCount).toBe(0);
     expect(context.store.records.size).toBe(0);
     expect(context.controlPlane.failures).toEqual([
-      expect.objectContaining({
-        phase: 'routing',
-        code: 'runtime_ineligible',
-      }),
+      expect.objectContaining({ phase: 'routing', code: 'invalid_routing_request' }),
     ]);
-  });
-
-  it('commits legacy routing only before launch when Rust is preferred but ineligible', async () => {
-    const context = buildFacade({
-      preference: 'rust_preferred',
-      eligible: false,
-    });
-
-    const handle = await context.facade.start(startCommand('rust_preferred'));
-
-    expect(handle.runtimeGeneration).toBe('legacy_ts');
-    expect(context.log).toEqual([
-      'control.prepareStart',
-      'route.commit',
-      'legacy_ts.launch',
-    ]);
-    expect(context.rustAdapter.launchCount).toBe(0);
-    expect(context.legacyAdapter.launchCount).toBe(1);
   });
 
   it('fails closed and records the failure when the selected adapter is unavailable', async () => {
@@ -497,7 +362,7 @@ describe('AgentRuntimeFacade', () => {
         code: 'runtime_adapter_unavailable',
       }),
     ]);
-    expect(context.store.records.get(attemptId)?.runtimeGeneration).toBe('rust_v1');
+    expect(context.store.records.get(attemptId)?.runtimeGeneration).toBe('legacy_ts');
   });
 
   it('rejects inconsistent prepared identities before routing or launch', async () => {
@@ -510,7 +375,7 @@ describe('AgentRuntimeFacade', () => {
     });
 
     expect(context.store.records.size).toBe(0);
-    expect(context.rustAdapter.launchCount).toBe(0);
+    expect(context.legacyAdapter.launchCount).toBe(0);
     expect(context.controlPlane.failures).toEqual([
       expect.objectContaining({
         phase: 'routing',
@@ -528,19 +393,19 @@ describe('AgentRuntimeFacade', () => {
     });
 
     expect(context.store.records.size).toBe(0);
-    expect(context.rustAdapter.launchCount).toBe(0);
+    expect(context.legacyAdapter.launchCount).toBe(0);
   });
 
-  it('rejects a wire spec whose hash no longer matches', async () => {
+  it('rejects preparation facts whose admitted digest no longer matches', async () => {
     const context = buildFacade();
-    context.controlPlane['preparedAttempt'].wireSpec.agentDefinitionId = 'mutated';
+    context.controlPlane['preparedAttempt'].preparation.agentDefinitionId = 'mutated';
 
     await expect(context.facade.start(startCommand())).rejects.toMatchObject({
       code: 'prepared_attempt_mismatch',
     });
 
     expect(context.store.records.size).toBe(0);
-    expect(context.rustAdapter.launchCount).toBe(0);
+    expect(context.legacyAdapter.launchCount).toBe(0);
   });
 
   it('supports resume through the same route and launch boundary', async () => {
@@ -551,7 +416,7 @@ describe('AgentRuntimeFacade', () => {
       payload: {
         agentRunId,
         surface: 'coder.interactive',
-        runtimePreference: 'rust_required',
+        runtimePreference: 'legacy_required',
         checkpointRef: 'checkpoint:1',
       },
     };
@@ -562,7 +427,7 @@ describe('AgentRuntimeFacade', () => {
     expect(context.log).toEqual([
       'control.prepareResume',
       'route.commit',
-      'rust_v1.launch',
+      'legacy_ts.launch',
     ]);
   });
 });

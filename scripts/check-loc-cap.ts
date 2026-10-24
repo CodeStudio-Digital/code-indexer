@@ -6,7 +6,6 @@
  *
  * Scope:
  *   - core TypeScript packages and apps (`*.ts`, `*.tsx`);
- *   - the Rust agent crates (`*.rs`);
  *   - Test files (`*.test.ts`, `__tests__/`) and seeds are excluded.
  *
  * Two levels:
@@ -38,7 +37,6 @@ const ROOTS = [
   'packages/code-agent/src',
   'packages/agent-runtime-contracts/src',
   'packages/agent-runtime-host/src',
-  'native/agent-runtime/crates',
   'apps/http-api',
   'apps/dashboard',
   'apps/cli',
@@ -189,7 +187,7 @@ function shouldSkipFile(name: string): boolean {
   for (const re of EXCLUDE_FILE_PATTERNS) {
     if (re.test(name)) return true;
   }
-  if (!/\.(ts|tsx|rs)$/.test(name)) return true;
+  if (!/\.(ts|tsx)$/.test(name)) return true;
   return false;
 }
 

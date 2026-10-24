@@ -16,7 +16,7 @@ export interface CoderFacadeActivation {
   preparation: CoderAttemptPreparationV1;
   admission: CoderAttemptAdmissionV1;
   bus: CoderRunBus;
-  /** Digest of the actual worker entrypoint; not a native package attestation. */
+  /** Digest of the actual worker entrypoint. */
   workerEntrypointSha256: string;
   assertOwner(): void;
   abortWorker(): Promise<void>;
@@ -35,7 +35,7 @@ export async function activateCoderRuntimeFacade(input: CoderFacadeActivation): 
   const authority: AttemptAuthority = {
     ...context, fencingEpoch: BigInt(context.fencingEpoch), rootAgentRunId: initial.command.agentRunId!,
     leaseExpiresAtUnixMs: BigInt(Date.parse(initial.attempt.executorLease.expiresAt)),
-    // Legacy execution is renewable and has no invented native wall deadline.
+    // Worker execution renews its lease during the run.
     // This deadline bounds activation only; subsequent controls re-read the lease.
     deadlineAtUnixMs: BigInt(Date.parse(initial.command.deadlineAt ?? initial.attempt.executorLease.expiresAt)),
   };
@@ -122,11 +122,11 @@ export async function activateCoderRuntimeFacade(input: CoderFacadeActivation): 
       return await store.getRuntimeRoute(context.sessionId, attemptId) ?? undefined;
     },
     commitIfAbsent: (route) => store.commitRuntimeRoute(context, route),
-  }, { evaluate: async () => ({ eligible: false, reasons: [{ code: 'rust_disabled', dimension: 'product-certification' }] }) });
+  });
   const adapter = new LegacyAgentRuntimeAdapter({
     assertCurrent: assertAuthority,
     async launch(candidate, _route, signal) {
-      if ('wireSpec' in candidate || candidate.admission.preparationSha256 !== admission.preparationSha256) {
+      if (candidate.admission.preparationSha256 !== admission.preparationSha256) {
         throw new Error('Worker activation requires its committed legacy preparation');
       }
       signal.throwIfAborted();

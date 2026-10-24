@@ -120,7 +120,6 @@ export function previewRpcTimeoutMs(req: PreviewInvoke): number {
  * (coder chat OR company subordinate/master) owns its own preview window(s).
  */
 export function previewKey(ctx: ToolContext): string {
-  if (ctx.previewAuthority) return ctx.previewAuthority.key;
   const cc = ctx.companyContext as
     | { agentRunId?: string; companySessionId?: string }
     | undefined;
@@ -145,11 +144,6 @@ export async function invokePreview(
   const requestId = `preview-${key}-${Date.now().toString(36)}-${(++previewRequestSeq).toString(36)}`;
   const signal = asAbortSignal(ctx.signal);
   if (signal?.aborted) throw new Error('Preview operation aborted.');
-  const native = ctx.previewAuthority;
-  const invocation = ctx.currentToolInvocation;
-  if (native && (!invocation || invocation.name !== `preview_${method}` || !ctx.mutationFence?.resourceBinding)) {
-    throw new Error('Native preview has no sealed invocation');
-  }
   if (PREVIEW_EFFECT_METHODS.has(method)) {
     if (ctx.mutationFence?.mode === 'enforce' && typeof backend.cancel !== 'function') {
       throw new MutationFenceError(
@@ -166,18 +160,14 @@ export async function invokePreview(
   let dispatched = false;
   try {
     return await cancellableToolRpc(
-      () => { dispatched = true; return backend.invoke({ key, method, args, requestId,
-        ...(native && invocation ? { runId: native.runId, authority: { payload: native.payload,
-          binding: ctx.mutationFence?.resourceBinding, toolUseId: ctx.currentToolUseId,
-          toolName: invocation.name, input: invocation.input } } : {}) }); },
+      () => { dispatched = true; return backend.invoke({ key, method, args, requestId }); },
       () => backend.cancel?.(requestId), signal, 'Preview operation aborted.',
     );
   } catch (error) {
     // A transport rejection is not evidence that CDP never delivered a click,
     // keypress, evaluation, navigation or server start. Preserve this ambiguity
-    // through the tool result so both runners stop before repeating effects.
+    // through the tool result so the runner stops before repeating effects.
     if (dispatched && PREVIEW_EFFECT_METHODS.has(method)) {
-      native?.outcomeUnknown();
       throw new PreviewOutcomeUnknownError(error);
     }
     throw error;

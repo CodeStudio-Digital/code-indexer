@@ -273,9 +273,6 @@ export type FsTaskRunStatus =
 
 export interface FsTaskRunRow {
   /** Absent on historical runs: legacy_ts. Fixed for the entire run tree. */
-  runtime_generation?: 'legacy_ts' | 'rust_v1';
-  task_plan_sha256?: string;
-  owner_tool_use_id?: string;
   id: string;
   seq: number;
   revision: number;
@@ -304,9 +301,6 @@ export interface FsTaskRunPage {
 }
 
 export interface FsCreateTaskRunInput {
-  runtime_generation?: 'legacy_ts' | 'rust_v1';
-  task_plan_sha256?: string;
-  owner_tool_use_id?: string;
   run_id: string;
   session_id: SessionId;
   mode: 'auto' | 'inline-all';
@@ -329,7 +323,6 @@ export interface FsUpdateTaskRunPatch {
 
 export interface FsTaskRunItemRow {
   /** Durable admission recorded before the child's first physical launch. */
-  native_transcript_ref?: string;
   id: string;
   seq: number;
   revision: number;

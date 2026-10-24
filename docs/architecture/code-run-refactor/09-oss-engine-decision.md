@@ -1,5 +1,7 @@
 # 09 — ADR: engine OSS como adapter substituível
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Status:** aceito para continuação em P3; não aprovado para cutover
 > **Data:** 2026-08-05
 > **Decisão:** adapter versionado; sem fork e sem autoridade de produto no engine

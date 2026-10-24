@@ -1,5 +1,7 @@
 # 04 — Plano de migração, validação e retirada
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Status:** P0-P2 e bridge P3 local executados; gate P3 físico e P4-P6 pendentes
 > **Regra:** nenhuma fase promove apenas por código escrito
 

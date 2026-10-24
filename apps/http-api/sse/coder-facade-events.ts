@@ -4,33 +4,11 @@ import type { CanonicalAgentEvent, EventCursor } from '@mcp/agent-runtime-host';
 import type { ControlPlaneRunContext } from '@mcp/store/control-plane/index.js';
 import type { BufferedEvent, CoderRunBus } from '../coder-bus.js';
 
-const nativeContexts = new WeakMap<CoderRunBus, Array<{ firstSequence: number; context: ControlPlaneRunContext }>>();
-
-/** Owned attempt boundaries belong to the stream, not to one subscriber.
- * Existing subscribers and reconnect replay must retain the same attribution. */
-export function bindNativeCoderFacadeContext(bus: CoderRunBus, context: ControlPlaneRunContext): void {
-  const entries = nativeContexts.get(bus) ?? [];
-  const latest = entries.at(-1);
-  if (latest?.context.sessionId !== undefined && latest.context.sessionId !== context.sessionId) throw new Error('Native stream cannot change sessions');
-  if (latest?.context.attemptId === context.attemptId) return;
-  const first = bus.buffer[0]?.seq ?? bus.nextSeq;
-  while (entries.length > 1 && entries[1]!.firstSequence <= first) entries.shift();
-  if (entries.length >= 64) throw new Error('Native stream attempt boundary limit exceeded');
-  entries.push({ firstSequence: latest ? bus.nextSeq : 0, context: structuredClone(context) });
-  nativeContexts.set(bus, entries);
-}
-
 export const coderStreamIdentity = (bus: CoderRunBus) => ({
   id: bus.busId, durability: 'volatile' as const, sequenceScope: 'stream' as const,
 });
 
 function envelope(bus: CoderRunBus, context: ControlPlaneRunContext, row: BufferedEvent, namespace: string): CanonicalAgentEvent {
-  if (namespace === 'native') {
-    const entries = nativeContexts.get(bus);
-    for (let index = (entries?.length ?? 0) - 1; index >= 0; index--) {
-      if (entries![index]!.firstSequence <= row.seq) { context = entries![index]!.context; break; }
-    }
-  }
   const hex = createHash('sha256').update(`${bus.busId}:${row.seq}`).digest('hex');
   const eventId = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-5${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
   const at = row.occurredAt ?? new Date().toISOString();
@@ -49,7 +27,7 @@ function envelope(bus: CoderRunBus, context: ControlPlaneRunContext, row: Buffer
 /** Reuse the bounded bus; never build an unbounded queue per slow subscriber.
  * A gap requires a transcript/snapshot refresh, not silent loss or fake replay. */
 export function subscribeCoderFacadeEvents(bus: CoderRunBus, context: ControlPlaneRunContext,
-  cursor?: EventCursor, namespace: 'legacy' | 'native' = 'legacy'): AsyncIterable<CanonicalAgentEvent> {
+  cursor?: EventCursor, namespace: 'legacy' = 'legacy'): AsyncIterable<CanonicalAgentEvent> {
   return { [Symbol.asyncIterator]() {
     let stopped = false;
     let wake: (() => void) | undefined;

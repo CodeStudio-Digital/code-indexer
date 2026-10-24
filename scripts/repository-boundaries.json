@@ -79,20 +79,8 @@
     {
       "name": "agent-runtime",
       "roots": [
-        "docs/architecture/rust-agent-runtime",
-        "native/agent-runtime",
         "packages/agent-runtime-contracts",
-        "packages/agent-runtime-host",
-        "scripts/benchmark-rust-agent-startup.mjs",
-        "scripts/check-rust-agent-crate-boundaries.ts",
-        "scripts/check-rust-agent-legacy-boundary.ts",
-        "scripts/check-rust-agent-loc.ts",
-        "scripts/lib/rust-agent-package-contract.mjs",
-        "scripts/package-rust-agent-runtime.mjs",
-        "scripts/rust-agent-installed-smoke",
-        "scripts/smoke-rust-agent-host-bridge-electron.mjs",
-        "scripts/smoke-rust-agent-runtime-package.ts",
-        "scripts/verify-rust-agent-runtime-package.ts"
+        "packages/agent-runtime-host"
       ]
     }
   ],

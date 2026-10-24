@@ -18,13 +18,11 @@
  *   - 'auto' (default) — subagent dispatch per kind, parallel batching.
  *   - 'inline-all'     — every task runs inline in the master (legacy).
  */
-import { createHash } from 'node:crypto';
 import type { CoderTool, ToolResult, ToolContext, JsonSchema } from '@mcp/code-agent/core/tool.js';
 import type { ChatUsage, AgentMessage } from '@mcp/code-agent/core/messages.js';
 import type { CoderTask, TaskStatus, TasksState } from '@mcp/session-storage/session-state-types.js';
 import { ok, err, unknownToolOutcome } from '@mcp/code-agent/core/tool.js';
 import { isUncertainToolOutcomeError } from '@mcp/code-agent/core/uncertain-tool-outcome.js';
-import { openNativeTaskCheckpoint } from './execute-tasks/native-task-checkpoint.js';
 import {
   runSubagent,
   runParallelAgents,
@@ -75,7 +73,6 @@ import {
 import { createTaskRunPersist } from './execute-tasks/task-run-persistence.js';
 import { dispatchWithRetry } from './execute-tasks/task-retry.js';
 import { shouldSkipTask } from './execute-tasks/task-stale-check.js';
-import { bindTaskContext } from '../ports/task-tool-port.js';
 
 export const DEFAULT_TASK_BUDGET_RESPONSE_TIMEOUT_MS = 30_000;
 
@@ -270,18 +267,17 @@ async function handleExecuteTasksInPlanMode(
   runner: ToolContext['runner'],
   state: TasksState | null | undefined,
 ): Promise<ToolResult | null> {
-  const nativeReview = ctx.runtimeGeneration === 'rust_v1' ? ctx.ports?.interactions : undefined;
-  if (!nativeReview && !runner) return err('execute_tasks requires an owned plan review port.');
+  if (!runner) return err('execute_tasks requires an owned plan review port.');
   const hasApprovedTasks = !!state?.approved && state.tasks.length > 0;
   if (hasApprovedTasks) {
     // submit_tasks already collected the user's approval — unlock + switch to
     // build, then let the waves run. Fixes the pre-existing dead-end where
     // markTasksApproved() left planApproved=false and execute_tasks got gated.
-    await applyPlanApproval(nativeReview ?? runner!, ctx);
+    await applyPlanApproval(runner!, ctx);
     return null;
   }
 
-  const id = nativeReview ? ctx.currentToolUseId! : `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const id = `plan_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const planText =
     state && state.tasks.length > 0
       ? `Execute the proposed task list:\n${state.tasks
@@ -291,8 +287,7 @@ async function handleExecuteTasksInPlanMode(
         'plan or task list. Approve leaving plan mode to begin?';
   await ctx.recordPlan?.(id, planText);
   let raw: string;
-  if (nativeReview) raw = await nativeReview.request({ kind: 'plan', payload: { type: 'plan', id, plan: planText, kind: 'mutating' } }, ctx.signal);
-  else {
+  {
     const response = runner!.waitForUserInput();
     runner!.emit('plan_posted', { type: 'plan', id, plan: planText, kind: 'mutating' });
     raw = await response;
@@ -318,7 +313,7 @@ async function handleExecuteTasksInPlanMode(
   }
 
   await ctx.resolvePlan?.(id, 'approved', parsed.feedback);
-  const extras = await applyPlanApproval(nativeReview ?? runner!, ctx);
+  const extras = await applyPlanApproval(runner!, ctx);
   return {
     content:
       `Plan approved by user.${parsed.feedback ? ` Feedback: ${parsed.feedback}` : ''} ` +
@@ -339,9 +334,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
     parallelSafe: false,
     riskLevel: 'write',
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-      if (ctx.runtimeGeneration === 'rust_v1') ctx = bindTaskContext(ctx, 'execute_tasks');
-      let checkpoint: Awaited<ReturnType<typeof openNativeTaskCheckpoint>> | undefined;
-      try {
+
       let state = ctx.getTasksState?.();
 
       // Plan/spec mode: execute_tasks is the model's "done planning, execute"
@@ -350,7 +343,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       // short-circuit (rejected / no-list cases) or null to fall through and
       // run the waves (an already-approved list — the approval was the gate).
       const planRunner = ctx.runner;
-      if (ctx.runtimeGeneration === 'rust_v1' ? ctx.planMode === true : planRunner && planRunner.planMode && !planRunner.isPlanApproved()) {
+      if (planRunner && planRunner.planMode && !planRunner.isPlanApproved()) {
         const gated = await handleExecuteTasksInPlanMode(ctx, planRunner, state);
         if (gated) return gated;
       }
@@ -366,12 +359,6 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       if (!state.approved) return err('execute_tasks: task list not approved yet.');
       if (state.tasks.length === 0) return err('execute_tasks: empty task list.');
 
-      if (ctx.runtimeGeneration === 'rust_v1' && !(ctx.taskRuntime ?? ctx.runner)?.currentTaskScopeId?.()) {
-        if (!deps.sessionStore || !ctx.sessionId) throw new Error('Native task execution requires its durable session store');
-        checkpoint = await openNativeTaskCheckpoint({ store: deps.sessionStore, sessionId: ctx.sessionId, context: ctx, state });
-        ctx = checkpoint.context;
-        state = ctx.getTasksState!()!;
-      }
       if (state.tasks.some(taskNeedsReconciliation)) {
         return err('execute_tasks: a previous task effect is unresolved. Reconcile its durable execution before starting another attempt.');
       }
@@ -396,7 +383,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
 
       // Refuse before creating a durable run: an already-active inline task
       // must not leave a second, permanently "running" orchestration record.
-      const activeScopeId = (ctx.taskRuntime ?? ctx.runner)?.currentTaskScopeId?.();
+      const activeScopeId = (ctx.runner)?.currentTaskScopeId?.();
       if (activeScopeId) {
         const activeTask = state.tasks.find((t) => t.id === activeScopeId);
         return err(
@@ -416,10 +403,8 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
         store: deps.sessionStore,
         sessionId: parentSessionId,
       });
-      const persist = checkpoint ? checkpoint.wrap(basePersist) : basePersist;
+      const persist = basePersist;
       await persist.recordRunStarted({ runId, mode, startedAt,
-        ...(ctx.runtimeGeneration === 'rust_v1' ? { runtimeGeneration: 'rust_v1',
-          taskPlanSha256: createHash('sha256').update(JSON.stringify(state)).digest('hex'), ownerToolUseId: ctx.currentToolUseId } : {}),
       });
 
       // PR-E: token budget tracker. Cap of 0/null means unlimited (gate
@@ -429,10 +414,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
       const tokenCap = deps.executeTasksTokenCap ?? loadDefaultTokenCap();
       const budget = new BudgetTracker({ tokensCap: tokenCap });
       const runnerForAsk = ctx.runner;
-      const askUserBudget: BudgetAskCallback | undefined = ctx.taskRuntime?.requestBudget
-        ? async req => parseBudgetAnswer(await ctx.taskRuntime!.requestBudget!({ runId, ...req,
-          timeoutMs: deps.executeTasksBudgetResponseTimeoutMs ?? taskBudgetResponseTimeoutMs() }))
-        : runnerForAsk
+      const askUserBudget: BudgetAskCallback | undefined = runnerForAsk
         ? async (req) => {
             const askId = `budget_${runId}_${Date.now().toString(36)}`;
             // Budget UI is advisory, never an unbounded execution lock. If no
@@ -448,7 +430,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
           }
         : undefined;
 
-      (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_started', {
+      (ctx.runner)?.emit('task_run_started', {
         run_id: runId,
         mode,
         total_tasks: totalRunnableTasks,
@@ -624,7 +606,7 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
         ctx.toolCallLedger?.markOutcomeUnknown('execute_tasks');
         return { ...unknownToolOutcome('execute_tasks finished child work but could not confirm the run checkpoint. Reconcile its task records before retrying.'), subUsage: totalUsage };
       }
-      (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_finished', {
+      (ctx.runner)?.emit('task_run_finished', {
         run_id: runId,
         status: runStatus,
         total_usage: totalUsage,
@@ -639,7 +621,6 @@ export function buildExecuteTasksTool(deps: SubagentDeps): CoderTool {
         ...(uncertainEffect ? unknownToolOutcome(content) : failedTasks > 0 ? err(content) : ok(content)),
         subUsage: totalUsage,
       };
-      } finally { await checkpoint?.close(); }
     },
   };
 }
@@ -678,7 +659,7 @@ async function runGroupParallel(
   for (const t of tasks) {
     await emitTaskRunTaskStarted(ctx, run, t, startedAt, 'subagent');
     await ctx.updateTaskStatus?.(t.id, { status: 'running', started_at: startedAt, mode_used: 'subagent' });
-    (ctx.taskRuntime ?? ctx.runner)?.emit('task_started', { task_id: t.id, mode: 'subagent', started_at: startedAt });
+    (ctx.runner)?.emit('task_started', { task_id: t.id, mode: 'subagent', started_at: startedAt });
   }
 
   const specs: ParallelAgentSpec[] = await Promise.all(tasks.map(async (t) => {
@@ -697,15 +678,11 @@ async function runGroupParallel(
       pathScope: art.pathScope,
       pathScopeMode: art.pathScopeMode,
       limits: resolveTaskLimit(t, deps.resolveLimitsForProfile?.(profile)),
-      ...(ctx.runtimeGeneration === 'rust_v1' ? { onNativeAdmission: async (nativeTranscriptRef: string) => {
-        if (!run.persist.recordTaskAdmitted) throw new Error('Native task admission requires durable persistence');
-        await run.persist.recordTaskAdmitted({ runId: run.runId, task: t, waveIdx: run.wave, startedAt, nativeTranscriptRef });
-      } } : {}),
     };
   }));
 
   const groupId = `tasks-wave-${Date.now().toString(36)}`;
-  (ctx.taskRuntime ?? ctx.runner)?.emit('agents_group_start', {
+  (ctx.runner)?.emit('agents_group_start', {
     groupId,
     agents: tasks.map((t, i) => ({
       index: i,
@@ -740,7 +717,7 @@ async function runGroupParallel(
       MICRO_AGENT_PROFILES.implement.systemPrompt, // global fallback (never used - per-spec wins)
       MICRO_AGENT_PROFILES.implement.allowlist,    // global fallback (never used - per-spec wins)
       (progress) => {
-        (ctx.taskRuntime ?? ctx.runner)?.emit('agent_progress', { groupId, ...progress });
+        (ctx.runner)?.emit('agent_progress', { groupId, ...progress });
         const task = tasks[progress.agentIndex];
         if (!task) return;
         if (progress.event === 'tool_call' || progress.event === 'heartbeat') {
@@ -777,7 +754,7 @@ async function runGroupParallel(
   const { results, totalUsage } = parallelRun;
 
   const outcomeCounts = countSubagentOutcomes(results);
-  (ctx.taskRuntime ?? ctx.runner)?.emit('agents_group_end', {
+  (ctx.runner)?.emit('agents_group_end', {
     groupId,
     totalUsage,
     agentCount: results.length,
@@ -808,7 +785,7 @@ async function runGroupParallel(
       finished_at: finishedAt,
       result: taskResult,
     });
-    (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
+    (ctx.runner)?.emit('task_finished', {
       task_id: t.id,
       status,
       result: taskResult,
@@ -850,7 +827,7 @@ async function runOneTask(
   // Task-level lifecycle (fires ONCE regardless of retry count).
   const taskStartedAt = new Date().toISOString();
   await ctx.updateTaskStatus?.(task.id, { status: 'running', started_at: taskStartedAt, mode_used: 'subagent' });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_started', { task_id: task.id, mode: 'subagent', started_at: taskStartedAt });
+  (ctx.runner)?.emit('task_started', { task_id: task.id, mode: 'subagent', started_at: taskStartedAt });
 
   const art = resolveKindArtifacts(task, ctx);
   const taskProfile = task.agent_profile ?? (task.kind === 'investigate' ? 'explore' : task.kind === 'verify' ? 'verify' : 'implement');
@@ -926,11 +903,6 @@ async function runOneTask(
           pathScope: art.pathScope,
           pathScopeMode: art.pathScopeMode,
           limits,
-          ...(ctx.runtimeGeneration === 'rust_v1' ? { onNativeAdmission: async (nativeTranscriptRef: string) => {
-            if (!run.persist.recordTaskAdmitted) throw new Error('Native task admission requires durable persistence');
-            await run.persist.recordTaskAdmitted({ runId: run.runId, task, waveIdx: run.wave,
-              startedAt: attemptStartedAt, attempt: attemptIdx, nativeTranscriptRef });
-          } } : {}),
           onProgress: (progress) => {
             toolCallCount = progress.toolCallCount;
             emitTaskRunTaskProgress(
@@ -1002,7 +974,7 @@ async function runOneTask(
     finished_at: attemptResult.finishedAt,
     result: taskResult,
   });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
+  (ctx.runner)?.emit('task_finished', {
     task_id: task.id,
     status: attemptResult.status,
     result: taskResult,
@@ -1067,10 +1039,10 @@ async function openInlineScope(
     task_run_id: run.runId,
     started_at: startedAt,
   });
-  const runtime = ctx.taskRuntime ?? ctx.runner;
-  if (ctx.runtimeGeneration === 'rust_v1' && !runtime?.beginTaskScope) throw new Error('Native inline tasks require an owned task scope');
+  const runtime = ctx.runner;
+
   runtime?.beginTaskScope?.({ id: task.id, files: task.files });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_started', { task_id: task.id, mode: 'inline', started_at: startedAt });
+  (ctx.runner)?.emit('task_started', { task_id: task.id, mode: 'inline', started_at: startedAt });
   await emitTaskRunTaskStarted(
     ctx,
     run,
@@ -1146,7 +1118,7 @@ async function skipTaskAsStale(
     finished_at: finishedAt,
     result,
   });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
+  (ctx.runner)?.emit('task_finished', {
     task_id: task.id,
     status: 'skipped',
     result,
@@ -1166,7 +1138,7 @@ async function skipTaskAsStale(
     skipReason: verdict.reason ?? 'inputs_unchanged',
     ...(verdict.fingerprint ? { inputsFingerprint: verdict.fingerprint } : {}),
   });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_finished', {
+  (ctx.runner)?.emit('task_run_task_finished', {
     run_id: run.runId,
     task_id: task.id,
     status: 'skipped',
@@ -1231,7 +1203,7 @@ async function skipTaskAsBudgetCapped(
     finished_at: finishedAt,
     result,
   });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
+  (ctx.runner)?.emit('task_finished', {
     task_id: task.id,
     status: 'skipped',
     result,
@@ -1248,7 +1220,7 @@ async function skipTaskAsBudgetCapped(
     summary,
     skipReason,
   });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_finished', {
+  (ctx.runner)?.emit('task_run_task_finished', {
     run_id: run.runId,
     task_id: task.id,
     status: 'skipped',
@@ -1279,7 +1251,7 @@ async function skipTaskDueToDependency(
     finished_at: finishedAt,
     result,
   });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_finished', {
+  (ctx.runner)?.emit('task_finished', {
     task_id: task.id,
     status: 'skipped',
     result,
@@ -1343,7 +1315,7 @@ async function emitTaskRunTaskStarted(
     startedAt,
     attempt,
   });
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_started', {
+  (ctx.runner)?.emit('task_run_task_started', {
     run_id: run.runId,
     task_id: task.id,
     title: task.title,
@@ -1363,7 +1335,7 @@ function emitTaskRunTaskProgress(
   note?: string,
   meta: TaskRunProgressMeta = {},
 ): void {
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_progress', {
+  (ctx.runner)?.emit('task_run_task_progress', {
     run_id: run.runId,
     task_id: task.id,
     tool_call_count: toolCallCount,
@@ -1413,7 +1385,7 @@ async function emitTaskRunTaskFinished(
       ...(result.skipReason ? { skipReason: result.skipReason } : {}),
     });
   }
-  (ctx.taskRuntime ?? ctx.runner)?.emit('task_run_task_finished', {
+  (ctx.runner)?.emit('task_run_task_finished', {
     run_id: run.runId,
     task_id: task.id,
     status: result.status,

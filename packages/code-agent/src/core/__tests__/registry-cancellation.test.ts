@@ -21,21 +21,6 @@ describe('tool dispatch cancellation boundary', () => {
       guardVerdict: { affectsFailureStreak: false, shouldReflect: false } });
   });
 
-  it('rechecks cancellation after asynchronous workspace admission', async () => {
-    const f = fixture();
-    let release!: () => void;
-    let admitted!: () => void;
-    const entered = new Promise<void>(resolve => { admitted = resolve; });
-    const gate = new Promise<void>(resolve => { release = resolve; });
-    f.ctx.workspaceRuntimeScope = { async invoke(_tool, invoke) {
-      admitted(); await gate; return invoke();
-    } };
-    const result = f.registry.invoke('effect', {}, f.ctx);
-    await entered; f.abort.abort(); release();
-    await expect(result).resolves.toMatchObject({ error: { kind: 'cancelled' } });
-    expect(f.handler).not.toHaveBeenCalled();
-  });
-
   it('preserves a confirmed result when cancellation arrives after the effect started', async () => {
     const f = fixture();
     f.handler.mockImplementationOnce(async () => { f.abort.abort(); return { content: 'effect finished' }; });

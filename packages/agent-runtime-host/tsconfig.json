@@ -6,9 +6,12 @@
     "outDir": "./dist",
     "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo"
   },
-  "include": ["src/**/*.ts"],
+  "include": [
+    "src/**/*.ts"
+  ],
   "references": [
-    { "path": "../agent-runtime-contracts" },
-    { "path": "../provider-sdk/tsconfig.contract.json" }
+    {
+      "path": "../agent-runtime-contracts"
+    }
   ]
 }

@@ -35,7 +35,6 @@ export interface SpawnRetentionAgent {
   usage: ChatUsage;
   toolCallCount: number;
   transcript?: AgentMessage[];
-  nativeTranscriptRef?: string;
   finalText: string;
   /** Raw watchdog/error message — SubagentRunResult.failureDetail. */
   failureDetail?: string;
@@ -74,7 +73,7 @@ export async function retainSpawnGroup(args: {
 }): Promise<number> {
   if (args.sessionId == null) return 0;
   const resumableCount = args.agents.filter((a) => !resumeNeedsReconciliation({ ...a, failureNote: a.failureDetail })
-    && a.reason !== 'completed' && (!!a.nativeTranscriptRef || (a.transcript?.length ?? 0) > 0)).length;
+    && a.reason !== 'completed' && ((a.transcript?.length ?? 0) > 0)).length;
   if (countFailed(args.agents) === 0 && !retainCompletedTranscripts()) return 0;
   const now = Date.now();
   const group: ResumableGroup = {
@@ -94,7 +93,6 @@ export async function retainSpawnGroup(args: {
       maxTurns: a.maxTurns,
       limits: a.limits,
       transcript: a.transcript,
-      nativeTranscriptRef: a.nativeTranscriptRef,
       reason: a.reason,
       effectOutcome: a.effectOutcome,
       failureNote: a.reason !== 'completed'

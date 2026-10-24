@@ -11,7 +11,6 @@
  * this module decoupled and unit-testable.
  */
 import type { ChatProvider } from '@mcp/code-agent/providers/adapter.js';
-import { rememberNativeProviderSelection } from '../runtime/native-provider-binding.js';
 import type {
   MicroAgentProfile,
   MicroAgentProfileId,
@@ -77,7 +76,6 @@ export function createSubagentProviderResolver(
     let p = cache.get(key);
     if (!p) {
       p = opts.createProvider(target.providerId, model).then(provider => {
-        rememberNativeProviderSelection(provider, { provider: target.providerId, model: model ?? provider.model });
         return provider;
       });
       cache.set(key, p);

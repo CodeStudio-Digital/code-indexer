@@ -93,14 +93,7 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
     },
     handler: async (args, ctx): Promise<ToolResult> => {
       ctx.signal?.throwIfAborted();
-      const owner = ctx.runtimeGeneration === 'rust_v1' ? ctx.ports?.sessionReview : undefined;
-      if (ctx.runtimeGeneration === 'rust_v1' && (!owner || owner.runtimeGeneration !== 'rust_v1' || owner.sessionId !== deps.sessionId
-        || owner.sessionId !== ctx.sessionId || owner.agentRunId !== ctx.controlPlaneParentAgentRunId)) {
-        return err('self_review: native invocation has no owned session review scope.');
-      }
-      owner?.assertOwner();
-      const onCancellationSettled = owner && ctx.currentToolUseId ? owner.beginInvocation(ctx.currentToolUseId) : undefined;
-      if (owner && !onCancellationSettled) return err('self_review: native invocation lacks its admitted tool identity.');
+
       if (args.focus !== undefined && (typeof args.focus !== 'string' || args.focus.length > 4000)) {
         return err('self_review: focus must be a string of at most 4000 characters.');
       }
@@ -113,7 +106,7 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
           const sec = deps.secondaryRoots?.find((r) => r.projectId === projectId);
           if (sec) return sec.rootPath;
         }
-        return owner?.workspaceRoot ?? deps.projectRoot;
+        return deps.projectRoot;
       });
       const resolver = new PipelineProviderResolver(
         new PipelineProviderBindingsStore(deps.settingsDbHandle),
@@ -132,7 +125,6 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
         /* review runs without intent */
       }
       ctx.signal?.throwIfAborted();
-      owner?.assertOwner();
 
       // Recorded verification evidence (which verify commands actually ran +
       // staleness) replaces author claims. Best-effort like intent.
@@ -142,7 +134,6 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
       );
       const evidence = evidenceData ? formatVerifyEvidence(evidenceData) : null;
       ctx.signal?.throwIfAborted();
-      owner?.assertOwner();
 
       // Consult the registered owner-backed tool live. Do not freeze this
       // capability from ToolContext.projectIndexed: a session may have started
@@ -179,13 +170,13 @@ export function buildSelfReviewTool(deps: SelfReviewDeps): CoderTool {
             projectId: deps.projectId,
           },
           deps.sessionId,
-          { focus, intent, evidence, signal: ctx.signal, assertOwner: owner?.assertOwner, onCancellationSettled },
+          { focus, intent, evidence, signal: ctx.signal },
         );
       } catch (e) {
         return err(`self_review failed: ${e instanceof Error ? e.message : String(e)}`);
       }
 
-      ctx.signal?.throwIfAborted(); owner?.assertOwner();
+      ctx.signal?.throwIfAborted();
       if (!outcome.ok) {
         if (outcome.errorCode && CONFIG_ERROR_CODES.has(outcome.errorCode)) {
           return err(

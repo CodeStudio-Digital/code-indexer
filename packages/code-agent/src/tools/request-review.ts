@@ -121,7 +121,7 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
         const result = await runReviewSubagent(parent, input);
         ctx.signal?.throwIfAborted();
         if (!result.parsed) return { ...err(formatReviewResult(result.findings, false, result.raw)), subUsage: result.usage,
-          structuredData: { kind: 'review_result', status: 'inconclusive', nativeTranscriptRef: result.nativeTranscriptRef } };
+          structuredData: { kind: 'review_result', status: 'inconclusive' } };
         if (deps.sessionStore && deps.sessionId != null) {
           try {
             await deps.sessionStore.markSessionReviewedNow(deps.sessionId);
@@ -131,7 +131,7 @@ export function buildRequestReviewTool(deps: RequestReviewDeps): CoderTool {
         }
         return {
           content: formatReviewResult(result.findings, result.parsed, result.raw),
-          structuredData: { kind: 'review_result', status: 'completed', findings: result.findings, nativeTranscriptRef: result.nativeTranscriptRef },
+          structuredData: { kind: 'review_result', status: 'completed', findings: result.findings },
           subUsage: {
             input_tokens: result.usage.input_tokens,
             output_tokens: result.usage.output_tokens,

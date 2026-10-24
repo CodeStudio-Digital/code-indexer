@@ -128,17 +128,14 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
     },
     handler: async (args, ctx): Promise<ToolResult> => {
       ctx.signal?.throwIfAborted();
-      const native = ctx.ports?.discovery;
-      native?.assertCurrent();
       if (args.limit !== undefined && (!Number.isInteger(args.limit) || (args.limit as number) < 1 || (args.limit as number) > MAX_RESULTS)) return err('capability_catalog limit must be an integer from 1 to 10.');
       if (args.cursor !== undefined && (typeof args.cursor !== 'string' || !/^(0|[1-9][0-9]{0,8})$/.test(args.cursor))) return err('capability_catalog cursor is invalid.');
       for (const field of ['query', 'namespace', 'input']) {
         if (args[field] !== undefined && (typeof args[field] !== 'string' || (args[field] as string).length > 4_000)) return err(`capability_catalog ${field} must be a string of at most 4000 characters.`);
       }
       const entries = deps.registry.isSealed ? (sealedEntries ??= buildEntries()) : buildEntries();
-      const toolEntries = native ? entries.toolEntries.filter(e => native.eligibleCapabilityIds.has(e.descriptor.capabilityId)
-        && native.visibleToolNames.has(e.tool.name)) : entries.toolEntries;
-      const skillEntries = native ? entries.skillEntries.filter(e => native.eligibleCapabilityIds.has(e.descriptor.capabilityId)) : entries.skillEntries;
+      const toolEntries = entries.toolEntries;
+      const skillEntries = entries.skillEntries;
       const op = String(args.op ?? '');
       const namespace = typeof args.namespace === 'string' ? args.namespace.trim() : '';
       const namespaceMatches = (entry: { descriptor: ReturnType<typeof deriveCapabilityDescriptor>['descriptor'] }): boolean => {
@@ -244,13 +241,10 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
       const activated: unknown[] = [];
       const rejected: unknown[] = [];
       for (const id of requested) {
-        ctx.signal?.throwIfAborted(); native?.assertCurrent();
+        ctx.signal?.throwIfAborted();
         const toolEntry = toolById.get(id as CapabilityId);
         if (toolEntry) {
-          if (native) {
-            activated.push({ capabilityId: id, effective: 'already_visible', evicted: [] });
-            continue;
-          }
+
           if (!runner?.promoteTool) {
             rejected.push({ capabilityId: id, reason: 'runner_activation_unavailable' });
             continue;
@@ -265,7 +259,7 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
           continue;
         }
         const missingRequirements = (skillEntry.skill.allowedTools ?? [])
-          .filter((name: string) => !deps.registry.has(name) || (native && !native.visibleToolNames.has(name)));
+          .filter((name: string) => !deps.registry.has(name));
         if (missingRequirements.length > 0) {
           rejected.push({ capabilityId: id, reason: 'required_capability_missing', missingRequirements });
           continue;
@@ -279,7 +273,7 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
           rejected.push({ capabilityId: id, reason: 'instruction_exceeds_catalog_budget', suggestedTool: 'get_skill_content' });
           continue;
         }
-        if (!native && deps.sessionStore && deps.sessionId) {
+        if (deps.sessionStore && deps.sessionId) {
           try {
             await deps.sessionStore.recordSessionInput({
               session_id: deps.sessionId,
@@ -293,12 +287,12 @@ export function buildCapabilityCatalogTool(deps: CapabilityCatalogToolDeps): Cod
         activated.push({ capabilityId: id, effective: 'immediate_instruction', instruction: body });
       }
       const agentRunId = (runner?.runId ?? '00000000-0000-4000-8000-000000000000') as AgentRunId;
-      const capabilitySetHash = native?.capabilitySetDigest ?? resolveCapabilitySet(
+      const capabilitySetHash = resolveCapabilitySet(
         [...deps.registry.list(), ...deps.skills.map(skillAsCatalogCapability)], { agentRunId }).set.hash;
       return catalogResult({
         capabilitySetDigest: capabilitySetHash,
         projectionDigest: null,
-        projectionState: native ? 'immutable_attempt_snapshot' : 'recomputed_at_next_turn_boundary',
+        projectionState: 'recomputed_at_next_turn_boundary',
         activationDigest: digest({ capabilitySet: capabilitySetHash, activated, rejected }),
         activated,
         rejected,

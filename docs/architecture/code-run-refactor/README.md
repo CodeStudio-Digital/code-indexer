@@ -1,10 +1,12 @@
 # Code Run — simplificação de configuração e capabilities
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Status:** P0-P2 e bridge P3 local implementados; B2 físico completo; P3 físico/P4 pendentes
 > **Baseline de código:** `7e79171d4c9a98397d3f47d9437d890e9316dc1d`
 > **Snapshot operacional:** 2026-08-05
 > **Escopo:** configuração do code-run, tools, skills, plugins e MCP
-> **Arquitetura superior:** [`../rust-agent-runtime/README.md`](../rust-agent-runtime/README.md)
+> **Arquitetura superior:** [Registro de remoção do runtime](../runtime-retirement.md)
 
 ## 1. Resultado pretendido
 

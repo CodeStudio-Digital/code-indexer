@@ -1,23 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { commitCoderAttemptPreparation, preparationId } from './coder-attempt-admission.js';
+import { commitCoderAttemptPreparation } from './coder-attempt-admission.js';
 import { commitRuntimeRoute, commitRuntimeRequest, assertNoRuntimeCancellation } from './runtime-attempt-ledger.js';
-import { readNativeInbox, type NativeInboxSource, type NativeTreeInboxEntry } from './native-tree-inbox.js';
 import { hashControlPlanePayload } from '@mcp/store/control-plane/index.js';
-import { resolveNativeChildSessionRoot, parseNativeChildTranscriptRef } from './native-child-storage.js';
-import { resolveNativeChildReference, type NativeChildCompletionAuthority } from './native-child-reference-authority.js';
-import type { DurableSupervisorFactPort, PreparedDurabilityPort, RuntimeRouteCommit, RuntimeRouteRecord } from '@mcp/agent-runtime-host';
-import { assertSupervisorCommitLive, commitSupervisorFact, supervisorFactRecord } from './supervisor-fact-ledger.js';
-import { assertPreparedWorkspaceLease, commitNativePreparation, copyNativePreparation, nativeRecordId, validateNativePreparation,
-  type NativeAttemptAdmission, type NativeAttemptPreparationInput } from './native-attempt-preparation.js';
-import { assertNativeActivationLive, commitNativeActivation, copyPreparedFacts } from './native-attempt-activation.js';
-import type { NativeWorkspaceLease } from './native-workspace-leases.js';
-import { admitNativeChild, nativeTreeId, type NativeTreeData, type NativeChildRequest, type NativeChildAdmission } from './native-child-admission.js';
-import { assertNativeChildCurrent, assertNativeChildPreparation } from './native-child-authority.js';
+import type { RuntimeRouteCommit, RuntimeRouteRecord } from '@mcp/agent-runtime-host';
 import {
   CONTROL_PLANE_EVENT_TYPES,
   CONTROL_PLANE_SCHEMA_VERSION,
-  agentV1Common,
-  agentV1Supervisor,
   asRuntimeEventId,
   asSessionId,
   canTransitionAgentRun,
@@ -31,8 +19,6 @@ import {
   type SessionId,
 } from '@mcp/agent-runtime-contracts';
 import type { FsSessionStore } from '@mcp/session-storage/fs-store/index.js';
-import { create, fromBinary, toBinary } from '@bufbuild/protobuf';
-import type { VerifiedRuntimePackage } from '@mcp/agent-runtime-host';
 import {
   ControlPlaneFileRepository,
   type ControlPlaneEntityDataMap,
@@ -51,17 +37,7 @@ import type {
 } from '@mcp/store/control-plane/index.js';
 
 export interface FileControlPlaneAuthority {
-  readNativeContinuationInbox(owner: ControlPlaneRunContext, source: NativeInboxSource): Promise<NativeTreeInboxEntry[]>;
   readonly journalEnabled: boolean;
-  createSupervisorFactPort(context: ControlPlaneRunContext, connectionId: string): DurableSupervisorFactPort;
-  admitNativeAttempt(context: ControlPlaneRunContext, input: NativeAttemptPreparationInput): Promise<NativeAttemptAdmission>;
-  admitNativeChild(context: ControlPlaneRunContext, input: NativeChildRequest): Promise<NativeChildAdmission>;
-  resolveNativeChild(root: ControlPlaneRunContext, agentRunId: string, requireActiveLease?: boolean): Promise<ControlPlaneRunContext>;
-  resolveNativeChildTranscript(owner: ControlPlaneRunContext, reference: string, requireActiveOwner?: boolean): Promise<ControlPlaneRunContext>;
-  resolveNativeChildCompletion(owner: ControlPlaneRunContext, reference: string): Promise<NativeChildCompletionAuthority>;
-  resolveSessionChildTranscript(sessionId: SessionId, reference: string): Promise<ControlPlaneRunContext>;
-  assertNativeWorkspaceLease(context: ControlPlaneRunContext, lease: NativeWorkspaceLease): Promise<void>;
-  createNativeActivationPort(context: ControlPlaneRunContext, activationNonce: Uint8Array): PreparedDurabilityPort;
   getAttemptState(context: ControlPlaneRunContext, requireActiveLease?: boolean): Promise<{
     command: PersistedSessionCommand; run: AgentRun; attempt: AgentRunAttempt;
   }>;
@@ -128,7 +104,6 @@ export interface FileControlPlaneAuthority {
   recoverInterruptedRuns(
     reason?: string,
     occurredAt?: string,
-    options?: { nativeOnly?: boolean },
   ): Promise<number>;
 }
 
@@ -266,23 +241,13 @@ export class FileControlPlaneStore implements FileControlPlaneAuthority {
   readonly #sessions: FsSessionStore;
   readonly #repositories = new Map<string, ControlPlaneFileRepository>();
   #recoveryPromise: Promise<number> | null = null;
-  readonly #nativeRecovery?: {
-    isPresent(): Promise<boolean>;
-    sessionIds?(): Promise<ReadonlySet<string>>;
-    load(): Promise<{ rootPath: string; runtimePackage: VerifiedRuntimePackage }>;
-  };
 
   constructor(
     sessions: FsSessionStore,
-    options: { journalEnabled?: boolean; nativeRecovery?: {
-      isPresent(): Promise<boolean>;
-      sessionIds?(): Promise<ReadonlySet<string>>;
-      load(): Promise<{ rootPath: string; runtimePackage: VerifiedRuntimePackage }>;
-    } } = {},
+    options: { journalEnabled?: boolean } = {},
   ) {
     this.#sessions = sessions;
     this.journalEnabled = options.journalEnabled ?? true;
-    this.#nativeRecovery = options.nativeRecovery;
   }
 
   async #repository(sessionId: SessionId | string): Promise<ControlPlaneFileRepository> {
@@ -489,14 +454,6 @@ export class FileControlPlaneStore implements FileControlPlaneAuthority {
         leaseExpired(attempt.executorLease.expiresAt, at)
       ) {
         throw new Error(`Run ${context.agentRunId} executor lease is not active`);
-      }
-      if (!directRoot && command.agentRunId) {
-        const root = await this.#run(repository, command.agentRunId);
-        const rootRoute = root?.activeAttemptId ? (await repository.get('runtimeRoute', root.activeAttemptId))?.data.route as RuntimeRouteRecord | undefined : undefined;
-        const ownRoute = (await repository.get('runtimeRoute', attempt.attemptId))?.data.route as RuntimeRouteRecord | undefined;
-        if (rootRoute?.runtimeGeneration === 'rust_v1' || ownRoute?.runtimeGeneration === 'rust_v1') {
-          await assertNativeChildCurrent(repository, context, { command, run, attempt });
-        }
       }
     }
     return { command, run, attempt };
@@ -819,14 +776,6 @@ export class FileControlPlaneStore implements FileControlPlaneAuthority {
         return current;
       };
       const { run, command } = await assertCurrent();
-      if (command.agentRunId !== run.agentRunId && run.ownerAgentRunId) {
-        const root = await this.#run(repository, run.ownerAgentRunId);
-        const route = root?.activeAttemptId ? (await repository.get('runtimeRoute', root.activeAttemptId))?.data.route as RuntimeRouteRecord | undefined : undefined;
-        if (route?.runtimeGeneration === 'rust_v1') throw new Error('Native tree cannot admit a legacy child');
-      }
-      if (await repository.get('nativePreparation', nativeRecordId(context.attemptId, 'prepare'))) {
-        throw new Error('Attempt already has a native preparation');
-      }
       return commitCoderAttemptPreparation({
         repository, context, preparation: facts, run, assertCurrent,
         updateRun: (resolved) => this.#updateRun(repository, resolved),
@@ -1092,271 +1041,6 @@ export class FileControlPlaneStore implements FileControlPlaneAuthority {
     ));
   }
 
-  admitNativeChild(context: ControlPlaneRunContext, input: NativeChildRequest): Promise<NativeChildAdmission> {
-    const parent = cleanJson(context), request = cleanJson(input);
-    return this.#enqueue(parent.sessionId, async () => {
-      const repository = await this.#repository(parent.sessionId);
-      const source = request.resumeFromRef ? await resolveNativeChildReference(repository, parent, request.resumeFromRef,
-        (candidate, requireActiveLease) => this.#assertRunContext(repository, candidate, { requireActiveLease })) : undefined;
-      if (source) {
-        const previous = await this.#assertRunContext(repository, source, { requireActiveLease: false });
-        if (previous.run.status === 'completed' && request.continuationPurpose !== 'followup') throw new Error('Completed native children cannot be resumed');
-        if (previous.run.effectiveProvider !== request.provider || previous.run.effectiveModel !== request.model) {
-          throw new Error('Native child continuation cannot change its configured provider');
-        }
-      }
-      return admitNativeChild(repository, parent, request, () => this.#assertRunContext(repository, parent), source);
-    });
-  }
-
-  /** Resolves only an exact child reserved by this worker's root attempt.
-   * Callers never supply executor IDs, epochs, a session path or another tree. */
-  resolveNativeChild(root: ControlPlaneRunContext, agentRunId: string, requireActiveLease = true): Promise<ControlPlaneRunContext> {
-    const owner = cleanJson(root);
-    return this.#enqueue(owner.sessionId, async () => {
-      const repository = await this.#repository(owner.sessionId);
-      const state = await this.#assertRunContext(repository, owner, { requireActiveLease });
-      if (state.command.agentRunId !== owner.agentRunId || state.run.spawnDepth !== 0) throw new Error('Native child lookup requires its root owner');
-      const data = (await repository.get('nativeTree', nativeTreeId(owner.attemptId)))?.data as unknown as NativeTreeData | undefined;
-      if (data?.checkpointType !== 'native-tree-v1' || data.rootAttemptId !== owner.attemptId || data.rootAgentRunId !== owner.agentRunId
-        || !Array.isArray(data.children) || data.children.length > 255) throw new Error('Native child lookup has no owned reservation');
-      const receipt = data.children.find(child => child.context.agentRunId === agentRunId);
-      if (!receipt || receipt.context.sessionId !== owner.sessionId || receipt.context.commandId !== owner.commandId
-        || receipt.context.executorOwnerId !== owner.executorOwnerId || receipt.context.correlationId !== owner.correlationId) {
-        throw new Error('Native child lookup belongs to another tree');
-      }
-      await this.#assertRunContext(repository, receipt.context, { requireActiveLease });
-      return cleanJson(receipt.context);
-    });
-  }
-
-  assertNativeWorkspaceLease(context: ControlPlaneRunContext, lease: NativeWorkspaceLease): Promise<void> {
-    const owner = cleanJson(context), grant = cleanJson(lease);
-    return this.#enqueue(owner.sessionId, async () => {
-      const repository = await this.#repository(owner.sessionId);
-      await this.#assertRunContext(repository, owner);
-      await assertPreparedWorkspaceLease(repository, owner, grant);
-      await this.#assertRunContext(repository, owner);
-    });
-  }
-
-  /** UI history: the caller must own the session, but needs no execution lease.
-   * Resolve the reader identity from durable records, never from the worker. */
-  resolveSessionChildTranscript(sessionId: SessionId, reference: string): Promise<ControlPlaneRunContext> {
-    const target = parseNativeChildTranscriptRef(reference);
-    if (target.sessionId !== sessionId) return Promise.reject(new Error('Native transcript belongs to another session'));
-    return this.#enqueue(sessionId, async () => {
-      const repository = await this.#repository(sessionId);
-      const tree = (await repository.get('nativeTree', nativeTreeId(target.rootAttemptId)))?.data as unknown as NativeTreeData | undefined;
-      if (tree?.checkpointType !== 'native-tree-v1' || tree.rootAttemptId !== target.rootAttemptId) throw new Error('Native transcript has no durable tree');
-      const run = await this.#run(repository, tree.rootAgentRunId);
-      const attempt = run?.activeAttemptId ? await this.#attempt(repository, run.activeAttemptId) : undefined;
-      const command = run ? await this.#command(repository, run.commandId) : undefined;
-      if (!run || !attempt || !command || run.parentAgentRunId || command.agentRunId !== run.agentRunId) {
-        throw new Error('Native transcript has no durable session root');
-      }
-      const owner: ControlPlaneRunContext = { sessionId, commandId: command.commandId, correlationId: command.correlationId,
-        actor: command.actor, agentRunId: run.agentRunId, attemptId: attempt.attemptId,
-        executorOwnerId: attempt.executorLease.ownerId, fencingEpoch: attempt.executorLease.fencingEpoch };
-      return resolveNativeChildReference(repository, owner, reference,
-        (candidate, requireActiveLease) => this.#assertRunContext(repository, candidate, { requireActiveLease }), false);
-    });
-  }
-
-  resolveNativeChildTranscript(context: ControlPlaneRunContext, reference: string, requireActiveOwner = true): Promise<ControlPlaneRunContext> {
-    const owner = cleanJson(context);
-    return this.#enqueue(owner.sessionId, async () => {
-      const repository = await this.#repository(owner.sessionId);
-      return resolveNativeChildReference(repository, owner, reference,
-        (candidate, requireActiveLease) => this.#assertRunContext(repository, candidate, { requireActiveLease }), requireActiveOwner);
-    });
-  }
-
-  readNativeContinuationInbox(context: ControlPlaneRunContext, input: NativeInboxSource): Promise<NativeTreeInboxEntry[]> {
-    const owner = cleanJson(context), source = cleanJson(input);
-    return this.#enqueue(owner.sessionId, async () => {
-      const repository = await this.#repository(owner.sessionId);
-      const current = await this.#assertRunContext(repository, owner);
-      let previous: ControlPlaneRunContext;
-      if ('reference' in source) {
-        previous = await resolveNativeChildReference(repository, owner, source.reference,
-          (candidate, requireActiveLease) => this.#assertRunContext(repository, candidate, { requireActiveLease }));
-      } else {
-        if (current.run.spawnDepth !== 0 || current.command.agentRunId !== owner.agentRunId
-          || !/^[a-f0-9-]{36}$/i.test(source.agentRunId) || !/^[a-f0-9-]{36}$/i.test(source.attemptId)) {
-          throw new Error('Native inbox root recovery requires its current session root');
-        }
-        const run = await this.#run(repository, source.agentRunId), attempt = await this.#attempt(repository, source.attemptId);
-        const command = run ? await this.#command(repository, run.commandId) : undefined;
-        if (!run || !attempt || !command || run.parentAgentRunId || run.spawnDepth !== 0 || run.sessionId !== owner.sessionId
-          || run.activeAttemptId !== attempt.attemptId || attempt.agentRunId !== run.agentRunId || command.agentRunId !== run.agentRunId
-          || hashControlPlanePayload(command.actor) !== hashControlPlanePayload(owner.actor)
-          || !['completed', 'failed', 'cancelled', 'interrupted'].includes(run.status) || attempt.attemptId === owner.attemptId) {
-          throw new Error('Native inbox recovery source is not a terminal root in this session');
-        }
-        previous = { sessionId: owner.sessionId, commandId: command.commandId, correlationId: command.correlationId,
-          actor: command.actor, agentRunId: run.agentRunId, attemptId: attempt.attemptId,
-          executorOwnerId: attempt.executorLease.ownerId, fencingEpoch: attempt.executorLease.fencingEpoch };
-      }
-      await this.#assertRunContext(repository, previous, { requireActiveLease: false });
-      const inbox = await readNativeInbox(repository, previous);
-      await this.#assertRunContext(repository, owner);
-      return inbox;
-    });
-  }
-
-  resolveNativeChildCompletion(context: ControlPlaneRunContext, reference: string): Promise<NativeChildCompletionAuthority> {
-    const owner = cleanJson(context);
-    return this.#enqueue(owner.sessionId, async () => {
-      const repository = await this.#repository(owner.sessionId);
-      const child = await resolveNativeChildReference(repository, owner, reference,
-        (candidate, requireActiveLease) => this.#assertRunContext(repository, candidate, { requireActiveLease }));
-      const { run, attempt, command } = await this.#assertRunContext(repository, child, { requireActiveLease: false });
-      const { supervisorFactId } = await import('./supervisor-fact-ledger.js');
-      const fact = await repository.get('supervisorFact', supervisorFactId(child.attemptId, 'attemptProcessReaped'));
-      let physicalReaped = false;
-      if (fact) {
-        if (fact.relations.attempt !== child.attemptId || fact.relations.session !== child.sessionId
-          || fact.data.checkpointType !== 'supervisor-fact-v1' || fact.data.factCase !== 'attemptProcessReaped'
-          || typeof fact.data.encodedPayload !== 'string' || fact.data.encodedPayload.length > 128 * 1024) {
-          throw new Error('Native child cleanup receipt has foreign authority');
-        }
-        const bytes = Buffer.from(fact.data.encodedPayload, 'base64');
-        if (createHash('sha256').update(bytes).digest('hex') !== fact.data.contentSha256) throw new Error('Native child cleanup receipt digest differs');
-        const body = fromBinary(agentV1Supervisor.ManagementPayloadSchema, bytes).body;
-        const expected = create(agentV1Common.AttemptIdentitySchema, { ...child, fencingEpoch: BigInt(child.fencingEpoch),
-          rootAgentRunId: command.agentRunId!, parentAgentRunId: run.parentAgentRunId, ownerAgentRunId: run.ownerAgentRunId });
-        if (body.case !== 'attemptProcessReaped' || !body.value.identity
-          || !Buffer.from(toBinary(agentV1Common.AttemptIdentitySchema, body.value.identity))
-            .equals(toBinary(agentV1Common.AttemptIdentitySchema, expected))) throw new Error('Native child cleanup identity differs');
-        physicalReaped = true;
-      }
-      // Startup fencing/physical recovery alone does not attest Host effects.
-      // Normal facade completion releases this lease only after Host drain.
-      const reason = run.terminalReason ?? '';
-      const hostDrained = attempt.status === 'terminal' && attempt.executorLease.status === 'released'
-        && attempt.terminalReason === reason && !['outcome_unknown', 'native_host_cleanup_failed', 'native_attempt_failed'].includes(reason);
-      return { context: child, status: run.status, reason, physicalReaped, hostDrained };
-    });
-  }
-
-  admitNativeAttempt(context: ControlPlaneRunContext, input: NativeAttemptPreparationInput): Promise<NativeAttemptAdmission> {
-    const owner = cleanJson(context); const copy = copyNativePreparation(input);
-    return this.#enqueue(owner.sessionId, async () => {
-      const repository = await this.#repository(owner.sessionId);
-      const assertCurrent = async () => {
-        const state = await this.#assertRunContext(repository, owner);
-        await assertNoRuntimeCancellation(repository, owner.attemptId);
-        const child = state.command.agentRunId !== state.run.agentRunId;
-        if (state.run.status !== 'starting' || state.attempt.status !== 'starting'
-          || (child ? state.command.status !== 'running' : state.command.status !== 'accepted')) {
-          throw new Error('Native preparation requires an accepted starting attempt');
-        }
-        return state;
-      };
-      const { command, run, attempt } = await assertCurrent();
-      if (await repository.get('attemptPreparation', preparationId(owner.attemptId))) {
-        throw new Error('Attempt already has a legacy preparation');
-      }
-      const spec = validateNativePreparation(copy, owner, run, attempt, command.agentRunId!);
-      if (command.agentRunId !== run.agentRunId) await assertNativeChildPreparation(repository, owner, { command, run, attempt }, spec);
-      const admission = await commitNativePreparation(repository, owner, copy, run, attempt, spec,
-        (resolved) => this.#updateRun(repository, resolved));
-      await assertCurrent();
-      return admission;
-    });
-  }
-
-  createNativeActivationPort(context: ControlPlaneRunContext, activationNonce: Uint8Array): PreparedDurabilityPort {
-    const owner = cleanJson(context); const nonce = Uint8Array.from(activationNonce);
-    if (nonce.length !== 32) throw new Error('Native activation nonce must contain 32 bytes');
-    return { commitPrepared: (value, control) => {
-      const facts = copyPreparedFacts(value);
-      return this.#enqueue(owner.sessionId, async () => {
-        const repository = await this.#repository(owner.sessionId);
-        const assertCurrent = async () => {
-          const state = await this.#assertRunContext(repository, owner);
-          await assertNoRuntimeCancellation(repository, owner.attemptId);
-          assertNativeActivationLive(control);
-          if (!['starting', 'running'].includes(state.run.status) || !['accepted', 'running'].includes(state.command.status)) {
-            throw new Error('Native activation authority no longer permits execution');
-          }
-          return state;
-        };
-        await assertCurrent();
-        return commitNativeActivation({ repository, context: owner, nonce, facts, control, assertCurrent,
-          projectRunning: async (runtimeInstanceId, runVersion, attemptVersion) => {
-            const state = await assertCurrent();
-            if ((state.run.status === 'starting' ? state.run.version + 1 : state.run.version) !== runVersion
-              || (state.attempt.status === 'starting' ? state.attempt.version + 1 : state.attempt.version) !== attemptVersion
-              || (state.attempt.runnerRunId && state.attempt.runnerRunId !== runtimeInstanceId)) {
-              throw new Error('Native activation versions or process were superseded');
-            }
-            const at = new Date().toISOString();
-            if (state.run.status === 'starting') await this.#updateRun(repository,
-              { ...state.run, status: 'running', startedAt: at, version: runVersion });
-            assertNativeActivationLive(control);
-            if (state.attempt.status === 'starting') await this.#updateAttempt(repository,
-              { ...state.attempt, status: 'running', runnerRunId: runtimeInstanceId, version: attemptVersion }, owner.sessionId);
-            assertNativeActivationLive(control);
-            if (state.command.status === 'accepted') await this.#updateCommand(repository,
-              { ...state.command, status: 'running', updatedAt: at });
-          },
-        });
-      });
-    } };
-  }
-
-  createSupervisorFactPort(context: ControlPlaneRunContext, connectionId: string): DurableSupervisorFactPort {
-    const owner = cleanJson(context);
-    if (!connectionId || connectionId.length > 512) throw new Error('Invalid supervisor connection identity');
-    return { commit: (fact, binding, control) => {
-      if (binding.connectionId !== connectionId) return Promise.reject(new Error('Supervisor connection changed'));
-      const record = supervisorFactRecord(fact, binding, control);
-      const identity = fact.value.identity && { ...fact.value.identity };
-      const cleanup = fact.case === 'attemptProcessExited' || fact.case === 'attemptProcessReaped';
-      return this.#enqueue(owner.sessionId, async () => {
-        assertSupervisorCommitLive(control);
-        const repository = await this.#repository(owner.sessionId);
-        // Physical cleanup remains recordable after logical terminalization;
-        // it cannot authorize work, alter routing, or reactivate a lease.
-        const state = await this.#assertRunContext(repository, owner, { requireActiveLease: !cleanup });
-        if (!identity || identity.sessionId !== owner.sessionId || identity.commandId !== owner.commandId
-          || identity.agentRunId !== owner.agentRunId || identity.attemptId !== owner.attemptId
-          || identity.executorOwnerId !== owner.executorOwnerId || identity.fencingEpoch !== BigInt(owner.fencingEpoch)
-          || identity.correlationId !== owner.correlationId || identity.rootAgentRunId !== state.command.agentRunId
-          || (identity.parentAgentRunId ?? undefined) !== state.run.parentAgentRunId
-          || (identity.ownerAgentRunId ?? undefined) !== state.run.ownerAgentRunId) {
-          throw new Error('Supervisor fact differs from its durable attempt authority');
-        }
-        if (!cleanup) await assertNoRuntimeCancellation(repository, owner.attemptId);
-        await commitSupervisorFact(repository, owner, record, control);
-      });
-    } };
-  }
-
-  /** Runs in the product writer queue and reads through the native OS lock.
-   * Cleanup can be reconciled after expiry, without reviving attempt authority. */
-  reconcileNativeSupervisor(context: ControlPlaneRunContext, native: { rootPath: string; runtimePackage: VerifiedRuntimePackage }) {
-    const owner = cleanJson(context);
-    return this.#enqueue(owner.sessionId, async () => {
-      const repository = await this.#repository(owner.sessionId);
-      const state = await this.#assertRunContext(repository, owner, { requireActiveLease: false });
-      const { supervisorFactId } = await import('./supervisor-fact-ledger.js');
-      const spawned = await repository.get('supervisorFact', supervisorFactId(owner.attemptId, 'attemptProcessSpawned'));
-      if (typeof spawned?.data.connectionId !== 'string') throw new Error('Native recovery lacks durable spawn authority');
-      const { inspectNativeSupervisorLifecycleEvidence } = await import('@mcp/agent-runtime-host');
-      const rootPath = state.run.parentAgentRunId ? await resolveNativeChildSessionRoot(native.rootPath, owner) : native.rootPath;
-      const entry = await inspectNativeSupervisorLifecycleEvidence(native.runtimePackage, { rootPath,
-        connectionId: spawned.data.connectionId, sessionId: owner.sessionId, attemptId: owner.attemptId });
-      if (!entry) throw new Error('Native recovery has no durable physical cleanup evidence');
-      const expectedIdentity = create(agentV1Common.AttemptIdentitySchema, { ...owner, fencingEpoch: BigInt(owner.fencingEpoch),
-        rootAgentRunId: state.command.agentRunId!, parentAgentRunId: state.run.parentAgentRunId, ownerAgentRunId: state.run.ownerAgentRunId });
-      const { commitNativeSupervisorRecovery } = await import('./native-supervisor-recovery.js');
-      return commitNativeSupervisorRecovery(repository, owner, expectedIdentity, entry);
-    });
-  }
-
   async getRuntimeRoute(sessionId: SessionId, attemptId: string): Promise<RuntimeRouteRecord | null> {
     const repository = await this.#repository(sessionId);
     return (await repository.get('runtimeRoute', attemptId))?.data.route as RuntimeRouteRecord | undefined ?? null;
@@ -1373,10 +1057,6 @@ export class FileControlPlaneStore implements FileControlPlaneAuthority {
         const root = await this.#run(repository, command.agentRunId);
         const parentRoute = root?.activeAttemptId ? (await repository.get('runtimeRoute', root.activeAttemptId))?.data.route as RuntimeRouteRecord | undefined : undefined;
         if (!parentRoute || parentRoute.runtimeGeneration !== copy.runtimeGeneration) throw new Error('Child runtime must match its root generation');
-        if (copy.runtimeGeneration === 'rust_v1' && (copy.runtimeBuildId !== parentRoute.runtimeBuildId
-          || copy.runtimeBinarySha256 !== parentRoute.runtimeBinarySha256 || copy.protocolVersion !== parentRoute.protocolVersion)) {
-          throw new Error('Native child must use the same runtime build as its root');
-        }
       }
       return commitRuntimeRoute(repository, context, copy);
     });
@@ -1449,25 +1129,19 @@ export class FileControlPlaneStore implements FileControlPlaneAuthority {
   recoverInterruptedRuns(
     reason = 'process-restart',
     occurredAt = new Date().toISOString(),
-    options: { nativeOnly?: boolean } = {},
   ): Promise<number> {
-    this.#recoveryPromise ??= this.#performRecovery(reason, occurredAt, options.nativeOnly === true);
+    this.#recoveryPromise ??= this.#performRecovery(reason, occurredAt);
     return this.#recoveryPromise;
   }
 
   async #performRecovery(
     reason: string,
     occurredAt: string,
-    nativeOnly: boolean,
   ): Promise<number> {
-    if (nativeOnly && !await this.#nativeRecovery?.isPresent()) return 0;
-    const nativeSessions = nativeOnly ? await this.#nativeRecovery?.sessionIds?.() : undefined;
     await this.#sessions.ensureCatalog();
-    const nativeCandidates: ControlPlaneRunContext[] = [];
     let recovered = 0;
     for (const entry of this.#sessions.catalog.list()) {
       const sessionId = entry.session.id;
-      if (nativeSessions && !nativeSessions.has(sessionId)) continue;
       recovered += await this.#enqueue(sessionId, async () => {
         const repository = await this.#repository(sessionId);
         const runs = (await this.#listAll(repository, 'run'))
@@ -1479,16 +1153,6 @@ export class FileControlPlaneStore implements FileControlPlaneAuthority {
           const attempt = run.activeAttemptId
             ? await this.#attempt(repository, String(run.activeAttemptId))
             : null;
-          const route = attempt ? await repository.get('runtimeRoute', String(run.activeAttemptId)) : null;
-          const native = (route?.data.route as { runtimeGeneration?: string } | undefined)?.runtimeGeneration === 'rust_v1';
-          if (nativeOnly && !native) continue;
-          if (native && attempt && this.#nativeRecovery
-            && !await repository.get('checkpoint', nativeRecordId(attempt.attemptId, 'physical-recovery'))) {
-            const command = await this.#command(repository, String(run.commandId));
-            if (command) nativeCandidates.push({ sessionId: run.sessionId, commandId: run.commandId,
-              agentRunId: run.agentRunId, attemptId: attempt.attemptId, correlationId: command.correlationId,
-              actor: command.actor, executorOwnerId: attempt.executorLease.ownerId, fencingEpoch: attempt.executorLease.fencingEpoch });
-          }
           if (TERMINAL_RUN_STATUSES.has(run.status)) continue;
           if (attempt && attempt.status !== 'terminal') {
             await this.#updateAttempt(
@@ -1536,25 +1200,6 @@ export class FileControlPlaneStore implements FileControlPlaneAuthority {
         }
         return count;
       });
-    }
-    if (nativeCandidates.length && this.#nativeRecovery) {
-      let native: { rootPath: string; runtimePackage: VerifiedRuntimePackage };
-      try { native = await this.#nativeRecovery.load(); }
-      catch (cause) {
-        // Logical fencing already completed. Missing native binaries must not
-        // prevent unrelated legacy commands; native admission verifies its own
-        // package and retained physical ownership still blocks unsafe reuse.
-        console.warn(`[native-recovery] package unavailable; physical ownership retained: ${cause instanceof Error ? cause.message : String(cause)}`);
-        return recovered;
-      }
-      for (const context of nativeCandidates) {
-        try { await this.reconcileNativeSupervisor(context, native); }
-        catch (cause) {
-          // No invented reap receipt, workspace release or automatic restart.
-          // Missing physical evidence stays unresolved for explicit recovery.
-          console.warn(`[native-recovery] physical evidence unresolved attempt=${context.attemptId}: ${cause instanceof Error ? cause.message : String(cause)}`);
-        }
-      }
     }
     return recovered;
   }

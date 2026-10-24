@@ -24,7 +24,6 @@
  *   - `refresh()` rebuilds connections when the operator enables /
  *     disables / edits a server in the admin UI.
  */
-import { createNativeMcpStdioTransport } from './native-mcp-stdio-factory.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { McpServerManager, mcpServerConfigurationKey } from '@mcp/code-agent/tools/mcp-server-manager.js';
 import { McpServerStore, type McpServerConfig } from '@mcp/store/mcp-server-store.js';
@@ -56,7 +55,6 @@ export interface McpExternalSnapshot {
     /** Opaque binding to this exact configuration and tool definition. */
     catalogueRevision?: string;
     transport?: 'stdio' | 'sse' | 'streamable_http';
-    processTreeContained?: boolean;
   }>;
   /** Tier assignment per prefixed tool name. */
   tierMap: Array<[string, ToolTier]>;
@@ -117,9 +115,7 @@ export class McpExternalPool implements IMcpServerManager {
   }) {
     this.dbPath = opts.dbPath;
     this.bearerResolver = opts.bearerResolver ?? null;
-    this.manager = opts.manager ?? new McpServerManager(this.bearerResolver,
-      process.platform === 'win32' && process.arch === 'x64' && (process.env.CODESTUDIO_NATIVE_CODER_DEV === '1' || process.env.CODESTUDIO_NATIVE_MCP_STDIO_DEV === '1')
-        ? createNativeMcpStdioTransport : undefined);
+    this.manager = opts.manager ?? new McpServerManager(this.bearerResolver);
     this.loadEnabledServers = opts.loadEnabledServers ?? (() => {
       const store = new McpServerStore(this.dbPath);
       try {
@@ -397,7 +393,7 @@ export class McpExternalPool implements IMcpServerManager {
         : [...configs].sort((a, b) => b.id.length - a.id.length).find(c => tool.name.startsWith('ext_' + c.id + '__'));
       const definition = createHash('sha256').update(JSON.stringify([
         config ? mcpServerConfigurationKey(config) : '', tool.name, tool.description, tool.parameters,
-        tool.repeatPolicy, tool.mutates, tool.riskLevel, config ? this.manager.isStdioContained?.(config.id) ?? false : false,
+        tool.repeatPolicy, tool.mutates, tool.riskLevel,
       ])).digest('hex');
       const previous = this.toolRevisions.get(tool.name);
       revisions.set(tool.name, previous?.definition === definition ? previous : { definition, revision: randomUUID() });
@@ -424,7 +420,6 @@ export class McpExternalPool implements IMcpServerManager {
           repeatable: t.repeatPolicy === 'pollable' || !!t.repeatable,
           catalogueRevision: this.toolRevisions.get(t.name)!.revision,
           transport: configs.find(config => config.id === serverId)?.transport,
-          processTreeContained: this.manager.isStdioContained?.(serverId) ?? false,
           serverId,
           toolName,
         };

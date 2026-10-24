@@ -20,7 +20,6 @@ import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
 import { withSessionLock } from './sessionLock.js';
-import { resolveNativeInteraction } from './native-interaction-response.js';
 import {
   authorizeQueuedAttachmentReferences,
   prepareQueuedAttachments,
@@ -249,9 +248,6 @@ export function mountCoderInteractionRoutes(
     const body = await c.req.json<AnswerBody>();
     const answer = body.answer ?? '';
     logRouteHit(id, '/answer', { answer_preview: answer.slice(0, 80) });
-    const native = await resolveNativeInteraction({ pool: workerPool, sessions: sessionStore,
-      sessionId: id, interactionId: body.interaction_id, prefix: 'native-tool:', value: JSON.stringify({ answer }) });
-    if (native) return c.json(native.body, native.status);
     try {
       const ok = await workerPool.provideUserInput(id, JSON.stringify({ answer }));
       if (ok) return c.json({ ok: true });
@@ -293,9 +289,6 @@ export function mountCoderInteractionRoutes(
     const answers = body.answers && typeof body.answers === 'object' ? body.answers : {};
     logRouteHit(id, '/decide', { questions: Object.keys(answers).length });
     const payload = JSON.stringify({ answers });
-    const native = await resolveNativeInteraction({ pool: workerPool, sessions: sessionStore,
-      sessionId: id, interactionId: body.interaction_id, prefix: 'native-tool:', value: payload });
-    if (native) return c.json(native.body, native.status);
     try {
       const ok = await workerPool.provideUserInput(id, payload);
       if (ok) return c.json({ ok: true });
@@ -359,9 +352,6 @@ export function mountCoderInteractionRoutes(
       alwaysAllow: !!body.always_allow,
     });
     const askId = approvalAskId(toolUseId);
-    const native = await resolveNativeInteraction({ pool: workerPool, sessions: sessionStore,
-      sessionId: id, interactionId: askId, prefix: 'tool_approval:', value: payload });
-    if (native) return c.json(native.body, native.status);
     try {
       const ok = await workerPool.provideUserInput(id, payload, askId);
       if (ok) return c.json({ ok: true });
@@ -402,9 +392,6 @@ export function mountCoderInteractionRoutes(
     const approved = !aborted && !!body.approved;
     logRouteHit(id, '/plan-response', { approved, aborted, has_feedback: !!body.feedback });
     const envelope = JSON.stringify({ approved, feedback: body.feedback, aborted });
-    const native = await resolveNativeInteraction({ pool: workerPool, sessions: sessionStore,
-      sessionId: id, interactionId: body.interaction_id, prefix: 'native-tool:', value: envelope });
-    if (native) return c.json(native.body, native.status);
     try {
       const ok = await workerPool.provideUserInput(id, envelope);
       if (ok) return c.json({ ok: true });
@@ -518,9 +505,6 @@ export function mountCoderInteractionRoutes(
     const id = parseSessionIdParam(c);
     const body = await c.req.json<TasksResponseBody>();
     const approved = !!body.approved;
-    const native = await resolveNativeInteraction({ pool: workerPool, sessions: sessionStore,
-      sessionId: id, interactionId: body.interaction_id, prefix: 'native-tool:', value: JSON.stringify(body) });
-    if (native) return c.json(native.body, native.status);
     logRouteHit(id, '/tasks-response', {
       approved,
       task_count: body.tasks?.length ?? 0,

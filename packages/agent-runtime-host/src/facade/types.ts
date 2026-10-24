@@ -11,7 +11,6 @@ import type {
   SessionCommand,
   SessionCommandId,
   SessionId,
-  agentV1Runtime,
 } from '@mcp/agent-runtime-contracts';
 import type {
   AgentRuntimeGeneration,
@@ -68,18 +67,7 @@ export interface AgentRunSnapshot {
   stream?: { id: string; durability: 'volatile'; sequenceScope: 'stream' };
 }
 
-export interface PreparedAgentAttempt {
-  spec: AgentRunSpec;
-  run: ResolvedAgentRun;
-  attempt: AgentRunAttempt;
-  authority: AttemptAuthority;
-  wireSpec: agentV1Runtime.ResolvedAttemptSpec;
-  expectedSpecSha256: Uint8Array;
-  routing: RuntimeRouteRequest;
-}
-
-/** An admitted legacy worker has no native workspace/resource lease. Keep its
- * real preparation distinct so it can never pass as a native wire spec. */
+/** Durable admission for a prepared TypeScript worker. */
 export interface PreparedLegacyAgentAttempt {
   run: ResolvedAgentRun;
   attempt: AgentRunAttempt;
@@ -90,7 +78,7 @@ export interface PreparedLegacyAgentAttempt {
   routing: RuntimeRouteRequest;
 }
 
-export type ExecutableAgentAttempt = PreparedAgentAttempt | PreparedLegacyAgentAttempt;
+export type ExecutableAgentAttempt = PreparedLegacyAgentAttempt;
 
 /**
  * Complete authority carried by every launch, cancel and interaction action.

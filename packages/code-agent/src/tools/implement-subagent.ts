@@ -57,12 +57,6 @@ export type SubagentAllowlist =
   | null;
 
 export interface SubagentSpec {
-  /** Persist orchestration identity before an admitted native child can start. */
-  onNativeAdmission?: (reference: string) => Promise<void>;
-  /** Owned native journal reference; never a legacy history seed. */
-  nativeResumeRef?: string;
-  /** Host-only continuation intent; absent for ordinary interrupted resumes. */
-  nativeFollowup?: boolean;
   systemPrompt: string;
   label?: string;
   allowlist: SubagentAllowlist;
@@ -308,8 +302,6 @@ export interface SubagentRunResult {
    * relaunch the child from where it stopped.
    */
   transcript?: AgentMessage[];
-  /** Native children retain their journal under their own durable attempt. */
-  nativeTranscriptRef?: string;
   /** A missing effect ACK forbids automatic fresh retries, even with a summary. */
   effectOutcome?: 'unknown';
   /**
@@ -361,18 +353,7 @@ export interface SubagentParent {
  * `<result>` block, never to the user directly.
  */
 export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): Promise<SubagentRunResult> {
-  if (parent.ctx.runtimeGeneration === 'rust_v1') {
-    parent.ctx.signal?.throwIfAborted(); spec.signal?.throwIfAborted();
-    const executor = parent.ctx.ports?.agentTree;
-    if (!executor || executor.runtimeGeneration !== 'rust_v1'
-      || !parent.ctx.controlPlaneParentAgentRunId
-      || executor.ownerAgentRunId !== parent.ctx.controlPlaneParentAgentRunId) {
-      throw new Error('Native agent tree requires its admitted owner executor; legacy child fallback is forbidden');
-    }
-    const signals = [parent.ctx.signal, spec.signal].filter((signal): signal is AbortSignal => !!signal);
-    return executor.run(parent, { ...spec, signal: signals.length ? AbortSignal.any(signals) : undefined });
-  }
-  if (parent.ctx.ports?.agentTree || spec.nativeResumeRef) throw new Error('A legacy parent cannot invoke a native agent tree');
+
   const sandboxViolations: string[] = [];
   const limits = withDefaultLimits(spec.limits);
   const startedAt = Date.now();
@@ -520,7 +501,6 @@ export async function runSubagent(parent: SubagentParent, spec: SubagentSpec): P
   }
 
   const subContext: ToolContext = {
-    workspaceRuntimeScope: parent.ctx.workspaceRuntimeScope,
     cwd: parent.ctx.cwd,
     projectName: parent.ctx.projectName,
     globalWorkspace: parent.ctx.globalWorkspace,
@@ -1657,8 +1637,6 @@ export function wrapToolForPathScope(
 const DEFAULT_PARALLEL_AGENT_MAX = 4;
 
 export interface ParallelAgentSpec {
-  onNativeAdmission?: SubagentSpec['onNativeAdmission'];
-  nativeResumeRef?: string;
   task: string;
   label: string;
   maxTurns: number;
@@ -1804,14 +1782,12 @@ export async function runParallelAgents(
         label: spec.label,
         allowlist: spec.allowlist ?? allowlist,
         initialMessages: spec.initialMessages ?? [{ role: 'user', content: [{ type: 'text', text: spec.task }] }],
-        nativeResumeRef: spec.nativeResumeRef,
-        onNativeAdmission: spec.onNativeAdmission,
         maxTurns: spec.maxTurns,
         profile: spec.profile,
         provider: spec.provider,
         reasoningEffort: spec.reasoningEffort,
         researchPolicy: spec.researchPolicy,
-        spawnId: parent.ctx.runtimeGeneration === 'rust_v1' && spec.spawnId ? `${spec.spawnId}:slot:${agentIndex}` : spec.spawnId,
+        spawnId: spec.spawnId,
         pushTimeCap: SUBAGENT_TOOL_RESULT_CAP,
         pathScope: spec.pathScope,
         pathScopeMode: spec.pathScopeMode,
@@ -1851,7 +1827,6 @@ export async function runParallelAgents(
         sandboxViolations: runResult.sandboxViolations,
         collected: runResult.collected ?? emptyCollected(),
         transcript: runResult.transcript,
-        nativeTranscriptRef: runResult.nativeTranscriptRef,
         failureDetail: runResult.failureDetail,
         effectOutcome: runResult.effectOutcome,
         label: spec.label,

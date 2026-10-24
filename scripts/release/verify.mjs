@@ -47,7 +47,7 @@ export function runSmokeProbes(root, resourcesDir) {
     !report.harnessError &&
     report.renderer?.ok === true &&
     report.deepLink?.ok === true &&
-    report.indexer?.ok === true && report.apiScripts?.ok === true && report.webContent?.ok === true && report.agentLsp?.ok === true;
+    report.indexer?.ok === true && report.apiScripts?.ok === true && report.webContent?.ok === true;
   return { ok, report };
 }
 
@@ -100,8 +100,6 @@ export function verifyBuild(root, outputDir) {
       detail: r.apiScripts?.ok ? 'QuickJS WASM executes pm.* inside a terminated worker' : (r.apiScripts?.error ?? 'failed') });
     checks.push({ name: 'Web content conversion', ok: r.webContent?.ok === true,
       detail: r.webContent?.ok ? 'HTML converts to markdown in a terminated worker' : (r.webContent?.error ?? 'failed') });
-    checks.push({ name: 'Agent code navigation', ok: r.agentLsp?.ok === true,
-      detail: r.agentLsp?.ok ? 'Packaged TS detects a type error; native Jobs reap warm close and eight bootstrap cancellation timings' : (r.agentLsp?.error ?? 'failed') });
   }
 
   return { ok: checks.every((c) => c.ok), checks };

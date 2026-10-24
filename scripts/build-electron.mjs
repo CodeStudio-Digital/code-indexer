@@ -19,8 +19,6 @@
  *   --skip-tsc            Skip the typescript compile step (use when
  *                         caller already ran `pnpm build`).
  *   --skip-dashboard      Skip the vite dashboard build.
- *   --reuse-native-runtime Verify and reuse the already built native package,
- *                         allowing scale tests to keep its binaries open.
  *   --target=<targets>    Pass-through to electron-builder
  *                         (e.g. --target=nsis, --target=dir).
  *   --output=<directory>  Keep a candidate separate from a previously certified build.
@@ -47,7 +45,6 @@ const argv_get = (name) => {
 
 const skipTsc = flag('--skip-tsc');
 const skipDashboard = flag('--skip-dashboard');
-const reuseNativeRuntime = flag('--reuse-native-runtime');
 const noPackage = flag('--no-package');
 const requireSigning = flag('--require-signing');
 const target = argv_get('--target');
@@ -137,6 +134,7 @@ if (!skipTsc) {
 
 // 2. Vite dashboard (parallel-safe with esbuild because separate outputs,
 //    but we run after tsc to keep stdio readable).
+run('node', ['scripts/prune-build-output.mjs']);
 if (!skipDashboard) {
   runTool('vite', 'vite', ['build', 'apps/dashboard']);
 }
@@ -175,9 +173,6 @@ await buildPreload();
 // 3d. Bundled provider plugins → dist/bundled-plugins/ (electron-builder ships
 //     it via extraResources → resourcesPath/bundled-plugins; seeded on first boot).
 run('node', ['scripts/build-bundled-plugins.mjs']);
-run('node', reuseNativeRuntime
-  ? ['--import', 'tsx', 'scripts/verify-rust-agent-runtime-package.ts']
-  : ['scripts/package-rust-agent-runtime.mjs']);
 run('node', ['scripts/ensure-electron-script-runtime.mjs']);
 
 if (noPackage) {

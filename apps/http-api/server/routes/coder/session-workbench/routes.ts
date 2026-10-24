@@ -29,6 +29,10 @@ import { getAllKnownToolsMeta } from '@mcp/code-agent/tools/tiers.js';
 import type { ServerDeps } from '../../../deps.js';
 import { getCoderWorkerPool } from '../../../../sse/coderWorkerPoolSingleton.js';
 import {
+  assertSupportedConversationFormat,
+  isRetiredConversationFormatError,
+} from '../../../../retired-conversation-format.js';
+import {
   flushRuntimeEventLogWrites,
   listPersistedRuntimeEventPage,
 } from '../../../../sse/runtime-event-log-storage.js';
@@ -371,8 +375,14 @@ export function mountSessionWorkbenchRoutes(
   app.post('/api/coder/session-workbench/commands', async (c) => {
     try {
       const command = parseSessionWorkbenchCommand(await c.req.json<unknown>());
+      if (command.type === 'duplicate') {
+        await assertSupportedConversationFormat(deps.config.dbPath, command.sessionId);
+      }
       return c.json(validateSessionWorkbenchCommandResult(await commandService().execute(command)));
     } catch (error) {
+      if (isRetiredConversationFormatError(error)) {
+        return c.json({ code: error.code, message: error.message, retryable: false, context: {} }, 409);
+      }
       if (error instanceof SessionWorkbenchResponseValidationError) {
         return c.json({ code: 'invalid_response', message: error.message, retryable: true, context: { path: error.path } }, 500);
       }
@@ -386,8 +396,17 @@ export function mountSessionWorkbenchRoutes(
   app.post('/api/coder/session-workbench/commands/batch', async (c) => {
     try {
       const commands = parseSessionWorkbenchCommandBatch(await c.req.json<unknown>());
+      // Preflight the whole batch before any command can mutate a conversation.
+      for (const command of commands) {
+        if (command.type === 'duplicate') {
+          await assertSupportedConversationFormat(deps.config.dbPath, command.sessionId);
+        }
+      }
       return c.json(validateSessionWorkbenchCommandResults(await commandService().batch(commands)));
     } catch (error) {
+      if (isRetiredConversationFormatError(error)) {
+        return c.json({ code: error.code, message: error.message, retryable: false, context: {} }, 409);
+      }
       if (error instanceof SessionWorkbenchResponseValidationError) {
         return c.json({ code: 'invalid_response', message: error.message, retryable: true, context: { path: error.path } }, 500);
       }

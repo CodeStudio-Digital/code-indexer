@@ -52,7 +52,6 @@ export interface ResumableAgentState {
    * from RAM, so a big all-completed group no longer pins tens of MB.
    */
   transcript?: AgentMessage[];
-  nativeTranscriptRef?: string;
   /**
    * Set when this agent's transcript was spilled to a bundle entity instead of
    * kept in `transcript`. read_agent_transcript falls back to it. Only
@@ -227,7 +226,7 @@ async function hydrateSpillPaths(
 ): Promise<void> {
   if (typeof store?.findSubagentTranscript !== 'function') return;
   await Promise.all(group.agents.map(async (agent) => {
-    if (agent.transcript || agent.spillPath || agent.nativeTranscriptRef) return;
+    if (agent.transcript || agent.spillPath) return;
     agent.spillPath = (
       await store.findSubagentTranscript!(
         group.sessionId,
@@ -285,8 +284,6 @@ function parsePersistedGroup(
     }
     for (const agent of group.agents) {
       if (agent.effectOutcome !== undefined && agent.effectOutcome !== 'unknown') return undefined;
-      if (agent.nativeTranscriptRef !== undefined && (typeof agent.nativeTranscriptRef !== 'string'
-        || !/^native-child-journal:[a-f\d-]{36}:[a-f\d-]{36}:[a-f\d-]{36}:[a-f\d-]{36}$/i.test(agent.nativeTranscriptRef))) return undefined;
       if (agent.transcript) {
         agent.transcript = sanitizeTranscriptForResume(agent.transcript, agent.reason);
         agent.approxBytes = approxBytesOf(agent.transcript);
@@ -321,7 +318,7 @@ async function persistGroup(
     });
     // RAM is bounded by sweep(); resume authority expires through the durable
     // TTL. Keep the redacted roster on disk to locate audit transcripts after
-    // eviction. Deleting it strands both bundle files and native journal refs.
+    // eviction. Deleting it strands bundle files.
     return saved;
   } catch {
     // Memory retention remains available in the current executor.
@@ -662,7 +659,7 @@ export function listResumable(
     for (const a of g.agents) {
       // Completed agents may carry a transcript (observability retention) —
       // they are readable, never resumable.
-      if ((a.transcript || a.nativeTranscriptRef) && a.reason !== 'completed') {
+      if ((a.transcript) && a.reason !== 'completed') {
         out.push({ spawnId: g.spawnId, agentIndex: a.agentIndex, label: a.label, reason: a.reason, attempt: a.attempt });
       }
     }
@@ -714,7 +711,7 @@ export async function listReadableGroups(
         label: a.label,
         reason: a.reason,
         // A spilled (completed) transcript is still readable via its pointer.
-        hasTranscript: (a.transcript?.length ?? 0) > 0 || !!a.spillPath || !!a.nativeTranscriptRef,
+        hasTranscript: (a.transcript?.length ?? 0) > 0 || !!a.spillPath,
       })),
     });
   }

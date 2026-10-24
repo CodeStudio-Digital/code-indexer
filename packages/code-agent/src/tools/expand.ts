@@ -122,11 +122,9 @@ export function buildExpandTools(
     },
     handler: async (args, ctx): Promise<ToolResult> => {
       ctx.signal?.throwIfAborted();
-      const native = ctx.ports?.discovery;
-      native?.assertCurrent();
       const tier = String(args.tier ?? '').trim() as ToolTier;
       const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
-      if (!native && !validTiers.has(tier) && options?.beforeExpand) {
+      if (!validTiers.has(tier) && options?.beforeExpand) {
         try {
           await options.beforeExpand(tier);
         } catch (e) {
@@ -142,13 +140,7 @@ export function buildExpandTools(
         return err("Bootstrap tier is always active — no need to expand to it.");
       }
       ctx.signal?.throwIfAborted();
-      if (native) {
-        native.assertCurrent();
-        const names = options?.toolNamesForTier?.(tier) ?? [];
-        if (!names.length) return err(`Tier '${tier}' has no capabilities in this attempt snapshot.`);
-        if (names.some(name => !native.visibleToolNames.has(name))) return err(`Tier '${tier}' contains capabilities outside the provider snapshot. Start a new attempt with the required capability profile.`);
-        return ok(`Tier '${tier}' is already visible in this attempt (${names.length} tools). No permissions or catalog membership changed.`);
-      }
+
       const runner = ctx.runner;
       if (!runner || typeof (runner as unknown as { promoteTier?: unknown }).promoteTier !== 'function') {
         return err('expand_toolset requires a runner that supports tier promotion.');

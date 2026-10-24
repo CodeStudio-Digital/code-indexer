@@ -205,7 +205,7 @@ export class ToolRegistry {
           )
         : await tool.handler(finalArgs, invocationContext);
       };
-      const result = ctx.workspaceRuntimeScope ? await ctx.workspaceRuntimeScope.invoke(tool, invoke) : await invoke();
+      const result = await invoke();
       notify(result);
       if (result.effectOutcome === 'unknown') ctx.toolCallLedger?.markOutcomeUnknown(name);
       if (ctx.toolCallLedger?.outcomeUnknownTool && result.effectOutcome !== 'unknown') {

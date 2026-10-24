@@ -142,7 +142,6 @@ export function toRetentionAgent(
     usage: ChatUsage;
     finalText: string;
     transcript?: AgentMessage[];
-    nativeTranscriptRef?: string;
     failureDetail?: string;
     toolCallCount?: number;
   },
@@ -164,7 +163,6 @@ export function toRetentionAgent(
     usage: result.usage,
     toolCallCount: result.toolCallCount ?? 0,
     transcript: result.transcript,
-    nativeTranscriptRef: result.nativeTranscriptRef,
     finalText: result.finalText,
     failureDetail: result.failureDetail,
   };

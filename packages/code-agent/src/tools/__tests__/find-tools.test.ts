@@ -30,21 +30,6 @@ function tool(name: string, description: string, opts?: Partial<CoderTool>): Cod
   };
 }
 
-it('searches a sealed native catalog without refreshing or promoting an excluded tool', async () => {
-  const registry = new ToolRegistry();
-  registry.register(tool('read_file', 'Read a file'));
-  registry.register(tool('spawn_agent', 'Spawn an agent'));
-  registry.seal();
-  const beforeSearch = vi.fn(), promoteTool = vi.fn();
-  const find = buildFindToolsTool(registry, undefined, { beforeSearch });
-  const ctx = { runner: { promoteTool }, ports: { discovery: { capabilitySetDigest: 'a'.repeat(64),
-    visibleToolNames: new Set(['read_file']), eligibleCapabilityIds: new Set(['cap:native:read_file']), assertCurrent() {} } } };
-  const result = await find.handler({ query: 'spawn_agent' }, ctx as never);
-  expect(result.content).toContain('No tools matched');
-  expect(beforeSearch).not.toHaveBeenCalled(); expect(promoteTool).not.toHaveBeenCalled();
-  expect((await find.handler({ query: 'x'.repeat(2001) }, ctx as never)).isError).toBe(true);
-});
-
 function buildRegistry(): ToolRegistry {
   const r = new ToolRegistry();
   // Productlike fixture — names + descriptions match the real tool bodies.

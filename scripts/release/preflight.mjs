@@ -4,42 +4,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-
-/** Where rustup keeps toolchains when `~/.cargo/bin` shims are missing. */
-function rustupCargoCandidates() {
-  const toolchains = join(homedir(), '.rustup', 'toolchains');
-  if (!existsSync(toolchains)) return [];
-  return readdirSync(toolchains)
-    .map((name) => join(toolchains, name, 'bin', 'cargo.exe'))
-    .filter((p) => existsSync(p));
-}
-
-/**
- * `scripts/package-rust-agent-runtime.mjs` shells out to `cargo`. A rustup
- * install whose `~/.cargo/bin` shims are missing (or that was never added to
- * PATH) leaves the toolchain on disk but `cargo` unresolvable — the build then
- * dies late, after tsc+vite+plugins have already run. The packaging script
- * honours `process.env.CARGO`, so pointing straight at the toolchain binary is
- * enough; nothing has to be installed.
- */
-export function resolveCargo() {
-  const probe = spawnSync('cargo', ['--version'], { shell: true, encoding: 'utf8' });
-  if (probe.status === 0) return { ok: true, path: 'cargo', version: probe.stdout.trim() };
-
-  for (const candidate of rustupCargoCandidates()) {
-    const r = spawnSync(candidate, ['--version'], { encoding: 'utf8' });
-    if (r.status === 0) return { ok: true, path: candidate, version: r.stdout.trim(), viaRustup: true };
-  }
-  return {
-    ok: false,
-    hint:
-      'cargo not found. The Rust agent runtime step needs it.\n' +
-      '       Fix permanently with `rustup toolchain install stable` (recreates ~/.cargo/bin),\n' +
-      '       or pass an explicit path: CARGO=<path-to-cargo.exe> pnpm release',
-  };
-}
 
 /**
  * better-sqlite3 is compiled against ONE ABI at a time. The desktop app needs

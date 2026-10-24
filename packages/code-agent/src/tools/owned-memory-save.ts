@@ -3,7 +3,7 @@ import { err, ok, unknownToolOutcome, type ToolContext, type ToolResult } from '
 import { parseProjectMemoryInput } from '@mcp/shared/memory-write.js';
 
 export async function invokeOwnedMemorySave(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
-  if (!ctx.ports?.memoryMutations) return err('Native memory save requires its owned persistence port.');
+  if (!ctx.ports?.memoryMutations) return err('Memory save requires its owned persistence port.');
   let entry;
   try {
     entry = parseProjectMemoryInput(args); ctx.signal?.throwIfAborted();

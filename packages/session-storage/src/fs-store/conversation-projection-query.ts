@@ -1,5 +1,5 @@
 import type { AgentMessage } from '@mcp/provider-sdk';
-import type { FsCoderMessageRow, FsCoderSession, FsConversationRuntimeOutcome } from './types.js';
+import type { FsCoderMessageRow, FsCoderSession } from './types.js';
 import type { FsSessionGoal } from './operational-types.js';
 
 export type FsConversationProjectionQuery =
@@ -15,9 +15,6 @@ export type FsConversationProjectionQuery =
 export interface FsConversationProjection {
   messages: AgentMessage[];
   rows: FsCoderMessageRow[];
-  runtime_outcome?: FsConversationRuntimeOutcome;
-  nativeGoal?: FsSessionGoal;
-  nativeTasks?: import('../session-state-types.js').TasksState | null;
   usage?: Pick<FsCoderSession, 'total_input_tokens' | 'total_output_tokens' | 'total_cache_read_tokens'
     | 'total_cache_creation_tokens' | 'last_turn_input_tokens'>;
   selection?: {
@@ -83,7 +80,6 @@ export function queryConversationProjection(source: FsConversationProjection,
     }
   }
   return { messages: source.messages.slice(start, end), rows: rows.slice(start, end), usage: source.usage,
-    runtime_outcome: source.runtime_outcome, nativeGoal: source.nativeGoal, nativeTasks: source.nativeTasks,
     selection: { kind: query.kind, nextCursor, maxSeq: rows.at(-1)?.seq ?? 0,
       visibleCount: rows.length - archivedCount, archivedCount } };
 }

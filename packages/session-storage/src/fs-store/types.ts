@@ -260,19 +260,10 @@ export interface FsCoderMessageRow {
   artifact_refs: readonly ArtifactRef[];
 }
 
-export interface FsConversationRuntimeOutcome {
-  runtimeGeneration: 'rust_v1';
-  agentRunId: string;
-  attemptId: string;
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
-  reason?: string;
-}
-
 export interface FsSessionWithMessages {
   session: FsCoderSession;
   messages: AgentMessage[];
   message_rows: FsCoderMessageRow[];
-  runtime_outcome?: FsConversationRuntimeOutcome;
 }
 
 export interface FsMessagePage {

@@ -188,7 +188,6 @@ export interface ReviewFinding {
 }
 
 export interface ReviewResult {
-  nativeTranscriptRef?: string;
   findings: ReviewFinding[];
   /** Raw text the reviewer returned, for debugging. */
   raw: string;
@@ -401,6 +400,5 @@ export async function runReviewSubagent(parent: SubagentParent, input: ReviewInp
     raw: result.finalText,
     parsed: parsed != null,
     usage: result.usage,
-    nativeTranscriptRef: result.nativeTranscriptRef,
   };
 }

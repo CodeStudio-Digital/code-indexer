@@ -54,8 +54,6 @@ export interface WorkflowStepState {
   status: WorkflowStepStatus;
   /** agents_group id of the wave dispatch — links UI lanes + resume registry. */
   groupId?: string;
-  /** Persisted after native admission, before any child provider/tool effect. */
-  nativeTranscriptRef?: string;
   summary?: string;
   error?: string;
   effectOutcome?: 'unknown';
@@ -65,7 +63,7 @@ export interface WorkflowStepState {
 
 export interface WorkflowRecord {
   /** Missing on historical checkpoints means the legacy executor. */
-  runtimeGeneration?: 'legacy_ts' | 'rust_v1';
+  runtimeGeneration?: 'legacy_ts';
   id: string;
   name: string;
   sessionId?: SessionId;

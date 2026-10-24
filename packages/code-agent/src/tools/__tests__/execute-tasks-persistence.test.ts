@@ -124,33 +124,6 @@ describe('execute_tasks persistence bridge (PR-B)', () => {
     expect(store.createTaskRun).not.toHaveBeenCalled(); expect(runSubagent).not.toHaveBeenCalled();
   });
 
-  it('persists native child admission before the child starts work and binds the parent tool identity', async () => {
-    const { tool, ctx, store } = setup([task({ id: 'native-write' })]);
-    ctx.runtimeGeneration = 'rust_v1'; ctx.currentToolUseId = `native-tool:${'a'.repeat(64)}`;
-    ctx.sessionId = SESSION_ID;
-    let payload: string | null = null;
-    Object.assign(store, {
-      loadOrchestrationCheckpointForAudit: async () => payload ? { payload_json: payload } : null,
-      saveOrchestrationCheckpoint: async (input: { payloadJson: string }) => { payload = input.payloadJson; return true; },
-      tryAcquireOrchestrationCheckpoint: async () => 'lease', renewOrchestrationCheckpoint: async () => true,
-      releaseOrchestrationCheckpoint: async () => {},
-    });
-    ctx.ports = { agentTree: { runtimeGeneration: 'rust_v1', ownerAgentRunId: 'owner', run: vi.fn(),
-      reconcile: vi.fn(async () => ({ outcome: 'terminal' as const, stepStatus: 'completed' as const, detail: 'validated' })) } };
-    const reference = 'native-child-journal:' + Array(4).fill('11111111-1111-4111-8111-111111111111').join(':');
-    let admitted = false;
-    store.upsertTaskRunItem.mockImplementation(async input => { if (input.native_transcript_ref) admitted = true; });
-    vi.mocked(runSubagent).mockImplementation(async (_parent, spec) => {
-      expect(admitted).toBe(false); await spec.onNativeAdmission!(reference); expect(admitted).toBe(true);
-      return { reason: 'completed', finalText: 'native confirmed', usage: { input_tokens: 1, output_tokens: 1 }, sandboxViolations: [] };
-    });
-    const result = await tool.handler({}, ctx);
-    expect(result.isError, result.content).toBeFalsy();
-    expect(store.createTaskRun).toHaveBeenCalledWith(expect.objectContaining({ runtime_generation: 'rust_v1',
-      task_plan_sha256: expect.stringMatching(/^[a-f\d]{64}$/), owner_tool_use_id: ctx.currentToolUseId }));
-    expect(store.upsertTaskRunItem).toHaveBeenCalledWith(expect.objectContaining({ native_transcript_ref: reference, status: 'running' }));
-  });
-
   it('createTaskRun fires once with session_id + mode + started_at', async () => {
     vi.mocked(runSubagent).mockResolvedValue({
       reason: 'completed',

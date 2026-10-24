@@ -69,8 +69,6 @@
   "item.CODER_WORKER_POST_RUN_LINGER_MS.label": "Worker post-run linger (ms)",
   "item.CODER_WORKER_TTL_MS.description": "How long an idle coder worker stays alive before eviction. Default 5 minutes.",
   "item.CODER_WORKER_TTL_MS.label": "Worker idle TTL (ms)",
-  "item.CODESTUDIO_NATIVE_CODER_DEV.description": "Opt in to the native Rust Coder on Windows x64 after restarting. Uses your selected provider, tools and settings. Company stays on its current runtime. Disable for new legacy conversations; existing Rust transcripts still require this preview to continue.",
-  "item.CODESTUDIO_NATIVE_CODER_DEV.label": "Rust Coder (Windows preview)",
   "item.MCP_AGENT_WATCHDOG_MS.description": "How long a company session may go with no activity (master idle, no subordinate running) before the dashboard shows a \"stalled\" banner with a manual nudge. Default 300000 (5 min).",
   "item.MCP_AGENT_WATCHDOG_MS.label": "Stall threshold (ms)",
   "item.MCP_AGENT_WATCHDOG_TICK_MS.description": "How often the idle watchdog polls for a stalled session. Default 60000 (60s).",

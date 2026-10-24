@@ -1,7 +1,5 @@
 import type { AgentRunAttemptId } from '@mcp/agent-runtime-contracts';
 import type {
-  RuntimeEligibilityDecision,
-  RuntimeEligibilityInput,
   RuntimeRouteCommit,
   RuntimeRouteRecord,
 } from './types.js';
@@ -13,14 +11,6 @@ import type {
 export interface RuntimeRouteStorePort {
   getByAttemptId(attemptId: AgentRunAttemptId): Promise<RuntimeRouteRecord | undefined>;
   commitIfAbsent(candidate: RuntimeRouteRecord): Promise<RuntimeRouteCommit>;
-}
-
-/**
- * Eligibility implementations may consult build manifests or feature policy,
- * but must not launch runtimes or mutate product state.
- */
-export interface RuntimeEligibilityPort {
-  evaluate(input: RuntimeEligibilityInput): Promise<RuntimeEligibilityDecision>;
 }
 
 export interface RuntimeClockPort {

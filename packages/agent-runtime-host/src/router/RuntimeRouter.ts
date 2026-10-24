@@ -1,22 +1,18 @@
 import type { AgentRunAttemptId } from '@mcp/agent-runtime-contracts';
 import {
   AgentRuntimeHostError,
-  RuntimeIneligibleError,
   RuntimeRouteConflictError,
 } from '../errors.js';
 import type {
   RuntimeClockPort,
-  RuntimeEligibilityPort,
   RuntimeRouteStorePort,
 } from './ports.js';
 import type {
-  RuntimeEligibilityDecision,
   RuntimeIneligibilityReason,
   RuntimeRouteRecord,
   RuntimeRouteRequest,
 } from './types.js';
 import {
-  normalizeEligibilityDecision,
   routeMatchesRequest,
   sameRoute,
   validateRouteRequest,
@@ -30,7 +26,6 @@ const systemClock: RuntimeClockPort = {
 export class RuntimeRouter {
   constructor(
     private readonly store: RuntimeRouteStorePort,
-    private readonly eligibility: RuntimeEligibilityPort,
     private readonly clock: RuntimeClockPort = systemClock,
   ) {}
 
@@ -66,42 +61,7 @@ export class RuntimeRouter {
   }
 
   private async buildCandidate(request: RuntimeRouteRequest): Promise<RuntimeRouteRecord> {
-    if (request.preference === 'legacy_required') {
-      return this.toRecord(request, 'legacy_ts', 'legacy_required', []);
-    }
-
-    const decision = await this.evaluateFailClosed(request);
-    if (decision.eligible) {
-      return this.toRecord(request, 'rust_v1', 'rust_eligible', []);
-    }
-    if (request.preference === 'rust_required') {
-      throw new RuntimeIneligibleError(decision);
-    }
-    return this.toRecord(
-      request,
-      'legacy_ts',
-      'rust_ineligible',
-      decision.reasons,
-    );
-  }
-
-  private async evaluateFailClosed(
-    request: RuntimeRouteRequest,
-  ): Promise<RuntimeEligibilityDecision> {
-    try {
-      return normalizeEligibilityDecision(
-        await this.eligibility.evaluate(request.eligibility),
-      );
-    } catch (error) {
-      return {
-        eligible: false,
-        reasons: [{
-          code: 'eligibility_check_failed',
-          dimension: 'eligibility',
-          detail: error instanceof Error ? error.message : 'Unknown eligibility error',
-        }],
-      };
-    }
+    return this.toRecord(request, 'legacy_ts', 'legacy_required', []);
   }
 
   private toRecord(

@@ -69,8 +69,6 @@
   "item.CODER_WORKER_POST_RUN_LINGER_MS.label": "Linger pós-run do worker (ms)",
   "item.CODER_WORKER_TTL_MS.description": "Quanto tempo um worker coder ocioso fica vivo antes da remoção. Padrão 5 minutos.",
   "item.CODER_WORKER_TTL_MS.label": "TTL de ociosidade do worker (ms)",
-  "item.CODESTUDIO_NATIVE_CODER_DEV.description": "Ativa o Coder nativo em Rust no Windows x64 após reiniciar. Usa o provider, as ferramentas e as configurações escolhidas. Company continua no runtime atual. Desative para novas conversas no legado; conversas já gravadas em Rust precisam desta opção para continuar.",
-  "item.CODESTUDIO_NATIVE_CODER_DEV.label": "Coder Rust (prévia para Windows)",
   "item.MCP_AGENT_WATCHDOG_MS.description": "Quanto tempo uma sessão company pode ficar sem atividade (master ocioso, nenhum subordinado rodando) antes do dashboard mostrar um banner de \"travado\" com um empurrão manual. Padrão 300000 (5 min).",
   "item.MCP_AGENT_WATCHDOG_MS.label": "Limite de stall (ms)",
   "item.MCP_AGENT_WATCHDOG_TICK_MS.description": "Com que frequência o watchdog de ociosidade verifica uma sessão travada. Padrão 60000 (60s).",

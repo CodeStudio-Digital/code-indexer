@@ -26,7 +26,7 @@ export type ScopeResult =
 
 export function resolveToolScope(ctx: ToolContext): ScopeResult {
   if (ctx.ports?.database) {
-    if (ctx.companyContext || ctx.projectId == null) return { ok: false, error: 'Native databases require the owning project scope.' };
+    if (ctx.companyContext || ctx.projectId == null) return { ok: false, error: 'Database tools require the owning project scope.' };
     const connections = ctx.ports.database.listConnections(ctx.projectId).map(conn => ({ conn }));
     return { ok: true, scope: resolveDbScope({ projectId: ctx.projectId, connections }) };
   }

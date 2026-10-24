@@ -1,4 +1,3 @@
-import { bindTaskContext } from '../ports/task-tool-port.js';
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import { ok, err } from '@mcp/code-agent/core/tool.js';
 import { type TodoItem, generateTodoId, effectiveGate } from '@mcp/code-agent/tools/task-list-shared.js';
@@ -120,7 +119,7 @@ function todosSignature(todos: TodoItem[]): string {
 }
 
 function readKey(ctx: ToolContext): object | null {
-  return ((ctx.ports?.tasks ?? ctx.runner) as unknown as object) ?? null;
+  return ((ctx.runner) as unknown as object) ?? null;
 }
 
 /**
@@ -214,7 +213,6 @@ export const todoWrite: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-    ctx = bindTaskContext(ctx, 'todo_write');
     ctx.signal?.throwIfAborted();
     const guard = guardTrackWriteOverApprove(ctx);
     if (guard) return err(guard);
@@ -222,7 +220,7 @@ export const todoWrite: CoderTool = {
     if (!validation.ok) return err(validation.error);
     const todos = validation.todos;
 
-    const runner = (ctx.taskRuntime ?? ctx.runner) as unknown as
+    const runner = (ctx.runner) as unknown as
       | { setTodos?: (t: TodoItem[]) => void | Promise<void>; currentTodos?: TodoItem[] }
       | undefined;
     if (!runner || typeof runner.setTodos !== 'function') {
@@ -363,7 +361,6 @@ export const updateTodo: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-    ctx = bindTaskContext(ctx, 'update_todo');
     ctx.signal?.throwIfAborted();
     const guard = guardTrackWriteOverApprove(ctx);
     if (guard) return err(guard);
@@ -405,7 +402,7 @@ export const updateTodo: CoderTool = {
       patches = [parsed.patch];
     }
 
-    const runner = (ctx.taskRuntime ?? ctx.runner) as unknown as
+    const runner = (ctx.runner) as unknown as
       | { setTodos?: (t: TodoItem[]) => void | Promise<void>; currentTodos?: TodoItem[] }
       | undefined;
     if (!runner || typeof runner.setTodos !== 'function') {

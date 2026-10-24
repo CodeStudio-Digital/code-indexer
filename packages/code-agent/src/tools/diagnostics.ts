@@ -20,7 +20,7 @@ async function localCompiler(root: string, fs: IFilesystemPort, signal?: AbortSi
   }
 }
 
-const missingExecutable = (message: string) => /\bENOENT\b|Native Host executable not found:/.test(message);
+const missingExecutable = (message: string) => /\bENOENT\b/.test(message);
 
 function render(result: ShellExecResult, label: string): ToolResult {
   const body = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();

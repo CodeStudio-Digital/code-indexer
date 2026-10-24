@@ -8,7 +8,7 @@ using System.Text;
 
 // Spawn suspended: no test code runs before the kernel owns its entire tree.
 // The only job handle belongs to this supervisor. Closing it also kills children
-// after a supervisor crash; detached Node/Rust processes cannot opt out.
+// after a supervisor crash; detached child processes cannot opt out.
 public static class TestProcessJob {
     [StructLayout(LayoutKind.Sequential)] struct Limits {
         public long ProcessTime, JobTime; public uint Flags;

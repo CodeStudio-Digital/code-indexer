@@ -140,39 +140,6 @@ afterEach(async () => {
 });
 
 describe('workflow durable checkpoint', () => {
-  it.each(['legacy_ts', 'rust_v1'] as const)('refuses to resume a %s workflow with the other runtime', async runtimeGeneration => {
-    const value = record(); value.runtimeGeneration = runtimeGeneration;
-    await saveWorkflow(sessionId, value, store); await clearWorkflows(sessionId);
-    const reconcile = vi.fn(), run = vi.fn();
-    const ctx = { cwd: projectRoot, projectName: 'fixture', sessionId,
-      runtimeGeneration: runtimeGeneration === 'rust_v1' ? 'legacy_ts' : 'rust_v1', controlPlaneParentAgentRunId: 'owner',
-      ports: { agentTree: { runtimeGeneration: 'rust_v1', ownerAgentRunId: 'owner', run, reconcile, emit() {} } } } as unknown as ToolContext;
-    const tool = buildWorkflowTool({ provider: { name: 'fake', model: 'fake' }, parentTools: [], sessionStore: fsStore } as never);
-    const result = await tool.handler({ resume_workflow_id: value.id, retry_failed: true }, ctx);
-    expect(result.isError).toBe(true); expect(result.content).toContain('original runtime');
-    expect(run).not.toHaveBeenCalled(); expect(reconcile).not.toHaveBeenCalled();
-  });
-
-  it.each(['terminal', 'outcome_unknown'] as const)('reconciles native admission from disk as %s without replaying the child', async outcome => {
-    const value = record(); value.runtimeGeneration = 'rust_v1'; value.steps = [value.steps[1]];
-    value.steps[0].dependsOn = []; value.steps[0].status = 'running'; value.steps[0].groupId = 'owned-wave';
-    value.steps[0].nativeTranscriptRef = `native-child-journal:${sessionId}:${randomUUID()}:${randomUUID()}:${randomUUID()}`;
-    await saveWorkflow(sessionId, value, store); await clearWorkflows(sessionId);
-    const reconcile = vi.fn(async () => ({ outcome, stepStatus: 'completed', reason: 'completed', detail: 'durable proof', summary: 'Recovered child summary' }));
-    const run = vi.fn();
-    const ctx = { cwd: projectRoot, projectName: 'fixture', sessionId, runtimeGeneration: 'rust_v1', controlPlaneParentAgentRunId: 'owner',
-      ports: { agentTree: { runtimeGeneration: 'rust_v1', ownerAgentRunId: 'owner', run, reconcile, emit() {} } } } as unknown as ToolContext;
-    const tool = buildWorkflowTool({ provider: { name: 'fake', model: 'fake' }, parentTools: [], sessionStore: fsStore } as never);
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const result = await tool.handler({ resume_workflow_id: value.id, retry_failed: true }, ctx);
-      expect(result.effectOutcome).toBe(outcome === 'outcome_unknown' ? 'unknown' : undefined);
-      expect(result.content).toContain(outcome === 'terminal' ? 'Recovered child summary' : 'Uncertain effects');
-      await clearWorkflows(sessionId);
-    }
-    expect(run).not.toHaveBeenCalled();
-    expect(reconcile).toHaveBeenCalledWith(value.steps[0].nativeTranscriptRef, { signal: undefined });
-    expect(reconcile).toHaveBeenCalledTimes(outcome === 'terminal' ? 1 : 3);
-  });
 
   it('restores after executor recreation without planning completed steps again', async () => {
     expect(await saveWorkflow(sessionId, record(), store)).toBe(true);

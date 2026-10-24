@@ -5,7 +5,6 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { defaultLocalShellPort, type IShellPort } from '../../ports/shell-port.js';
 import type { ToolContext } from '../../core/tool.js';
 import { createProjectWorktree, enterWorktree, exitWorktree } from '../worktree.js';
-import { prepareNativeWorktree } from '../../runtime/native-worktree.js';
 
 const shell = defaultLocalShellPort();
 let fixture: string; let root: string;
@@ -33,7 +32,8 @@ function context(port = shell) {
 }
 function port(run: IShellPort['run']): IShellPort { return { run, exec: shell.exec.bind(shell), spawn: shell.spawn.bind(shell) }; }
 
-it.each(['legacy', 'native'])('%s rejects a junction before creating any child outside the project', async engine => {
+it('rejects a junction before creating any child outside the project', async () => {
+  const engine = 'typescript';
   const project = join(fixture, `junction-${engine}`);
   const outside = join(fixture, `outside-${engine}`);
   await mkdir(project); await mkdir(outside);
@@ -42,17 +42,10 @@ it.each(['legacy', 'native'])('%s rejects a junction before creating any child o
   const run = vi.fn<IShellPort['run']>(async (_command, args) => ({
     stdout: args[1] === '--show-toplevel' ? canonical : 'true', stderr: '', exitCode: 0, timedOut: false,
   }));
-  const persist = vi.fn();
-  if (engine === 'legacy') {
-    expect(await createProjectWorktree(project, { name: 'escape' }, { shell: port(run) }))
-      .toMatchObject({ ok: false, error: expect.stringContaining('escapes') });
-  } else {
-    await expect(prepareNativeWorktree({ projectRoot: project, requested: { name: 'escape' }, persist }, port(run)))
-      .rejects.toThrow('escapes');
-  }
+  expect(await createProjectWorktree(project, { name: 'escape' }, { shell: port(run) }))
+    .toMatchObject({ ok: false, error: expect.stringContaining('escapes') });
   await expect(stat(join(outside, 'worktrees'))).rejects.toMatchObject({ code: 'ENOENT' });
   expect(run.mock.calls.every(([, args]) => args[0] !== 'worktree')).toBe(true);
-  expect(persist).not.toHaveBeenCalled();
 });
 
 it('creates, scopes and removes a real worktree without changing the main branch', async () => {

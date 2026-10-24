@@ -46,58 +46,7 @@ afterEach(async () => {
 });
 
 describe('FsSessionStore operational state', () => {
-  it('persists native task admission across restart and refuses to replace a child identity', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Native task ownership', provider: 'test', model: 'test' });
-    const runId = randomUUID(), reference = `native-child-journal:${randomUUID()}:${randomUUID()}:${randomUUID()}:${randomUUID()}`;
-    const startedAt = new Date().toISOString();
-    const identity = { runtime_generation: 'rust_v1' as const, task_plan_sha256: 'a'.repeat(64), owner_tool_use_id: `native-tool:${'b'.repeat(64)}` };
-    await store.createTaskRun({ session_id: session.id, run_id: runId, mode: 'auto', started_at: startedAt, ...identity });
-    const item = { session_id: session.id, run_id: runId, task_id: 'write', attempt: 0, wave_idx: 1,
-      parallel_group: null, kind: 'implement' as const, title: 'Write', started_at: startedAt, finished_at: null,
-      status: 'running' as const, tool_call_count: 0, input_tokens: 0, output_tokens: 0,
-      inputs_fingerprint: null, skip_reason: null, error: null, summary: null };
-    await store.upsertTaskRunItem(item);
-    await store.upsertTaskRunItem({ ...item, native_transcript_ref: reference });
-    await restart();
-    expect(await store.getTaskRun(session.id, runId)).toMatchObject(identity);
-    expect((await store.listTaskRunItems(session.id, runId))[0]).toMatchObject({ status: 'running', native_transcript_ref: reference });
-    await store.upsertTaskRunItem({ ...item, status: 'done', summary: 'confirmed', finished_at: new Date().toISOString() });
-    await expect(store.upsertTaskRunItem({ ...item, native_transcript_ref: reference.replace(/:[^:]+$/, ':' + randomUUID()) }))
-      .rejects.toThrow('already owns a different native child');
-    await restart();
-    expect((await store.listTaskRunItems(session.id, runId))[0]).toMatchObject({ status: 'done', native_transcript_ref: reference });
-  });
 
-  it('rejects native children attached to a legacy task run and incomplete native admission', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Generation', provider: 'test', model: 'test' });
-    const runId = randomUUID(), startedAt = new Date().toISOString();
-    await expect(store.createTaskRun({ session_id: session.id, run_id: runId, mode: 'auto', started_at: startedAt, runtime_generation: 'rust_v1' }))
-      .rejects.toThrow('plan digest');
-    await store.createTaskRun({ session_id: session.id, run_id: runId, mode: 'auto', started_at: startedAt });
-    await expect(store.upsertTaskRunItem({ session_id: session.id, run_id: runId, task_id: 'write', attempt: 0, wave_idx: 1,
-      parallel_group: null, kind: 'implement', title: 'Write', started_at: startedAt, finished_at: null,
-      status: 'running', tool_call_count: 0, input_tokens: 0, output_tokens: 0, inputs_fingerprint: null,
-      skip_reason: null, error: null, summary: null,
-      native_transcript_ref: `native-child-journal:${randomUUID()}:${randomUUID()}:${randomUUID()}:${randomUUID()}` }))
-      .rejects.toThrow('legacy or absent run');
-    expect(await store.listTaskRunItems(session.id, runId)).toEqual([]);
-  });
-
-  it('uses the native task projection and never resurrects a cleared legacy board', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Tasks', provider: 'test', model: 'test' });
-    const legacy = { gate: 'track' as const, summary: 'Legacy board', tasks: [], approved: true, execution_mode: null, current_task_id: null };
-    await store.recordTasks({ session_id: session.id, tool_use_id: 'legacy-tasks', state: legacy });
-    let nativeTasks: typeof legacy | null | undefined;
-    store.setConversationProjectionLoader(async () => ({ messages: [], rows: [], nativeTasks }));
-    expect(await store.getTasksState(session.id)).toEqual(legacy);
-    nativeTasks = { ...legacy, summary: 'Native board' };
-    expect(await store.getTasksState(session.id)).toEqual(nativeTasks);
-    nativeTasks = null;
-    expect(await store.getTasksState(session.id)).toBeNull();
-    await restart();
-    store.setConversationProjectionLoader(async () => ({ messages: [], rows: [], nativeTasks: null }));
-    expect(await store.getTasksState(session.id)).toBeNull();
-  });
   it('serializes note upserts by title and preserves idempotency after reopening', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Notes', provider: 'test', model: 'test' });
     const writes = await Promise.all(Array.from({ length: 8 }, (_, index) => store.rememberMemory(session.id, {
@@ -181,86 +130,6 @@ describe('FsSessionStore operational state', () => {
     expect((await store.recallInvestigationsByIds(session.id, [second.id, first.id])).map(row => row.id)).toEqual([second.id, first.id]);
     await expect(store.recallInvestigations(session.id, 'first', 1)).rejects.toThrow();
     await expect(store.recallInvestigationsByIds(session.id, [first.id], 1, AbortSignal.abort())).rejects.toThrow();
-  });
-  it('reads a native goal through a bounded projection without replaying the legacy journal', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Native goal', provider: 'test', model: 'test' });
-    const nativeGoal = { id: randomUUID(), text: 'Native state', status: 'complete' as const,
-      budget_tokens: null, completion_note: 'verified', created_at: new Date().toISOString(), updated_at: new Date().toISOString(), revision: 2, mutation_seq: 2 };
-    store.setConversationProjectionLoader(async (id, query) => {
-      expect(id).toBe(session.id); expect(query).toEqual({ kind: 'stats', boundary: 0 });
-      return { messages: [], rows: [], nativeGoal };
-    });
-    const read = vi.spyOn(store.repository, 'readConversationSync');
-    expect(await store.getSessionGoal(session.id)).toEqual(nativeGoal);
-    expect(read).not.toHaveBeenCalled();
-    await expect(store.clearSessionGoal(session.id)).rejects.toThrow('native session writer');
-    expect(await store.getSessionGoal(session.id)).toEqual(nativeGoal);
-  });
-  it('requests bounded native windows and statistics instead of transferring the transcript', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Bounded native reader', provider: 'test', model: 'test' });
-    const projection: FsConversationProjection = { messages: [], rows: [] };
-    for (let index = 0; index < 20_000; index++) {
-      const role = index % 2 === 0 ? 'user' : 'assistant';
-      projection.messages.push({ role, content: [{ type: 'text', text: `message ${index + 1}` }] });
-      projection.rows.push({ seq: index + 1, role, is_meta: 0 } as FsConversationProjection['rows'][number]);
-    }
-    const kinds: string[] = [];
-    store.setConversationProjectionLoader(async (id, query) => {
-      expect(id).toBe(session.id);
-      if (!query) throw new Error('Interactive query attempted full history transport');
-      kinds.push(query.kind);
-      const selected = queryConversationProjection(projection, query);
-      expect(Buffer.byteLength(JSON.stringify(selected))).toBeLessThan(2_000);
-      return structuredClone(selected);
-    });
-    expect(await store.getMessageCount(session.id)).toBe(20_000);
-    expect(await store.getArchivedMessageCount(session.id)).toBe(0);
-    expect(await store.maxMessageSeq(session.id)).toBe(20_000);
-    expect((await store.loadSessionMessagesTail(session.id, 2))?.message_rows.map(row => row.seq)).toEqual([19_999, 20_000]);
-    expect((await store.loadMessagesBefore(session.id, 19_999, 2)).message_rows.map(row => row.seq)).toEqual([19_997, 19_998]);
-    expect(await store.previousUserMessageSeq(session.id, 19_999)).toBe(19_997);
-    expect((await store.getMessageBySeq(session.id, 4))?.row.seq).toBe(4);
-    expect(await store.getFirstUserMessageText(session.id)).toBe('message 1');
-    expect(await store.getLatestNonMetaUserMessageText(session.id)).toBe('message 19999');
-    expect(kinds).toEqual(['stats', 'stats', 'stats', 'tail', 'before', 'previousUser', 'message', 'firstUser', 'latestUser']);
-  });
-
-  it('rejects corrupt or oversized worker metadata instead of returning the stale native-session catalog', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Metadata bounds', provider: 'test', model: 'test' });
-    const reader = openStore();
-    try {
-      await reader.getSession(session.id);
-      reader.setConversationProjectionLoader(async () => ({ messages: [], rows: [] }));
-      const location = (await store.getSessionLocation(session.id))!;
-      await writeFile(join(location.bundle_path, 'state.json'), JSON.stringify({ schema_version: 999 }));
-      await expect(reader.loadSessionWithMessages(session.id)).rejects.toThrow('identity or schema');
-      await writeFile(join(location.bundle_path, 'state.json'), Buffer.alloc(8 * 1024 * 1024 + 1, 32));
-      await expect(reader.loadSessionWithMessages(session.id)).rejects.toThrow('metadata bound');
-    } finally { await reader.close(); }
-  });
-
-  it('refreshes worker-owned metadata while reading a native transcript without a writer or synchronous metadata reads', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Native metadata', provider: 'test', model: 'test' });
-    const reader = openStore();
-    try {
-      expect((await reader.getSession(session.id))?.worktree_path).toBeNull();
-      reader.setConversationProjectionLoader(async () => ({ messages: [], rows: [], usage: {
-        total_input_tokens: 12, total_output_tokens: 4, total_cache_read_tokens: 0,
-        total_cache_creation_tokens: 0, last_turn_input_tokens: 12,
-      } }));
-      const syncSession = vi.spyOn(reader.repository, 'readSessionSync');
-      const syncState = vi.spyOn(reader.repository, 'readStateSync');
-      const journal = vi.spyOn(reader.repository, 'readConversation');
-      const tree = join(projectRoot, '.mcp-indexer/worktrees/owned');
-      await store.setSessionWorktree(session.id, tree);
-      await store.setSessionToolPermissionMode(session.id, 'ask');
-      const result = await reader.loadSessionWithMessages(session.id);
-      expect(result?.session).toMatchObject({ worktree_path: tree, tool_permission_mode: 'ask', total_input_tokens: 12 });
-      expect((await reader.getSession(session.id))?.worktree_path).toBe(tree);
-      expect(syncSession).not.toHaveBeenCalled();
-      expect(syncState).not.toHaveBeenCalled();
-      expect(journal).not.toHaveBeenCalled();
-    } finally { await reader.close(); }
   });
 
   it('keeps read projections lease-free while another store owns the writer', async () => {

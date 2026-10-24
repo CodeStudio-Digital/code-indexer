@@ -1,4 +1,3 @@
-import { authorizeNativeMcpDispatch } from '../native-mcp-dispatch.js';
 import { registerWorkerMcpCalls } from './worker-mcp-calls.js';
 /**
  * Pool of worker-backed coder runs (P17).
@@ -38,28 +37,16 @@ import type { AgentId } from '@mcp/code-agent/agents/index.js';
 import type { ToolOutputCapLevel } from '@mcp/code-agent/core/runner/output-caps.js';
 import type { DocSearchBackend } from '@mcp/code-agent/tools/rag-search-docs.js';
 import { registerWorkerPreviewCalls } from './worker-preview-calls.js';
-import { nativeApplicationTarget, resolveNativeApplicationOwner } from './native-application-owner.js';
-import { registerWorkerNativeMemoryCalls } from './worker-native-memory-calls.js';
-import { registerWorkerNativeExportCalls } from './worker-native-export-calls.js';
-import { registerWorkerNativeIndexCalls } from './worker-native-index-calls.js';
 import { registerWorkerAgentReadCalls, type OwnedAgentReadService } from './worker-agent-read-calls.js';
-import { registerWorkerNativeChildHistory } from './worker-native-child-history.js';
 import { registerWorkerDiagramRender } from './worker-diagram-render.js';
 import { registerWorkerBrowserCalls } from './worker-browser-calls.js';
 import { closePreviewWindow, closePreviewSession } from './closeCoderPreview.js';
 import { admitWorkerAttempt } from './coder-attempt-bridge.js';
 import { activateCoderRuntimeFacade } from './coder-runtime-facade.js';
-import { nativeCoderDevelopmentConfig, nativeCoderWorkerHandle } from './native-coder-worker-handle.js';
-import { dispatchNativeAuthority, type NativeAuthorityOperation } from '../workers/native-authority-bridge.js';
-import { admitNativeWorktreeContinuation } from '../native-worktree-continuation-admission.js';
-import type { NativeCoderDevelopmentConfig } from '../workers/native-coder-execution.js';
-import type { NativeHistoryProjection } from '../native-history-projection.js';
-import type { FsConversationProjectionQuery } from '@mcp/session-storage/fs-store/index.js';
 import { CoderStartupUncertainError, isCoderInteractionNotPendingError } from './coder-runtime-errors.js';
+import { assertSupportedConversationFormat } from '../retired-conversation-format.js';
 import type { AgentRunHandleApi } from '@mcp/agent-runtime-host';
 import { readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
-import { nativeRuntimePaths } from '../native-runtime-paths.js';
 import { notifyBuilderRunEnded } from './builder-checkpoint.js';
 import type { IVisionDescriber, VisionDescribeRequest } from '@mcp/code-agent/core/vision-describer.js';
 import type { DocsResearchBridge } from '@mcp/docs-agent/bridges/docs-bridge.js';
@@ -78,7 +65,6 @@ import { registerDocsResearchRpcHandlers } from '../workers/docs-research-rpc.js
 import { createHash, randomUUID } from 'node:crypto';
 import {
   classifyCoderTerminalOutcome,
-  isTerminalAgentRunStatus,
   normalizeCoderTerminalSignal,
   type ControlPlaneEventType,
   type ResolvedRuntimePolicyV1,
@@ -381,8 +367,6 @@ interface PoolEntry {
   runtimeHandle?: AgentRunHandleApi;
   runtimeAdmission?: { hash: string; result: ReturnType<typeof admitWorkerAttempt> };
   runtimeCancellationRequested?: boolean;
-  nativeDevelopment?: NativeCoderDevelopmentConfig;
-  nativeWorkspaceTransitions?: Map<string, Promise<ControlPlaneRunContext>>;
   workerClosed: Promise<void>;
   lastTouchedAt: number;
   detachCurrentBusRuntimeLog: () => void;
@@ -606,6 +590,7 @@ export class CoderWorkerPool {
    * Returns the mirrored bus the caller should pump to SSE.
    */
   async runFresh(sessionId: SessionId, opts: RunFreshOpts): Promise<CoderRunBus> {
+    await assertSupportedConversationFormat(this.opts.dbPath, sessionId);
     const { controlPlaneRunContext, ...workerOpts } = opts;
     const runtimePolicy = workerOpts.runtimePolicy ?? this.opts.resolveRuntimePolicy?.();
     let entry: PoolEntry;
@@ -646,7 +631,6 @@ export class CoderWorkerPool {
     entry.controlPlaneRunContext = controlPlaneRunContext ?? null;
     entry.runtimeHandle = undefined;
     entry.runtimeAdmission = undefined;
-    entry.nativeWorkspaceTransitions = new Map();
     entry.runtimeCancellationRequested = false;
     // (B) — mark the run in-progress so the idle sweep keeps hands off
     // until the worker emits its terminal `done`/`error` via the bus
@@ -657,25 +641,12 @@ export class CoderWorkerPool {
     }
     const bridge = entry.host.requireBridge();
     try {
-      entry.nativeDevelopment = await nativeCoderDevelopmentConfig({ context: controlPlaneRunContext, sessionId,
-        workerFile: this.opts.workerFile, dbPath: this.opts.dbPath, projectRoot: entry.sessionContext.projectRoot });
-      if (entry.nativeDevelopment) {
-        const store = this.opts.getControlPlaneStore?.();
-        if (!store) throw new Error('Native product authority is unavailable');
-        entry.runtimeHandle = nativeCoderWorkerHandle({ store, context: entry.nativeDevelopment.context,
-          bridge, bus: entry.bus, assertOwner: () => {
-            if (this.entries.get(sessionId) !== entry || entry.currentRunId !== runId || !entry.runInProgress) {
-              throw new Error('Native worker handle belongs to a retired attempt');
-            }
-          } });
-      }
       await bridge.request('runFresh', {
         ...workerOpts,
         ...(runtimePolicy ? { runtimePolicy } : {}),
         runId,
         controlPlaneParentAgentRunId: controlPlaneRunContext?.agentRunId,
-        controlPlaneAdmissionRequired: controlPlaneRunContext != null && !entry.nativeDevelopment,
-        nativeDevelopment: entry.nativeDevelopment,
+        controlPlaneAdmissionRequired: controlPlaneRunContext != null,
       }, { timeoutMs: 60_000 });
     } catch (err) {
       if (isMutationOutcomeUnknownError(err)) {
@@ -724,6 +695,7 @@ export class CoderWorkerPool {
     operationId = `message:${randomUUID()}`,
     attachments?: CoderAttachment[],
   ): Promise<number> {
+    await assertSupportedConversationFormat(this.opts.dbPath, sessionId);
     const entry = this.entries.get(sessionId);
     if (!entry) throw new Error(`coder-pool: no active run for session ${sessionId}`);
     this.cancelPostRunEvict(entry);
@@ -744,13 +716,6 @@ export class CoderWorkerPool {
       throw new Error(`coder-pool: worker did not persist follow-up message for ${sessionId}`);
     }
     return result.roundMessageId;
-  }
-
-  /** Read through the active native writer. Legacy or idle workers return no projection. */
-  async readNativeHistory(sessionId: string, query?: FsConversationProjectionQuery): Promise<NativeHistoryProjection | undefined> {
-    const entry = this.entries.get(sessionId as SessionId);
-    if (!entry?.nativeDevelopment || this.evictions.has(sessionId as SessionId)) return undefined;
-    return entry.host.requireBridge().request<NativeHistoryProjection | undefined>('native.readHistory', { query });
   }
 
   /**
@@ -1092,6 +1057,7 @@ export class CoderWorkerPool {
     if (!spawnId || spawnId.length > 1024 || typeof agentRef === 'string' && agentRef.length > 1024) {
       return { ok: false, reason: 'invalid_reference' };
     }
+    await assertSupportedConversationFormat(this.opts.dbPath, sessionId);
     const entry = await this.ensureEntry(sessionId);
     this.cancelPostRunEvict(entry); entry.lastTouchedAt = Date.now();
     try {
@@ -1236,9 +1202,8 @@ export class CoderWorkerPool {
         {},
         { timeoutMs: 15_000 },
       );
-      // The native owner still needs its authority while cancellation commits
-      // the terminal receipt and drains physical effects. Revoke only after
-      // that acknowledged barrier; a timeout must leave recovery authority intact.
+      // Retain run authority until the worker acknowledges writer release.
+      // A timeout must leave recovery authority intact.
       this.stopControlPlaneLeaseRenewal(entry);
       await terminalizeLocalCoderRun(
         this.opts.getControlPlaneStore?.(),
@@ -1442,8 +1407,6 @@ export class CoderWorkerPool {
         sessionId,
         sessionContext,
         dbPath: this.opts.dbPath,
-        nativeChildHistory: { ...nativeRuntimePaths(resolve(dirname(this.opts.workerFile), '../../..')),
-          sessionRoot: join(dirname(this.opts.dbPath), 'native-sessions') },
         // Dev bootstrap reads this to dynamic-import the real TS entry
         // after registering tsx. Absent in production builds.
         tsEntry: this.opts.workerDevTsEntry,
@@ -1677,53 +1640,6 @@ export class CoderWorkerPool {
     const bridge = host.requireBridge();
     // ─── Wire RPC bridges from worker → main ─────────────────────────
     const offAttemptAdmission = bridge.handle('attempt.admit', (payload) => this.admitRuntimeAttempt(sessionId, payload));
-    const offNativeWorkspaceTransition = bridge.handle('native.workspaceTransition', payload => {
-      const request = payload as { runId?: unknown; sourceAttemptId?: string; transitionId?: string };
-      const owner = this.entries.get(sessionId);
-      const store = this.opts.getControlPlaneStore?.();
-      if (!owner?.nativeDevelopment || !store || typeof request.transitionId !== 'string'
-        || !/^[a-f0-9]{64}$/.test(request.transitionId) || request.runId !== owner.currentRunId) throw new Error('Native workspace continuation is unavailable');
-      const previous = owner.nativeWorkspaceTransitions?.get(request.transitionId);
-      if (previous) return previous;
-      const config = owner.nativeDevelopment;
-      const assertOwner = () => {
-        if (this.entries.get(sessionId) !== owner || owner.host !== host || !owner.runInProgress
-          || owner.runtimeCancellationRequested || owner.currentRunId !== request.runId
-          || owner.controlPlaneRunContext?.attemptId !== config.context.attemptId
-          || request.sourceAttemptId !== config.context.attemptId) throw new Error('Native workspace transition lost its worker owner');
-      };
-      assertOwner();
-      owner.nativeWorkspaceTransitions ??= new Map();
-      if (owner.nativeWorkspaceTransitions.size >= 8) throw new Error('Native workspace transition bound exceeded');
-      const pending = (async () => {
-        const context = await admitNativeWorktreeContinuation(store, config, request.transitionId!, assertOwner, owner.bus.ctrl.signal);
-        assertOwner();
-        owner.controlPlaneRunContext = context;
-        owner.nativeDevelopment = { ...config, context };
-        owner.runtimeHandle?.dispose();
-        owner.runtimeHandle = nativeCoderWorkerHandle({ store, context, bridge, bus: owner.bus, assertOwner: () => {
-          if (this.entries.get(sessionId) !== owner || !owner.runInProgress || owner.currentRunId !== request.runId
-            || owner.controlPlaneRunContext?.attemptId !== context.attemptId) throw new Error('Native workspace handle was superseded');
-        } });
-        this.startControlPlaneLeaseRenewal(owner, sessionId, owner.currentRunId, context);
-        return context;
-      })();
-      owner.nativeWorkspaceTransitions.set(request.transitionId, pending); return pending;
-    });
-    const offNativeAuthority = bridge.handle('native.authority', (payload) => {
-      const request = payload as { runId?: unknown; agentRunId?: string; operation?: NativeAuthorityOperation } | null;
-      const owner = this.entries.get(sessionId);
-      const store = this.opts.getControlPlaneStore?.();
-      if (!owner?.nativeDevelopment || !store || !request?.operation) throw new Error('Native worker authority is unavailable');
-      const context = owner.nativeDevelopment.context;
-      const assertOwner = () => {
-        if (this.entries.get(sessionId) !== owner || owner.host !== host || !owner.runInProgress
-          || request.runId !== owner.currentRunId || owner.controlPlaneRunContext?.attemptId !== context.attemptId) {
-          throw new Error('Native authority rejected a stale worker');
-        }
-      };
-      return dispatchNativeAuthority({ authority: store, context, agentRunId: request.agentRunId, operation: request.operation, assertOwner });
-    });
     // `rag_search_docs` runs in the worker. Only structural navigation and
     // deep research cross this bridge; the navigation verbs are short SQLite
     // reads and the methods remain optional for compatibility with old hosts.
@@ -1759,7 +1675,7 @@ export class CoderWorkerPool {
     // Preview DevTools — routes to the main-process PreviewWindowService
     // (set by the Electron main via setGlobalPreviewDevtools). Unset in
     // headless → the tool surfaces a friendly "unavailable" error.
-    const rootApplicationOwner = (runId: unknown, closing?: boolean) => {
+    const applicationOwner = (runId: unknown, closing?: boolean) => {
       const owner = this.entries.get(sessionId);
       const assertOwner = () => {
         if (!owner || this.entries.get(sessionId) !== owner || owner.host !== host || runId !== owner.currentRunId
@@ -1768,18 +1684,12 @@ export class CoderWorkerPool {
         }
       };
       assertOwner();
-      return { sessionId, projectId: owner!.sessionContext.projectId, config: owner!.nativeDevelopment,
+      return { sessionId, projectId: owner!.sessionContext.projectId,
         projectRoot: owner!.sessionContext.projectRoot,
-        store: this.opts.getControlPlaneStore?.(), signal: owner!.bus.ctrl.signal, assertOwner };
+        signal: owner!.bus.ctrl.signal, assertOwner };
     };
-    const applicationOwner = (runId: unknown, closing?: boolean, agentRunId?: string) =>
-      resolveNativeApplicationOwner(rootApplicationOwner(runId, closing), this.opts.getControlPlaneStore?.(), agentRunId, closing);
     const offPreviewDevtools = registerWorkerPreviewCalls(bridge, applicationOwner);
-    const offNativeMemory = registerWorkerNativeMemoryCalls(bridge, applicationOwner, () => this.opts.docDeps);
-    const offNativeExport = registerWorkerNativeExportCalls(bridge, applicationOwner, () => this.opts.docDeps?.documentExport);
-    const offNativeIndex = registerWorkerNativeIndexCalls(bridge, applicationOwner, () => this.opts.docDeps?.projectIndex);
     const offAgentReads = registerWorkerAgentReadCalls(bridge, applicationOwner, () => this.opts.docDeps?.agentReads);
-    const offChildHistory = registerWorkerNativeChildHistory(bridge, applicationOwner);
     const offDiagramRender = registerWorkerDiagramRender(bridge, applicationOwner);
     const offResearchBrowser = registerWorkerBrowserCalls(bridge, applicationOwner);
     // Vision fallback — routes image→text describe to the main-process vision
@@ -1803,7 +1713,7 @@ export class CoderWorkerPool {
     const offMemory = registerWorkerMemoryHandlers(bridge, () => this.opts.docDeps);
     // Secret decryption (`enc:`/`plain:` blobs) — safeStorage lives only in
     // the Electron main process; db_* tools in the worker RPC here.
-    const offSecrets = registerWorkerSecretsHandlers(bridge, runId => rootApplicationOwner(runId).assertOwner);
+    const offSecrets = registerWorkerSecretsHandlers(bridge, runId => applicationOwner(runId).assertOwner);
 
     // Agent LSP nav (lsp_definition/references/hover on non-TS files) —
     // routed to the main-process LSP router (external servers + structural
@@ -1843,13 +1753,7 @@ export class CoderWorkerPool {
         }
       };
       assertOwner();
-      if (owner!.nativeDevelopment) {
-        const store = this.opts.getControlPlaneStore?.();
-        if (!store) throw new Error('Native MCP product authority is unavailable');
-        const scoped = await applicationOwner(runId, false, nativeApplicationTarget(request));
-        return authorizeNativeMcpDispatch(request, scoped.config!, store, assertOwner);
-      }
-      if (request.authority !== undefined) throw new Error('Native MCP authority cannot target a legacy run');
+      if (request.authority !== undefined) throw new Error('External MCP request contains unsupported authority');
       return assertOwner;
     });
 
@@ -1918,20 +1822,13 @@ export class CoderWorkerPool {
         markEnded(e.bus, terminal.event, terminal.data);
       }
       const terminalContext = e.controlPlaneRunContext;
-      const nativeTerminalOwner = e.nativeDevelopment !== undefined;
       e.controlPlaneRunContext = null;
       // The bus terminal is already visible to SSE above. The filesystem
       // authority is queued before any following command for this session, then
       // the diagnostic comparison runs after that durable transition.
       void (async () => {
         const authority = this.opts.getControlPlaneStore?.();
-        // Native facade commits its terminal state before publishing bus.end.
-        // Preserve that exact reason/receipt; only startup failures that never
-        // reached the native owner need the main-process fallback transition.
-        const alreadyTerminal = nativeTerminalOwner && authority && terminalContext
-          && isTerminalAgentRunStatus(
-            (await authority.getAttemptState(terminalContext, false)).run.status);
-        if (!alreadyTerminal) await terminalizeLocalCoderRun(authority, terminalContext, terminal);
+        await terminalizeLocalCoderRun(authority, terminalContext, terminal);
         await this.compareShadowTerminalState(
           sessionId,
           terminalContext,
@@ -1985,8 +1882,6 @@ export class CoderWorkerPool {
       controlPlaneLeaseRenewTimer: null,
       detachBusMirror: () => {
         try { offAttemptAdmission(); } catch { /* best-effort */ }
-        try { offNativeAuthority(); } catch { /* best-effort */ }
-        try { offNativeWorkspaceTransition(); } catch { /* best-effort */ }
         try { entry.detachCurrentBusRuntimeLog(); } catch { /* best-effort */ }
         try { offEvent(); } catch { /* best-effort */ }
         try { offEnd(); } catch { /* best-effort */ }
@@ -1995,11 +1890,7 @@ export class CoderWorkerPool {
         try { offDocOutline(); } catch { /* best-effort */ }
         try { offDocsResearch(); } catch { /* best-effort */ }
         try { offPreviewDevtools(); } catch { /* best-effort */ }
-        try { offNativeMemory(); } catch { /* best-effort */ }
-        try { offNativeExport(); } catch { /* best-effort */ }
-        try { offNativeIndex(); } catch { /* best-effort */ }
         try { offAgentReads(); } catch { /* best-effort */ }
-        try { offChildHistory(); } catch { /* best-effort */ }
         try { offDiagramRender(); } catch { /* best-effort */ }
         try { offResearchBrowser(); } catch { /* best-effort */ }
         try { offVisionDescribe(); } catch { /* best-effort */ }

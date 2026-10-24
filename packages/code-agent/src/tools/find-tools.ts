@@ -97,7 +97,6 @@ export function buildFindToolsTool(
     },
     handler: async (args, ctx): Promise<ToolResult> => {
       ctx.signal?.throwIfAborted();
-      ctx.ports?.discovery?.assertCurrent();
       const query = typeof args.query === 'string' ? args.query.trim() : '';
       if (!query) return err('find_tools: `query` is required and must be non-empty.');
       if (query.length > 2_000) return err('find_tools: query exceeds 2000 characters.');
@@ -119,7 +118,7 @@ export function buildFindToolsTool(
         | undefined;
       const active = runner?.activeTiers ?? null;
       const pinned = runner?.pinnedTools;
-      const visibleToolNames = ctx.ports?.discovery?.visibleToolNames ?? runner?.visibleToolNames;
+      const visibleToolNames = runner?.visibleToolNames;
 
       const tokens = tokenizeQuery(query);
       if (tokens.length === 0) {
@@ -139,7 +138,6 @@ export function buildFindToolsTool(
         }
       }
       ctx.signal?.throwIfAborted();
-      ctx.ports?.discovery?.assertCurrent();
 
       // Coverage knob: fraction of distinct query tokens that must hit for
       // the strict pass (default 0.5 — see passesStrict/passesRelaxed).
@@ -156,7 +154,7 @@ export function buildFindToolsTool(
       };
       const all: Scored[] = [];
       for (const t of registry.list()) {
-        if (ctx.ports?.discovery && !visibleToolNames?.has(t.name)) continue;
+
         const score = scoreTool(tokens, getToolText(t));
         if (score.hitCount === 0) continue;
         const tier = getToolTier(t.name, tierOverrides);

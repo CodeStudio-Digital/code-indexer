@@ -33,9 +33,7 @@ function fixture(options: { stream?: string; abortStatus?: number; restoredStatu
     }
     if (url.pathname === '/api/coder/sessions') return Response.json(options.discover ? [{ id, project_id: 7, status: 'idle', metadata }] : []);
     detailPaths.push(url.search);
-    return Response.json({ session: { id, project_id: 7, status: 'idle', metadata },
-      ...(options.restoredStatus ? { runtime_outcome: { runtimeGeneration: 'rust_v1', status: options.restoredStatus,
-        agentRunId: 'run', attemptId: 'attempt', reason: 'durable_terminal' } } : {}),
+    return Response.json({ session: { id, project_id: 7, status: options.restoredStatus ?? 'idle', metadata },
       messages: [{ role: 'assistant', content: [{ type: 'text', text: finalText }] }] });
   });
   vi.stubGlobal('fetch', fetch);
@@ -44,7 +42,7 @@ function fixture(options: { stream?: string; abortStatus?: number; restoredStatu
 
 it.each([
   ['done', 'completed', 'completed'], ['done', 'max_turns', 'interrupted'],
-  ['done', 'aborted', 'cancelled'], ['error', 'native_provider_failed', 'failed'],
+  ['done', 'aborted', 'cancelled'], ['error', 'provider_failed', 'failed'],
 ])('keeps the durable %s/%s classification as %s', async (event, reason, status) => {
   const f = fixture({ stream: `event: text\ndata: {"text":"partial"}\n\nevent: ${event}\ndata: ${JSON.stringify({ reason })}\n\n` });
   expect((await f.manager.start(input)).id).toBe(id);
@@ -133,11 +131,11 @@ it('requests one bounded metadata page instead of complete project session lists
   expect(query.searchParams.get('limit')).toBe('3');
 });
 
-it.each(['completed', 'failed', 'cancelled', 'interrupted', 'running'])('restores durable native %s instead of inferring success from partial text', async status => {
+it.each(['completed', 'failed', 'cancelled', 'interrupted', 'running'])('restores persisted %s instead of inferring success from partial text', async status => {
   const f = fixture({ restoredStatus: status, discover: true });
   expect((await f.manager.get(id)).status).toBe(status);
   const runs = await f.manager.list();
   expect(runs).toHaveLength(1);
   expect(runs[0]!.status).toBe(status);
-  if (status === 'failed') expect(runs[0]!.error).toBe('durable_terminal');
+  if (status === 'failed') expect(runs[0]!.error).toBe('Agent session failed');
 });

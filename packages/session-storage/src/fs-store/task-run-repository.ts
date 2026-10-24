@@ -74,7 +74,6 @@ function runItemRow(
     skip_reason: data.skip_reason,
     error: data.error,
     summary: data.summary,
-    ...(data.native_transcript_ref ? { native_transcript_ref: data.native_transcript_ref } : {}),
   };
 }
 
@@ -86,14 +85,6 @@ export class FsTaskRunRepository {
 
   async create(input: FsCreateTaskRunInput): Promise<void> {
     const runId = taskRunId(input.run_id);
-    const generation = input.runtime_generation;
-    if (generation !== undefined && !['legacy_ts', 'rust_v1'].includes(generation)) throw new Error('Invalid task runtime generation');
-    if (generation === 'rust_v1' && (!/^[a-f\d]{64}$/.test(input.task_plan_sha256 ?? '')
-      || !/^native-tool:[a-f\d]{64}$/.test(input.owner_tool_use_id ?? ''))) {
-      throw new Error('Native task run requires its plan digest and invoking tool identity');
-    }
-    const nativeIdentity = generation === 'rust_v1' ? { runtime_generation: generation,
-      task_plan_sha256: input.task_plan_sha256!, owner_tool_use_id: input.owner_tool_use_id! } : {};
     const operationKey = {
       action: 'create_task_run',
       run_id: runId,
@@ -101,7 +92,6 @@ export class FsTaskRunRepository {
       started_at: input.started_at,
       budget_tokens: input.budget_tokens ?? null,
       budget_usd_cents: input.budget_usd_cents ?? null,
-      ...nativeIdentity,
     };
     await this.entities.create(input.session_id, 'tasks', {
       kind: 'task_run',
@@ -119,7 +109,6 @@ export class FsTaskRunRepository {
         budget_tokens: input.budget_tokens ?? null,
         budget_usd_cents: input.budget_usd_cents ?? null,
         reject_reason: null,
-        ...nativeIdentity,
       } satisfies TaskRunData,
       operation_id: input.operation_id ?? `task-run:${runId}`,
       operation_key: operationKey,
@@ -171,15 +160,6 @@ export class FsTaskRunRepository {
 
   async upsertItem(input: FsUpsertTaskRunItemInput): Promise<void> {
     const runId = taskRunId(input.run_id);
-    if (input.native_transcript_ref !== undefined) {
-      if (!/^native-child-journal:[a-f\d-]{36}:[a-f\d-]{36}:[a-f\d-]{36}:[a-f\d-]{36}$/i.test(input.native_transcript_ref)) {
-        throw new Error('Invalid native task child reference');
-      }
-      const run = await this.envelope(input.session_id, runId);
-      if ((run?.data as unknown as TaskRunData | undefined)?.runtime_generation !== 'rust_v1') {
-        throw new Error('Native task child cannot be attached to a legacy or absent run');
-      }
-    }
     const items = await this.entities.list<JsonValue>(
       input.session_id,
       'tasks',
@@ -213,7 +193,6 @@ export class FsTaskRunRepository {
       skip_reason: input.skip_reason ?? null,
       error: input.error ?? null,
       summary: input.summary ?? null,
-      ...(input.native_transcript_ref ? { native_transcript_ref: input.native_transcript_ref } : {}),
     };
     const operationKey = {
       action: 'upsert_task_run_item',
@@ -225,9 +204,6 @@ export class FsTaskRunRepository {
         'tasks',
         existing.id,
         (current) => {
-          if (current.native_transcript_ref && data.native_transcript_ref && current.native_transcript_ref !== data.native_transcript_ref) {
-            throw new Error('Task attempt already owns a different native child; reconcile before retrying');
-          }
           return ({
           ...data,
           started_at: data.started_at ?? current.started_at,
@@ -237,8 +213,6 @@ export class FsTaskRunRepository {
           skip_reason: data.skip_reason ?? current.skip_reason,
           error: data.error ?? current.error,
           summary: data.summary ?? current.summary,
-          ...(data.native_transcript_ref ?? current.native_transcript_ref
-            ? { native_transcript_ref: data.native_transcript_ref ?? current.native_transcript_ref } : {}),
         }); },
         {
           operation_id: input.operation_id,

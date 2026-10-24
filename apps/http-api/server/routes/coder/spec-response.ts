@@ -7,7 +7,6 @@ import { parseSessionIdParam } from '../_helpers.js';
 import { getCoderWorkerPool } from '../../../sse/coderWorkerPoolSingleton.js';
 import { emitWorkerLog } from '../../../coder-bus.js';
 import { resolveAgentSelection } from '../../../custom-agents.js';
-import { resolveNativeInteraction } from './native-interaction-response.js';
 
 interface SpecResponseBody {
   approved: boolean;
@@ -49,9 +48,6 @@ export function mountCoderSpecResponseRoute(
     });
 
     const payload = JSON.stringify({ approved, requested_changes: requested });
-    const native = await resolveNativeInteraction({ pool: workerPool, sessions: sessionStore,
-      sessionId: id, interactionId: body.interaction_id, prefix: 'native-tool:', value: payload });
-    if (native) return c.json(native.body, native.status);
 
     try {
       const ok = await workerPool.provideUserInput(id, payload);

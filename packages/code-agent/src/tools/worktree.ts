@@ -55,10 +55,7 @@ export const enterWorktree: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-    if (ctx.runtimeGeneration === 'rust_v1') {
-      return ctx.ports?.worktree ? ctx.ports.worktree.request('enter_worktree', args, ctx)
-        : err('Native worktree switching requires the owned root attempt transition port.');
-    }
+
     const runner = ctx.runner as unknown as
       | (RunnerWithCwd & { enterWorktreeScope?: (abs: string) => void })
       | undefined;
@@ -122,10 +119,7 @@ export const exitWorktree: CoderTool = {
     additionalProperties: false,
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-    if (ctx.runtimeGeneration === 'rust_v1') {
-      return ctx.ports?.worktree ? ctx.ports.worktree.request('exit_worktree', args, ctx)
-        : err('Native worktree switching requires the owned root attempt transition port.');
-    }
+
     const runner = ctx.runner as unknown as
       | (RunnerWithCwd & { exitWorktreeScope?: () => void })
       | undefined;

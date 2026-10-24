@@ -1,21 +1,19 @@
 # Ferramentas e tipos de agentes do CodeStudio
 
-Conferido no checkout em 23/10/2026. Escopo: definições do produto; não consulta credenciais nem presume quais agentes personalizados, plugins ou servidores externos estão habilitados no perfil do usuário.
+Inventário de nomes conferido no checkpoint anterior à remoção do runtime, em 23/10/2026. A execução atual é TypeScript; a contagem abaixo é o snapshot funcional dessa data. Escopo: definições do produto; não consulta credenciais nem presume quais agentes personalizados, plugins ou servidores externos estão habilitados no perfil do usuário.
 
 O catálogo principal possui **247 nomes** em **248 definições**. Nomes de compatibilidade e superfícies diferentes são contados separadamente. A definição de `respond_to_inbox` aparece em dois papéis Company, mas conta como um nome.
 
 ## Separação por superfície
 
-| Superfície | Nomes | Habilitados no catálogo Rust | Pendentes nesse catálogo |
-| --- | ---: | ---: | ---: |
-| Coder | 127 | 127 | 0 |
-| Company e App Studio | 77 | 0 | 77 |
-| DocsAgent legado | 6 | 0 | 6 |
-| MCP interno/público | 33 | 31 | 2 |
-| Skills | 4 | 4 | 0 |
-| **Total** | **247** | **162** | **85** |
-
-Dos 162, 161 são de entrada e `record_memo` é exclusivo de filhos autorizados. Habilitação no harness Rust não significa implementação de cada ferramenta em Rust: muitas executam no Host TypeScript/Electron. Company e o DocsAgent independente continuam no runtime legado. Ferramenta pendente de integração nativa não significa ferramenta inexistente no produto.
+| Superfície | Nomes |
+| --- | ---: |
+| Coder | 127 |
+| Company e App Studio | 77 |
+| DocsAgent | 6 |
+| MCP interno/público | 33 |
+| Skills | 4 |
+| **Total** | **247** |
 
 A composição efetivamente disponível depende do preset, perfil de ferramentas, permissões, capacidades registradas e contexto da sessão. Não se fornecem automaticamente as 247 ferramentas a todos os agentes.
 
@@ -192,8 +190,6 @@ A composição efetivamente disponível depende do preset, perfil de ferramentas
 - `preview_*`: janela Electron do aplicativo local, com inspeção por CDP. `browser_*`: navegador de pesquisa para páginas públicas. `web_search`/`web_fetch`: pesquisa e extração sem o mesmo fluxo de interação visual.
 - O prefixo `mcp__` é o nome dentro do Coder; no servidor MCP público, a declaração normalmente usa o nome sem esse prefixo. `list_agents` da árvore do Coder e `mcp__list_agents` do catálogo público têm finalidades diferentes.
 - `docs_*` da Company gerencia documentos de equipe; as seis `docs_*` do DocsAgent controlam seu ciclo de pesquisa; `rag_*` consulta documentação indexada. São superfícies distintas.
-- `docs_deep_research` está habilitada no Coder Rust por uma árvore de pesquisa/revisão nativa. Isso não migra automaticamente o DocsAgent independente nem suas seis ferramentas internas.
-- Os dois nomes MCP pendentes no catálogo nativo aninhado são `mcp__start_agent_run` e `mcp__cancel_agent_run`. A fachada pública MCP já pode encaminhar execuções ao runtime selecionado; isso não autoriza abrir uma árvore de runtime diferente dentro de uma árvore Rust.
 
 ## Tipos de agentes, modos e extensões
 
@@ -260,14 +256,12 @@ Fontes: [presets App Team](../../packages/api-handlers/src/app-studio/app-team-p
 | Caminho | Agentes / funcionamento | Runtime |
 | --- | --- | --- |
 | DocsAgent independente | Planejamento, fontes, busca, leitura, síntese e revisão; usa as seis tools `docs_*` listadas acima | `CoderRunner` TypeScript; rotas DocsAgent, Company e ponte legada |
-| `docs_deep_research` no Coder Rust | Filhos `Documentation research` e `Documentation evidence review`; pesquisa usa `rag_search_docs`, `rag_read_doc`, `rag_doc_outline`; revisão recebe evidências sem tools | Árvore Rust; provider, conta e orçamento herdados do pai |
 
-Fontes: [DocsAgent](../../packages/docs-agent/src/index.ts#L126), [pesquisa/revisão nativa](../../apps/http-api/workers/native-docs-research-port.ts#L60), [corpus nativo](../../apps/http-api/workers/native-docs-research-corpus.ts#L5).
+Fonte: [DocsAgent](../../packages/docs-agent/src/index.ts).
 
 ### Agentes personalizados, plugins e MCP
 
 - **Personalizados:** `custom:<id>`, herdando um dos onze presets e acrescentando prompt, skills, tiers, pins e allowlist. Podem ser criados pelo usuário ou gerenciados por extensão. A quantidade e os nomes dependem do perfil configurado. [Fonte](../../apps/http-api/custom-agents.ts#L10).
-- **Plugin Assistant:** um assistente por plugin habilitado, limitado às ferramentas desse plugin. Executa `runMiniAgent` em TypeScript, com confirmação de mutações. Não é uma árvore Coder Rust. [Fonte](../../packages/api-handlers/src/plugins/assistant.ts#L100).
 - **Agentes via MCP:** o servidor expõe o catálogo built-in/custom e encaminha a execução para sessões do Coder. É outra forma de acesso aos agentes, não um engine independente. [Fonte](../../apps/mcp-server/agent-run-manager.ts#L171).
 
 ### Perfis, modos e runtime: eixos separados
@@ -281,11 +275,11 @@ Fontes: [DocsAgent](../../packages/docs-agent/src/index.ts#L126), [pesquisa/revi
 | Execução de tarefas | `inline`, `all-subagent`, `smart`, `per-task` | Se cada tarefa roda no principal ou em um filho |
 | Tipo de tarefa | `investigate`, `implement`, `verify` | Encaminhamento para os microperfis correspondentes |
 | Profundidade de pesquisa | `quick`, `standard`, `deep`, `exhaustive` | Metas de exploração/síntese; não cria tipos de agente |
-| Geração do runtime | `legacy_ts`, `rust_v1` | Motor que executa a árvore de agentes |
+| Execução | TypeScript | Motor que executa a árvore de agentes |
 
 Fontes: [tiers/perfis](../../packages/code-agent/src/tools/tiers.ts#L565), [modos](../../packages/session-storage/src/session-state-types.ts#L10), [tarefas](../../packages/code-agent/src/tools/execute-tasks/task-run-types.ts#L188), [roteamento](../../packages/agent-runtime-host/src/router/types.ts#L8).
 
-Rust continua como opção do Coder no Windows x64, com reinicialização necessária. Company permanece no runtime legado; a árvore não mistura filhos legados e nativos. Uma conversa já persistida em Rust não pode continuar silenciosamente no legado com a opção desligada. `full` pode nomear um perfil de catálogo ou um microperfil de subagente, dependendo do campo: são configurações diferentes.
+A execução de Coder, Company e DocsAgent usa TypeScript. `full` pode nomear um perfil de catálogo ou um microperfil de subagente, dependendo do campo.
 
 ### Serviços auxiliares de IA: 18 bindings em 12 grupos
 
@@ -303,7 +297,7 @@ Esses bindings escolhem providers para funções específicas. Não correspondem
 | `memory_recall` | `reranker` | Filtrar lembranças pertinentes |
 | `memory_query` | `query_writer` | Gerar consulta de memória |
 | `goal_verification` | `reviewer` | Verificação consultiva da conclusão |
-| `code-agent` | `vision`, `transcription`, `preflight`, `compaction` | Etapas auxiliares do Coder legado; não confundidas com compactação extrativa Rust |
+| `code-agent` | `vision`, `transcription`, `preflight`, `compaction` | Etapas auxiliares do Coder |
 | `editor` | `autocomplete` | Sugestões de código |
 
 Fonte: [catálogo de pipelines](../../packages/services/src/pipelines/catalog.ts#L113). `docs_research` e o verificador de conclusão chegam a loops reais de agentes; isso não vale automaticamente para os demais bindings. `AgentSupervisor` é infraestrutura de heartbeat/recuperação. A antiga interface de pipelines executáveis de agentes foi removida pela [migração 265](../../packages/store/src/migrations/265_remove_agent_pipelines.ts#L6).
@@ -316,9 +310,9 @@ MCPs externos, plugins e agentes personalizados variam conforme configuração e
 
 ## Fontes e conferência
 
-- [Inventário por nome, arquivo e linha](./rust-agent-runtime/tool-inventory.md).
-- [Inventário estruturado e metadados de execução](./rust-agent-runtime/tool-inventory.json).
-- [Catálogo de entrada Rust](../../apps/http-api/workers/native-coder-catalog.ts).
-- [Estado e limites da entrega R12](./rust-agent-runtime/11-coder-windows-release-2026-10-23.md).
+- [Remoção do runtime e localização do checkpoint histórico](./runtime-retirement.md).
+- [Definições das ferramentas Coder](../../packages/code-agent/src/tools/).
+- [Definições MCP](../../apps/mcp-server/tools/).
+
 
 A classificação funcional foi conferida por igualdade de conjuntos: os 247 nomes aparecem exatamente uma vez na seção principal e pertencem à superfície declarada. Nenhum aplicativo ou provider foi iniciado para este levantamento.

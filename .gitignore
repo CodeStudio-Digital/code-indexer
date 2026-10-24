@@ -51,7 +51,6 @@ worker-market/.deploy.*
 debug.log
 
 # Rust agent runtime build output
-native/agent-runtime/target/
 
 # Unity throwaway validation/test harness projects (disposable; the real plugin
 # lives in extensions/unity-scene-analyzer).

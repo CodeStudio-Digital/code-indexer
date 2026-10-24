@@ -59,7 +59,7 @@ export async function runInteractionFixture({ dashboard, post, projectId, root, 
     // An unrelated response must not consume the pending human-response slot.
     const rejected = await dashboard.evaluate(async id => {
       const response = await fetch(`mcp://app/api/coder/sessions/${id}/answer`, { method: 'POST',
-        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer: 'wrong', interaction_id: 'native-tool:wrong' }) });
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ answer: 'wrong', interaction_id: 'unrelated-tool:wrong' }) });
       return { status: response.status, body: await response.json() };
     }, session.id);
     assert.equal(rejected.status, 409); assert.equal(rejected.body.code, 'INTERACTION_NOT_PENDING');
@@ -102,7 +102,8 @@ export async function runInteractionFixture({ dashboard, post, projectId, root, 
       await submit();
       const posts = await dashboard.evaluate(() => window.harnessReviewPosts);
       assert.equal(posts.length, 2); assert.deepEqual(posts[0], posts[1]);
-      assert.match(posts[0].interaction_id, /^native-tool:/);
+      assert.equal(typeof posts[0].interaction_id, 'string');
+      assert(posts[0].interaction_id.length > 0, 'interaction identity missing');
     }
     const outcome = await dashboard.evaluate(async ({ id, scenario }) => {
       const deadline = Date.now() + 60_000;

@@ -2,7 +2,7 @@
 
 ## Product role
 
-CodeStudio Desktop is the local-first IDE product. It owns the Electron application, React workspace, local APIs, agents, indexer, provider runtime, plugin host and native agent runtime.
+CodeStudio Desktop is the local-first IDE product. It owns the Electron application, React workspace, local APIs, agents, indexer, provider runtime, plugin host and TypeScript agent runtime.
 
 ## Layers
 
@@ -15,7 +15,7 @@ CodeStudio Desktop is the local-first IDE product. It owns the Electron applicat
 | Plugin platform | `packages/plugin-sdk`, `packages/plugin-host`, `packages/plugin-market-client`, `packages/podman-core` | Plugin authoring, isolation and Market client |
 | Contracts | `packages/api-bus`, `packages/agent-runtime-contracts`, `packages/company-contracts` | Stable process and package boundaries |
 | Desktop infrastructure | `packages/secret-box`, `packages/vault-crypto`, `packages/db-drivers` | Technical capabilities without product policy |
-| Native runtime | `native/agent-runtime` | Rust protocol, runner and supervisor |
+| Runtime host | `packages/agent-runtime-host` | TypeScript execution, integration and policy |
 
 ## Dependency policy
 

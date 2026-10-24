@@ -1,40 +1,19 @@
 # Session filesystem storage
 
-Status: normative for the filesystem-session cutover.
+Status: current TypeScript filesystem implementation.
 
 ## Authority
 
-SQLite is not a session store. The target authority for physical session
-persistence is the Rust `agent-session-store`: it owns the per-session writer
-lease, assigns the canonical sequence, commits the journal and publishes
-projections, artifacts, checkpoints and metric rollups.
+SQLite is not a session store. `FileSessionRepository` and `SessionWriter`
+in `packages/session-storage` own the filesystem session bundles. The agent
+runs in TypeScript workers and uses these repositories to persist conversations,
+state, artifacts and metrics. Session writes do not require a Rust addon or
+external supervisor.
 
-The TypeScript host remains the semantic control/integration plane: it decides
-commands, policy, provider bindings and user-visible projections, but it does
-not implement filesystem commits after a bundle moves to the Rust storage
-generation. The host invokes the native store through generated, idempotent
-contracts and an opaque in-process Rust bridge owner. Wire requests carry only
-registered `root_id` values and writer handles, never mutable filesystem paths.
-The host only acknowledges a durable transition after receiving the Rust commit
-receipt.
-
-The existing TypeScript `FileSessionRepository` is the transition writer for
-bundles that have not moved yet. A bundle has exactly one persisted
-`storageGeneration` and one writer implementation at a time:
-
-- `typescript_fs_v1` while the legacy filesystem writer is authoritative;
-- `rust_fs_v1` after drain, verification and fenced lease transfer.
-
-Rust agent execution does not require an immediate storage transfer: during
-rollout it may submit commits through the host to the currently selected
-writer. Conversely, legacy execution may use the Rust writer through the same
-neutral facade. Dual-write and concurrent TypeScript/Rust writers are
-forbidden. After `rust_fs_v1`, TypeScript reads through Rust queries or
-immutable published projections and never opens mutable bundle files.
-
-There is no dual-write, SQLite fallback, or legacy-ID lookup after cutover.
-Public session IDs are opaque UUID strings. Sequence numbers order records;
-UUID lexical order never does.
+There is one fenced writer per session. Public session IDs are opaque UUID
+strings; journal sequence numbers order commits. There is no dual-write or
+SQLite fallback for session data. The removed Rust runtime is described only
+in the [retirement record](./runtime-retirement.md).
 
 ## Placement
 
@@ -44,56 +23,28 @@ UUID lexical order never does.
   `<MCP_DATA_DIR>/sessions/global/<uuid>`.
 
 Missing, read-only, symlinked, or otherwise unsafe roots fail closed. A
-project-owned session is never silently redirected to the global data
-directory.
+project-owned session is never silently redirected to the global data directory.
 
-## Bundle
+## Bundle and recovery
 
-Each bundle has `session.json`, `state.json`, `conversation.jsonl`, and
-independent directories for attachments, tool outputs, snapshots, metrics,
-events, checkpoints, chapters, plans, tasks, inputs, memory, subagents,
-Company data, and Sprite data. Para `rust_fs_v1`, `session.json` é o manifesto
-imutável com layout version, session ID, `storageGeneration` e a referência ao
-`storage-authority.jsonl`. Esse authority log é append-only e hash-chained:
-cada transição persiste o próximo lease epoch e o writer ID. A identidade do
-último commit durável vem do journal/receipt, não de atualização in-place do
-manifesto.
+Each bundle contains `session.json`, `state.json`, `conversation.jsonl`,
+and directories for attachments, tool outputs, snapshots, metrics, events,
+checkpoints, chapters, plans, tasks, inputs, memory, subagents and Company data.
 
-`conversation.jsonl` is canonical and append-only. Every line is a complete
-commit containing a monotonic sequence, operation ID, storage generation,
-lease epoch, writer ID, durability class, previous hash, current hash, payload,
-and artifact references. Artifacts are content-addressed and durably committed
-before the line that references them. O receipt idempotente repete essa
-identidade fenced e não pode ser usado por outra sessão, generation ou epoch.
+The conversation journal is append-only and hash-chained. A commit includes
+its sequence, operation identity, request hash, payload and artifact references.
+Artifacts are committed before the records that reference them. An operation
+cannot be replayed with conflicting content. Recovery validates the journal
+and can discard an incomplete final record; it rejects sequence or hash
+corruption.
 
-Mutable projections such as `state.json` are written to a same-directory
-temporary file, fsynced, renamed, and followed by a best-effort directory
-fsync. Recovery truncates only an incomplete final JSONL line and rejects hash
-or sequence divergence.
+Mutable projections use same-directory temporary files and atomic rename.
+The writer lease and persisted fencing counter prevent stale owners from
+committing. Different sessions can make progress independently. Deletion uses
+an explicit trash operation and must not traverse symlinks or junctions.
 
-Session metrics are also filesystem data. Durable usage, cost, lifecycle and
-resource rollups live under `metrics/` in bounded, versioned segments.
-High-frequency samples are coalesced before commit and rotate by byte/time
-quota; session/run IDs belong in journal or traces, never as unbounded metric
-labels. Ephemeral pulse samples, secrets, provider credentials and raw
-environment values are never persisted.
-
-## Concurrency and deletion
-
-One Rust-owned writer queue and one fenced lease exist per session after
-`rust_fs_v1`. Work on separate sessions can proceed independently. A duplicate
-writer or stale lease epoch cannot commit. Runners and the supervisor never
-open the bundle directly; they submit bounded records to the storage owner.
-
-Storage transfer requires: stop admission for the bundle, drain in-flight
-commits, verify journal/hash/projections, advance the persisted lease epoch,
-activate the new writer and only then reopen admission. Failure before
-activation leaves the old generation authoritative; failure after activation
-recovers in Rust and never falls back to a TypeScript writer.
-
-Archiving changes `state.json`. Normal deletion atomically renames the complete
-bundle into a trash directory on the same volume. Permanent deletion is a
-separate explicit operation and must not traverse symlinks or junctions.
+Session metrics are filesystem data. Credentials and raw environment values
+are not session artifacts.
 
 ## SQLite boundary
 
@@ -102,16 +53,13 @@ state, providers, credentials, MCP configuration, plugins, global settings,
 skills, phase profiles, reusable pipelines, Company templates, and project
 memory/snapshots that are not owned by a session.
 
-Coder/Company/App Studio/Sprite runtime data, control-plane execution journals,
-session metrics, tool outputs, and session-scoped overrides are forbidden in
-SQLite. They are owned by the filesystem bundle and, after storage transfer,
-physically committed by Rust. Mixed tables are cleaned through explicit row
-and column dispositions; table names are never inferred by wildcard.
+Coder/Company/App Studio/Sprite runtime data, session metrics, tool outputs,
+and session-scoped overrides belong to the filesystem bundle. Mixed tables
+are cleaned through explicit row and column dispositions.
 
 Application startup refuses a legacy database that still contains session
-state. The only supported cutover is the offline
-`pnpm sessions:fs-migrate` command, followed by complete verification and
-irreversible removal of the source database.
+state. The supported cutover is the offline `pnpm sessions:fs-migrate`
+command, followed by complete verification and removal of the source database.
 
 ## Offline cutover runbook
 

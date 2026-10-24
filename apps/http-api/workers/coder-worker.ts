@@ -50,19 +50,9 @@ import {
   closeSharedCentral,
   getSharedSessionStore,
   runCoder,
-  prepareCoderExecution,
   type RunCoderHandle,
   type CoderAttachment,
 } from '../../../packages/code-agent/src/index.js';
-import type { PreparedCoderHandle } from '../../../packages/code-agent/src/runtime/prepared-coder-execution.js';
-import type { NativeCoderDevelopmentConfig } from './native-coder-execution.js';
-import { executeNativeCoderWithWorkspaceTransitions } from './native-coder-workspace-execution.js';
-import { createNativeChildHistoryReader, type NativeChildHistoryConfig } from './native-child-history-reader.js';
-import { prepareNativeCoderWorkspace } from './native-worktree-preparation.js';
-import { NATIVE_CODER_TOOL_NAMES, isNativeExternalMcpTool } from './native-coder-catalog.js';
-import { installNativeSessionHistory } from '../native-session-history.js';
-import type { FsConversationProjectionQuery } from '@mcp/session-storage/fs-store/index.js';
-import type { InteractionResponse, CancelReason } from '../../../packages/agent-runtime-host/src/index.js';
 import type { AgentId } from '../../../packages/code-agent/src/agents/index.js';
 import type { ResolvedRuntimePolicyV1 } from '../../../packages/agent-runtime-contracts/src/index.js';
 import { sealResolvedRuntimePolicyV1 } from '../../../packages/agent-runtime-host/src/runtime-policy/RuntimePolicySnapshot.js';
@@ -152,7 +142,6 @@ import type {
 interface CoderWorkerData {
   sessionId: SessionId;
   dbPath: string;
-  nativeChildHistory?: NativeChildHistoryConfig;
   sessionContext: {
     sessionId: SessionId;
     projectId: ProjectId | null;
@@ -165,7 +154,7 @@ interface CoderWorkerData {
 const port = parentPort;
 if (!port) throw new Error('coder-worker.ts: not running inside a worker_thread');
 
-const { sessionId, dbPath, sessionContext, nativeChildHistory } = workerData as CoderWorkerData;
+const { sessionId, dbPath, sessionContext } = workerData as CoderWorkerData;
 if (sessionContext.sessionId !== sessionId) {
   throw new Error('coder-worker.ts: session runtime context identity mismatch');
 }
@@ -369,9 +358,6 @@ const operationalSessionStore = getSharedSessionStore(
   sessionContext.writerOwnerId,
 );
 await operationalSessionStore.ensureCatalog();
-const closeNativeHistory = installNativeSessionHistory(operationalSessionStore, dirname(dbPath));
-bridge.handle('native.readHistory', async payload => closeNativeHistory.readLive(sessionContext.sessionId,
-  (payload as { query?: FsConversationProjectionQuery }).query));
 // App Studio operational state is filesystem-only. The worker receives the
 // shared bundle repository/catalog and reads SQLite solely for the essential
 // project-root catalog needed to locate a project-owned bundle.
@@ -420,7 +406,7 @@ interface ActiveRunState {
   runId: number;
   ctrl: AbortController;
   bus: CoderRunBus;
-  handle: RunCoderHandle | PreparedCoderHandle | null;
+  handle: RunCoderHandle | null;
   preparationSettled: Promise<void>;
   completePreparation: () => void;
   runner: CoderRunner | null;
@@ -430,7 +416,6 @@ interface ActiveRunState {
   detachBusEndListener: () => void;
 }
 let activeRun: ActiveRunState | null = null;
-let nativeChildHistoryReader = nativeChildHistory ? createNativeChildHistoryReader(bridge, 0, nativeChildHistory) : undefined;
 let stopping = false;
 let stopPreparation: Promise<void> | null = null;
 
@@ -481,7 +466,7 @@ function prepareWorkerStop(): Promise<void> {
         }
         run.ctrl.abort();
         // A stop can arrive while runFresh is still awaiting context, MCP or
-        // native admission. That work owns this writer even before a handle
+        // attempt admission. That work owns this writer even before a handle
         // exists. Its finally barrier must settle before we close the store.
         await run.preparationSettled;
         const handle = run.handle;
@@ -489,16 +474,10 @@ function prepareWorkerStop(): Promise<void> {
           try { run.runner.abort(); } catch { /* best-effort */ }
         }
         if (handle?.done) {
-          if ('runtimeGeneration' in handle) {
-            // The caller bounds this RPC. Never acknowledge writer release
-            // while the native owner can still commit or hold a workspace lease.
-            await handle.done.catch(() => undefined);
-          } else {
-            await Promise.race([
-              handle.done.catch(() => undefined),
-              new Promise((resolve) => setTimeout(resolve, 4_000)),
-            ]);
-          }
+          await Promise.race([
+            handle.done.catch(() => undefined),
+            new Promise((resolve) => setTimeout(resolve, 4_000)),
+          ]);
         }
       }
     } catch {
@@ -513,7 +492,6 @@ function prepareWorkerStop(): Promise<void> {
     if (location) {
       await sessionStore.repository.closeSession(location);
     }
-    await closeNativeHistory();
     await closeSharedCentral();
   })();
   return stopPreparation;
@@ -802,7 +780,6 @@ process.on('unhandledRejection', (reason) => {
 // ─── RPC handlers ───────────────────────────────────────────────
 
 interface RunFreshPayload {
-  nativeDevelopment?: NativeCoderDevelopmentConfig;
   runId?: number;
   /** Opaque parent AgentRun identity; the full control-plane fence stays main-only. */
   controlPlaneParentAgentRunId?: string;
@@ -864,8 +841,6 @@ bridge.handle('runFresh', async (payload) => {
       : Date.now(),
   );
   activeRun = run;
-  const historyConfig = opts.nativeDevelopment ?? nativeChildHistory;
-  nativeChildHistoryReader = historyConfig ? createNativeChildHistoryReader(bridge, run.runId, historyConfig) : undefined;
   let pluginHost: PluginWorkerHost | null = null;
   try {
     const { toolPlugins, bundles } = listWorkerEnabledPluginRuntime(
@@ -951,39 +926,8 @@ bridge.handle('runFresh', async (payload) => {
       hostTools: getReadyDocsResearchTools(),
       externalMcpManager: new RemoteMcpServerManager(bridge, run.runId),
     };
-    let nativeToolNames = [...NATIVE_CODER_TOOL_NAMES];
-    if (opts.nativeDevelopment) {
-      await coderOptions.externalMcpManager!.connectAll([]);
-      const external = await coderOptions.externalMcpManager!.listAllTools();
-      nativeToolNames.push(...external.tools.filter(isNativeExternalMcpTool).map(tool => tool.name));
-    }
-    const result = opts.nativeDevelopment
-      ? await prepareCoderExecution({ ...coderOptions,
-        allowedToolNames: opts.allowedToolNames?.filter((name) => nativeToolNames.includes(name)) ?? nativeToolNames,
-      }, (prepared) => executeNativeCoderWithWorkspaceTransitions({ prepared, config: opts.nativeDevelopment!, bridge, runId: run.runId,
-        persistWorktree: path => operationalSessionStore.setSessionWorktree(sessionId, path),
-        loadMessages: async () => {
-          const history = await operationalSessionStore.loadAllSessionMessages(sessionId);
-          if (!history) throw new Error('Workspace continuation lost its session history');
-          return history.messages;
-        },
-        bus: run.bus, assertOwner: () => {
-          if (activeRun !== run || !run.inProgress) throw new Error('Native coder run is no longer owned by this worker');
-        } }), (workspace) => prepareNativeCoderWorkspace(workspace, opts.nativeDevelopment!, bridge, run.runId,
-          () => { if (activeRun !== run || !run.inProgress) throw new Error('Native workspace preparation lost its worker owner'); }))
-      : await runCoder(coderOptions);
+    const result = await runCoder(coderOptions);
     run.handle = result;
-    if ('runtimeGeneration' in result) {
-      publish(run.bus, 'session', result.session);
-      publish(run.bus, 'index_status', result.indexStatus);
-      void result.done.catch((error: unknown) => {
-        if (!run.bus.ended) markEnded(run.bus, 'error', { message: error instanceof Error ? error.message : String(error) });
-      }).finally(() => {
-        void pluginHost?.dispose();
-        releaseCompletedRun(run);
-      });
-      return { ok: true, session: result.session, indexStatus: result.indexStatus, runtimeGeneration: result.runtimeGeneration };
-    }
     run.runner = result.runner;
     setBusRunner(run.bus, result.runner);
     publish(run.bus, 'session', result.session);
@@ -1035,8 +979,6 @@ bridge.handle('runFresh', async (payload) => {
 
 bridge.handle('isWaitingForInput', () => {
   recordRpc('isWaitingForInput');
-  const handle = activeRun?.handle;
-  if (handle && 'runtimeGeneration' in handle) return handle.isWaitingForInput?.() ?? false;
   const runner = activeRun?.runner;
   if (!runner) return false;
   return runner.isWaitingForInput();
@@ -1127,22 +1069,10 @@ bridge.handle('provideUserInput', async (payload) => {
   // `tool_approval:<toolUseId>`); omitted → the default slot
   // (submit_plan / ask_user / submit_tasks).
   const { value, askId } = payload as { value: string; askId?: string };
-  const handle = activeRun?.handle;
-  if (handle && 'runtimeGeneration' in handle) {
-    return { ok: askId ? await handle.provideInput(askId, value) : false };
-  }
   const runner = activeRun?.runner;
   if (!runner) return { ok: false, reason: 'no_runner' };
   const accepted = runner.provideUserInput(value, askId);
   return { ok: accepted };
-});
-
-bridge.handle('native.resolveInteraction', async (payload) => {
-  const { interactionId, response } = payload as { interactionId: string; response: InteractionResponse };
-  const handle = activeRun?.handle;
-  if (!handle || !('runtimeGeneration' in handle)) throw new Error('No native interaction owner');
-  await handle.resolveInteraction(interactionId, response);
-  return { ok: true };
 });
 
 bridge.handle('setThinking', (payload) => {
@@ -1254,16 +1184,14 @@ bridge.handle('readAgentTranscript', async (payload) => {
   if (!agent) return { ok: false, reason: 'not_found' };
   // Completed transcripts are spilled to disk; the renderer restores them via
   // the retained pointer, so a spilled agent is still "hasTranscript".
-  const hasTranscript = (agent.transcript?.length ?? 0) > 0 || !!agent.spillPath || !!agent.nativeTranscriptRef;
-  if (agent.nativeTranscriptRef && !nativeChildHistoryReader) return { ok: false, reason: 'native_reader_unavailable' };
+  const hasTranscript = (agent.transcript?.length ?? 0) > 0 || !!agent.spillPath;
   return {
     ok: true,
     label: agent.label,
     agentIndex: agent.agentIndex,
     status: agent.reason,
     hasTranscript,
-    text: agent.nativeTranscriptRef ? await nativeChildHistoryReader!(agent.nativeTranscriptRef, { maxChars })
-      : await renderAgentTranscriptAsync(agent, { maxChars }),
+    text: await renderAgentTranscriptAsync(agent, { maxChars }),
   };
 });
 
@@ -1281,17 +1209,13 @@ bridge.handle('swapProvider', async (payload) => {
   return { ok: true, activeRunner: Boolean(runner), model: nextProvider.model };
 });
 
-bridge.handle('abort', async (payload) => {
+bridge.handle('abort', async () => {
   recordRpc('abort');
   try {
     // User Stop kills background subagent jobs too (they're detached from the
     // run signal, so run.runner.abort() alone would leave them running).
     try { getSubagentJobManager().abortSession(sessionId, 'user abort'); } catch { /* best-effort */ }
     const run = activeRun;
-    if (run?.handle && 'runtimeGeneration' in run.handle) {
-      await run.handle.cancel((payload as { reason?: CancelReason } | null)?.reason);
-      return { ok: true };
-    }
     run?.ctrl.abort();
     if (run?.runner) {
       try { run.runner.abort(); } catch { /* best-effort */ }

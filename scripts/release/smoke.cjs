@@ -155,7 +155,6 @@ app.on('ready', async () => {
     report.indexer = await probeIndexer();
     report.apiScripts = await probeApiScripts();
     report.webContent = await probeWebContent();
-    report.agentLsp = await require('./lsp-probe.cjs')(asar);
   } catch (error) {
     report.harnessError = String(error.message || error).split('\n')[0];
   }

@@ -30,9 +30,7 @@ export function buildRegistryReferenceLookup(registry: ToolRegistry, ctx: ToolCo
       timer.unref();
       try {
         const args = { project_name: ctx.projectName, symbol_name: symbolName, format: 'json' };
-        const result = ctx.runtimeGeneration === 'rust_v1'
-          ? await ctx.nestedCapabilityDispatch?.invoke?.('mcp__find_references', args, { ...ctx, signal }, () => {})
-          : await registry.invoke('mcp__find_references', args, { ...ctx, signal });
+        const result = await registry.invoke('mcp__find_references', args, { ...ctx, signal });
         ctx.signal?.throwIfAborted();
         if (!result || signal.aborted || result.isError) return [];
         return parseHits(result.content);

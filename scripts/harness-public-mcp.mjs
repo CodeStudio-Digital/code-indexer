@@ -53,9 +53,8 @@ export async function runPublicMcpFixture({ port, setSession, requests, cancelOb
       const listed = await call('list_agent_runs', { limit: 50 });
       assert(listed.runs.some(run => run.id === started.id && run.status === expected));
       const attempts = requests.slice(before);
-      assert(attempts.length >= 1, 'public MCP never reached the native provider');
-      assert(attempts.every(request => request.admission.sessionId === started.sessionId
-        && request.admission.runtimeRoute.runtimeGeneration === 'rust_v1'));
+      assert(attempts.length >= 1, 'public MCP never reached the provider');
+      assert(attempts.every(request => request.admission.sessionId === started.sessionId));
       evidence.push({ scenario, sessionId: started.sessionId, status: expected, providerRequests: attempts.length });
     }
     return evidence;

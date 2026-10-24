@@ -1,5 +1,7 @@
 # Plano de separação do monorepo
 
+> Plano histórico anterior à remoção do runtime Rust. A seção de extração do runtime foi substituída pelo [registro de remoção](./runtime-retirement.md). Caminhos e contagens são os do snapshot original.
+
 > Status: proposta revalidada contra `feature/ide-mvp` em `1a7cf741`.
 > Escopo: limpeza estrutural, fronteiras de domínio e migração incremental para repositórios independentes.
 > Princípio: nenhuma pasta será extraída antes de construir, testar e empacotar isoladamente no monorepo atual.

@@ -1,5 +1,7 @@
 # 01 — Auditoria do estado atual
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Natureza:** evidência do baseline, não desenho alvo  
 > **Baseline de código:** `c817f13ec0fd4073db7a70e3c07f3714a3a54e4e`  
 > **Snapshot vivo:** 2026-08-04; valores vivos são temporais e não são segredos

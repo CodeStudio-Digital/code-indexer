@@ -41,13 +41,12 @@ export class FsOperationalSessionStore {
   readonly groups: FsSessionGroupRepository;
   readonly filesystemRoots: FsFilesystemRootRepository;
 
-  constructor(directory: FsSessionDirectory, nativeGoal?: (id: string) => Promise<FsSessionGoal | undefined>,
-    nativeTasks?: (id: string) => Promise<import('../session-state-types.js').TasksState | null | undefined>) {
+  constructor(directory: FsSessionDirectory) {
     const entities = new FsSessionEntityFiles(directory);
     this.advanced = new FsAdvancedStateRepository(directory, entities);
-    this.goals = new FsGoalRepository(directory, nativeGoal);
+    this.goals = new FsGoalRepository(directory);
     this.planning = new FsPlanningRepository(entities);
-    this.tasks = new FsTaskRepository(entities, nativeTasks);
+    this.tasks = new FsTaskRepository(entities);
     this.taskRuns = new FsTaskRunRepository(directory, entities);
     this.drive = new FsDriveRepository(
       directory,

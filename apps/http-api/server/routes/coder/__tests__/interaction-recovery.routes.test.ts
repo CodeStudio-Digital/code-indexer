@@ -58,45 +58,6 @@ afterEach(async () => {
 });
 
 describe('coder interaction route filesystem recovery', () => {
-  it('requires keyed native specification approval and never writes legacy fallback after an uncertain ACK', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Spec', provider: 'test', model: 'test' });
-    const app = new Hono();
-    mountCoderSpecResponseRoute(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
-    poolMock.getRuntimeHandle.mockReturnValue({ runtimeGeneration: 'rust_v1' });
-    const post = (body: unknown) => app.request(`/api/coder/sessions/${session.id}/spec-response`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-    });
-    expect((await post({ approved: 'yes', interaction_id: 'native-tool:spec' })).status).toBe(400);
-    expect((await post({ approved: true })).status).toBe(400);
-    expect((await post({ approved: true, interaction_id: 'native-tool:foreign' })).status).toBe(409);
-    poolMock.provideUserInput.mockRejectedValueOnce(new Error('ACK lost'));
-    expect((await post({ approved: true, interaction_id: 'native-tool:spec' })).status).toBe(503);
-    expect((await store.loadSessionWithMessages(session.id))?.messages).toEqual([]);
-    poolMock.getRuntimeHandle.mockReturnValue(undefined);
-    vi.spyOn(store, 'loadSessionMessagesTail').mockResolvedValue({ runtime_outcome: { runtimeGeneration: 'rust_v1' } } as never);
-    expect((await post({ approved: true, interaction_id: 'native-tool:spec' })).status).toBe(409);
-    expect((await store.loadSessionWithMessages(session.id))?.messages).toEqual([]);
-  });
-  it('never synthesizes a legacy task result after native approval ACK loss or owner loss', async () => {
-    const session = await store.createSession({ project_id: 7, title: 'Native task approval', provider: 'test', model: 'test' });
-    const state = { gate: 'approve' as const, summary: 'Pending review', tasks: [], approved: false, execution_mode: null, current_task_id: null };
-    await store.recordTasks({ session_id: session.id, tool_use_id: 'native-tool:review', state });
-    const app = new Hono();
-    mountCoderInteractionRoutes(app, { sessionStore: store } as unknown as ServerDeps, createCoderRuntime(store));
-    poolMock.getRuntimeHandle.mockReturnValue({ runtimeGeneration: 'rust_v1' });
-    poolMock.provideUserInput.mockRejectedValueOnce(new Error('ACK lost'));
-    const post = () => app.request(`/api/coder/sessions/${session.id}/tasks-response`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approved: true, interaction_id: 'native-tool:review' }),
-    });
-    expect((await post()).status).toBe(503);
-    expect(await store.getTasksState(session.id)).toEqual(state);
-    expect((await store.loadSessionWithMessages(session.id))?.messages).toEqual([]);
-    poolMock.getRuntimeHandle.mockReturnValue(undefined);
-    vi.spyOn(store, 'loadSessionMessagesTail').mockResolvedValue({ runtime_outcome: { runtimeGeneration: 'rust_v1' } } as never);
-    expect((await post()).status).toBe(409);
-    expect(poolMock.provideUserInput).toHaveBeenCalledTimes(1);
-    expect(await store.getTasksState(session.id)).toEqual(state);
-  });
   it('does not synthesize a retryable tool result when an approval acknowledgement is lost', async () => {
     const session = await store.createSession({ project_id: 7, title: 'Approval ACK loss', provider: 'test', model: 'test' });
     await store.appendMessage({ session_id: session.id, operation_id: 'pending-write', message: {

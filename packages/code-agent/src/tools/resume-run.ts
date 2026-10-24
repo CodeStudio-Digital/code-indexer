@@ -75,7 +75,7 @@ function specFor(state: ResumableAgentState, profile: MicroAgentProfile, guidanc
     isImplement: profile.capability === 'implement',
   });
   const initialMessages: AgentMessage[] = [
-    ...(state.nativeTranscriptRef ? [] : state.transcript ?? []),
+    ...(state.transcript ?? []),
     { role: 'user', content: [{ type: 'text', text: nudge }] },
   ];
   return {
@@ -90,7 +90,6 @@ function specFor(state: ResumableAgentState, profile: MicroAgentProfile, guidanc
     pathScopeMode: profile.pathScopeMode,
     limits: state.limits,
     initialMessages,
-    nativeResumeRef: state.nativeTranscriptRef,
   };
 }
 
@@ -221,7 +220,6 @@ async function relaunchResumedAgentsOwned(
         failureNote: r.reason !== 'completed' ? (r.failureDetail || r.finalText).slice(0, 500) : undefined,
         finalText: r.finalText ? r.finalText.slice(0, 8_000) : state.finalText,
         transcript: nextTranscript,
-        nativeTranscriptRef: r.nativeTranscriptRef ?? state.nativeTranscriptRef,
         toolCallCount: r.toolCallCount,
         usage: r.usage,
         attempt,
@@ -280,7 +278,7 @@ async function relaunchResumedAgentsOwned(
     agentCount: results.length,
     successCount: outcomeCounts.completedCount,
     ...outcomeCounts,
-    resumableCount: results.filter((r) => r.reason !== 'completed' && (!!r.nativeTranscriptRef || (r.transcript?.length ?? 0) > 0)).length,
+    resumableCount: results.filter((r) => r.reason !== 'completed' && ((r.transcript?.length ?? 0) > 0)).length,
   });
   return {
     text,

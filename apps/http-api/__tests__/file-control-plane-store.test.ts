@@ -408,16 +408,6 @@ describe('FileControlPlaneStore', () => {
     };
     await authority.markRunStarted(context, 'runner-before-crash');
 
-    const nativeLoad = vi.fn();
-    for (const present of [false, true]) {
-      const nativeOnly = new FileControlPlaneStore(sessions, { nativeRecovery: {
-        isPresent: async () => present, load: nativeLoad,
-      } });
-      expect(await nativeOnly.recoverInterruptedRuns('process-restart', new Date().toISOString(), { nativeOnly: true })).toBe(0);
-      expect(await nativeOnly.getRun(session.id, agentRunId)).toMatchObject({ status: 'running' });
-    }
-    expect(nativeLoad).not.toHaveBeenCalled();
-
     const restarted = new FileControlPlaneStore(sessions);
     expect(await restarted.recoverInterruptedRuns()).toBe(1);
     expect(await restarted.getRun(session.id, agentRunId)).toMatchObject({

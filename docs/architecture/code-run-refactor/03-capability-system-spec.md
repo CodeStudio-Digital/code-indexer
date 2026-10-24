@@ -1,5 +1,7 @@
 # 03 — Spec do sistema unificado de capabilities
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Status:** proposta normativa para aprovação  
 > **Requisitos:** `CAT-*`  
 > **Complementa:** `../rust-agent-runtime/04-capabilities-tools-and-provider-gateway.md`

@@ -20,7 +20,6 @@ import { modelSupportsVision } from '@mcp/code-agent/providers/capabilities.js';
 import { DEFAULT_ATTACHMENT_PROMPT, MAX_ATTACHMENT_REQUEST_BYTES } from '@mcp/shared';
 import { renderPreflightHint } from '@mcp/code-agent/core/runner/assembly/preflight-hint.js';
 import { markGoalLifecycleIntentCache } from '@mcp/code-agent/core/runner/goal-lifecycle-intent.js';
-import { hasResumableNativeToolAttachments } from '../../../native-session-resume-guard.js';
 import {
   normalizeSessionMaxAutoContinues,
   normalizeSessionMaxTurns,
@@ -1408,7 +1407,7 @@ export function mountCoderStreamRoutes(
       return c.json({ error: error.message, code: 'TOOL_OUTCOME_UNKNOWN', retryable: false }, 409);
     }
     const last = data.messages[data.messages.length - 1];
-    if (!last || (last.role !== 'tool' && !hasResumableNativeToolAttachments(data))) {
+    if (!last || last.role !== 'tool') {
       return c.json({ error: 'session not in resumable state' }, 409);
     }
     const resolvedAgent = await resolveRunAgent(id, body.agent);

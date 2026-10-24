@@ -892,17 +892,7 @@ export function buildSpawnAgentTool(depsOrRegistry: SubagentDeps | ToolRegistry,
       // Background (fire-and-forget) — returns immediately with a job id.
       // Ephemeral only; results fetched via collect_agents.
       if (args.background === true) {
-        if (ctx.runtimeGeneration === 'rust_v1') {
-          const port = ctx.ports?.agentTree;
-          if (!port?.background || port.ownerAgentRunId !== ctx.controlPlaneParentAgentRunId || !ctx.currentToolUseId) {
-            throw new Error('Native background spawn requires the admitted tree owner and invocation identity');
-          }
-          return port.background({ invocationId: ctx.currentToolUseId, task: args, signal: ctx.signal }, signal => {
-            const backgroundContext = { ...ctx, signal };
-            return agents.length === 1 ? runSingleEphemeral(deps, agents[0]!, backgroundContext)
-              : runParallelEphemeral(deps, agents, backgroundContext);
-          });
-        }
+
         return runBackgroundEphemeral(deps, agents, ctx);
       }
 

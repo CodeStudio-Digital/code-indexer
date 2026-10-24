@@ -114,7 +114,7 @@ export const saveNoteTool: CoderTool = {
     if (args.pinned !== undefined && typeof args.pinned !== 'boolean') return err('save_note: pinned must be boolean.');
     if (args.scope !== undefined && !['session', 'project', 'user'].includes(args.scope as string)) return err('save_note: invalid scope.');
     if (args.scope && args.scope !== 'session' && ctx.sessionDrive?.assertCurrent) {
-      return err('save_note writes session notes in the native runtime. Use remember for project/user memory.');
+      return err('save_note writes session notes for this session. Use remember for project/user memory.');
     }
 
     if (args.scope === 'project') {

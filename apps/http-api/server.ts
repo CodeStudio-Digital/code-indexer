@@ -287,15 +287,10 @@ export function createApp() {
   // persisted runtime policy. Still fail before mounting any routes.
   getCoderWorkerPool();
   // The command ledger is always the restart-safe idempotency authority.
-  // Legacy AgentRun recovery remains feature-gated. Native ownership must be
-  // reconciled after a restart even when its development flag has changed.
+  // AgentRun recovery remains feature-gated.
   setCoderWorkerControlPlaneStore(deps.controlPlaneStore);
-  {
-    // Native sessions retain recovery even when the development route or
-    // legacy shadow flags are disabled. Empty profiles do not load native code.
-    void deps.controlPlaneStore.recoverInterruptedRuns('process-restart', new Date().toISOString(), {
-      nativeOnly: !coderControlPlaneShadowEnabled(),
-    }).then(
+  if (coderControlPlaneShadowEnabled()) {
+    void deps.controlPlaneStore.recoverInterruptedRuns('process-restart').then(
       (recovered) => {
         console.log(
           `[control-plane] filesystem recovery completed recovered=${recovered}`,

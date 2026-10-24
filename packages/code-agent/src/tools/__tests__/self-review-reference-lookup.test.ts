@@ -8,18 +8,7 @@ function lookup(invoke: (...args: any[]) => Promise<ToolResult>, signal?: AbortS
   return buildRegistryReferenceLookup({ invoke } as unknown as ToolRegistry, { projectName: 'fixture', signal } as ToolContext);
 }
 describe('owned self-review reference lookup', () => {
-  it('uses the native nested gateway and never the weaker raw registry path', async () => {
-    const raw = vi.fn(), invoke = vi.fn(async () => ({ content: '{"references":[{"file_path":"owned.ts","line":2}]}' }));
-    const context = { cwd: process.cwd(), projectName: 'fixture', runtimeGeneration: 'rust_v1', nestedCapabilityDispatch: { turn: 1, invoke } } as ToolContext;
-    const references = buildRegistryReferenceLookup({ invoke: raw } as unknown as ToolRegistry, context);
-    expect(await references.findReferences('owned')).toEqual([{ filePath: 'owned.ts', line: 2, context: null }]);
-    expect(invoke).toHaveBeenCalledWith('mcp__find_references', expect.objectContaining({ symbol_name: 'owned' }),
-      expect.objectContaining({ signal: expect.any(AbortSignal) }), expect.any(Function));
-    expect(raw).not.toHaveBeenCalled();
-    delete context.nestedCapabilityDispatch;
-    expect(await references.findReferences('unavailable')).toEqual([]);
-    expect(raw).not.toHaveBeenCalled();
-  });
+
   it('cancels on its budget and waits for the actual handler to drain', async () => {
     vi.useFakeTimers();
     let signal!: AbortSignal, release!: (result: ToolResult) => void;

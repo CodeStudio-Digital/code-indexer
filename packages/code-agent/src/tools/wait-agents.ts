@@ -31,7 +31,7 @@ import { runAgentWaitLoop } from '@mcp/company/tools/agent-wait-loop.js';
 const TERMINAL_STATUSES = new Set(['completed', 'finished', 'failed', 'aborted', 'timed_out', 'error']);
 
 const WAIT_AGENTS_DESC =
-  'Block until ALL specified agents in the native tree or company reach a terminal status (completed/failed/aborted). ' +
+  'Block until ALL specified agents in the company reach a terminal status (completed/failed/aborted). ' +
   'Cross-tier — usable by master and subordinates. Read-only: never spawns or messages.\n' +
   '\n' +
   'Specify targets via paths returned by `list_agents` or raw UUID `agent_run_ids` (or both).\n' +
@@ -133,18 +133,7 @@ export const waitAgents: CoderTool = {
   },
   handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
     ctx.signal?.throwIfAborted();
-    if (ctx.runtimeGeneration === 'rust_v1') {
-      if (!ctx.ports?.agentTree?.wait) return err('Native agent wait is unavailable for this owned tree.');
-      const raw = [...(Array.isArray(args.paths) ? args.paths : []), ...(Array.isArray(args.agent_run_ids) ? args.agent_run_ids : [])];
-      if (!raw.length || raw.length > 256 || raw.some(v => typeof v !== 'string' || !v.trim())) return err('Provide 1–256 owned agent paths or ids.');
-      const minutes = args.timeout_minutes ?? 30;
-      if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < 0 || minutes > 30) return err('timeout_minutes must be between 0 and 30.');
-      const result = await ctx.ports.agentTree.wait({ targets: raw as string[], timeoutMs: minutes * 60_000, signal: ctx.signal });
-      const summary = result.agents.map(agent => `- ${agent.path}: ${agent.status}`).join('\n');
-      if (result.kind === 'timeout') return err(`wait_agents reached its deadline.\n${summary}`);
-      if (result.kind === 'attention') return ok(`An agent is waiting for a pending interaction.\n${summary}`);
-      return ok(`All targeted agents finished:\n${summary}`);
-    }
+
     const cc = ctx.companyContext;
     if (!cc) {
       return err('wait_agents: no companyContext on this session — there are no agents to wait on.');

@@ -11,6 +11,3 @@ export function browserDispatchArguments(method: string, input: Record<string, u
     default: throw new Error('Browser method is not an admitted tool');
   }
 }
-export function nativeBrowserKey(sessionId: string | number, attemptId: string): string {
-  return `coder-${sessionId}-attempt-${attemptId}`;
-}

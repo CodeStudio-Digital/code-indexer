@@ -114,8 +114,6 @@ export interface CoderTool {
    * with no explicit value (conservative posture); `false` for native read
    * tools recognised by the built-in classifier.
    */
-  /** Host-issued transport metadata; never populated from server tool annotations. */
-  externalMcpTransport?: { serverId: string; toolName: string; transport: 'stdio' | 'sse' | 'streamable_http'; catalogueRevision: string; processTreeContained?: boolean };
   mutates?: boolean;
   /**
    * Whether two invocations of this tool (or this tool against another
@@ -357,7 +355,7 @@ export interface NestedCapabilityDispatch {
   preflight?: CapabilityPreflightPort;
   policyShadow?: CapabilityPolicyPort;
   capabilityHooks?: CapabilityLifecycleHooks;
-  /** Native owner restricts both discovery and execution to the sealed attempt. */
+  /** The owning runner restricts discovery and execution to its admitted tools. */
   visibleToolNames?: ReadonlySet<string>;
   invocableToolNames?: ReadonlySet<string>;
   /** Includes permission and grant validation; called with the script clock paused. */
@@ -373,11 +371,7 @@ export interface ToolSettledEvent {
 }
 
 export interface ToolContext {
-  /** Product-owned admission lifetime, propagated through nested dispatch. */
-  workspaceRuntimeScope?: {
-    invoke(tool: CoderTool, operation: () => Promise<ToolResult>): Promise<ToolResult>;
-  };
-  /** Best-effort post-handler observation, shared by native/legacy/nested calls.
+  /** Best-effort post-handler observation, shared by built-in, external and nested calls.
    * It cannot change policy or tool inputs/results and is not awaited by dispatch. */
   onToolSettled?: (event: ToolSettledEvent) => void | Promise<void>;
   /** Project root path of the PRIMARY project. Native fs operations default here
@@ -546,16 +540,12 @@ export interface ToolContext {
    * `reportProgress`, this must not reset the operation's no-real-output age.
    */
   reportHeartbeat?: (note?: string) => void;
-  /** Artifact notification for runtimes without a legacy runner. Files are
+  /** Optional artifact notification for injected tool contexts. Files are
    * already persisted; this notification must not perform another write. */
   onDiagramChanged?: (payload: { path: string; xml: string }) => void;
   /** Back-reference to the runner so interactive tools (submit_plan, ask_user)
    *  can pause execution waiting for user input. Set automatically by CoderRunner. */
   runner?: import('@mcp/code-agent/core/runner.js').CoderRunner;
-  /** Invocation-bound task state, without creating a legacy runner. */
-  taskRuntime?: import('../ports/task-tool-port.js').TaskToolRuntime;
-  /** Selected once before execution; inherited children must keep the tree's runtime. */
-  runtimeGeneration?: 'legacy_ts' | 'rust_v1';
   /** True when the runner was started in plan mode. */
   planMode?: boolean;
   /**
@@ -802,8 +792,6 @@ export interface ToolContext {
   externalMcpAuthority?: { payload: unknown; outcomeUnknown(): void };
   /** Original normalized invocation, sealed by the resource binding. */
   currentToolInvocation?: { name: string; input: Record<string, unknown> };
-  previewAuthority?: { payload: unknown; key: string; runId: number; outcomeUnknown(): void };
-  browserAuthority?: { payload: unknown; key: string; runId: number; outcomeUnknown(): void };
   /**
    * Optional execution ports — when provided, filesystem/shell tools
    * route through these instead of talking to `node:fs` / `child_process`
@@ -814,20 +802,13 @@ export interface ToolContext {
    * same tool code writes into an ephemeral container instead of the host.
    */
   ports?: {
-    docsResearch?: import('../ports/docs-research-port.js').DocsResearchPort;
-    worktree?: import('../ports/worktree-transition-port.js').WorktreeTransitionPort;
-    codeExecution?: import('../ports/code-execution-port.js').CodeExecutionPort;
-    sessionReview?: import('../ports/session-review-port.js').SessionReviewPort;
-    agentTree?: import('../ports/agent-tree-port.js').AgentTreePort;
     projectIndex?: import('@mcp/code-agent/ports/project-index-port.js').ProjectIndexPort;
     documentExport?: import('@mcp/code-agent/ports/document-export-port.js').DocumentExportPort;
     memoryMutations?: import('@mcp/code-agent/ports/memory-mutation-port.js').MemoryMutationPort;
-    discovery?: import('@mcp/code-agent/ports/capability-discovery-port.js').CapabilityDiscoveryPort;
     fs?: import('@mcp/code-agent/ports/filesystem-port.js').IFilesystemPort;
     shell?: import('@mcp/code-agent/ports/shell-port.js').IShellPort;
     commands?: import('@mcp/code-agent/ports/persistent-command-port.js').IPersistentCommandPort;
     interactions?: import('@mcp/code-agent/ports/interactive-tool-port.js').InteractiveToolPort;
-    tasks?: import('../ports/task-tool-port.js').TaskToolPort;
     database?: import('@mcp/code-agent/ports/database-port.js').DatabasePort;
     http?: import('@mcp/code-agent/ports/http-port.js').HttpPort;
     web?: import('@mcp/code-agent/ports/web-port.js').WebPort;

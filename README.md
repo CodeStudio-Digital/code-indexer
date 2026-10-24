@@ -10,7 +10,7 @@ An AI-native IDE for builders. Bring your own keys, work in a fast desktop app, 
 
 | Repository | What it holds | Location |
 | --- | --- | --- |
-| **codestudio-desktop** (this one) | Electron shell, React dashboard, agent runtime, indexer, Rust supervisor, bundled providers/plugins | `D:\MCP` |
+| **codestudio-desktop** (this one) | Electron shell, React dashboard, TypeScript agent runtime, indexer, bundled providers/plugins | `D:\MCP` |
 | **codestudio-cloud** | Cloudflare Workers (cloud-api + worker-market), cloud bounded contexts (`@cloudstudio/cloud-*`), account-portal SPA | `D:\repos\codestudio-cloud` |
 | **codestudio-unity** | Unity Editor plugin (`com.maicon.scene-analyzer`) — Scene Analyzer / Asset Modeler | `D:\repos\codestudio-unity` |
 | **codestudio-web** | Public React/Vite institutional and product website | `D:\repos\codestudio-web` |

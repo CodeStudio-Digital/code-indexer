@@ -133,10 +133,6 @@ function runFromSession(payload: unknown): McpAgentRun | null {
   const metadata = runMetadata(view);
   if (!metadata || !Number.isSafeInteger(view.project_id)) return null;
   const finalText = finalAssistantText(payload);
-  const outcome = record(record(payload)?.runtime_outcome);
-  const durableStatus = outcome?.runtimeGeneration === 'rust_v1'
-    && ['running', 'completed', 'failed', 'cancelled', 'interrupted'].includes(String(outcome.status))
-    ? outcome.status as McpAgentRunStatus : undefined;
   return {
     id: view.id,
     principal: metadata.principal,
@@ -145,11 +141,10 @@ function runFromSession(payload: unknown): McpAgentRun | null {
     projectId: view.project_id as number,
     agentId:
       typeof view.agent === 'string' ? view.agent : metadata.agent_id,
-    status: durableStatus ?? projectedStatus(view.status, finalText),
+    status: projectedStatus(view.status, finalText),
     taskPreview: metadata.task_preview,
     finalText,
-    error: durableStatus === 'failed' ? String(outcome?.reason ?? 'Agent session failed')
-      : view.status === 'error' ? 'Agent session failed' : null,
+    error: view.status === 'error' || view.status === 'failed' ? 'Agent session failed' : null,
     createdAt: timestamp(view.created_at),
     updatedAt: timestamp(view.updated_at),
   };

@@ -41,7 +41,7 @@ function attemptCap(state: ResumableAgentState): number {
 
 function canResume(state: ResumableAgentState): boolean {
   return !resumeNeedsReconciliation(state) && state.reason !== 'completed'
-    && !!(state.transcript || state.nativeTranscriptRef)
+    && !!state.transcript
     && state.attempt < attemptCap(state);
 }
 
@@ -136,11 +136,7 @@ export function buildResumeAgentTool(deps: SubagentDeps): CoderTool {
             if (!explicit) skipped.push(`#${state.agentIndex + 1} ${state.label} (${kind} — name it in \`agents\` to retry)`);
             continue;
           }
-          if (state.nativeTranscriptRef && (ctx.runtimeGeneration !== 'rust_v1' || ctx.ports?.agentTree?.runtimeGeneration !== 'rust_v1')) {
-            skipped.push(`#${state.agentIndex + 1} ${state.label} (native continuation requires its owned Rust tree)`);
-            continue;
-          }
-          if (!state.transcript && !state.nativeTranscriptRef) {
+          if (!state.transcript) {
             skipped.push(`#${state.agentIndex + 1} ${state.label} (resume state expired — re-spawn or decompose the task)`);
             continue;
           }

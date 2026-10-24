@@ -14,6 +14,7 @@
     "dist/dashboard/**/*",
     "dist/packages/**/*",
     "package.json",
+    "!dist/apps/electron/native-agent-runtime-integrity.json",
     "!**/*.map"
   ],
   "asar": true,
@@ -45,13 +46,6 @@
     {
       "from": "dist/bundled-plugins",
       "to": "bundled-plugins"
-    },
-    {
-      "from": "dist/native-agent-runtime",
-      "to": "native-agent-runtime",
-      "filter": [
-        "**/*"
-      ]
     },
     {
       "from": "node_modules/typescript/lib",

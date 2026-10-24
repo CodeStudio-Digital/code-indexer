@@ -4,7 +4,6 @@ import { ToolRegistry } from '../../core/registry.js';
 import { ToolCallLedger } from '../../core/tool-call-ledger.js';
 import { createMutationFenceAuthority } from '../../core/mutation-fence.js';
 import type { ToolContext } from '../../core/tool.js';
-import { nativeCoderWorkspaceAccess } from '../../../../../apps/http-api/workers/native-coder-catalog.js';
 
 async function fixture() {
   const invoke = vi.fn(async () => 'job #19'); const bridge = new McpToolBridge({ deferConnection: true });
@@ -19,10 +18,6 @@ async function fixture() {
 }
 it('binds indexing to an owned sequential administrative resource', async () => {
   const f = await fixture();
-  expect(nativeCoderWorkspaceAccess([f.tool])).toBe('exclusive_write');
-  for (const change of [{ parallelSafe: true }, { mutates: false }, { effectBoundary: undefined }]) {
-    expect(() => nativeCoderWorkspaceAccess([{ ...f.tool, ...change }])).toThrow('owned project mutation');
-  }
   expect((await f.registry.invoke(f.tool.name, { project_path: process.cwd() }, f.context)).content).toBe('job #19');
   expect(f.invoke).toHaveBeenCalledWith(expect.objectContaining({ toolUseId: 'index-1', binding: expect.objectContaining({
     canonicalResources: [{ kind: 'application', appId: f.tool.name, operations: ['index/reconcile'] }],

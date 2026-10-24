@@ -8,12 +8,7 @@
  *    we include the master and every subordinate run. Roles are read from
  *    the orchestrator so abort/status/spawn happen via the existing master
  *    tools — `list_agents` is a strict read-only inventory.
- *  - Native children: current-tree admissions, including completed children;
- *    siblings can observe them while read-only branches execute concurrently.
- *    Legacy ephemeral subagents remain outside the company inventory.
- *
- * Native paths preserve ancestry under /root/agent-<id>; company paths use
- * /root/master/<role>-<id>. Neither snapshot grants execution authority.
+ *  - Ephemeral subagents are tracked by spawn_agent and collect_agents.
  */
 import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
 import type { CompanyContext } from '@mcp/company/types.js';
@@ -35,7 +30,7 @@ interface AgentLine {
 }
 
 const LIST_AGENTS_DESC =
-  'List every agent reachable from this runner: the current native execution tree, or the caller and its company peers. ' +
+  'List every agent reachable from this runner: the caller and its company peers. ' +
   'Read-only inventory — for actions, use the master tools (spawn_subordinate_agent, forward_to_agent, abort_subordinate_agent, ...).\n' +
   "USE: at the start of a master turn to see who is alive and what status they hold.\n" +
   "USE: from a subordinate that wants to know which peers are running before deciding to wait or proceed.\n" +
@@ -109,9 +104,8 @@ export const listAgents: CoderTool = {
   },
   handler: async (args, ctx): Promise<ToolResult> => {
     ctx.signal?.throwIfAborted();
-    const native = ctx.runtimeGeneration === 'rust_v1';
-    if (native && !ctx.ports?.agentTree?.list) return err('Native agent inventory is unavailable for this owned tree.');
-    const all: AgentLine[] = native ? await ctx.ports!.agentTree!.list!({ signal: ctx.signal }) : buildLines(ctx);
+
+    const all: AgentLine[] = buildLines(ctx);
     const filter = (args.filter as string | undefined) ?? 'all';
     const asJson = args.format === 'json';
     let lines = all;

@@ -14,8 +14,6 @@ vi.mock('node:http', async original => {
   } };
 });
 import { readPublicWeb } from '../public-web-request.js';
-import { NativeWebPort } from '../../../../../apps/http-api/workers/native-web-port.js';
-import { HostEffectScope } from '@mcp/code-agent/runtime/host-effect-scope.js';
 
 let server: Server, base: string, sockets: Set<Socket>, requests: string[];
 let respond: (req: IncomingMessage, res: ServerResponse) => void;
@@ -86,9 +84,9 @@ describe('owned public-page physical transfer', () => {
       assertCurrent: () => { if (++checks >= 3) throw new Error('lease revoked'); } })).rejects.toThrow('lease revoked');
     expect(requests).toEqual([]); await drained();
   });
-  it('overlaps independent reads, publishes the fast result first and closes an attempt with a pending read', async () => {
-    const effects = new HostEffectScope(), ctrl = new AbortController();
-    const port = new NativeWebPort({ effects, signal: ctrl.signal, assertOwner() {} });
+  it('overlaps independent reads, publishes the fast result first and cancels a pending read', async () => {
+    const ctrl = new AbortController();
+    const port = { read: (input: { url: string; maxBytes: number }) => readPublicWeb({ ...input, signal: ctrl.signal }) };
     let release!: () => void, slowStarted!: () => void;
     const started = new Promise<void>(resolve => { slowStarted = resolve; });
     respond = (req, res) => { if (req.url === '/slow') { release = () => res.end('SLOW'); slowStarted(); } else res.end('FAST'); };
@@ -100,7 +98,7 @@ describe('owned public-page physical transfer', () => {
     respond = (_req, res) => { res.writeHead(200); res.flushHeaders(); };
     const pending = port.read({ url: base + '/pending', maxBytes: 1024 });
     const rejected = expect(pending).rejects.toThrow();
-    await port.close(); await rejected; expect(effects.activeCount).toBe(0); await drained();
+    ctrl.abort(new Error('closed')); await rejected; await drained();
     await expect(port.read({ url: base, maxBytes: 1024 })).rejects.toThrow('closed');
   });
 });

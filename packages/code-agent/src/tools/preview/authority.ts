@@ -38,7 +38,3 @@ export function previewDispatchArguments(method: string, input: Record<string, u
     default: throw new Error('Preview method is not an admitted tool');
   }
 }
-
-export function nativePreviewKey(sessionId: string | number, attemptId: string): string {
-  return `coder-${sessionId}-attempt-${attemptId}`;
-}

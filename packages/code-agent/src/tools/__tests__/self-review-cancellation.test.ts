@@ -17,21 +17,7 @@ beforeEach(() => {
   mocks.evidence.mockReset().mockResolvedValue(null);
 });
 describe('review tool cancellation wiring', () => {
-  it('requires native session ownership and forwards its fence to the shared service', async () => {
-    const assertOwner = vi.fn();
-    const context = { runtimeGeneration: 'rust_v1', sessionId, controlPlaneParentAgentRunId: 'root', currentToolUseId: 'review-call',
-      ports: { sessionReview: { runtimeGeneration: 'rust_v1', sessionId, agentRunId: 'root', workspaceRoot: 'D:\\worktree', assertOwner,
-        beginInvocation: () => () => {}, isCancellationSettled: () => false } } } as unknown as ToolContext;
-    expect((await selfReview().handler({}, context)).isError).not.toBe(true);
-    expect(mocks.review.mock.calls[0][2].assertOwner).toBe(assertOwner);
-    expect(assertOwner).toHaveBeenCalled(); mocks.intent.mockClear();
-    for (const bad of [{ ...context, ports: undefined }, { ...context, controlPlaneParentAgentRunId: 'other' }]) {
-      expect((await selfReview().handler({}, bad)).isError).toBe(true);
-    }
-    expect(mocks.intent).not.toHaveBeenCalled();
-    assertOwner.mockImplementation(() => { throw new Error('owner lost'); });
-    await expect(selfReview().handler({}, context)).rejects.toThrow('owner lost');
-  });
+
   it('forwards the self-review invocation signal', async () => {
     const signal = new AbortController().signal;
     expect((await selfReview().handler({}, { signal } as ToolContext)).isError).not.toBe(true);

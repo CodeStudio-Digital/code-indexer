@@ -1,11 +1,9 @@
 import type {
-  RuntimeEligibilityDecision,
   RuntimeRouteRecord,
 } from './router/types.js';
 
 export type AgentRuntimeHostErrorCode =
   | 'invalid_routing_request'
-  | 'runtime_ineligible'
   | 'runtime_route_conflict'
   | 'runtime_route_corrupt'
   | 'runtime_route_not_committed'
@@ -25,19 +23,6 @@ export class AgentRuntimeHostError extends Error {
     super(message, options);
     this.name = 'AgentRuntimeHostError';
     this.code = code;
-  }
-}
-
-export class RuntimeIneligibleError extends AgentRuntimeHostError {
-  readonly decision: RuntimeEligibilityDecision;
-
-  constructor(decision: RuntimeEligibilityDecision) {
-    super(
-      'runtime_ineligible',
-      `Rust runtime is ineligible: ${decision.reasons.map((reason) => reason.code).join(', ')}`,
-    );
-    this.name = 'RuntimeIneligibleError';
-    this.decision = decision;
   }
 }
 

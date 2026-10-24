@@ -8,10 +8,6 @@ import { createCoderProvider } from '@mcp/services/providers/factory.js';
 import type { ChatProvider, CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
 import { ToolRegistry } from '@mcp/code-agent/core/registry.js';
 import { admitCoderAttempt, prepareCoderAttempt } from './runtime/attempt-preparation.js';
-import { startPreparedCoderExecution, type PreparedCoderExecutor, type PreparedCoderHandle } from './runtime/prepared-coder-execution.js';
-import { prepareSelectedSkillContext } from './runtime/prepared-skill-context.js';
-import { WorkspaceRuntimeScope } from './runtime/workspace-runtime-cohort.js';
-import type { PreparedWorkspaceFactory } from './runtime/prepared-workspace.js';
 import { asAgentRunId } from '@mcp/agent-runtime-contracts';
 import { nestedToolCallUseId, type ToolSettledEvent } from '@mcp/code-agent/core/tool.js';
 import { changedToolPaths } from './runtime/changed-tool-paths.js';
@@ -479,34 +475,7 @@ export function runCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   return initializeCoder(opts);
 }
 
-/** Reuses product configuration/provider/tool preparation without constructing
- * or starting CoderRunner. Native admission and durability belong to executor. */
-export function prepareCoderExecution(opts: RunCoderOptions, executor: PreparedCoderExecutor,
-  workspaceFactory?: PreparedWorkspaceFactory): Promise<PreparedCoderHandle> {
-  return initializeCoder(opts, executor, workspaceFactory);
-}
-
-function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle>;
-function initializeCoder(opts: RunCoderOptions, executor: PreparedCoderExecutor, workspaceFactory?: PreparedWorkspaceFactory): Promise<PreparedCoderHandle>;
-async function initializeCoder(opts: RunCoderOptions, executor?: PreparedCoderExecutor,
-  workspaceFactory?: PreparedWorkspaceFactory): Promise<RunCoderHandle | PreparedCoderHandle> {
-  const workspaceScope = new WorkspaceRuntimeScope(executor ? 'rust_v1' : 'legacy_ts');
-  try {
-    const handle = await initializeCoderOwned(opts, executor, workspaceFactory, workspaceScope);
-    const done = handle.done.then(async outcome => {
-      await workspaceScope.close(true);
-      return outcome;
-    }, async error => { await workspaceScope.close(false); throw error; });
-    void done.catch(() => undefined);
-    return { ...handle, done };
-  } catch (error) {
-    await workspaceScope.close(false);
-    throw error;
-  }
-}
-
-async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCoderExecutor | undefined,
-  workspaceFactory: PreparedWorkspaceFactory | undefined, workspaceScope: WorkspaceRuntimeScope): Promise<RunCoderHandle | PreparedCoderHandle> {
+async function initializeCoder(opts: RunCoderOptions): Promise<RunCoderHandle> {
   const config = loadConfig();
   // Shared per-process central handles — see getSharedCentral. One connection
   // for the whole worker instead of one per master/subordinate run.
@@ -606,14 +575,6 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
     throw new Error(
       `Real project ${projectAuthority.primary.project_id} not found`,
     );
-  }
-  if (!opts.sandbox && !opts.companyContext?.sandbox) {
-    const roots = [project.root_path, ...projectAuthority.projects.map(link => link.root_path),
-      ...(opts.companyContext?.allowedProjectIds ?? []).flatMap(id => {
-        const linked = db.getProject(id);
-        return linked && !linked.is_synthetic ? [linked.root_path] : [];
-      }), ...(await store.listSessionFilesystemRoots(session.id)).filter(root => existsSync(root.root_path)).map(root => root.root_path)];
-    await workspaceScope.enter(config.dbPath, session.id, roots);
   }
   if (
     session.worktree_path
@@ -872,15 +833,6 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
   // session — where each errors or returns just-self (no peer to reach). Moved
   // into the `if (opts.companyContext)` block below (P1) so solo prompts drop
   // them entirely. Master/subordinate sessions are unaffected.
-  // Native attempts have a real owned child tree even without Company. Its
-  // observation tools must be present before the preparation is sealed.
-  if (executor && !opts.companyContext) {
-    registry.registerAll(listAgentsTools);
-    registry.registerAll(waitAgentsTools);
-    registry.registerAll(sendMessageTools);
-    registry.registerAll(sendInputTools);
-    registry.registerAll(followupTaskTools);
-  }
   // code_exec — registered last in the native batch so its tools-proxy
   // closes over a registry that already includes fs/git/web/lsp/glob/etc.
   // The proxy itself is rebuilt per invocation (`registry.list()` at call
@@ -1333,16 +1285,7 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
         `certainly a missing binding-propagation in the orchestrator.`,
     );
   }
-  let nativeWorktreeRoot: string | undefined;
-  if (executor && (opts.worktree || session.worktree_path)) {
-    if (!workspaceFactory || sandboxBinding || opts.companyContext) throw new Error('Native worktree requires an owned local preparation service');
-    nativeWorktreeRoot = await workspaceFactory({ projectRoot: resolvePath(project.root_path),
-      existingPath: session.worktree_path, requested: opts.worktree, signal: opts.signal,
-      persist: async path => { await store.setSessionWorktree(session.id, path); } });
-    session = { ...session, worktree_path: nativeWorktreeRoot };
-  }
-  const workspace: WorkspaceContext = workspaceFromProject(
-    nativeWorktreeRoot ? { ...project, root_path: nativeWorktreeRoot } : project, sandboxBinding);
+  const workspace: WorkspaceContext = workspaceFromProject(project, sandboxBinding);
   const effectiveCwd = workspace.rootPath;
   // External host roots are a local-session capability. A container-bound run
   // cannot safely translate host paths into its filesystem namespace. Company
@@ -1388,7 +1331,6 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
         const persisted = await store.listSessionFilesystemRoots(session.id);
         const exact = persisted.find((root) => root.root_path.toLowerCase() === canonical.path.toLowerCase());
         if (!exact && persisted.length >= 16) throw new Error('session filesystem root limit reached (16)');
-        await workspaceScope.extend(canonical.path);
         const row = await store.upsertSessionFilesystemRoot(
           session.id,
           canonical.path,
@@ -1565,7 +1507,6 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
   };
 
   const toolContext: ToolContext = {
-    workspaceRuntimeScope: workspaceScope,
     cwd: effectiveCwd,
     projectName: workspace.displayName,
     globalWorkspace: session.is_global
@@ -1637,7 +1578,6 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
         });
         activePlanCache = { text: planText, status: 'pending' };
       } catch (e) {
-        if (executor) throw e;
         console.warn(`[coder] recordPlan failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
@@ -1657,7 +1597,6 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
           if (captured) runnerRef?.requestMilestoneCompaction('milestone:plan-approved');
         }
       } catch (e) {
-        if (executor) throw e;
         console.warn(`[coder] resolvePlan failed: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
@@ -1665,7 +1604,6 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
       try {
         await store.setSessionAgent(session.id, agent);
       } catch (e) {
-        if (executor) throw e;
         console.warn(`[coder] setSessionAgent failed: ${e instanceof Error ? e.message : String(e)}`);
       }
       // Apply the NEW agent's defaults to the LIVE runner so the next
@@ -2776,49 +2714,7 @@ async function initializeCoderOwned(opts: RunCoderOptions, executor: PreparedCod
   // complete. From this point through terminal cleanup the attempt owns an
   // immutable catalog snapshot; a late MCP/plugin is visible only to the next
   // attempt assembled by the host.
-  // Late session/skill helpers are registered after the legacy allowlist pass.
-  // A prepared runtime must receive exactly the admitted catalog, including
-  // when its development cohort permits only a subset of product tools.
-  if (executor && exactAllowedToolNames !== null) {
-    registry.filterInPlace((tool) => exactAllowedToolNames.has(tool.name));
-  }
   registry.seal();
-
-  if (executor) {
-    return startPreparedCoderExecution({ opts, session, indexStatus, registry, catalogOnlyCapabilities,
-      toolContext, provider, systemPrompt, initialMessages,
-      prepareUserContext: messages => prepareSelectedSkillContext({ messages, template: skillTemplateCtx,
-        getSkill: id => skillStore.getSkill(id) }),
-      boundaryRecall: {
-        memory: opts.memoryRetriever && anyMemoryEnabled ? async (query, signal) => {
-          signal.throwIfAborted();
-          const recalled = await mapProjectsConcurrent(memoryReadProjects, async p => {
-            signal.throwIfAborted();
-            return { name: p.name, rows: [...await opts.memoryRetriever!.retrieve(p.id, p.name, query)] };
-          });
-          signal.throwIfAborted(); return interleaveLabeled(recalled, 8);
-        } : undefined,
-        chapters: async (query, signal) => {
-          signal.throwIfAborted();
-          const chapters = await store.searchConversationChapters(session.id, query, { limit: 2 });
-          signal.throwIfAborted();
-          return chapters.items.slice(0, 2).map(chapter => ({ id: `conversation-chapter:${chapter.id}`,
-            title: chapter.title, content: chapter.chapter_text.slice(0, 400) }));
-        },
-      },
-      reasoningEffort: effectiveReasoningEffort ?? undefined,
-      agentDefinitionId: opts.agentSelectionId ?? effectiveAgentId ?? 'code-agent/default', effectiveAgentId,
-      capabilityProfile: preResolvedProfile, permissionMode: resolvedPermissionMode,
-      thinking: ultraExecutionEnabled && sessionModelCanReason === true ? true : !!opts.thinking,
-      executor, async cleanup() {
-        const outcomes = await Promise.allSettled([
-          toolOutputStore.drain(), mcpServerManager.closeAll(), bridge.close(), ...extraBridges.map((item) => item.close()),
-        ]);
-        const failures = outcomes.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
-        if (failures.length) throw new AggregateError(failures.map((result) => result.reason), 'Native preparation cleanup failed');
-      },
-    });
-  }
 
   // Fase 2.5 — Policy Engine shadow composition. Returns null when every
   // CODER_* policy flag is off, so the port is absent and dispatch stays
@@ -4093,18 +3989,3 @@ export type { CoderProviderName } from '@mcp/code-agent/providers/adapter.js';
  * from the unified registry — all kinds that declare `createCoder`.
  */
 export { listCoderKinds as SUPPORTED_CODER_PROVIDERS } from '@mcp/services/providers/factory.js';
-export {
-  createToolRegistryCapabilityGatewayFactory,
-  decodeHostToolExecutionPayload,
-  hostToolExecutionPayloadSha256,
-  HOST_TOOL_RESULT_SCHEMA_ID,
-  HOST_TOOL_RESULT_SCHEMA_VERSION,
-  ToolRegistryHostCapabilityExecutor,
-} from '@mcp/code-agent/runtime/tool-registry-host-capability-executor.js';
-export type {
-  HostToolExecutionPayload,
-  ToolRegistryCapabilityDecisionResolverFactory,
-  ToolRegistryCapabilityGatewayFactory,
-  ToolRegistryCapabilityGatewayFactoryOptions,
-  ToolRegistryHostCapabilityExecutorOptions,
-} from '@mcp/code-agent/runtime/tool-registry-host-capability-executor.js';

@@ -30,7 +30,7 @@ import {
 } from './workflow-types.js';
 import { executeWorkflow } from './workflow-run.js';
 import { emitSubagentEvent } from '../subagent-events.js';
-import type { AgentTreeReconciliation } from '../../ports/agent-tree-port.js';
+type WorkflowStepReconciliation = { outcome: 'terminal' | 'outcome_unknown'; stepStatus?: 'completed' | 'partial' | 'failed'; reason?: string; resultRef?: string; summary?: string; detail: string };
 import {
   getWorkflow,
   reloadWorkflowUnderLease,
@@ -183,11 +183,8 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
     mutates: true,
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
       const sessionId = ctx.sessionId ?? ctx.runner?.sessionId;
-      const runtimeGeneration = ctx.runtimeGeneration === 'rust_v1' ? 'rust_v1' : 'legacy_ts';
-      if (runtimeGeneration === 'rust_v1' && (!sessionId || !deps.sessionStore
-        || !ctx.ports?.agentTree?.reconcile || ctx.ports.agentTree.ownerAgentRunId !== ctx.controlPlaneParentAgentRunId)) {
-        return err('workflow: native execution requires the owned tree, recovery port and durable session checkpoints.');
-      }
+      const runtimeGeneration = 'legacy_ts';
+
       const resumeId = typeof args.resume_workflow_id === 'string' ? args.resume_workflow_id.trim() : '';
       let record: WorkflowRecord | undefined;
       let leaseAcquired = false;
@@ -236,7 +233,7 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
             record = observed;
           }
           if ((record.runtimeGeneration ?? 'legacy_ts') !== runtimeGeneration) {
-            return err('workflow: resume must use the original runtime generation; mixing native and legacy children is forbidden.');
+            return err('workflow: this saved workflow belongs to an unavailable runtime and cannot be resumed.');
           }
           // A model-authored retry flag cannot authorize repeating an uncertain
           // effect. Reconcile such children on every resume until durable
@@ -248,11 +245,7 @@ export function buildWorkflowTool(deps: SubagentDeps): CoderTool {
           );
           for (const step of record.steps) {
             if (step.status !== 'running' && !workflowStepNeedsReconciliation(step)) continue;
-            const reconciliation: AgentTreeReconciliation = runtimeGeneration === 'rust_v1'
-              ? step.nativeTranscriptRef
-                ? await ctx.ports!.agentTree!.reconcile!(step.nativeTranscriptRef, { signal: ctx.signal })
-                : { outcome: 'outcome_unknown', detail: 'native child admission has no confirmed journal reference' }
-              : sessionId != null
+            const reconciliation: WorkflowStepReconciliation = sessionId != null
               && step.groupId
               && deps.sessionStore?.reconcileWorkflowStepRun
               ? await deps.sessionStore.reconcileWorkflowStepRun(

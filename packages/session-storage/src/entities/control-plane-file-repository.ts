@@ -65,10 +65,6 @@ export interface ControlPlaneEntityDataMap {
   attemptPreparation: ControlPlaneCheckpointData;
   runtimeRoute: ControlPlaneCheckpointData;
   runtimeRequest: ControlPlaneCheckpointData;
-  supervisorFact: ControlPlaneCheckpointData;
-  nativePreparation: ControlPlaneCheckpointData;
-  nativeActivation: ControlPlaneCheckpointData;
-  nativeTree: ControlPlaneCheckpointData;
   approval: ControlPlaneApprovalData;
 }
 
@@ -102,10 +98,6 @@ const CONTROL_PLANE_DIRECTORIES: Record<ControlPlaneEntityKind, string> = {
   attemptPreparation: 'events/attempt-preparations',
   runtimeRoute: 'events/runtime-routes',
   runtimeRequest: 'events/runtime-requests',
-  supervisorFact: 'events/supervisor-facts',
-  nativePreparation: 'events/native-preparations',
-  nativeActivation: 'events/native-activations',
-  nativeTree: 'events/native-trees',
   approval: 'events/approvals',
 };
 
@@ -117,9 +109,6 @@ const IMMUTABLE_CONTROL_PLANE_ENTITIES =
     'attemptPreparation',
     'runtimeRoute',
     'runtimeRequest',
-    'supervisorFact',
-    'nativePreparation',
-    'nativeActivation',
   ]);
 
 /**

@@ -1,7 +1,5 @@
 import { CodeIndexDB } from '@mcp/store/db.js';
 import { dirname } from 'node:path';
-import { installNativeSessionHistory } from '../native-session-history.js';
-import { nativeRuntimeStorageRecovery } from '../native-runtime-package.js';
 import { setSqlCallSink, sqlLabel } from '@mcp/store/db/sql-timing.js';
 import { noteSyncLeaf } from './perf/stall-evidence.js';
 import { recordSlowCall } from './perf/slow-ipc.js';
@@ -996,8 +994,6 @@ export function createDeps(): ServerDeps {
     },
   });
   const coderPreferences = CoderPreferencesFile.fromDataDir(mcpDataDir());
-  registerShutdownTask('native-session-history', installNativeSessionHistory(sessionStore, dirname(config.dbPath),
-    async (sessionId, query) => peekCoderWorkerPool()?.readNativeHistory(sessionId, query)));
   filesystemPipelineTelemetrySink = new FsPipelineTelemetrySink(sessionStore);
   // Builder checkpoints — run-end hook deps (worker pool + in-process
   // stream both notify through the builder-checkpoint module global).
@@ -1094,7 +1090,6 @@ export function createDeps(): ServerDeps {
   });
   const controlPlaneStore = new FileControlPlaneStore(sessionStore, {
     journalEnabled: process.env.CODER_RUNTIME_JOURNAL_SHADOW === '1',
-    nativeRecovery: nativeRuntimeStorageRecovery(dirname(config.dbPath)),
   });
   const investigationSemanticIndex = new InvestigationSemanticIndex(
     { listProject: (projectId) => sessionStore.listInvestigationsForSemanticIndex(projectId) },

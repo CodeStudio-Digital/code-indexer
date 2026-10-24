@@ -21,9 +21,6 @@ import { newSessionId } from '@mcp/session-storage';
  */
 export interface TaskRunPersist {
   recordRunStarted(args: {
-    runtimeGeneration?: 'legacy_ts' | 'rust_v1';
-    taskPlanSha256?: string;
-    ownerToolUseId?: string;
     runId: string;
     mode: ExecuteTasksMode;
     startedAt: string;
@@ -51,10 +48,6 @@ export interface TaskRunPersist {
     skipReason?: string;
     inputsFingerprint?: string;
     attempt?: number;
-  }): Promise<void>;
-  recordTaskAdmitted?(args: {
-    runId: string; task: CoderTask; waveIdx: number; startedAt: string;
-    attempt?: number; nativeTranscriptRef: string;
   }): Promise<void>;
   recordRunFinished(args: {
     runId: string;

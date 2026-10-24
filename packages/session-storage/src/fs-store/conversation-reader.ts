@@ -28,12 +28,7 @@ interface HydratedConversation {
   rows: FsCoderMessageRow[];
   messages: AgentMessage[];
   selection?: FsConversationProjection['selection'];
-  runtime_outcome?: FsConversationProjection['runtime_outcome'];
 }
-
-/** Undefined delegates to the legacy journal. A native result is authoritative. */
-export type FsConversationProjectionLoader = (id: string,
-  query?: FsConversationProjectionQuery) => Promise<FsConversationProjection | undefined>;
 
 const CONVERSATION_TAIL_CHUNK_BYTES = 64 * 1024;
 
@@ -145,7 +140,6 @@ async function highestMessageSeqFromTail(
 }
 
 export class FsConversationReader {
-  projectionLoader?: FsConversationProjectionLoader;
   private hydratedCache: {
     key: string;
     value: HydratedConversation;
@@ -157,15 +151,6 @@ export class FsConversationReader {
 
   private async hydrated(id: SessionId | string, query?: FsConversationProjectionQuery): Promise<HydratedConversation> {
     const entry = await this.directory.requireEntry(id);
-    const native = await this.projectionLoader?.(String(id), query);
-    if (native) {
-      // The transcript writer lives in another worker. Its metadata (notably
-      // the selected worktree) must not come from this process's old catalog.
-      const session = await this.directory.refreshSession(id);
-      if (!session) throw new Error('Native conversation lost its product session');
-      const selected = query && native.selection?.kind !== query.kind ? queryConversationProjection(native, query) : native;
-      return { entry: await this.directory.requireEntry(id), session: { ...session, ...native.usage }, ...selected };
-    }
     const conversationPath = join(entry.location.bundle_path, 'conversation.jsonl');
     let fileSignature = 'missing';
     try {
@@ -212,8 +197,7 @@ export class FsConversationReader {
   }
 
   private async boundary(id: SessionId | string): Promise<number> {
-    // Native metadata belongs to the worker; refresh before selecting a window.
-    const session = this.projectionLoader ? await this.directory.refreshSession(id) : await this.directory.getSession(id);
+    const session = await this.directory.getSession(id);
     if (!session) throw new Error('Conversation has no product session');
     return compactionBoundary(session.state);
   }
@@ -273,7 +257,6 @@ export class FsConversationReader {
       session: result.session,
       messages: result.messages,
       message_rows: result.rows,
-      runtime_outcome: result.runtime_outcome,
     };
   }
 
@@ -286,7 +269,6 @@ export class FsConversationReader {
       session: result.session,
       messages: result.messages,
       message_rows: result.rows,
-      runtime_outcome: result.runtime_outcome,
     };
   }
 
@@ -305,7 +287,6 @@ export class FsConversationReader {
       session: result.session,
       messages: result.messages,
       message_rows: result.rows,
-      runtime_outcome: result.runtime_outcome,
     };
   }
 
@@ -386,9 +367,6 @@ export class FsConversationReader {
   }
 
   async maxSeq(id: SessionId | string): Promise<number> {
-    const query = { kind: 'stats', boundary: 0 } as const;
-    const native = await this.projectionLoader?.(String(id), query);
-    if (native) return (native.selection?.kind === 'stats' ? native : queryConversationProjection(native, query)).selection!.maxSeq;
     const entry = await this.directory.requireEntry(id);
     const conversationPath = join(
       entry.location.bundle_path,

@@ -80,8 +80,7 @@ function mergedTasks(
 }
 
 export class FsTaskRepository {
-  constructor(private readonly entities: FsSessionEntityFiles,
-    private readonly nativeState?: (id: string) => Promise<TasksState | null | undefined>) {}
+  constructor(private readonly entities: FsSessionEntityFiles) {}
 
   private async board(
     sessionId: SessionId | string,
@@ -211,8 +210,6 @@ export class FsTaskRepository {
   async getState(
     sessionId: SessionId | string,
   ): Promise<TasksState | null> {
-    const native = await this.nativeState?.(String(sessionId));
-    if (native !== undefined) return native;
     const current = await this.board(sessionId);
     return current
       ? (current.data as unknown as TaskBoardData).state

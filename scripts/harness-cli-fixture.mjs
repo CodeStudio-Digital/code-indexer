@@ -40,8 +40,7 @@ export async function runCliFixture({ env, repo, isolated, approvalSessionId, se
     assert(sessionId, `CLI ${scenario} omitted its session`);
     const calls = requests.slice(before);
     assert(calls.length, `CLI ${scenario} never reached its provider`);
-    assert(calls.every(request => request.admission.sessionId === sessionId
-      && request.admission.runtimeRoute.runtimeGeneration === 'rust_v1'));
+    assert(calls.every(request => request.admission.sessionId === sessionId));
     if (expected === 0) assert(stdout.includes('[done: completed]') && stdout.includes('HARNESS_RESULT_OK'));
     if (approve) assert(approvalCount > 0, 'CLI did not render a keyed tool approval');
     if (scenario === 'CANCEL') assert(signalled && /\[done: (?:cancelled|aborted)\]/.test(stdout));

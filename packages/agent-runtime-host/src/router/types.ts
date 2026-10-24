@@ -5,15 +5,12 @@ import type {
   SessionId,
 } from '@mcp/agent-runtime-contracts';
 
-export type AgentRuntimeGeneration = 'legacy_ts' | 'rust_v1';
+export type AgentRuntimeGeneration = 'legacy_ts';
 
-export type RuntimePreference =
-  | 'legacy_required'
-  | 'rust_preferred'
-  | 'rust_required';
+export type RuntimePreference = 'legacy_required';
 
 export type RuntimeIneligibilityReasonCode =
-  | 'rust_disabled'
+  | 'runtime_unavailable'
   | 'invalid_eligibility_input'
   | 'surface_unsupported'
   | 'platform_unsupported'
@@ -57,11 +54,6 @@ export interface RuntimeEligibilityInput {
   requiredContainmentLevel: RequiredContainmentLevel;
 }
 
-export interface RuntimeEligibilityDecision {
-  eligible: boolean;
-  reasons: readonly RuntimeIneligibilityReason[];
-}
-
 export interface RuntimeRouteRequest {
   sessionId: SessionId;
   agentRunId: AgentRunId;
@@ -71,10 +63,7 @@ export interface RuntimeRouteRequest {
   eligibility: RuntimeEligibilityInput;
 }
 
-export type RuntimeSelectionReasonCode =
-  | 'legacy_required'
-  | 'rust_eligible'
-  | 'rust_ineligible';
+export type RuntimeSelectionReasonCode = 'legacy_required';
 
 export interface RuntimeRouteRecord {
   schemaVersion: 1;

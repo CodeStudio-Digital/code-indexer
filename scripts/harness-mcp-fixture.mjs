@@ -33,7 +33,7 @@ export async function startMcpFixture(projectRoot) {
   }, async assertSingleEffect() { assert.equal(await readFile(join(projectRoot, 'mcp-effect.txt'), 'utf8'), 'effects:1'); } };
 }
 
-export async function runMcpFixture({ dashboard, post, projectId, fixture, setSession, requestCount, native = false, worktree = false }) {
+export async function runMcpFixture({ dashboard, post, projectId, fixture, setSession, requestCount, worktree = false }) {
   await post('/api/admin/mcp-servers', { id: 'harness-ext', name: 'Harness external MCP',
     ...(fixture.configuration ?? { transport: 'streamable_http', url: fixture.url }), enabled: true, auth_type: 'none', default_tier: 'bootstrap' });
   const session = await post('/api/coder/sessions', { project_id: projectId, title: 'MCP lost ACK fixture',
@@ -46,18 +46,18 @@ export async function runMcpFixture({ dashboard, post, projectId, fixture, setSe
       headers: { 'Content-Type': 'application/json' }, signal: AbortSignal.timeout(60_000),
       body: JSON.stringify({ content: 'Execute the fixture mutation. HARNESS_MCP_CASE', profile: 'full',
         client_msg_id: `harness-mcp-${path}`, max_turns: 3, max_auto_continues: 0,
-        ...(worktree && path === 'messages' ? { worktree: { name: 'native-mcp', branch: 'codex/native-mcp' } } : {}) }) });
+        ...(worktree && path === 'messages' ? { worktree: { name: 'fixture-mcp', branch: 'codex/fixture-mcp' } } : {}) }) });
     return { status: response.status, text: await response.text() };
   }, { path, sessionId: session.id, worktree });
   const first = await readStream('messages');
   assert(first.text.includes('TOOL_OUTCOME_UNKNOWN'), `MCP did not stop on unknown: ${first.text.slice(-2000)}`);
-  assert.equal(requestCount(), before + (native ? 1 : 2), 'MCP uncertainty entered another provider turn');
+  assert.equal(requestCount(), before + 2, 'MCP uncertainty entered another provider turn');
   await fixture.assertSingleEffect();
   const history = await dashboard.evaluate(async id => {
     const response = await fetch(`mcp://app/api/coder/sessions/${id}?full=1`); return response.json();
   }, session.id);
   assert(JSON.stringify(history.messages).includes('"effect_outcome":"unknown"'), 'history lost uncertain effect');
-  if (worktree) assert(history.session.worktree_path?.replaceAll('\\', '/').endsWith('/.mcp-indexer/worktrees/native-mcp'),
+  if (worktree) assert(history.session.worktree_path?.replaceAll('\\', '/').endsWith('/.mcp-indexer/worktrees/fixture-mcp'),
     'MCP did not execute from the admitted managed worktree');
   const continuation = await readStream('continue');
   assert(continuation.text.includes('TOOL_OUTCOME_UNKNOWN'), 'continuation did not retain uncertain-effect stop');

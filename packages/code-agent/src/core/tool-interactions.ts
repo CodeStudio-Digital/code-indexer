@@ -3,8 +3,7 @@ import type { InteractiveToolPort } from '../ports/interactive-tool-port.js';
 
 const legacyPorts = new WeakMap<object, InteractiveToolPort>();
 
-/** Compatibility adapter for existing tools; native attempts supply the port
- * directly and never create a legacy runner. */
+/** Resolve an injected interaction port or adapt the owning runner. */
 export function toolInteractions(context: ToolContext): InteractiveToolPort | undefined {
   if (context.ports?.interactions) return context.ports.interactions;
   const runner = context.runner;

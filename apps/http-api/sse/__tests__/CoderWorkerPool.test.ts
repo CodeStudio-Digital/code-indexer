@@ -202,13 +202,43 @@ describe('CoderWorkerPool', () => {
     return pool;
   }
 
+  it('rejects retired conversations before policy resolution, writer handoff, or worker startup', async () => {
+    const sessionId = sid(97);
+    const directory = join(bundleRoot, 'native-sessions', sessionId);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'session.json'), '{}');
+    const resolveRuntimePolicy = vi.fn();
+    const handoffSessionWriter = vi.fn();
+    pool = new CoderWorkerPool({
+      workerFile: 'mock-worker.js',
+      dbPath: join(bundleRoot, 'store.db'),
+      resolveSessionRuntimeContext: resolveTestSessionRuntimeContext,
+      resolveRuntimePolicy,
+      handoffSessionWriter,
+      log: () => undefined,
+    });
+
+    await expect(pool.runFresh(sessionId, { userMessage: 'continue' })).rejects.toMatchObject({
+      code: 'RETIRED_CONVERSATION_FORMAT',
+    });
+    await expect(pool.pushUserMessage(sessionId, 'follow-up')).rejects.toMatchObject({
+      code: 'RETIRED_CONVERSATION_FORMAT',
+    });
+    await expect(pool.readAgentTranscript(sessionId, 'retained-group')).rejects.toMatchObject({
+      code: 'RETIRED_CONVERSATION_FORMAT',
+    });
+    expect(resolveRuntimePolicy).not.toHaveBeenCalled();
+    expect(handoffSessionWriter).not.toHaveBeenCalled();
+    expect(mockWorker.state.hosts).toHaveLength(0);
+  });
+
   it('recreates an evicted worker for retained history without launching a model or run', async () => {
     const p = createPool();
     mockWorker.state.requestImpl = async type => type === 'readAgentTranscript' ? { ok: true, text: 'Retained result' } : { ok: true };
     await expect(p.readAgentTranscript(sid(99), 'retained-group', 1, 2000)).resolves.toMatchObject({ ok: true, text: 'Retained result' });
     const first = mockWorker.state.hosts[0];
     expect(first.bridge.requests.map(request => request.type)).not.toContain('runFresh');
-    expect(first.opts).toMatchObject({ workerData: { nativeChildHistory: { sessionRoot: expect.any(String) } } });
+    expect(first.opts).not.toHaveProperty('workerData.nativeChildHistory');
     await p.evict(sid(99));
     await expect(p.readAgentTranscript(sid(99), 'retained-group')).resolves.toMatchObject({ ok: true });
     expect(mockWorker.state.hosts).toHaveLength(2);
@@ -1121,7 +1151,7 @@ describe('CoderWorkerPool', () => {
       host.bridge.emitToPool('bus.event', {
         runId,
         event: 'run_started',
-        data: { runId: 'runner-native-13' },
+        data: { runId: 'runner-worker-13' },
       });
       host.bridge.emitToPool('bus.event', {
         runId,
@@ -1140,7 +1170,7 @@ describe('CoderWorkerPool', () => {
       });
       await drainLocalCoderShadowWrites();
 
-      expect(storeSpies.markRunStarted).toHaveBeenCalledWith(context, 'runner-native-13');
+      expect(storeSpies.markRunStarted).toHaveBeenCalledWith(context, 'runner-worker-13');
       expect(storeSpies.appendToolBoundary).toHaveBeenCalledTimes(2);
       expect(storeSpies.appendToolBoundary).toHaveBeenNthCalledWith(1, expect.objectContaining({
         context,

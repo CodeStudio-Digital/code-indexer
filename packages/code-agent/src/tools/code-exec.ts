@@ -54,7 +54,6 @@ import { normalizeSourceTruncations } from '@mcp/code-agent/core/runner/tool-out
 import { ToolCallLedger } from '@mcp/code-agent/core/tool-call-ledger.js';
 import { nestedToolConcurrencyGate } from './code-exec-concurrency.js';
 import { preserveCodeExecEffectOutcome } from './code-exec-effect-outcome.js';
-import type { CodeExecutionSession } from '../ports/code-execution-port.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
@@ -323,9 +322,7 @@ export function buildCodeExecTool(
       additionalProperties: false,
     },
     handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-      if (ctx.runtimeGeneration === 'rust_v1' && !ctx.ports?.codeExecution) {
-        return err('Native code_exec requires its owned disposable evaluator process. Rebuild the runtime integration.');
-      }
+
       const code = String(args.code ?? '');
       if (!code.trim()) {
         // PR 5 — guide the model towards the right tool when `code` is
@@ -1336,7 +1333,6 @@ export function buildCodeExecTool(
         }
       };
 
-      let isolatedExecution: CodeExecutionSession | undefined;
       const closeAndSettle = async (reason?: unknown, abortActive = false): Promise<boolean> => {
         executionClosing = true;
         pauseClock();
@@ -1345,10 +1341,7 @@ export function buildCodeExecTool(
           clockTimer = null;
         }
         if (abortActive) abortActiveCalls(reason);
-        if (isolatedExecution) {
-          try { await isolatedExecution.close(); }
-          catch { unsafeLedger.markOutcomeUnknown('code_exec'); }
-        }
+
         // A detached continuation can enqueue one more proxy promise while a
         // sibling settles. Refuse late calls (executionClosing) and drain until
         // the set is genuinely empty, but never let an uncooperative nested
@@ -1449,17 +1442,7 @@ export function buildCodeExecTool(
       armClock();
       let scriptPromise: Promise<unknown>;
       try {
-        if (ctx.ports?.codeExecution) {
-          isolatedExecution = ctx.ports.codeExecution.start({ code, sandbox, timeoutMs: timeout,
-            wallTimeoutMs: WALL_TIMEOUT_MS, maxOutputBytes: effectiveMaxOutput, priorityErrorBytes: priorityErrorLimit,
-            toolNames: exposedNames, allToolNames: allNames, signal: ctx.signal,
-            onOmittedLogs: (lines, bytes, tail) => {
-              omittedLogLines += lines; omittedLogBytes += bytes; emittedLogBytes += bytes;
-              for (const line of tail) retainPriorityError(line);
-            },
-          });
-          scriptPromise = isolatedExecution.result;
-        } else {
+        {
           scriptPromise = runInNewContext(wrapped, sandbox, {
             timeout: timeout, // legacy synchronous loop protection
             filename: 'code_exec.js',

@@ -297,12 +297,9 @@ export function prepareTurnGoalMutations(
 }
 
 export class FsGoalRepository {
-  constructor(private readonly directory: FsSessionDirectory,
-    private readonly nativeProjection?: (id: string) => Promise<FsSessionGoal | undefined>) {}
+  constructor(private readonly directory: FsSessionDirectory) {}
 
   async get(id: SessionId | string): Promise<FsSessionGoal | null> {
-    const native = await this.nativeProjection?.(id);
-    if (native) return native;
     const entry = await this.directory.requireEntry(id);
     return projectGoal(
       this.directory.repository.readConversationSync(entry.location),
@@ -314,7 +311,6 @@ export class FsGoalRepository {
     input: FsUpsertGoalInput,
   ): Promise<FsSessionGoal> {
     return this.directory.runMutation(id, async () => {
-      if (await this.nativeProjection?.(id)) throw new FsGoalConflictError('Native goal changes require the native session writer');
       const entry = await this.directory.requireEntry(id);
       const commits = this.directory.repository.readConversationSync(
         entry.location,
@@ -390,7 +386,6 @@ export class FsGoalRepository {
     options: { expected_revision?: number; operation_id?: string } = {},
   ): Promise<boolean> {
     return this.directory.runMutation(id, async () => {
-      if (await this.nativeProjection?.(id)) throw new FsGoalConflictError('Native goal changes require the native session writer');
       const entry = await this.directory.requireEntry(id);
       const commits = this.directory.repository.readConversationSync(
         entry.location,

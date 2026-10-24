@@ -25,7 +25,6 @@ import {
   checkNativeAbi,
   checkWorkspaceDeps,
   gitState,
-  resolveCargo,
 } from './release/preflight.mjs';
 import { verifyBuild } from './release/verify.mjs';
 import { confirm, publishRelease, releaseAssets, releaseExists, targetRepo } from './release/publish.mjs';
@@ -90,9 +89,6 @@ step(`Preflight — CodeStudio ${version}`);
 const git = gitState(root);
 line(true, `git ${git.branch} @ ${git.head}`, git.dirtyFiles > 0 ? `${git.dirtyFiles} uncommitted file(s)` : '');
 
-const cargo = resolveCargo();
-line(cargo.ok, cargo.ok ? `cargo — ${cargo.version}${cargo.viaRustup ? ' (via rustup toolchain)' : ''}` : 'cargo', cargo.hint);
-
 const abi = checkNativeAbi(root);
 line(abi.ok, abi.ok ? `better-sqlite3 built for Electron (ABI ${abi.abi})` : 'better-sqlite3 ABI', abi.hint);
 
@@ -126,9 +122,6 @@ if (!skipBuild) {
   step('Build');
   console.log('  running the full electron:build pipeline…\n');
   const env = { ...process.env };
-  // The Rust packaging step shells out to `cargo`; hand it the binary we
-  // resolved so a missing ~/.cargo/bin shim cannot fail the build 15 minutes in.
-  if (cargo.path !== 'cargo') env.CARGO = cargo.path;
   const build = spawnSync('pnpm', ['run', 'electron:build'], {
     cwd: root,
     stdio: 'inherit',

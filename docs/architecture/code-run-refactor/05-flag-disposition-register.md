@@ -1,5 +1,7 @@
 # 05 — Registro de disposição das flags
 
+> Documento histórico anterior à remoção do runtime Rust. Os caminhos e resultados descrevem o checkpoint da época; consulte o [estado atual](../runtime-retirement.md).
+
 > **Status:** classificação aplicada; inventário AST é o oracle de cobertura
 > **Regra:** este registro governa destino; o inventory gerado em P0 governa
 > cobertura exata de consumers e valores

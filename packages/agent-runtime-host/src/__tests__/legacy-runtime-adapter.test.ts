@@ -1,19 +1,16 @@
-import { create } from '@bufbuild/protobuf';
-import { agentV1Runtime } from '@mcp/agent-runtime-contracts';
 import { describe, expect, it, vi } from 'vitest';
-import { LegacyAgentRuntimeAdapter, NativeRustAgentRuntimeAdapter, type PreparedLegacyAgentAttempt,
-  type AttemptRuntimeLease, type PreparedAgentAttempt, type RuntimeRouteRecord } from '../index.js';
+import { LegacyAgentRuntimeAdapter,
+  type AttemptRuntimeLease, type PreparedLegacyAgentAttempt, type RuntimeRouteRecord } from '../index.js';
 
 function fixture() {
   const authority = {
     sessionId: 'session', commandId: 'command', agentRunId: 'run', attemptId: 'attempt',
     executorOwnerId: 'worker', fencingEpoch: 1n, correlationId: 'correlation', rootAgentRunId: 'run',
     leaseExpiresAtUnixMs: 9_999_999_999_999n, deadlineAtUnixMs: 9_999_999_999_999n,
-  } as PreparedAgentAttempt['authority'];
+  } as PreparedLegacyAgentAttempt['authority'];
   // Adapter fixtures isolate ownership; full prepared-spec validation belongs
   // to the facade suite, before this boundary can be called by the product.
-  const prepared = { authority, expectedSpecSha256: new Uint8Array(32).fill(1),
-    wireSpec: create(agentV1Runtime.ResolvedAttemptSpecSchema) } as PreparedAgentAttempt;
+  const prepared = { authority, expectedSpecSha256: new Uint8Array(32).fill(1) } as PreparedLegacyAgentAttempt;
   const route = { ...authority, runtimeGeneration: 'legacy_ts' } as unknown as RuntimeRouteRecord;
   return { prepared, route };
 }
@@ -45,15 +42,6 @@ describe('LegacyAgentRuntimeAdapter ownership', () => {
     await expect(adapter.cancel(prepared.authority, { code: 'user_cancelled' })).rejects.toThrow('fenced');
     expect(cancel).not.toHaveBeenCalled();
   });
-  it('never provisions a native process from legacy-only admission facts', async () => {
-    const { prepared, route } = fixture();
-    const { wireSpec: _wireSpec, ...legacy } = prepared;
-    const provision = vi.fn(async () => { throw new Error('must not provision'); });
-    const native = new NativeRustAgentRuntimeAdapter({ assertCurrent: async () => {}, provision });
-    await expect(native.launch(legacy as unknown as PreparedLegacyAgentAttempt, { ...route, runtimeGeneration: 'rust_v1' }))
-      .rejects.toThrow('native wire spec');
-    expect(provision).not.toHaveBeenCalled();
-  });
   it('launches once under concurrent replay and does not retry an ambiguous start', async () => {
     const { prepared, route } = fixture();
     const launch = vi.fn(async () => { throw new Error('ack lost'); });
@@ -71,7 +59,7 @@ describe('LegacyAgentRuntimeAdapter ownership', () => {
     await adapter.launch(prepared, route);
     await expect(adapter.launch({ ...prepared, expectedSpecSha256: new Uint8Array(32).fill(2) }, route)).rejects.toThrow('input changed');
     await expect(adapter.cancel({ ...prepared.authority, fencingEpoch: 2n }, { code: 'cancel' })).rejects.toThrow('authority changed');
-    await expect(adapter.launch(prepared, { ...route, runtimeGeneration: 'rust_v1' })).rejects.toThrow('route');
+    await expect(adapter.launch(prepared, { ...route, attemptId: 'another-attempt' as typeof route.attemptId })).rejects.toThrow('route');
     expect(launch).toHaveBeenCalledTimes(1);
   });
 

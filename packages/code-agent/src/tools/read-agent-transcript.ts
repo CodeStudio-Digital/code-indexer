@@ -124,13 +124,6 @@ export function buildReadAgentTranscriptTool(
       }
       // Final-report fallback uses the same bound as a full transcript.
       const maxChars = typeof args.max_chars === 'number' ? args.max_chars : undefined;
-      if (agent.nativeTranscriptRef) {
-        const tree = ctx.ports?.agentTree;
-        if (ctx.runtimeGeneration !== 'rust_v1' || !tree?.readTranscript || tree.ownerAgentRunId !== ctx.controlPlaneParentAgentRunId) {
-          return err('read_agent_transcript: the native transcript has no authorized tree reader.');
-        }
-        return ok(await tree.readTranscript(agent.nativeTranscriptRef, { maxChars, signal: ctx.signal }));
-      }
       return ok(await renderAgentTranscriptAsync(agent, { maxChars, signal: ctx.signal }));
     },
   };

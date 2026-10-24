@@ -12,7 +12,7 @@ export function inlineRunProjection(store: FsSessionStore, sessionId: SessionId)
     }
     const saved = await store.getTaskRunWithItems(sessionId, task.task_run_id);
     const item = saved?.items.find(value => value.task_id === task.id && value.attempt === 0);
-    if (!saved || !item || item.native_transcript_ref) throw new Error('Inline task-run projection has no matching run item');
+    if (!saved || !item) throw new Error('Inline task-run projection has no matching run item');
     await store.upsertTaskRunItem({ ...item, session_id: sessionId, status: task.status,
       finished_at: task.finished_at, summary: task.result.summary, error: task.result.errors ?? null });
     const latest = new Map<string, typeof item>();
