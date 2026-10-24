@@ -3,7 +3,6 @@ import AdmZip from 'adm-zip';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MAX_ATTACHMENTS_PER_MESSAGE } from '@mcp/shared';
 import { validateAttachments } from '../attachment-validation.js';
 
 function b64(value: string): string {
@@ -60,13 +59,14 @@ describe('validateAttachments', () => {
     expect(result).toMatchObject({ ok: false, code: 'ATTACHMENT_ENCODING_INVALID' });
   });
 
-  it('enforces the per-message item cap', () => {
-    const items = Array.from({ length: MAX_ATTACHMENTS_PER_MESSAGE + 1 }, (_, i) => ({
-      name: `file-${i}.txt`,
-      mediaType: 'text/plain',
-      text: 'ok',
+  it('accepts many images within the payload budget', () => {
+    const items = Array.from({ length: 25 }, (_, i) => ({
+      name: `image-${i}.png`,
+      mediaType: 'image/png',
+      base64: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString('base64'),
     }));
-    expect(validateAttachments(items)).toMatchObject({ ok: false, code: 'ATTACHMENTS_TOO_MANY' });
+    const result = validateAttachments(items);
+    expect(result.ok && result.value?.length).toBe(25);
   });
 
   it('rejects unsupported binary file types', () => {

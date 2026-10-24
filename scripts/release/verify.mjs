@@ -61,7 +61,8 @@ export function runSmokeProbes(root, resourcesDir) {
     !report.harnessError &&
     report.renderer?.ok === true &&
     report.deepLink?.ok === true &&
-    report.indexer?.ok === true && report.apiScripts?.ok === true && report.webContent?.ok === true;
+    report.indexer?.ok === true && report.apiScripts?.ok === true && report.webContent?.ok === true
+    && report.vision?.ok === true;
   return { ok, report };
 }
 
@@ -97,8 +98,8 @@ export function verifyBuild(root, outputDir) {
       name: 'renderer paints',
       ok: r.renderer?.ok === true,
       detail: r.renderer?.ok
-        ? `mounted (${r.renderer.children} nodes), location intact, relative assets load`
-        : `mounted=${r.renderer?.mounted} locationIntact=${r.renderer?.locationIntact} assets=${r.renderer?.relativeAssetLoads} ${r.renderer?.error ?? ''}`,
+        ? `mounted (${r.renderer.children} nodes), location intact, assets and mcp:// images load`
+        : `mounted=${r.renderer?.mounted} locationIntact=${r.renderer?.locationIntact} assets=${r.renderer?.relativeAssetLoads} images=${r.renderer?.imageProtocolLoads} ${r.renderer?.error ?? ''}`,
     });
     checks.push({
       name: 'deep link',
@@ -114,6 +115,8 @@ export function verifyBuild(root, outputDir) {
       detail: r.apiScripts?.ok ? 'QuickJS WASM executes pm.* inside a terminated worker' : (r.apiScripts?.error ?? 'failed') });
     checks.push({ name: 'Web content conversion', ok: r.webContent?.ok === true,
       detail: r.webContent?.ok ? 'HTML converts to markdown in a terminated worker' : (r.webContent?.error ?? 'failed') });
+    checks.push({ name: 'Image and video vision', ok: r.vision?.ok === true,
+      detail: r.vision?.ok ? 'Sharp decodes a local image and packaged FFmpeg extracts a video frame' : (r.vision?.error ?? 'failed') });
   }
 
   return { ok: checks.every((c) => c.ok), checks };

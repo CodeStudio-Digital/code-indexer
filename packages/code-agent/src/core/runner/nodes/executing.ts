@@ -1,4 +1,5 @@
 import { toolExtraUserMessages } from '../../tool-extra-user-messages.js';
+import { projectVisionContext } from '../../vision-context.js';
 import { BoundaryPreparation } from '../boundary-preparation.js';
 /**
  * Executing node — drives ONE full provider turn.
@@ -478,7 +479,7 @@ export class ExecutingNode implements BehaviorNode {
     };
     let reducerStats: { retired: number; freedChars: number; pendingRetired: number; pendingChars: number } | null = null;
     const messagesForChat = assembleMessagesForChat({
-      messages: ctx.messages,
+      messages: projectVisionContext(ctx.messages, ctx.opts.toolContext.toolOutputStore),
       tunables,
       compactionLimits: undefined,
       agentLoopV2: !!ctx.opts.agentLoopV2,

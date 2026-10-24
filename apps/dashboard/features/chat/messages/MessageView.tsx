@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Brain, ChevronDown, ChevronRight, FileText, GitBranch, ImageIcon, Loader2, Paperclip, RotateCcw, Sparkles } from 'lucide-react';
+import { Brain, ChevronDown, ChevronRight, FileText, GitBranch, Loader2, Paperclip, RotateCcw, Sparkles } from 'lucide-react';
 import type { DecisionAnswers, DecisionQuestion, StreamTask, ToolCallEvent } from '../../../hooks/useAgentStream.js';
 import { cn } from '../../../lib/utils.js';
+import { apiBaseUrl } from '../../../lib/api-client-transport.js';
 import { PlanPromptView } from '../prompts/PlanPromptView.js';
 import { QuestionPromptView } from '../prompts/QuestionPromptView.js';
 import { DecisionGateView } from '../prompts/DecisionGateView.js';
@@ -20,6 +21,7 @@ import { persistedInteractivePromptSignature } from '../utils.js';
 import { AgentsGroupBlock } from './AgentsGroupBlock.js';
 import { CopyMarkdownButton } from './CopyMarkdownButton.js';
 import { Markdown } from './Markdown.js';
+import { ImageGallery } from './ImageGallery.js';
 import { TaskExecutionBlock, parseExecuteTasksResult } from './TaskExecutionBlock.js';
 import { WorkflowBlock, parseWorkflowResult } from './WorkflowBlock.js';
 import { ToolCallBlock } from './ToolCallBlock.js';
@@ -164,8 +166,8 @@ function MessageViewInner({
     .join('\n\n');
 
   return (
-    <div className="group/msg w-full py-1">
-      <article className="relative w-full min-w-0 py-1 text-foreground">
+    <div className="group/msg w-full">
+      <article className="relative w-full min-w-0 text-foreground">
         <div className="absolute right-0 top-0 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/msg:opacity-100 focus-within:opacity-100">
           {tokenBadge}
           {assistantMarkdown && <CopyMarkdownButton text={assistantMarkdown} />}
@@ -261,9 +263,9 @@ function UserMessage({
   const hasUserBody = !!text || docs.length > 0 || !!fetchError;
 
   return (
-    <div className="group/user group/msg flex w-full justify-end py-2">
-      <article className="min-w-0 max-w-[min(82%,42rem)]">
-        <div className="mb-1 flex min-h-5 items-center justify-end gap-2 text-[10px] text-muted-foreground/75">
+    <div className="group/user group/msg flex w-full justify-end py-1">
+      <article className="relative min-w-0 max-w-[min(82%,42rem)]">
+        <div className="absolute right-1 -top-5 z-10 flex h-5 items-center justify-end gap-2 text-[10px] text-muted-foreground/75 opacity-0 group-hover/user:opacity-100 focus-within:opacity-100">
           <div className={cn(
             'flex items-center gap-1 opacity-0 transition-opacity duration-200 group-hover/user:opacity-100 focus-within:opacity-100',
             rollbackPending && 'opacity-100',
@@ -322,18 +324,12 @@ function UserMessage({
             )}
           </div>
         )}
-        {images.length > 0 && (
-          <div className="mt-2 flex flex-wrap justify-end gap-2">
-            {images.map((img, i) => (
-              <AttachmentImage
-                key={`img-${i}`}
-                block={resolveBlock(img, i)}
-                loading={loading}
-                onNeedsFetch={ensureFull}
-              />
-            ))}
-          </div>
-        )}
+        {images.length > 0 && <ImageGallery images={images.map((img, i) => {
+          const inline = img.base64 ? `data:${img.mediaType};base64,${img.base64}` : '';
+          const url = sessionId && messageId != null
+            ? `${apiBaseUrl()}/api/coder/sessions/${encodeURIComponent(sessionId)}/messages/${messageId}/images/${i}` : '';
+          return { name: img.name || t('gallery.image', { index: i + 1 }), src: inline || url, thumbnail: inline || (url ? `${url}?thumbnail=1` : '') };
+        })} />}
         {appliedSkills.length > 0 && (
           <div
             className="mt-1 flex flex-wrap justify-end gap-1"
@@ -353,85 +349,6 @@ function UserMessage({
         )}
       </article>
     </div>
-  );
-}
-
-/**
- * User-uploaded image: shows a thumbnail. If the base64 was stripped from
- * the list payload (server trims user attachments — see
- * sessions.ts trimMessageBlocks), the thumbnail is a placeholder card and
- * clicking it lazy-fetches the full message and opens a fullscreen modal.
- */
-function AttachmentImage({
-  block,
-  loading,
-  onNeedsFetch,
-}: {
-  block: ContentBlock;
-  loading: boolean;
-  onNeedsFetch: () => void | Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [pendingOpen, setPendingOpen] = useState(false);
-  const hasData = !!block.base64;
-  const src = hasData ? `data:${block.mediaType};base64,${block.base64}` : null;
-
-  // Open the modal automatically once a click-triggered fetch resolves.
-  useEffect(() => {
-    if (pendingOpen && hasData) {
-      setOpen(true);
-      setPendingOpen(false);
-    }
-  }, [pendingOpen, hasData]);
-
-  const handleClick = () => {
-    if (hasData) {
-      setOpen(true);
-      return;
-    }
-    setPendingOpen(true);
-    void onNeedsFetch();
-  };
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={handleClick}
-        className="relative h-20 w-20 overflow-hidden rounded-md border border-border/45 bg-card/75 cursor-zoom-in transition-all duration-150 hover:border-primary/45 hover:opacity-95 hover:shadow-sm"
-        title={hasData ? 'Open preview' : 'Load preview'}
-      >
-        {src ? (
-          <img src={src} alt="attachment" className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-muted-foreground">
-            {loading || pendingOpen ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : (
-              <ImageIcon className="h-5 w-5" />
-            )}
-            <span className="text-[10px]">
-              {loading || pendingOpen ? 'Loading…' : 'Preview'}
-            </span>
-          </div>
-        )}
-      </button>
-      {open && src && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 cursor-zoom-out"
-          onClick={() => setOpen(false)}
-          role="button"
-          tabIndex={-1}
-        >
-          <img
-            src={src}
-            alt="attachment full size"
-            className="max-w-full max-h-full rounded shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
-    </>
   );
 }
 
@@ -914,39 +831,10 @@ export function renderAssistantBlock(
  * Used for assistant-emitted images (server-managed image_generation results).
  */
 function GeneratedImageBlock({ mediaType, base64 }: { mediaType: string; base64: string }) {
-  const [open, setOpen] = useState(false);
+  const { t } = useTranslation('chat');
   if (!base64) return null;
-  const src = `data:${mediaType};base64,${base64}`;
-  return (
-    <>
-      <div className="my-2">
-        <img
-          src={src}
-          alt="Generated"
-          width={300}
-          onClick={() => setOpen(true)}
-          className="rounded border border-border cursor-zoom-in hover:opacity-90 transition-opacity"
-        />
-      </div>
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 cursor-zoom-out"
-          onClick={() => setOpen(false)}
-          role="button"
-          tabIndex={-1}
-        >
-          <img
-            src={src}
-            alt="Generated (full size)"
-            className="max-w-full max-h-full rounded shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
-    </>
-  );
+  return <ImageGallery images={[{ name: t('gallery.generated'), src: `data:${mediaType};base64,${base64}` }]} />;
 }
-
 
 /** Collapsible thinking block — shows model reasoning, like Gemini/Claude. */
 function ThinkingBlockView({ text }: { text: string }) {

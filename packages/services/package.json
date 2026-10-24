@@ -22,6 +22,7 @@
     "officeparser": "^7.2.1",
     "playwright-core": "1.61.1",
     "quickjs-emscripten": "0.32.0",
+    "sharp": "0.34.5",
     "turndown": "^7.2.4",
     "unpdf": "^1.6.2"
   },

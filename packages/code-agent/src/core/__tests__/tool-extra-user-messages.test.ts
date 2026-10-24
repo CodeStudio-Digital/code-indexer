@@ -10,7 +10,7 @@ it('keeps mixed images and internal reminders in call order without hiding attac
     { name: 'preview_screenshot', extraUserBlocks: [image] },
   ]);
   expect(output.map(message => !!message.isMeta)).toEqual([false, true, false]);
-  expect(output[0]!.content[0]).toEqual(image); expect(output[2]!.content[0]).toEqual(image);
+  expect(output[0]!.content[0]).toEqual({ ...image, visionRequested: true }); expect(output[2]!.content[0]).toEqual({ ...image, visionRequested: true });
   expect(output[1]!.content).toEqual([reminder]);
 });
 

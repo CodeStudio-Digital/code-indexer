@@ -1,86 +1,73 @@
 import { promises as fs } from 'node:fs';
-import { extname } from 'node:path';
-import type { CoderTool, ToolContext, ToolResult } from '@mcp/code-agent/core/tool.js';
-import type { ImageBlock } from '@mcp/code-agent/core/messages.js';
-import { ok, err } from '@mcp/code-agent/core/tool.js';
+import { basename } from 'node:path';
+import type { CoderTool } from '@mcp/code-agent/core/tool.js';
+import { err } from '@mcp/code-agent/core/tool.js';
 import { resolveWorkspacePath } from '@mcp/code-agent/tools/paths.js';
-import { maybeTerse } from '@mcp/code-agent/tools/descriptions.js';
-
-const VIEW_IMAGE_DESC =
-  'Load a project image file so you can actually see it on the next turn. ' +
-  'The image is appended as a user-visible block; your next prompt observes it like any user attachment.\n' +
-  "USE: when the user asked about a screenshot, design asset, or test artifact stored in the project tree.\n" +
-  "USE: to inspect a chart/figure your tools just generated.\n" +
-  "DON'T: load the same image twice in a session — once it's in the thread you keep seeing it.\n" +
-  "DON'T: load images outside the project or explicitly authorized external roots. Paths are validated.\n" +
-  'VISION FALLBACK: if your own model can\'t see images, set `describe` to say what you need ' +
-  '(e.g. "describe the layout to recreate it" or "list visual bugs / misalignments") — a vision ' +
-  'model translates the image to text for you. Ignored when you can already see images.';
-
-const IMAGE_EXT_TO_MEDIA: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  webp: 'image/webp',
-  gif: 'image/gif',
-};
-
-const MAX_BYTES = 8 * 1024 * 1024; // 8 MB
+import { prepareVisionImage, MAX_VISION_SOURCE_BYTES, type ImageCrop } from '@mcp/services/services/docs/vision-image.js';
+import { viewVideo } from './view-video.js';
 
 export const viewImage: CoderTool = {
   name: 'view_image',
-  description: maybeTerse(VIEW_IMAGE_DESC),
-  source: 'native',
-  mutates: false,
-  parallelSafe: true,
-  riskLevel: 'read',
+  description: 'Inspect an image from ANY authorized project/local path, or revisit a saved attachment/screenshot by attachment_id. '
+    + 'Use action=list to discover saved session images after compaction or restart. Pixels are sent only for the next inference; call again to revisit. '
+    + 'Use crop for fine details and max_dimension to control resolution. Supports raster images and SVG. '
+    + 'For browser/preview screenshots use the capture tools, then revisit their saved images here.',
+  source: 'native', mutates: false, parallelSafe: true, riskLevel: 'read',
+  repeatPolicy: 'volatile',
   parameters: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'Project-relative path, "<project-slug>/..." in a global session, or an authorized absolute image path.' },
-      describe: {
-        type: 'string',
-        description:
-          'Optional. What you want described / looked for if your model can\'t see the image (vision fallback). Task-specific, e.g. "detailed layout to recreate" or "evaluate alignment bugs".',
-      },
-    },
-    required: ['path'],
-    additionalProperties: false,
+    type: 'object', properties: {
+      action: { type: 'string', enum: ['view', 'list'], description: 'Default view. list returns saved image references without pixels.' },
+      path: { type: 'string', description: 'Project-relative, <project-slug>/... or authorized absolute image path.' },
+      attachment_id: { type: 'string', description: 'Saved image reference from the conversation or action=list.' },
+      crop: { type: 'object', properties: { left: { type: 'integer' }, top: { type: 'integer' }, width: { type: 'integer' }, height: { type: 'integer' } }, required: ['left', 'top', 'width', 'height'], additionalProperties: false },
+      max_dimension: { type: 'integer', minimum: 64, maximum: 4096, description: 'Longest preview edge, default 2048; original is retained.' },
+      offset: { type: 'integer', minimum: 0, description: 'For list, page offset; 50 references per page.' },
+      describe: { type: 'string', description: 'What to inspect if a vision fallback model is needed.' },
+    }, additionalProperties: false,
   },
-  handler: async (args, ctx: ToolContext): Promise<ToolResult> => {
-    const path = String(args.path ?? '');
-    const resolved = resolveWorkspacePath(path, ctx, 'read');
-    if (!resolved.ok) return err(resolved.reason);
-    const abs = resolved.abs;
-
-    const ext = extname(path).replace(/^\./, '').toLowerCase();
-    const mediaType = IMAGE_EXT_TO_MEDIA[ext];
-    if (!mediaType) {
-      return err(
-        `view_image: '${path}' has unsupported extension '.${ext}'. ` +
-          `Supported: ${Object.keys(IMAGE_EXT_TO_MEDIA).join(', ')}.`,
-      );
-    }
-
-    let buf: Buffer;
+  handler: async (args, ctx) => {
     try {
-      buf = await fs.readFile(abs);
-    } catch (e) {
-      return err(`view_image: cannot read ${path}: ${e instanceof Error ? e.message : String(e)}`);
-    }
-    if (buf.length > MAX_BYTES) {
-      return err(`view_image: ${path} is ${(buf.length / 1024 / 1024).toFixed(1)} MB — over the ${MAX_BYTES / 1024 / 1024} MB cap.`);
-    }
-
-    const base64 = buf.toString('base64');
-    const describeHint = typeof args.describe === 'string' && args.describe.trim() ? args.describe.trim() : undefined;
-    const block: ImageBlock = { type: 'image', mediaType, base64, describeHint };
-
-    return {
-      content: `Loaded ${path} (${mediaType}, ${(buf.length / 1024).toFixed(1)} KB). The image is now visible to you on the next turn.`,
-      extraUserBlocks: [block],
-    };
+      const store = ctx.toolOutputStore;
+      if (args.action === 'list') {
+        const images = store?.listImages?.() ?? [];
+        const offset = Number(args.offset ?? 0);
+        if (!Number.isSafeInteger(offset) || offset < 0) return err('Invalid list offset.');
+        return { content: JSON.stringify({ images: images.slice(offset, offset + 50), total: images.length,
+          next_offset: offset + 50 < images.length ? offset + 50 : null }) };
+      }
+      if (Boolean(args.path) === Boolean(args.attachment_id)) return err('Provide exactly one of path or attachment_id.');
+      let bytes: Buffer;
+      let name: string;
+      let attachmentId: string | null = null;
+      if (args.attachment_id) {
+        attachmentId = String(args.attachment_id);
+        const reference = store?.listImages?.().find(image => image.id === attachmentId);
+        if (!reference) return err('Image reference not found in this session. Use action=list.');
+        const raw = await store!.get(attachmentId, ctx.signal);
+        if (!raw) return err('Image payload not found.');
+        const image = JSON.parse(raw) as { base64: string };
+        bytes = Buffer.from(image.base64, 'base64');
+        name = reference.name;
+      } else {
+        const resolved = resolveWorkspacePath(String(args.path), ctx, 'read');
+        if (!resolved.ok) return err(resolved.reason);
+        const stat = await fs.stat(resolved.abs);
+        if (!stat.isFile() || stat.size > MAX_VISION_SOURCE_BYTES) return err('Expected an image file up to 64 MB.');
+        bytes = await fs.readFile(resolved.abs, { signal: ctx.signal });
+        name = basename(resolved.abs);
+      }
+      const preview = await prepareVisionImage(bytes, { crop: args.crop as ImageCrop | undefined,
+        maxDimension: args.max_dimension as number | undefined });
+      attachmentId ??= store?.putImage?.({ name, mediaType: 'application/octet-stream', base64: bytes.toString('base64') }) ?? null;
+      return {
+        content: `Viewing ${name}: original ${preview.width}×${preview.height}, preview ${preview.previewWidth}×${preview.previewHeight}.`
+          + (attachmentId ? ` Saved attachment_id=${attachmentId}.` : ''),
+        extraUserBlocks: [{ type: 'image', name, mediaType: preview.mediaType, base64: preview.base64,
+          ...(attachmentId ? { sourceImageId: attachmentId } : {}),
+          ...(typeof args.describe === 'string' ? { describeHint: args.describe } : {}) }],
+      };
+    } catch (error) { return err(`view_image: ${error instanceof Error ? error.message : String(error)}`); }
   },
 };
 
-export const viewImageTools: CoderTool[] = [viewImage];
+export const viewImageTools: CoderTool[] = [viewImage, viewVideo];

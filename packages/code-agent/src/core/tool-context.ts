@@ -67,6 +67,8 @@ export interface ToolContextServices {
    */
   toolOutputStore?: {
     put(content: string): string | null;
+    putImage?(image: { name?: string; mediaType: string; base64: string }): string | null;
+    listImages?(): Array<{ id: string; name: string; mediaType: string }>;
     get(id: string, signal?: AbortSignal): string | null | Promise<string | null>;
     hasOutputs(): boolean;
     drain?(): Promise<void>;

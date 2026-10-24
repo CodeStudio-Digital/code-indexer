@@ -1,3 +1,4 @@
+import { registerSessionImageRoutes } from './session-images.js';
 import type { Hono } from 'hono';
 import type { CoderProviderName } from '@mcp/code-agent/index.js';
 import type { CoderExecutionMode } from '@mcp/session-storage/session-state-types.js';
@@ -1418,6 +1419,8 @@ export function mountCoderSessionsRoutes(
     }
     return c.json({ ...stats, context_window });
   });
+
+  registerSessionImageRoutes(app, sessionStore);
 
   app.get('/api/coder/sessions/:id/messages/:seq/full', async (c) => {
     const id = parseSessionIdParam(c);

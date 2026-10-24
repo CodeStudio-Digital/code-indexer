@@ -11,15 +11,7 @@ describe('shouldResumeFollow', () => {
     expect(shouldResumeFollow(FOLLOW_RESUME_PX)).toBe(true);
     expect(shouldResumeFollow(FOLLOW_RESUME_PX + 1)).toBe(false);
     expect(shouldResumeFollow(400)).toBe(false);
-  });
-
-  it('treats elastic overscroll past the bottom as the end', () => {
     expect(shouldResumeFollow(-120)).toBe(true);
-  });
-
-  it('never resumes from a distance a reader could be sitting at', () => {
-    // Resuming from far away is what used to trap the view at the bottom: the
-    // pin runs on every commit, so anything but the true bottom must stay free.
     expect(shouldResumeFollow(80)).toBe(false);
   });
 });

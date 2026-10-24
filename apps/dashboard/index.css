@@ -245,6 +245,7 @@ html[data-app-runtime='electron'] :where(
 }
 .chat-transcript {
   scrollbar-gutter: stable;
+  overflow-anchor: none;
   background:
     linear-gradient(to bottom, hsl(var(--background) / 0.12), transparent 120px),
     var(--workbench-surface);

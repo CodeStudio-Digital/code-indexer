@@ -674,14 +674,16 @@ export const MessageList = React.memo(function MessageList({
       const row = rowsRef.current[index];
       if (row?.kind === 'history-control') return 48;
       if (row?.kind === 'chapter') return expandedSummaries.has(row.chapter.id) ? 300 : 68;
-      if (row?.kind === 'tail') return 160;
-      return 180;
+      if (row?.kind === 'tail') return 24;
+      if (row?.kind === 'live-block') return 40;
+      return 88;
     },
     // `followOnAppend` is intentionally absent: its guard requires the last item
     // key to change, and the last row here is always the `tail:` sentinel, so it
     // could never fire. Sticking to the bottom is `useFollowOutput`'s job.
-    anchorTo: 'end',
-    scrollEndThreshold: 80,
+    // Only useFollowOutput owns the bottom pin. End anchoring here also
+    // adjusts scrollTop during measurements, fighting upward wheel gestures.
+    anchorTo: 'start',
     overscan: 6,
     useAnimationFrameWithResizeObserver: true,
     onChange: (instance) => {
@@ -713,7 +715,7 @@ export const MessageList = React.memo(function MessageList({
     setActiveChapterId(chapterId);
     // A pin racing this smooth scroll would drag the view back to the bottom.
     disengage();
-    virtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
+    virtualizer.scrollToIndex(index, { align: 'center', behavior: 'auto' });
   }, [chapterRowIndexes, disengage, virtualizer]);
 
   useEffect(() => {
@@ -875,7 +877,7 @@ export const MessageList = React.memo(function MessageList({
                   key={row.key}
                   ref={virtualizer.measureElement}
                   data-index={virtualRow.index}
-                  className="absolute left-0 top-0 w-full px-3 pb-3 sm:px-6 lg:px-8"
+                  className="absolute left-0 top-0 w-full px-3 pb-1 sm:px-6 lg:px-8"
                   style={{ transform: `translateY(${virtualRow.start}px)` }}
                 >
                   {row.kind === 'history-control' && renderHistoryControl()}

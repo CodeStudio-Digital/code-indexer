@@ -51,7 +51,7 @@ export function attachmentsToBlocks(
   const blocks: ContentBlock[] = [{ type: 'text', text }];
   for (const att of attachments ?? []) {
     if (att.mediaType.startsWith('image/') && att.base64) {
-      blocks.push({ type: 'image', mediaType: att.mediaType, base64: att.base64 });
+      blocks.push({ type: 'image', name: att.name, mediaType: att.mediaType, base64: att.base64 });
     } else {
       blocks.push({
         type: 'document',

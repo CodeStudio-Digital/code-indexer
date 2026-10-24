@@ -324,7 +324,7 @@ export class ChatGPTCodexProvider implements ChatProvider {
       // Server-managed: backend executes the generation and streams the
       // resulting image. No client-side handler is required beyond consuming
       // the `image_generation_call` output_item.
-      tools.push({ type: 'image_generation', output_format: 'png' });
+      tools.push({ type: 'image_generation', model: 'gpt-image-2.5-sunburst', output_format: 'png' });
     }
 
     // The SDK's responses.create is typed loosely; cast through unknown to

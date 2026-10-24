@@ -49,6 +49,19 @@ type TranslationReference = {
   namespace: string;
 };
 
+const syntaxCache = new Map<string, ts.SourceFile>();
+function sourceFile(file: string): ts.SourceFile {
+  let cached = syntaxCache.get(file);
+  if (!cached) {
+    cached = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true,
+      file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+    syntaxCache.set(file, cached);
+  }
+  return cached;
+}
+let dashboardFiles: string[] | undefined;
+function dashboardSource(): string[] { return dashboardFiles ??= walkDashboardSource(); }
+
 const literalBaseline = readJson(join(here, 'literal-baseline.json')) as LiteralBaseline;
 
 describe('dashboard i18n catalogs', () => {
@@ -77,7 +90,7 @@ describe('dashboard i18n catalogs', () => {
       catalogs.set(file.replace(/\.json$/, ''), new Set(Object.keys(flatten(readJson(join(localesRoot, 'pt-BR', file))))));
     }
 
-    const failures = walkDashboardSource()
+    const failures = dashboardSource()
       .flatMap(scanStaticTranslationReferences)
       .filter(({ namespace, key }) => {
         const catalog = catalogs.get(namespace);
@@ -151,15 +164,8 @@ function namespaceOption(call: ts.CallExpression): string | null {
 }
 
 function scanStaticTranslationReferences(file: string): TranslationReference[] {
-  const source = readFileSync(file, 'utf8');
-  const relativePath = relative(repoRoot, file).replace(/\\/g, '/');
-  const sf = ts.createSourceFile(
-    file,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
+    const relativePath = relative(repoRoot, file).replace(/\\/g, '/');
+  const sf = sourceFile(file);
   const bindings = translationBindings(sf);
   const references: TranslationReference[] = [];
 
@@ -296,8 +302,7 @@ function walkDashboardSource(dir = dashboardRoot, out: string[] = []): string[] 
 
 function scanVisibleJsxItems(relativePath: string): LiteralItem[] {
   const file = join(repoRoot, relativePath);
-  const source = readFileSync(file, 'utf8');
-  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const sf = sourceFile(file);
   const allowed = protectedAllowlist.get(relativePath) ?? new Set<string>();
   const items: LiteralItem[] = [];
 
@@ -344,15 +349,8 @@ function dialogCallKind(expr: ts.Expression, sf: ts.SourceFile): string | null {
 }
 
 function scanDialogCallItems(file: string): LiteralItem[] {
-  const source = readFileSync(file, 'utf8');
-  const relativePath = relative(repoRoot, file).replace(/\\/g, '/');
-  const sf = ts.createSourceFile(
-    file,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
+    const relativePath = relative(repoRoot, file).replace(/\\/g, '/');
+  const sf = sourceFile(file);
   const items: LiteralItem[] = [];
 
   function lineOf(node: ts.Node): number {
@@ -387,14 +385,14 @@ describe('dashboard visible literals', () => {
   });
 
   it('blocks new raw visible JSX text across dashboard files', () => {
-    const items = walkDashboardSource()
+    const items = dashboardSource()
       .filter((file) => file.endsWith('.tsx'))
       .flatMap((file) => scanVisibleJsxItems(relative(repoRoot, file).replace(/\\/g, '/')));
     expect(unexpectedLiterals(items, literalBaseline.visibleJsx)).toEqual([]);
   });
 
   it('blocks new raw confirm, prompt, alert, and toast literals', () => {
-    const items = walkDashboardSource().flatMap(scanDialogCallItems);
+    const items = dashboardSource().flatMap(scanDialogCallItems);
     expect(unexpectedLiterals(items, literalBaseline.dialogCalls)).toEqual([]);
   });
 });

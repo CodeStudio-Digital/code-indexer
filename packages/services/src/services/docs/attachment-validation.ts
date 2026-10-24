@@ -1,7 +1,6 @@
 import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 import {
-  MAX_ATTACHMENTS_PER_MESSAGE,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENTS_TOTAL_BYTES,
   MAX_ATTACHMENT_TEXT_CHARS,
@@ -54,13 +53,6 @@ export function validateAttachments(
   if (input === undefined || input === null) return { ok: true, value: undefined };
   if (!Array.isArray(input)) return invalid(400, 'ATTACHMENTS_INVALID', 'attachments must be an array');
   if (input.length === 0) return { ok: true, value: undefined };
-  if (input.length > MAX_ATTACHMENTS_PER_MESSAGE) {
-    return invalid(
-      413,
-      'ATTACHMENTS_TOO_MANY',
-      `attachments: at most ${MAX_ATTACHMENTS_PER_MESSAGE} items`,
-    );
-  }
 
   const out: ValidatedAttachment[] = [];
   let totalBytes = 0;

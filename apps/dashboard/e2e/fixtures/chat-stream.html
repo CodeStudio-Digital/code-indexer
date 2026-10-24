@@ -1,0 +1,43 @@
+<!doctype html><html class="dark"><head><meta charset="utf-8"><title>Chat regression fixture</title></head>
+<body><div id="root" style="height:100vh;display:flex;flex-direction:column"></div>
+<script type="module">
+import React, {useState, useEffect, useMemo} from 'react';
+import {createRoot} from 'react-dom/client';
+import {MessageList} from '/features/chat/messages/MessageList.tsx';
+import {buildTranscriptProjection} from '/features/chat/transcript-projection.ts';
+import { TooltipProvider } from '/components/ui/tooltip.tsx';
+import { i18nReady } from '/i18n/index.ts';
+import { filesToAttachments } from '/features/chat/chat-attachments.ts';
+import '/index.css';
+const canvas = document.createElement('canvas'); canvas.width=640; canvas.height=360;
+const paint=canvas.getContext('2d'); paint.fillStyle='#7355c7'; paint.fillRect(0,0,640,360);
+paint.fillStyle='white'; paint.font='32px sans-serif'; paint.fillText('Imagem de projeto — detalhes',45,180);
+const base64=canvas.toDataURL('image/png').split(',')[1];
+window.chatFixtureImage=base64;
+function Fixture() {
+  const [tick,setTick]=useState(0); const [running,setRunning]=useState(true);
+  const [count,setCount]=useState(80); const [images,setImages]=useState([]); const [session,setSession]=useState('fixture-one');
+  const [stored,setStored]=useState(false);
+  useEffect(()=>{if(!running)return; const timer=setInterval(()=>setTick(n=>n+1),80);return()=>clearInterval(timer);},[running]);
+  window.chatFixture={pause:()=>setRunning(false),resume:()=>setRunning(true),gallery:async()=>{
+    const bytes=Uint8Array.from(atob(base64),c=>c.charCodeAt(0));
+    const files=Array.from({length:15},(_,i)=>new File([bytes],`Projeto ${i+1}.png`,{type:'image/png'}));
+    setImages(await filesToAttachments(files));setRunning(false);setCount(0);
+  },stored:()=>setStored(true),short:()=>{setRunning(false);setCount(2);setTick(0);},switch:()=>setSession('fixture-two')};
+  document.body.dataset.tick=String(tick);
+  const data=useMemo(()=>{
+    const messages=Array.from({length:count},(_,i)=>({role:i%2===0?'user':'assistant',content:[{type:'text',text:i%2===0?`Pergunta ${i/2+1}`:`Resposta ${Math.ceil(i/2)}: conteúdo da conversa para testar a leitura durante o stream.`}]}));
+    messages.push({role:'user',content:[{type:'text',text:'Avalie o projeto?'},...images.map(image=>({type:'image',...image,...(stored?{base64:'',_hasBase64:true}:{})}))]});
+    return {session:{id:session,model:'fixture',provider:'fixture',status:'running'},messages,message_rows:messages.map((m,i)=>({seq:i+1,role:m.role})),total_messages:messages.length,archived_count:0};
+  },[count,images,session,stored]);
+  const turn=images.length?null:{blocks:[
+    {type:'text',id:'intro',text:'Vou examinar a estrutura e os arquivos principais do projeto.'},
+    {type:'tool',call:{id:'files',name:'list_directory',input:{path:'.'},status:'done',result:'src, package.json',durationMs:3}},
+    {type:'tool',call:{id:'search',name:'mcp__search',input:{query:'architecture'},status:'running',startedAt:Date.now()}},
+    {type:'text',id:'stream',text:Array.from({length:Math.floor(tick/4)+1},(_,i)=>`Trecho ${i+1}: analisando o fluxo de mensagens e a arquitetura.`).join('\n\n')}
+  ],text:'',thinking:'',toolCalls:[],startedAt:Date.now()};
+  return React.createElement(MessageList,{sessionData:data,currentTurn:turn,streaming:running,doneReason:null,error:null,tasksState:null,handlers:{sessionId:session},projection:buildTranscriptProjection(data,turn)});
+}
+await i18nReady;
+createRoot(document.getElementById('root')).render(React.createElement(TooltipProvider,null,React.createElement(Fixture)));
+</script></body></html>

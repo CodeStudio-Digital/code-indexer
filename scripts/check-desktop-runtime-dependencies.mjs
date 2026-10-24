@@ -1,6 +1,7 @@
 // dist flattens workspace source into one application package. External runtime
 // dependencies must therefore also be declared by the distributable root.
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, access } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,4 +23,8 @@ for (const area of ['apps', 'packages']) {
   }
 }
 if (missing.length) throw new Error(`Desktop root is missing runtime dependencies:\n${missing.join('\n')}`);
+const require = createRequire(import.meta.url);
+const ffmpeg = require('ffmpeg-static');
+if (!ffmpeg) throw new Error('FFmpeg has no binary for this desktop platform.');
+await access(ffmpeg).catch(() => { throw new Error('FFmpeg binary is missing. Run pnpm rebuild ffmpeg-static before packaging.'); });
 console.log('Desktop runtime dependencies are declared in the distributable manifest.');

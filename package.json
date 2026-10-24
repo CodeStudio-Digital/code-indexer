@@ -35,7 +35,8 @@
     "start": "node --max-old-space-size=8192 dist/apps/cli/index.js",
     "start:server": "node --max-old-space-size=8192 dist/apps/mcp-server/index.js",
     "start:api": "node --max-old-space-size=8192 dist/apps/http-api/server.js",
-    "test": "vitest run",
+    "test": "node scripts/test-workspace.mjs --quick",
+    "test:quick": "node scripts/test-workspace.mjs --quick",
     "test:tools": "node scripts/test-harness-tools.mjs",
     "test:watch": "vitest",
     "test:visual": "playwright test --config apps/dashboard/playwright.config.ts",
@@ -99,6 +100,7 @@
     "clsx": "^2.1.1",
     "commander": "^13.1.0",
     "dotenv": "^17.4.0",
+    "ffmpeg-static": "5.2.0",
     "glob": "^11.0.1",
     "google-auth-library": "^10.6.2",
     "hono": "^4.7.5",
@@ -127,6 +129,7 @@
     "react-resizable-panels": "^2.1.7",
     "react-router-dom": "^7.10.0",
     "remark-gfm": "^4.0.1",
+    "sharp": "0.34.5",
     "shiki": "^4.0.2",
     "sqlite-vec": "^0.1.9",
     "ssh2": "^1.16.0",
@@ -207,6 +210,7 @@
       "better-sqlite3",
       "electron",
       "esbuild",
+      "ffmpeg-static",
       "node-pty"
     ],
     "overrides": {

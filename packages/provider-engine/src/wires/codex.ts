@@ -49,7 +49,7 @@ export function buildCodex(spec: ProviderSpec): WireParts {
       }
 
       const imageGenOptIn = process.env.CODEX_IMAGE_GEN_ENABLED === '1';
-      const imageAllow = (process.env.CODEX_IMAGE_GEN_MODELS ?? 'gpt-5.5,gpt-5.4,gpt-5.4-mini')
+      const imageAllow = (process.env.CODEX_IMAGE_GEN_MODELS ?? 'gpt-6.1-sol,gpt-6-astra,gpt-6-sol,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.5,gpt-5.4,gpt-5.4-mini')
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);

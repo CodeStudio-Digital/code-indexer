@@ -12,7 +12,8 @@ export function isInternalToolReminder(name: string | undefined, blocks: readonl
 export function toolExtraUserMessages(results: readonly { name: string; extraUserBlocks?: ContentBlock[] }[]): AgentMessage[] {
   const messages: AgentMessage[] = [];
   for (const result of results) {
-    const blocks = result.extraUserBlocks;
+    const blocks = result.extraUserBlocks?.map(block => block.type === 'image'
+      ? { ...block, visionRequested: true as const } : block);
     if (!blocks?.length) continue;
     const isMeta = isInternalToolReminder(result.name, blocks);
     const previous = messages.at(-1);

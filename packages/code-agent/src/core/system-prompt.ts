@@ -897,16 +897,11 @@ Use \`mcp__search\` in \`auto\` for discovery; use \`mcp__grep_code\` for exact 
 `;
 }
 
-/**
- * "Images & vision" — only relevant when the active model can NOT see
- * images natively (or the composer forces the describe-images fallback).
- * Vision-capable sessions drop it entirely (~450 chars saved).
- */
+/** Explain on-demand pixels for both native vision and description fallback. */
 function visionSection(modelCanSeeImages?: boolean): string {
-  if (modelCanSeeImages === true) return '';
   return `
 # Images & vision
-Images may arrive as \`[Image description]\`. Use \`view_image\` or \`preview_screenshot\` with a task-specific inspection intent when more detail is needed.
+Image references do not contain pixels. Use \`view_image\` with an attachment_id or any authorized project/local path to inspect them. Use action=list to find saved images after compaction. Pixels are included only on the next inference; revisit images when needed. Use crop for detail, \`view_video\` for selected video frames, and browser/preview screenshot tools for captures.${modelCanSeeImages === true ? '' : ' Images may arrive as [Image description]; provide a task-specific describe hint for the vision fallback.'}
 `;
 }
 

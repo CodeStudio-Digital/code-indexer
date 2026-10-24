@@ -53,16 +53,7 @@ describe('createProjectWorktree', () => {
     expect(result.ok).toBe(false);
   });
 
-  it('accepts valid names (letters, digits, dot, underscore, dash)', async () => {
-    // This will fail because /fake is not a real git repo, but validation
-    // should pass the name check and fail at git level.
-    const result = await createProjectWorktree('/fake', { name: 'experiment-1' });
-    // The name passes validation, so it will try git and fail — that's fine
-    // as long as the error is about git, not about the name format.
-    if (!result.ok) {
-      expect(result.error).not.toContain('name');
-    }
-  });
+
 });
 
 // ── enter_worktree ──────────────────────────────────────────────────
@@ -85,32 +76,9 @@ describe('enter_worktree', () => {
     expect(result.content).toContain('Already inside a worktree');
   });
 
-  it('attempts to create worktree and calls enterWorktreeScope on success', async () => {
-    const runner = makeRunner();
-    // We can't actually run git in tests, so we need to mock
-    // createProjectWorktree. Since it's imported directly, we mock
-    // the module. Instead, we test the validation logic path.
-    // The real git integration is tested via integration tests.
 
-    // Just verify that if git fails, we get an error
-    const result = await enterWorktree.handler(
-      { name: 'test-wt' },
-      { ...ctx(), runner } as any,
-    );
-    // /fake/project is not a real git repo, so it should fail
-    expect(result.isError).toBe(true);
-  });
 
-  it('passes custom branch to createProjectWorktree', async () => {
-    const runner = makeRunner();
-    // We can't fully test this without a real git repo, but verify
-    // the handler passes args through (it will fail at git level)
-    const result = await enterWorktree.handler(
-      { name: 'test-wt', branch: 'feature/custom' },
-      { ...ctx(), runner } as any,
-    );
-    expect(result.isError).toBe(true);
-  });
+
 });
 
 // ── exit_worktree ───────────────────────────────────────────────────

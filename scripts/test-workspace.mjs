@@ -6,12 +6,14 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { criticalPaths } from './test-critical-paths.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const electron = require('electron');
 const vitest = resolve(root, 'node_modules/vitest/vitest.mjs');
 const reports = resolve(root, '.tmp/test-workspace');
+const quick = process.argv.includes('--quick');
 mkdirSync(reports, { recursive: true });
 
 // These fixtures spawn process.execPath as a real Node executable. They do not
@@ -48,7 +50,9 @@ function run(executable, name, filters, runtimeEnv) {
   return result.status === 0;
 }
 
-const desktopPassed = run(electron, 'electron', nodeOnly.flatMap(file => ['--exclude', file]),
+console.log(quick ? 'Suite: critical workflows (use test:workspace for the exhaustive suite).' : 'Suite: exhaustive workspace.');
+const desktopPassed = run(electron, quick ? 'critical-electron' : 'electron',
+  [...(quick ? criticalPaths : []), ...nodeOnly.flatMap(file => ['--exclude', file])],
   { ...env, ELECTRON_RUN_AS_NODE: '1' });
 const nodePassed = run(process.execPath, 'node', nodeOnly, env);
 console.log('\nWorkspace tests: Node build scripts');

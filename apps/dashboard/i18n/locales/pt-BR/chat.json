@@ -914,5 +914,16 @@
   "workflow.stepTools_one": "{{count}}{{limit}} ferramenta",
   "workflow.stepTools_other": "{{count}}{{limit}} ferramentas",
   "workflow.lastTool": "última: {{tool}}",
-  "messages.durationMs": "{{duration}}ms"
+  "messages.durationMs": "{{duration}}ms",
+  "gallery": {
+    "attachments": "Imagens anexadas",
+    "open": "Abrir imagem {{index}}: {{name}}",
+    "fit": "Ajustar à janela",
+    "original": "Tamanho original",
+    "previous": "Imagem anterior",
+    "next": "Próxima imagem",
+    "failed": "Não foi possível carregar a imagem. Feche e tente novamente.",
+    "generated": "Imagem gerada",
+    "image": "Imagem {{index}}"
+  }
 }

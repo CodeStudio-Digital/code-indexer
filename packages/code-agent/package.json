@@ -24,11 +24,13 @@
     "@mcp/store": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chroma-js": "3.2.0",
+    "ffmpeg-static": "5.2.0",
     "openai": "^4.85.4",
     "turndown": "^7.2.4",
     "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
+    "sharp": "0.34.5",
     "@types/chroma-js": "^3.1.2",
     "vitest": "^4.1.2"
   }

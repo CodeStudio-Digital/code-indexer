@@ -85,10 +85,11 @@ async function probeRenderer(hash) {
       // mount, which silently breaks every relative URL resolved afterwards.
       locationIntact: location.href.includes('index.html'),
       relativeAssetLoads: await loadImage('./brand/logo-mark.svg'),
+      imageProtocolLoads: await loadImage('mcp://app/api/_release/image'),
     };
   })()`);
   win.destroy();
-  return { ok: result.mounted && result.locationIntact && result.relativeAssetLoads, ...result, consoleErrors };
+  return { ok: result.mounted && result.locationIntact && result.relativeAssetLoads && result.imageProtocolLoads, ...result, consoleErrors };
 }
 
 /**
@@ -139,10 +140,34 @@ async function probeWebContent() {
   } catch (cause) { return { ok: false, error: String(cause.message ?? cause) }; }
 }
 
+/** Native image decoding and the video executable must work outside the source tree. */
+async function probeVision() {
+  const os = require('node:os');
+  const { execFileSync } = require('node:child_process');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codestudio-vision-probe-'));
+  try {
+    const { prepareVisionImage } = require(path.join(asar, 'dist/packages/services/src/services/docs/vision-image.js'));
+    const preview = await prepareVisionImage(Buffer.from('<svg width="64" height="48"><rect width="64" height="48" fill="red"/></svg>'));
+    const binary = require(path.join(asar, 'node_modules/ffmpeg-static')).replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+    execFileSync(binary, ['-nostdin', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=64x48:d=1', '-y', path.join(directory, 'clip.mp4')], { timeout: 15000, windowsHide: true });
+    const { viewVideo } = require(path.join(asar, 'dist/packages/code-agent/src/tools/view-video.js'));
+    const frames = await viewVideo.handler({ path: 'clip.mp4', timestamps: [0] }, { cwd: directory });
+    return { ok: preview.previewWidth === 64 && !frames.isError && frames.extraUserBlocks?.length === 1,
+      imageWidth: preview.previewWidth, frameCount: frames.extraUserBlocks?.length ?? 0, error: frames.isError ? frames.content : undefined };
+  } catch (cause) { return { ok: false, error: String(cause.message ?? cause) }; }
+  finally {
+    if (path.dirname(directory) === path.resolve(os.tmpdir()) && path.basename(directory).startsWith('codestudio-vision-probe-')) {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  }
+}
+
 app.on('ready', async () => {
   // The renderer talks to the backend over mcp://; stub it so probes exercise
   // packaging, not backend availability.
-  protocol.handle('mcp', async () => new Response('{}', { headers: { 'content-type': 'application/json' } }));
+  protocol.handle('mcp', async request => request.url.endsWith('/api/_release/image')
+    ? new Response(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a7WQAAAAASUVORK5CYII=', 'base64'), { headers: { 'content-type': 'image/png' } })
+    : new Response('{}', { headers: { 'content-type': 'application/json' } }));
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({ responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': [CSP] } });
   });
@@ -155,6 +180,7 @@ app.on('ready', async () => {
     report.indexer = await probeIndexer();
     report.apiScripts = await probeApiScripts();
     report.webContent = await probeWebContent();
+    report.vision = await probeVision();
   } catch (error) {
     report.harnessError = String(error.message || error).split('\n')[0];
   }

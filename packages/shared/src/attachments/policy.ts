@@ -5,7 +5,7 @@
  * `@mcp/services/services/docs/attachment-validation`.
  */
 
-export const MAX_ATTACHMENTS_PER_MESSAGE = 4;
+// Bound payload bytes rather than arbitrarily limiting the number of images.
 export const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 export const MAX_ATTACHMENTS_TOTAL_BYTES = 25 * 1024 * 1024;
 export const MAX_ATTACHMENT_TEXT_CHARS = 200_000;

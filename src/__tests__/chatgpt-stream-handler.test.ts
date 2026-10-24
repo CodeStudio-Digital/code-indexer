@@ -631,7 +631,7 @@ describe('ChatGPTCodexProvider stream handler', () => {
     const tools = args.tools as Array<{ type: string; output_format?: string }>;
     const imgTool = tools.find((t) => t.type === 'image_generation');
     expect(imgTool).toBeDefined();
-    expect(imgTool?.output_format).toBe('png');
+    expect(imgTool).toMatchObject({ output_format: 'png', model: 'gpt-image-2.5-sunburst' });
   });
 
   it('omits image_generation tool when capability is off', async () => {

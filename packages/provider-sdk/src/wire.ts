@@ -65,6 +65,11 @@ export interface ToolResultBlock {
 
 export interface ImageBlock {
   type: 'image';
+  name?: string;
+  /** Pixels explicitly requested by a tool; included only in its immediate next inference. */
+  visionRequested?: boolean;
+  /** Original session image behind a resized/cropped tool preview. */
+  sourceImageId?: string;
   mediaType: string; // 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
   base64: string;
   /**

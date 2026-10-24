@@ -10,6 +10,9 @@ import {
 } from '@mcp/session-storage';
 import type { FsSessionStore } from './fs-session-store.js';
 
+interface StoredImage { name?: string; mediaType: string; base64: string }
+interface ImageReference { id: string; name: string; mediaType: string }
+
 function outputId(content: string): string {
   return createHash('sha256').update(content, 'utf8').digest('hex').slice(0, 24);
 }
@@ -29,6 +32,8 @@ export class BundleToolOutputStore {
   readonly #store: FsSessionStore;
   readonly #memory = new Map<string, string>();
   readonly #pending = new Map<string, Promise<void>>();
+  readonly #images = new Map<string, ImageReference>();
+  #imageCatalogLoaded = false;
   #failure: Error | null = null;
 
   constructor(store: FsSessionStore, sessionId: SessionId) {
@@ -41,9 +46,11 @@ export class BundleToolOutputStore {
     this.#bundlePath = entry.location.bundle_path;
   }
 
-  put(content: string): string | null {
+  put(content: string, image?: Omit<ImageReference, 'id'>): string | null {
     if (typeof content !== 'string') return null;
     const id = outputId(content);
+    if (image) this.#images.set(id, { id, ...image });
+    if (this.#memory.has(id)) return id;
     this.#memory.set(id, content);
     if (!this.#pending.has(id)) {
       const write = this.#store.repository
@@ -52,8 +59,9 @@ export class BundleToolOutputStore {
           raw: content,
           raw_media_type: 'text/plain; charset=utf-8',
           metadata: {
-            purpose: 'truncated_tool_output',
+            purpose: image ? 'session_image' : 'truncated_tool_output',
             output_id: id,
+            ...(image ? { image } : {}),
           },
         })
         .then(() => undefined)
@@ -69,6 +77,35 @@ export class BundleToolOutputStore {
       void write.catch(() => undefined);
     }
     return id;
+  }
+
+  putImage(image: StoredImage): string | null {
+    const { mediaType, base64 } = image;
+    return this.put(JSON.stringify({ mediaType, base64 }), {
+      name: image.name || 'image', mediaType,
+    });
+  }
+
+  /** Catalog metadata survives compaction/restart without loading any pixels. */
+  listImages(): ImageReference[] {
+    const directory = join(this.#bundlePath, 'tools_outputs', 'calls');
+    if (!this.#imageCatalogLoaded && existsSync(directory)) {
+      assertPathHasNoLinksSync(this.#bundlePath, directory);
+      for (const name of readdirSync(directory)) {
+        if (!name.endsWith('.json')) continue;
+        const path = join(directory, name);
+        assertPathHasNoLinksSync(this.#bundlePath, path);
+        const record = JSON.parse(readFileSync(path, 'utf8')) as ToolOutputRecord;
+        const metadata = record.metadata;
+        if (metadata.purpose !== 'session_image' || typeof metadata.output_id !== 'string') continue;
+        const image = metadata.image as Omit<ImageReference, 'id'> | undefined;
+        if (image && typeof image.name === 'string' && typeof image.mediaType === 'string') {
+          this.#images.set(metadata.output_id, { id: metadata.output_id, ...image });
+        }
+      }
+    }
+    this.#imageCatalogLoaded = true;
+    return [...this.#images.values()];
   }
 
   get(id: string): string | null {
@@ -110,7 +147,7 @@ export class BundleToolOutputStore {
   }
 
   hasOutputs(): boolean {
-    if (this.#memory.size > 0) return true;
+    if ([...this.#memory.keys()].some(id => !this.#images.has(id))) return true;
     const callsDirectory = join(
       this.#bundlePath,
       'tools_outputs',

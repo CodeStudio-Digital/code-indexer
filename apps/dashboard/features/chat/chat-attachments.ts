@@ -1,4 +1,4 @@
-import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, MAX_ATTACHMENT_TEXT_CHARS, MAX_ATTACHMENTS_TOTAL_TEXT_CHARS, attachmentPayloadBytes, classifyAttachment } from '@mcp/shared/attachments/policy.js';
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_TOTAL_BYTES, MAX_ATTACHMENT_TEXT_CHARS, MAX_ATTACHMENTS_TOTAL_TEXT_CHARS, attachmentPayloadBytes, classifyAttachment } from '@mcp/shared/attachments/policy.js';
 import type { AgentAttachment } from './types.js';
 import { TEXT_LIKE_EXTS } from './constants.js';
 
@@ -112,9 +112,6 @@ export async function filesToAttachments(
   options: Pick<FileAttachmentOptions, 'preferFileReferences'> = {},
 ): Promise<AgentAttachment[]> {
   const selected = Array.from(files);
-  if (existing.length + selected.length > MAX_ATTACHMENTS_PER_MESSAGE) {
-    throw new Error(`You can attach at most ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
-  }
 
   const planned = selected.map((file) => {
     const kind = classifyAttachment(file.name, file.type);
@@ -138,8 +135,10 @@ export async function filesToAttachments(
     throw new Error('Attachments exceed the 25 MB combined limit.');
   }
 
-  const converted = await Promise.all(planned.map(({ file, nativePath }) =>
-    fileToAttachment(file, { ...options, nativePath })));
+  const converted: AgentAttachment[] = [];
+  for (const { file, nativePath } of planned) {
+    converted.push(await fileToAttachment(file, { ...options, nativePath }));
+  }
   const totalTextChars = [...existing, ...converted].reduce(
     (sum, att) => sum + (att.text?.length ?? 0),
     0,

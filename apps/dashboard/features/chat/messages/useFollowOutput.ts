@@ -57,6 +57,7 @@ interface FollowOutput {
 export function useFollowOutput({ scrollRef, resetKey }: FollowOutputOptions): FollowOutput {
   const [following, setFollowing] = useState(true);
   const followingRef = useRef(true);
+  const resumeIntent = useRef(false);
   const setFollow = useCallback((next: boolean) => {
     if (followingRef.current === next) return;
     followingRef.current = next;
@@ -65,7 +66,7 @@ export function useFollowOutput({ scrollRef, resetKey }: FollowOutputOptions): F
 
   const pin = useCallback(() => {
     const el = scrollRef.current;
-    if (!el) return;
+    if (!el || !followingRef.current) return;
     const target = el.scrollHeight - el.clientHeight;
     if (target <= el.scrollTop) return;
     el.scrollTop = target;
@@ -74,39 +75,63 @@ export function useFollowOutput({ scrollRef, resetKey }: FollowOutputOptions): F
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const release = () => setFollow(false);
+    const release = () => { resumeIntent.current = false; setFollow(false); };
+    let touchY = 0;
+    let draggingScrollbar = false;
+    let previousTop = el.scrollTop;
 
     // A wheel event fires BEFORE the scroll it causes, so the pin never gets a
     // chance to undo the gesture.
     const onWheel = (event: WheelEvent) => {
       if (event.deltaY < 0) release();
+      else if (event.deltaY > 0) resumeIntent.current = true;
     };
     // Any touch drag: a downward fling lands at the bottom and re-engages below.
-    const onTouchMove = () => release();
+    const onTouchStart = (event: TouchEvent) => { touchY = event.touches[0]?.clientY ?? 0; };
+    const onTouchMove = (event: TouchEvent) => {
+      const nextY = event.touches[0]?.clientY ?? touchY;
+      release();
+      resumeIntent.current = nextY < touchY;
+      touchY = nextY;
+    };
     // Dragging the scrollbar produces no wheel or touch event at all.
     const onPointerDown = (event: PointerEvent) => {
       const rect = el.getBoundingClientRect();
-      if (isScrollbarPointer(event.clientX, rect.left + el.clientWidth)) release();
+      if (isScrollbarPointer(event.clientX, rect.left + el.clientWidth)) {
+        draggingScrollbar = true;
+        previousTop = el.scrollTop;
+        release();
+      }
     };
+    const onPointerUp = () => { draggingScrollbar = false; };
     // Capture: the transcript itself never holds focus, so these arrive from
     // whatever descendant the user is on.
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home') release();
+      if (event.key === 'ArrowDown' || event.key === 'PageDown' || event.key === 'End') resumeIntent.current = true;
     };
     const onScroll = () => {
-      if (followingRef.current) return;
-      if (shouldResumeFollow(distanceFromEnd(el))) setFollow(true);
+      if (draggingScrollbar) resumeIntent.current = el.scrollTop > previousTop;
+      previousTop = el.scrollTop;
+      if (!followingRef.current && resumeIntent.current && shouldResumeFollow(distanceFromEnd(el))) {
+        resumeIntent.current = false;
+        setFollow(true);
+      }
     };
 
     el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
     el.addEventListener('touchmove', onTouchMove, { passive: true });
     el.addEventListener('pointerdown', onPointerDown, { passive: true });
+    window.addEventListener('pointerup', onPointerUp, { passive: true });
     el.addEventListener('keydown', onKeyDown, true);
     el.addEventListener('scroll', onScroll, { passive: true });
     return () => {
       el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
       el.removeEventListener('touchmove', onTouchMove);
       el.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointerup', onPointerUp);
       el.removeEventListener('keydown', onKeyDown, true);
       el.removeEventListener('scroll', onScroll);
     };
@@ -132,7 +157,7 @@ export function useFollowOutput({ scrollRef, resetKey }: FollowOutputOptions): F
     requestAnimationFrame(pin);
   }, [pin, setFollow]);
 
-  const disengage = useCallback(() => setFollow(false), [setFollow]);
+  const disengage = useCallback(() => { resumeIntent.current = false; setFollow(false); }, [setFollow]);
 
   return { following, jumpToEnd, disengage };
 }

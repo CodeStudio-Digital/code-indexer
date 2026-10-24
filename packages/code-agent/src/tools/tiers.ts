@@ -296,6 +296,7 @@ export const BOOTSTRAP_TOOLS: ReadonlySet<string> = new Set([
   // surface they already had via the fallback.
   'code_exec',
   'view_image',
+  'view_video',
   'submit_spec',
 ]);
 
